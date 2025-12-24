@@ -1,0 +1,10 @@
+name: demo-lab
+nodes:
+  - name: r1
+    type: frr
+    asn: 65001
+  - name: r2
+    type: frr
+    asn: 65002
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]

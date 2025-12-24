@@ -1,0 +1,29 @@
+name: three-frr-two-hosts
+nodes:
+  - name: r1
+    type: frr
+    asn: 65001
+    router_id: 1.1.1.1
+  - name: r2
+    type: frr
+    asn: 65002
+    router_id: 2.2.2.2
+  - name: r3
+    type: frr
+    asn: 65003
+    router_id: 3.3.3.3
+
+  - name: h1
+    type: host
+  - name: h2
+    type: host
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+  - endpoints: ["r2:eth2", "r3:eth1"]
+
+  - endpoints: ["h1:eth1", "r1:eth2"]
+    ipv4: ["192.168.1.10/24", "192.168.1.1/24"]
+
+  - endpoints: ["h2:eth1", "r3:eth2"]
+    ipv4: ["192.168.2.10/24", "192.168.2.1/24"]

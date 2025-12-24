@@ -1,0 +1,13 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Generated artifacts
+labs/
+results.json
+*.clab.yaml
+
+# OS / editor
+.vscode/
+.DS_Store
