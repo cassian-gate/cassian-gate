@@ -1736,6 +1736,84 @@ def cmd_status(args: argparse.Namespace) -> None:
                     for line in cp.stdout.strip().splitlines():
                         print("    " + line)
 
+def cmd_collect(args: argparse.Namespace) -> None:
+    lab = args.lab
+
+    # -----------------------------------------------------------------------------
+    # 0) Load & validate resolved topology (authoritative for this lab)
+    # -----------------------------------------------------------------------------
+    tpath = topo_path_for_lab(lab)
+    if not tpath.exists():
+        die(f"Topology file not found for lab '{lab}': {tpath}")
+
+    topo = load_yaml(tpath)
+    ensure_valid_topology(topo)
+
+    nodes = topo.get("nodes", []) or []
+    nodes_sorted = sorted(nodes, key=lambda n: n.get("name", ""))
+
+    # -----------------------------------------------------------------------------
+    # 1) STRICT gate: all expected containers must be running
+    # -----------------------------------------------------------------------------
+    for n in nodes_sorted:
+        name = n.get("name")
+        if not name:
+            die("Invalid topology: node missing 'name'")
+        c = container_name(lab, name)
+        if not docker_is_running(c):
+            die(f"COLLECT FAIL: {c} is not running")
+
+    # -----------------------------------------------------------------------------
+    # 2) Output dir (deterministic location)
+    # -----------------------------------------------------------------------------
+    outdir = lab_dir(lab) / "artifacts"
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    def write(name: str, content: str) -> None:
+        (outdir / name).write_text(content or "", encoding="utf-8")
+
+    # -----------------------------------------------------------------------------
+    # 3) High-level snapshot (DETERMINISTIC)
+    # -----------------------------------------------------------------------------
+    # IMPORTANT: do NOT include docker "Status" (it contains changing uptimes).
+    cp = run(
+        ["sh", "-lc", "docker ps --format '{{.Names}}\t{{.Image}}' | sort"],
+        check=True,
+        capture_output=True,
+    )
+    write("docker-ps.txt", cp.stdout)
+
+    # containerlab inspect can be useful, but may include volatile fields depending on version.
+    # If you ever see hash drift again, remove this block.
+    clab_yaml = LABS_DIR / f"{lab}.clab.yaml"
+    if not clab_yaml.exists():
+        die(f"COLLECT FAIL: containerlab file not found: {clab_yaml}")
+
+    cp = run(
+        ["sudo", "containerlab", "inspect", "-t", str(clab_yaml)],
+        check=True,
+        capture_output=True,
+    )
+    write("containerlab-inspect.txt", (cp.stdout or "") + (cp.stderr or ""))
+
+    # -----------------------------------------------------------------------------
+    # 4) Per-node snapshots (STRICT + deterministic order)
+    # -----------------------------------------------------------------------------
+    for n in nodes_sorted:
+        name = n["name"]
+        c = container_name(lab, name)
+
+        cp = run(["docker", "exec", c, "sh", "-lc", "ip -br a"], check=True, capture_output=True)
+        write(f"{name}.ip-addr.txt", (cp.stdout or "") + (cp.stderr or ""))
+
+        cp = run(["docker", "exec", c, "sh", "-lc", "ip route"], check=True, capture_output=True)
+        write(f"{name}.ip-route.txt", (cp.stdout or "") + (cp.stderr or ""))
+
+        # NOTE: NO BGP SUMMARY HERE because it contains ticking Up/Down timers (non-deterministic)
+        # If you want it, add an explicit --volatile flag later.
+
+    print(f"✅ COLLECT PASS: wrote artifacts to {outdir}")
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="netsim", description="ai-netsim: topo YAML -> containerlab (local MVP)")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1766,6 +1844,10 @@ def main() -> None:
     p_exec.add_argument("node", help="Node name (e.g. r1)")
     p_exec.add_argument("command", nargs=argparse.REMAINDER, help="Command to run inside container")
     p_exec.set_defaults(func=cmd_exec)
+
+    p_collect = sub.add_parser("collect", help="Collect runtime artifacts for a lab")
+    p_collect.add_argument("lab", help="Lab name (topology 'name')")
+    p_collect.set_defaults(func=cmd_collect)
 
     p_vty = sub.add_parser("vty", help="Run a vtysh command easily")
     p_vty.add_argument("lab", help="Lab name (topology 'name')")
