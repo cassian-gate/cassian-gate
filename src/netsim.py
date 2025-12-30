@@ -1936,7 +1936,11 @@ def _iter_nodes(topo: dict[str, Any]) -> list[dict[str, Any]]:
         return out
     return []
 
+import re
+
 def cmd_status(args: argparse.Namespace) -> None:
+    import re  # ok to keep here, but better at top-level
+
     lab = args.lab
 
     topo = _load_resolved_topology(lab)
@@ -1949,45 +1953,147 @@ def cmd_status(args: argparse.Namespace) -> None:
         print("  (no nodes found in topology.resolved.yaml)")
         return
 
-    for n in nodes:
-        name = str(n.get("name", ""))
-        ntype = str(n.get("type", ""))
-        if not name:
-            continue
+    bgp_enabled = bool(getattr(args, "bgp", False))
+    bgp_verbose = bool(getattr(args, "bgp_verbose", False))
+    bgp_strict = bool(getattr(args, "strict", False))
+    show_intf = bool(getattr(args, "interfaces", False))
+    show_summary = bool(getattr(args, "summary", False))
 
-        cname = f"clab-{lab}-{name}"
-
-        # running?
+    def _container_is_running(cname: str) -> bool:
         try:
             cp = run(
                 ["docker", "inspect", "-f", "{{.State.Running}}", cname],
                 check=False,
                 capture_output=True,
             )
-            running = (cp.stdout.strip() == "true")
+            out = cp.stdout
+            if isinstance(out, bytes):
+                out = out.decode("utf-8", errors="replace")
+            return (out or "").strip() == "true"
         except Exception:
-            running = False
+            return False
+
+    def _docker_exec(cname: str, cmd: list[str]) -> str:
+        cp = run(["docker", "exec", cname, *cmd], check=False, capture_output=True)
+        out = cp.stdout
+        if isinstance(out, bytes):
+            out = out.decode("utf-8", errors="replace")
+        return (out or "").strip()
+
+    def _parse_bgp_summary_counts(out: str) -> tuple[int, int]:
+        """
+        Returns: (established, total)
+          - total is number of neighbors parsed from the summary output
+          - established is count of neighbors in Established state
+        """
+        if not out:
+            return (0, 0)
+        if "No BGP neighbors found" in out:
+            return (0, 0)
+
+        total = 0
+        established = 0
+
+        # Neighbor lines usually begin with an IPv4 address in our labs.
+        for line in out.splitlines():
+            s = line.strip()
+            if not s or s.startswith("%"):
+                continue
+            if s.startswith("Neighbor") or s.startswith("Total number of neighbors"):
+                continue
+
+            if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}\s+", s):
+                total += 1
+
+                # Not-established states commonly seen in FRR.
+                if re.search(r"\b(Idle|Active|Connect|OpenSent|OpenConfirm)\b", s):
+                    continue
+
+                # Heuristic: Established lines have an Up/Down time AND then a numeric State/PfxRcd.
+                # Example: "... 00:00:02            1 ..."
+                if re.search(r"\b\d{2}:\d{2}:\d{2}\s+\d+\b", s) or re.search(r"\b\d+d\d+h\d+m\b", s):
+                    established += 1
+
+        return (established, total)
+
+    # Totals for --summary / --strict
+    total_nodes = 0
+    running_nodes = 0
+    bgp_total_peers = 0
+    bgp_established_peers = 0
+    frr_nodes_with_peers = 0
+    strict_fail = False
+
+    for n in nodes:
+        name = str(n.get("name", "")).strip()
+        ntype = str(n.get("type", "")).strip()
+        if not name:
+            continue
+
+        total_nodes += 1
+        cname = f"clab-{lab}-{name}"
+        running = _container_is_running(cname)
+        if running:
+            running_nodes += 1
 
         state = "running" if running else "not running"
         print(f"  - {name:<8} ({cname}) : {state}")
 
-        # optional BGP
-        if args.bgp and ntype == "frr" and running:
+        if not running:
+            continue
+
+        # optional interfaces
+        if show_intf:
             try:
-                cp = run(
-                    ["docker", "exec", cname, "vtysh", "-c", "show bgp summary"],
-                    check=False,
-                    capture_output=True,
-                )
-                bgp_out = (cp.stdout or "").strip()
-                if bgp_out:
-                    print("      BGP:")
+                intf_out = _docker_exec(cname, ["sh", "-lc", "ip -br a"])
+                if intf_out:
+                    print("      IF:")
+                    for line in intf_out.splitlines():
+                        print(f"      {line}")
+            except Exception as e:
+                print(f"      IF: failed ({e})")
+
+        # optional BGP
+        if bgp_enabled and ntype == "frr":
+            try:
+                bgp_out = _docker_exec(cname, ["vtysh", "-c", "show bgp summary"])
+                est, tot = _parse_bgp_summary_counts(bgp_out)
+
+                if tot == 0:
+                    print("      BGP (none)")
+                else:
+                    frr_nodes_with_peers += 1
+                    bgp_total_peers += tot
+                    bgp_established_peers += est
+
+                    if est == tot:
+                        print(f"      BGP {est}/{tot} Established")
+                    else:
+                        print(f"      BGP {est}/{tot} Not established")
+                        if bgp_strict:
+                            strict_fail = True
+
+                if bgp_verbose and bgp_out:
+                    print("      --- show bgp summary ---")
                     for line in bgp_out.splitlines():
                         print(f"      {line}")
-                else:
-                    print("      BGP: no output")
+
             except Exception as e:
                 print(f"      BGP: failed to query ({e})")
+                if bgp_strict:
+                    strict_fail = True
+
+    # summary line
+    if show_summary:
+        parts = [f"containers {running_nodes}/{total_nodes} running"]
+        if bgp_enabled:
+            parts.append(f"BGP peers {bgp_established_peers}/{bgp_total_peers} established")
+            parts.append(f"FRR nodes w/peers {frr_nodes_with_peers}")
+        print("Summary: " + " | ".join(parts))
+
+    # strict exit behavior (CI-friendly)
+    if bgp_enabled and bgp_strict and strict_fail:
+        raise SystemExit(2)
 
 def cmd_collect(args: argparse.Namespace) -> None:
     import json
@@ -2329,7 +2435,10 @@ def main() -> None:
     p_status = sub.add_parser("status", help="Show lab status (containers + optional BGP summary)")
     p_status.add_argument("lab", help="Lab name (topology 'name')")
     p_status.add_argument("--bgp", action="store_true", help="Include 'show bgp summary' for FRR nodes")
+    p_status.add_argument("--bgp-verbose", action="store_true", help="Print full 'show bgp summary' output")
+    p_status.add_argument("--strict", action="store_true", help="Exit non-zero if any FRR peers are not Established")
     p_status.add_argument("--interfaces", action="store_true", help="Include 'ip -br a' output per node")
+    p_status.add_argument("--summary", action="store_true", help="Print a one-line summary at the end")
     p_status.set_defaults(func=cmd_status)
 
     # test
