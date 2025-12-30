@@ -2546,6 +2546,7 @@ def main() -> None:
     p_status.add_argument("--strict", action="store_true", help="Exit non-zero if any FRR peers are not Established")
     p_status.add_argument("--interfaces", action="store_true", help="Include 'ip -br a' output per node")
     p_status.add_argument("--summary", action="store_true", help="Print a one-line summary at the end")
+    p_status.add_argument("--json", action="store_true", help="Emit machine-readable JSON (no human output)")
     p_status.set_defaults(func=cmd_status)
 
     # test
