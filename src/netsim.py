@@ -696,6 +696,141 @@ def write_containerlab_file(topo_path: Path) -> Path:
 # Runtime helpers
 # -------------------------
 
+import re
+
+_RE_NEIGH_LINE = re.compile(r"^\s*(\d{1,3}(?:\.\d{1,3}){3})\s+")
+
+def derive_expected_bgp_neighbors_from_links(topo: dict[str, Any]) -> dict[str, set[str]]:
+    """
+    Intent: expected BGP neighbors derived from topology links.
+
+    Rule:
+      - For each link with 2 endpoints and 2 ipv4 entries
+      - If both endpoints are FRR nodes, then each side expects the other side's IP (no mask)
+    """
+    nodes = _node_index_by_name(topo)
+    expected: dict[str, set[str]] = {}
+
+    for link in topo.get("links", []) or []:
+        eps = link.get("endpoints") or []
+        ips = link.get("ipv4") or []
+        if not (isinstance(eps, list) and isinstance(ips, list)):
+            continue
+        if len(eps) != 2 or len(ips) != 2:
+            continue
+
+        ep1, ep2 = eps
+        ip1, ip2 = ips
+        if not (isinstance(ep1, str) and isinstance(ep2, str) and isinstance(ip1, str) and isinstance(ip2, str)):
+            continue
+        if ":" not in ep1 or ":" not in ep2:
+            continue
+
+        n1, _if1 = ep1.split(":", 1)
+        n2, _if2 = ep2.split(":", 1)
+
+        if nodes.get(n1, {}).get("type") != "frr":
+            continue
+        if nodes.get(n2, {}).get("type") != "frr":
+            continue
+
+        # Neighbor IPs: strip CIDR
+        nbr_for_n1 = ip2.split("/", 1)[0].strip()
+        nbr_for_n2 = ip1.split("/", 1)[0].strip()
+
+        expected.setdefault(n1, set()).add(nbr_for_n1)
+        expected.setdefault(n2, set()).add(nbr_for_n2)
+
+    return expected
+
+
+def parse_frr_bgp_summary_neighbors(out: str) -> dict[str, dict[str, Any]]:
+    """
+    Parse `show bgp summary` and return:
+      { "<neighbor_ip>": {"established": bool, "raw": "<line>"} }
+
+    Robust logic:
+      - Find the table header and locate the 'State/PfxRcd' column index.
+      - Neighbor rows start with an IPv4 address.
+      - Established if State/PfxRcd token is numeric OR equals 'Established' (case-insensitive).
+    """
+    obs: dict[str, dict[str, Any]] = {}
+    if not out:
+        return obs
+    if "No BGP neighbors found" in out:
+        return obs
+
+    lines = out.splitlines()
+
+    # 1) Find header and determine column index for State/PfxRcd
+    state_idx: int | None = None
+    for line in lines:
+        if "Neighbor" in line and "State/PfxRcd" in line:
+            cols = line.split()
+            # Example header tokens:
+            # Neighbor V AS MsgRcvd MsgSent TblVer InQ OutQ Up/Down State/PfxRcd PfxSnt Desc
+            for i, c in enumerate(cols):
+                if c == "State/PfxRcd":
+                    state_idx = i
+                    break
+            break
+
+    # Fallback: if we can't find header, keep a safe heuristic:
+    # treat as established if ANY token is exactly 'Established' OR ANY token is purely numeric
+    fallback = (state_idx is None)
+
+    for line in lines:
+        m = _RE_NEIGH_LINE.match(line)
+        if not m:
+            continue
+
+        ip = m.group(1)
+        cols = line.split()
+
+        established = False
+        if fallback:
+            if any(c.lower() == "established" for c in cols):
+                established = True
+            else:
+                # In established rows there is typically at least one numeric token at State/PfxRcd,
+                # but fallback is less precise; still better than "last token".
+                established = any(c.isdigit() for c in cols)
+        else:
+            if len(cols) > state_idx:
+                state = cols[state_idx]
+                if state.isdigit() or state.lower() == "established":
+                    established = True
+
+        obs[ip] = {"established": established, "raw": line.rstrip("\n")}
+
+    return obs
+
+def compare_expected_vs_observed_bgp(expected: set[str], observed: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    obs_set = set(observed.keys())
+    missing = sorted(expected - obs_set)
+    extra = sorted(obs_set - expected)
+
+    established: list[str] = []
+    down: list[str] = []
+    for ip in sorted(expected & obs_set):
+        if observed[ip].get("established"):
+            established.append(ip)
+        else:
+            down.append(ip)
+
+    ok = (not missing) and (not down)
+
+    return {
+        "expected": sorted(expected),
+        "observed": sorted(obs_set),
+        "missing": missing,
+        "extra": extra,
+        "established": established,
+        "down": down,
+        "ok": ok,
+    }
+
+
 def wait_for_bgp(lab: str, node: str, timeout: int = 30) -> None:
     """
     Wait for BGP to be Established-ish on a node.
@@ -1939,8 +2074,6 @@ def _iter_nodes(topo: dict[str, Any]) -> list[dict[str, Any]]:
 import re
 
 def cmd_status(args: argparse.Namespace) -> None:
-    import re  # ok to keep here, but better at top-level
-
     lab = args.lab
 
     topo = _load_resolved_topology(lab)
@@ -1959,20 +2092,6 @@ def cmd_status(args: argparse.Namespace) -> None:
     show_intf = bool(getattr(args, "interfaces", False))
     show_summary = bool(getattr(args, "summary", False))
 
-    def _container_is_running(cname: str) -> bool:
-        try:
-            cp = run(
-                ["docker", "inspect", "-f", "{{.State.Running}}", cname],
-                check=False,
-                capture_output=True,
-            )
-            out = cp.stdout
-            if isinstance(out, bytes):
-                out = out.decode("utf-8", errors="replace")
-            return (out or "").strip() == "true"
-        except Exception:
-            return False
-
     def _docker_exec(cname: str, cmd: list[str]) -> str:
         cp = run(["docker", "exec", cname, *cmd], check=False, capture_output=True)
         out = cp.stdout
@@ -1980,48 +2099,18 @@ def cmd_status(args: argparse.Namespace) -> None:
             out = out.decode("utf-8", errors="replace")
         return (out or "").strip()
 
-    def _parse_bgp_summary_counts(out: str) -> tuple[int, int]:
-        """
-        Returns: (established, total)
-          - total is number of neighbors parsed from the summary output
-          - established is count of neighbors in Established state
-        """
-        if not out:
-            return (0, 0)
-        if "No BGP neighbors found" in out:
-            return (0, 0)
-
-        total = 0
-        established = 0
-
-        # Neighbor lines usually begin with an IPv4 address in our labs.
-        for line in out.splitlines():
-            s = line.strip()
-            if not s or s.startswith("%"):
-                continue
-            if s.startswith("Neighbor") or s.startswith("Total number of neighbors"):
-                continue
-
-            if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}\s+", s):
-                total += 1
-
-                # Not-established states commonly seen in FRR.
-                if re.search(r"\b(Idle|Active|Connect|OpenSent|OpenConfirm)\b", s):
-                    continue
-
-                # Heuristic: Established lines have an Up/Down time AND then a numeric State/PfxRcd.
-                # Example: "... 00:00:02            1 ..."
-                if re.search(r"\b\d{2}:\d{2}:\d{2}\s+\d+\b", s) or re.search(r"\b\d+d\d+h\d+m\b", s):
-                    established += 1
-
-        return (established, total)
+    # Intent: expected neighbors derived from topology links (FRR<->FRR)
+    expected_by_node: dict[str, set[str]] = derive_expected_bgp_neighbors_from_links(topo)
 
     # Totals for --summary / --strict
     total_nodes = 0
     running_nodes = 0
-    bgp_total_peers = 0
-    bgp_established_peers = 0
-    frr_nodes_with_peers = 0
+
+    # For summary, count only expected peers (intent-based)
+    exp_total_peers = 0
+    exp_established_peers = 0
+    frr_nodes_with_expected_peers = 0
+
     strict_fail = False
 
     for n in nodes:
@@ -2053,23 +2142,41 @@ def cmd_status(args: argparse.Namespace) -> None:
             except Exception as e:
                 print(f"      IF: failed ({e})")
 
-        # optional BGP
+        # optional BGP (intent-aware)
         if bgp_enabled and ntype == "frr":
+            expected = expected_by_node.get(name, set())
+
             try:
                 bgp_out = _docker_exec(cname, ["vtysh", "-c", "show bgp summary"])
-                est, tot = _parse_bgp_summary_counts(bgp_out)
+                observed = parse_frr_bgp_summary_neighbors(bgp_out)
+                cmp = compare_expected_vs_observed_bgp(expected, observed)
 
-                if tot == 0:
+                # Summary counters (only based on intent)
+                if expected:
+                    frr_nodes_with_expected_peers += 1
+                    exp_total_peers += len(expected)
+                    exp_established_peers += len(cmp["established"])
+
+                if not expected:
+                    # If no expected neighbors, we keep the previous UX: "BGP (none)"
                     print("      BGP (none)")
                 else:
-                    frr_nodes_with_peers += 1
-                    bgp_total_peers += tot
-                    bgp_established_peers += est
-
-                    if est == tot:
-                        print(f"      BGP {est}/{tot} Established")
+                    if cmp["ok"]:
+                        print(f"      BGP expected {len(expected)} | Established {len(cmp['established'])}/{len(expected)} (OK)")
                     else:
-                        print(f"      BGP {est}/{tot} Not established")
+                        print(f"      BGP expected {len(expected)} | Established {len(cmp['established'])}/{len(expected)} (MISMATCH)")
+                        if cmp["missing"]:
+                            print(f"      BGP missing: {', '.join(cmp['missing'])}")
+                        if cmp["down"]:
+                            print(f"      BGP down:    {', '.join(cmp['down'])}")
+                            # DEBUG: show raw neighbor lines for down peers
+                            for ip in cmp["down"]:
+                                raw = observed.get(ip, {}).get("raw", "")
+                                if raw:
+                                    print(f"      BGP down raw: {raw}")
+                        if cmp["extra"]:
+                            print(f"      BGP extra:   {', '.join(cmp['extra'])}")
+
                         if bgp_strict:
                             strict_fail = True
 
@@ -2080,21 +2187,21 @@ def cmd_status(args: argparse.Namespace) -> None:
 
             except Exception as e:
                 print(f"      BGP: failed to query ({e})")
-                if bgp_strict:
+                if bgp_strict and expected:
                     strict_fail = True
 
     # summary line
     if show_summary:
         parts = [f"containers {running_nodes}/{total_nodes} running"]
         if bgp_enabled:
-            parts.append(f"BGP peers {bgp_established_peers}/{bgp_total_peers} established")
-            parts.append(f"FRR nodes w/peers {frr_nodes_with_peers}")
+            parts.append(f"BGP expected peers {exp_established_peers}/{exp_total_peers} established")
+            parts.append(f"FRR nodes w/expected peers {frr_nodes_with_expected_peers}")
         print("Summary: " + " | ".join(parts))
 
     # strict exit behavior (CI-friendly)
     if bgp_enabled and bgp_strict and strict_fail:
         raise SystemExit(2)
-
+    
 def cmd_collect(args: argparse.Namespace) -> None:
     import json
     import re
