@@ -16,6 +16,8 @@ import subprocess
 import sys
 import time
 import shutil
+import json
+import ipaddress
 
 from pathlib import Path
 from typing import Any
@@ -25,6 +27,8 @@ import yaml
 BASE_DIR = Path(__file__).resolve().parent.parent
 TOPO_DIR = BASE_DIR / "topologies"
 LABS_DIR = BASE_DIR / "labs"
+QUIET_RUN = False
+
 
 DEFAULT_IMAGES = {
     "frr": "frrouting/frr:latest",
@@ -49,7 +53,9 @@ def run(
     - capture=True is the legacy flag (captures stdout/stderr)
     - capture_output overrides capture if explicitly set
     """
-    print("+", " ".join(cmd))
+    global QUIET_RUN
+    if not QUIET_RUN:
+        print("+", " ".join(cmd))
 
     if capture_output is None:
         capture_output = capture
@@ -697,8 +703,228 @@ def write_containerlab_file(topo_path: Path) -> Path:
 # -------------------------
 
 import re
+import ipaddress
 
 _RE_NEIGH_LINE = re.compile(r"^\s*(\d{1,3}(?:\.\d{1,3}){3})\s+")
+_RE_IPV4_PREFIX = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3}/\d{1,2})\b")
+
+def _normalize_prefix(cidr: str) -> str | None:
+    try:
+        n = ipaddress.ip_network(cidr.strip(), strict=False)
+        if n.version != 4:
+            return None
+        return str(n)
+    except Exception:
+        return None
+
+def derive_expected_routes_for_frr(topo: dict[str, Any]) -> dict[str, set[str]]:
+    """
+    Intent: expected IPv4 prefixes that must appear in each FRR node's routing table.
+
+    v1 rules:
+      - router_id => expect router_id/32
+      - FRR<->host links => expect connected subnet prefix (network of router-side IP)
+      - node.static_routes => expect each prefix part (before ' via ')
+    """
+    nodes = topo.get("nodes", []) or []
+    node_type = {n.get("name"): n.get("type") for n in nodes if isinstance(n, dict)}
+    nodes_by_name = {n.get("name"): n for n in nodes if isinstance(n, dict)}
+
+    expected: dict[str, set[str]] = {}
+
+    # 1) Loopbacks from router_id
+    for n in nodes:
+        if not isinstance(n, dict):
+            continue
+        if n.get("type") != "frr":
+            continue
+        name = n.get("name")
+        rid = n.get("router_id")
+        if isinstance(name, str) and name:
+            expected.setdefault(name, set())
+            if isinstance(rid, str) and rid:
+                p = _normalize_prefix(f"{rid}/32")
+                if p:
+                    expected[name].add(p)
+
+    # 2) Connected host subnets (FRR<->host links)
+    for link in topo.get("links", []) or []:
+        eps = link.get("endpoints", []) or []
+        ips = link.get("ipv4", []) or []
+        if len(eps) != 2 or len(ips) != 2:
+            continue
+
+        (n1, _if1) = str(eps[0]).split(":", 1)
+        (n2, _if2) = str(eps[1]).split(":", 1)
+
+        t1 = node_type.get(n1)
+        t2 = node_type.get(n2)
+
+        # Only FRR<->host in v1
+        if t1 == "frr" and t2 == "host":
+            router = n1
+            router_ip = ips[0]
+        elif t2 == "frr" and t1 == "host":
+            router = n2
+            router_ip = ips[1]
+        else:
+            continue
+
+        # Convert router interface IP/mask into its network prefix
+        norm = _normalize_prefix(router_ip)
+        if norm:
+            expected.setdefault(router, set()).add(norm)
+
+    # 3) Static routes declared on FRR nodes
+    for n in nodes:
+        if not isinstance(n, dict):
+            continue
+        if n.get("type") != "frr":
+            continue
+        name = n.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+
+        srs = n.get("static_routes") or []
+        if not isinstance(srs, list):
+            continue
+
+        for r in srs:
+            if not isinstance(r, str) or " via " not in r:
+                continue
+            prefix, _nh = r.split(" via ", 1)
+            p = _normalize_prefix(prefix)
+            if p:
+                expected.setdefault(name, set()).add(p)
+
+    return expected
+
+def parse_frr_show_ip_route_prefixes(text: str) -> set[str]:
+    """
+    Parse `vtysh -c "show ip route"` and extract IPv4 prefixes.
+    This avoids fragile column indexes.
+    """
+    out: set[str] = set()
+    if not text:
+        return out
+
+    for line in text.splitlines():
+        m = _RE_IPV4_PREFIX.search(line)
+        if not m:
+            continue
+        p = _normalize_prefix(m.group(1))
+        if p:
+            out.add(p)
+    return out
+
+def compare_expected_vs_observed_prefixes(expected: set[str], observed: set[str]) -> dict[str, Any]:
+    missing = sorted([p for p in expected if p not in observed])
+    return {
+        "expected": sorted(expected),
+        "observed": sorted(observed),
+        "missing": missing,
+        "ok": (len(missing) == 0),
+    }
+
+def parse_frr_show_ip_route_prefixes_json(raw: str) -> set[str]:
+    """
+    Parse `vtysh -c "show ip route json"` into a set of prefixes like "192.168.1.0/24".
+    Returns empty set if raw isn't valid/expected JSON.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return set()
+
+    try:
+        doc = json.loads(raw)
+    except Exception:
+        return set()
+
+    prefixes: set[str] = set()
+
+    # FRR typically returns keys as prefixes at the top level (e.g. "10.0.0.0/31": {...})
+    # Some versions may wrap under "routes" or "routeTable"; handle a couple common shapes.
+    if isinstance(doc, dict):
+        if "routes" in doc and isinstance(doc["routes"], dict):
+            route_dict = doc["routes"]
+        else:
+            route_dict = doc
+
+        for k, v in route_dict.items():
+            if not isinstance(k, str):
+                continue
+            # keep only things that look like prefixes
+            try:
+                ipaddress.ip_network(k, strict=False)
+            except Exception:
+                continue
+            prefixes.add(k)
+
+    return prefixes
+
+def parse_frr_bgp_summary_neighbors_json(out: str) -> dict[str, dict[str, Any]]:
+    """
+    Parse FRR `show bgp summary json`.
+
+    Observed schema (FRR):
+      {
+        "ipv4Unicast": {
+          "peers": {
+            "10.0.0.1": { "state": "Established", "pfxRcd": 1, ... },
+            ...
+          }
+        }
+      }
+
+    Returns:
+      { "<neighbor_ip>": {"established": bool, "raw": "<state>"} }
+    """
+    import json
+
+    if not out:
+        return {}
+
+    try:
+        obj = json.loads(out)
+    except Exception:
+        return {}
+
+    v4 = obj.get("ipv4Unicast")
+    if not isinstance(v4, dict):
+        return {}
+
+    peers = v4.get("peers")
+    if not isinstance(peers, dict):
+        return {}
+
+    res: dict[str, dict[str, Any]] = {}
+    for nbr_ip, pdata in peers.items():
+        if not isinstance(nbr_ip, str):
+            continue
+        if not _RE_NEIGH_LINE.match(nbr_ip + " "):
+            continue
+
+        established = False
+        raw_state = ""
+
+        if isinstance(pdata, dict):
+            state = pdata.get("state")
+            pfx = pdata.get("pfxRcd")
+
+            if isinstance(state, str):
+                raw_state = state
+                if state.lower().startswith("estab"):
+                    established = True
+
+            # Numeric pfxRcd is a strong indicator of Established
+            if isinstance(pfx, int):
+                established = True
+            elif isinstance(pfx, str) and pfx.isdigit():
+                established = True
+
+        res[nbr_ip] = {"established": bool(established), "raw": raw_state}
+
+    return res
 
 def derive_expected_bgp_neighbors_from_links(topo: dict[str, Any]) -> dict[str, set[str]]:
     """
@@ -2074,134 +2300,329 @@ def _iter_nodes(topo: dict[str, Any]) -> list[dict[str, Any]]:
 import re
 
 def cmd_status(args: argparse.Namespace) -> None:
+    """
+    Read-only lab status.
+
+    - Default: human-friendly output.
+    - --json: machine output only (no "+ docker ..." command echoes).
+    - --bgp: intent-aware BGP checks (expected from topology.resolved.yaml).
+      * tries `show bgp summary json` first, falls back to text summary parsing
+    - --routes: intent-aware route presence checks (read-only), derived from topology.resolved.yaml.
+      * tries `show ip route json` first, falls back to text parsing
+    - Exit code changes ONLY with --strict (per design contract).
+    """
     lab = args.lab
-
-    topo = _load_resolved_topology(lab)
-    nodes = _iter_nodes(topo)
-
-    print(f"Lab: {lab}")
-    print("Nodes:")
-
-    if not nodes:
-        print("  (no nodes found in topology.resolved.yaml)")
-        return
 
     bgp_enabled = bool(getattr(args, "bgp", False))
     bgp_verbose = bool(getattr(args, "bgp_verbose", False))
-    bgp_strict = bool(getattr(args, "strict", False))
+    routes_enabled = bool(getattr(args, "routes", False))
+    routes_verbose = bool(getattr(args, "routes_verbose", False))
+
+    strict = bool(getattr(args, "strict", False))
     show_intf = bool(getattr(args, "interfaces", False))
     show_summary = bool(getattr(args, "summary", False))
+    as_json = bool(getattr(args, "json", False))
 
-    def _docker_exec(cname: str, cmd: list[str]) -> str:
-        cp = run(["docker", "exec", cname, *cmd], check=False, capture_output=True)
-        out = cp.stdout
-        if isinstance(out, bytes):
-            out = out.decode("utf-8", errors="replace")
-        return (out or "").strip()
+    # Suppress "+ <cmd>" echoes during JSON mode (so JSON is clean)
+    global QUIET_RUN
+    old_quiet = QUIET_RUN
+    if as_json:
+        QUIET_RUN = True
 
-    # Intent: expected neighbors derived from topology links (FRR<->FRR)
-    expected_by_node: dict[str, set[str]] = derive_expected_bgp_neighbors_from_links(topo)
+    try:
+        topo = _load_resolved_topology(lab)
+        nodes = sorted(_iter_nodes(topo), key=lambda n: str(n.get("name", "")))
 
-    # Totals for --summary / --strict
-    total_nodes = 0
-    running_nodes = 0
+        expected_bgp_by_node: dict[str, set[str]] = derive_expected_bgp_neighbors_from_links(topo)
+        expected_routes_by_frr: dict[str, set[str]] = derive_expected_routes_for_frr(topo) if routes_enabled else {}
 
-    # For summary, count only expected peers (intent-based)
-    exp_total_peers = 0
-    exp_established_peers = 0
-    frr_nodes_with_expected_peers = 0
+        def _docker_exec(cname: str, cmd: list[str]) -> str:
+            cp = run(["docker", "exec", cname, *cmd], check=False, capture_output=True)
+            out = cp.stdout
+            if isinstance(out, bytes):
+                out = out.decode("utf-8", errors="replace")
+            return (out or "").strip()
 
-    strict_fail = False
+        # Totals for summary / strict
+        total_nodes = 0
+        running_nodes = 0
 
-    for n in nodes:
-        name = str(n.get("name", "")).strip()
-        ntype = str(n.get("type", "")).strip()
-        if not name:
-            continue
+        # BGP summary counters (based on expected peers)
+        exp_total_peers = 0
+        exp_established_peers = 0
+        frr_nodes_with_expected_peers = 0
 
-        total_nodes += 1
-        cname = f"clab-{lab}-{name}"
-        running = _container_is_running(cname)
-        if running:
-            running_nodes += 1
+        # ROUTES summary counters (based on expected prefixes)
+        routes_total_prefixes = 0
+        routes_present_prefixes = 0
+        frr_nodes_with_expected_routes = 0
 
-        state = "running" if running else "not running"
-        print(f"  - {name:<8} ({cname}) : {state}")
+        strict_fail = False
 
-        if not running:
-            continue
+        # JSON model
+        out_doc: dict[str, Any] = {
+            "schema_version": "1",
+            "lab": lab,
+            "nodes": [],
+            "summary": {},
+        }
 
-        # optional interfaces
-        if show_intf:
-            try:
-                intf_out = _docker_exec(cname, ["sh", "-lc", "ip -br a"])
-                if intf_out:
-                    print("      IF:")
-                    for line in intf_out.splitlines():
-                        print(f"      {line}")
-            except Exception as e:
-                print(f"      IF: failed ({e})")
+        for n in nodes:
+            name = str(n.get("name", "")).strip()
+            ntype = str(n.get("type", "")).strip()
+            if not name:
+                continue
 
-        # optional BGP (intent-aware)
-        if bgp_enabled and ntype == "frr":
-            expected = expected_by_node.get(name, set())
+            total_nodes += 1
+            cname = f"clab-{lab}-{name}"
+            running = _container_is_running(cname)
+            if running:
+                running_nodes += 1
 
-            try:
-                bgp_out = _docker_exec(cname, ["vtysh", "-c", "show bgp summary"])
-                observed = parse_frr_bgp_summary_neighbors(bgp_out)
-                cmp = compare_expected_vs_observed_bgp(expected, observed)
+            node_rec: dict[str, Any] = {
+                "name": name,
+                "type": ntype,
+                "container": cname,
+                "running": bool(running),
+            }
 
-                # Summary counters (only based on intent)
-                if expected:
-                    frr_nodes_with_expected_peers += 1
-                    exp_total_peers += len(expected)
-                    exp_established_peers += len(cmp["established"])
+            # Optional interfaces
+            if running and show_intf:
+                try:
+                    intf_out = _docker_exec(cname, ["sh", "-lc", "ip -br a"])
+                    node_rec["interfaces"] = intf_out.splitlines() if intf_out else []
+                except Exception as e:
+                    node_rec["interfaces_error"] = str(e)
 
+            # Optional BGP (intent-aware)
+            if running and bgp_enabled and ntype == "frr":
+                expected = expected_bgp_by_node.get(name, set())
+
+                bgp_rec: dict[str, Any] = {
+                    "expected": sorted(expected),
+                    "observed": [],
+                    "missing": [],
+                    "down": [],
+                    "extra": [],
+                    "established": [],
+                    "ok": True,
+                    "parser_mode": "none",
+                }
+
+                try:
+                    observed: dict[str, dict[str, Any]] = {}
+
+                    # Try JSON first (read-only)
+                    bgp_out_json = _docker_exec(cname, ["vtysh", "-c", "show bgp summary json"])
+                    observed = parse_frr_bgp_summary_neighbors_json(bgp_out_json)
+
+                    if observed:
+                        bgp_rec["parser_mode"] = "json"
+                    else:
+                        # Fallback to text summary parsing
+                        bgp_out_text = _docker_exec(cname, ["vtysh", "-c", "show bgp summary"])
+                        observed = parse_frr_bgp_summary_neighbors(bgp_out_text)
+                        bgp_rec["parser_mode"] = "text"
+
+                    cmp = compare_expected_vs_observed_bgp(expected, observed)
+
+                    bgp_rec["observed"] = cmp["observed"]
+                    bgp_rec["missing"] = cmp["missing"]
+                    bgp_rec["down"] = cmp["down"]
+                    bgp_rec["extra"] = cmp["extra"]
+                    bgp_rec["established"] = cmp["established"]
+                    bgp_rec["ok"] = bool(cmp["ok"])
+
+                    # Summary counters (only based on expected peers)
+                    if expected:
+                        frr_nodes_with_expected_peers += 1
+                        exp_total_peers += len(expected)
+                        exp_established_peers += len(cmp["established"])
+
+                    # Verbose: only meaningful in human mode
+                    if bgp_verbose and not as_json:
+                        bgp_out_text = _docker_exec(cname, ["vtysh", "-c", "show bgp summary"])
+                        bgp_rec["raw_text"] = bgp_out_text
+
+                    # Strict: only fail if we had expected peers and mismatch exists
+                    if strict and expected and not cmp["ok"]:
+                        strict_fail = True
+
+                except Exception as e:
+                    bgp_rec["error"] = str(e)
+                    bgp_rec["ok"] = False
+                    if strict and expected:
+                        strict_fail = True
+
+                node_rec["bgp"] = bgp_rec
+
+            # Optional ROUTES (intent-aware, read-only)
+            if running and routes_enabled and ntype == "frr":
+                expected_routes = expected_routes_by_frr.get(name, set())
+
+                routes_rec: dict[str, Any] = {
+                    "expected": sorted(expected_routes),
+                    "observed": [],
+                    "missing": [],
+                    "ok": True,
+                    "parser_mode": "none",
+                }
+
+                try:
+                    observed_routes: set[str] = set()
+
+                    # Try JSON first (read-only) if supported by FRR
+                    rt_out_json = _docker_exec(cname, ["vtysh", "-c", "show ip route json"])
+                    observed_routes = parse_frr_show_ip_route_prefixes_json(rt_out_json)
+
+                    if observed_routes:
+                        routes_rec["parser_mode"] = "json"
+                    else:
+                        # Fallback to text parsing
+                        rt_out_text = _docker_exec(cname, ["vtysh", "-c", "show ip route"])
+                        observed_routes = parse_frr_show_ip_route_prefixes(rt_out_text)
+                        routes_rec["parser_mode"] = "text"
+
+                    cmp_r = compare_expected_vs_observed_prefixes(expected_routes, observed_routes)
+
+                    routes_rec["observed"] = cmp_r["observed"]
+                    routes_rec["missing"] = cmp_r["missing"]
+                    routes_rec["ok"] = bool(cmp_r["ok"])
+
+                    if expected_routes:
+                        frr_nodes_with_expected_routes += 1
+                        routes_total_prefixes += len(expected_routes)
+                        routes_present_prefixes += (len(expected_routes) - len(cmp_r["missing"]))
+
+                    # Verbose: only meaningful in human mode
+                    if routes_verbose and not as_json:
+                        # Prefer showing text output (more readable)
+                        if routes_rec["parser_mode"] == "text":
+                            routes_rec["raw_text"] = rt_out_text  # type: ignore[name-defined]
+                        else:
+                            # If we only succeeded via JSON, still include text if requested
+                            routes_rec["raw_text"] = _docker_exec(cname, ["vtysh", "-c", "show ip route"])
+
+                    if strict and expected_routes and not cmp_r["ok"]:
+                        strict_fail = True
+
+                except Exception as e:
+                    routes_rec["error"] = str(e)
+                    routes_rec["ok"] = False
+                    if strict and expected_routes:
+                        strict_fail = True
+
+                node_rec["routes"] = routes_rec
+
+            out_doc["nodes"].append(node_rec)
+
+        # Summary
+        out_doc["summary"] = {
+            "containers_running": {"running": running_nodes, "total": total_nodes},
+        }
+        if bgp_enabled:
+            out_doc["summary"]["bgp_expected_peers"] = {
+                "established": exp_established_peers,
+                "total": exp_total_peers,
+                "frr_nodes_with_expected_peers": frr_nodes_with_expected_peers,
+            }
+        if routes_enabled:
+            out_doc["summary"]["routes_expected_prefixes"] = {
+                "present": routes_present_prefixes,
+                "total": routes_total_prefixes,
+                "frr_nodes_with_expected_routes": frr_nodes_with_expected_routes,
+            }
+
+        # JSON output mode: no human printing
+        if as_json:
+            print(json.dumps(out_doc, indent=2, sort_keys=True))
+            if strict and strict_fail:
+                raise SystemExit(2)
+            return
+
+        # Human output
+        print(f"Lab: {lab}")
+        print("Nodes:")
+
+        if not out_doc["nodes"]:
+            print("  (no nodes found in topology.resolved.yaml)")
+            return
+
+        for node_rec in out_doc["nodes"]:
+            name = node_rec["name"]
+            cname = node_rec["container"]
+            running = node_rec["running"]
+            print(f"  - {name:<8} ({cname}) : {'running' if running else 'not running'}")
+
+            if running and show_intf and "interfaces" in node_rec and node_rec["interfaces"]:
+                print("      IF:")
+                for line in node_rec["interfaces"]:
+                    print(f"      {line}")
+
+            if running and bgp_enabled and node_rec.get("type") == "frr":
+                bgp = node_rec.get("bgp") or {}
+                expected = bgp.get("expected") or []
                 if not expected:
-                    # If no expected neighbors, we keep the previous UX: "BGP (none)"
                     print("      BGP (none)")
                 else:
-                    if cmp["ok"]:
-                        print(f"      BGP expected {len(expected)} | Established {len(cmp['established'])}/{len(expected)} (OK)")
+                    est = len(bgp.get("established") or [])
+                    tot = len(expected)
+                    if bgp.get("ok"):
+                        print(f"      BGP expected {tot} | Established {est}/{tot} (OK)")
                     else:
-                        print(f"      BGP expected {len(expected)} | Established {len(cmp['established'])}/{len(expected)} (MISMATCH)")
-                        if cmp["missing"]:
-                            print(f"      BGP missing: {', '.join(cmp['missing'])}")
-                        if cmp["down"]:
-                            print(f"      BGP down:    {', '.join(cmp['down'])}")
-                            # DEBUG: show raw neighbor lines for down peers
-                            for ip in cmp["down"]:
-                                raw = observed.get(ip, {}).get("raw", "")
-                                if raw:
-                                    print(f"      BGP down raw: {raw}")
-                        if cmp["extra"]:
-                            print(f"      BGP extra:   {', '.join(cmp['extra'])}")
+                        print(f"      BGP expected {tot} | Established {est}/{tot} (MISMATCH)")
+                        if bgp.get("missing"):
+                            print(f"      BGP missing: {', '.join(bgp['missing'])}")
+                        if bgp.get("down"):
+                            print(f"      BGP down:    {', '.join(bgp['down'])}")
+                        if bgp.get("extra"):
+                            print(f"      BGP extra:   {', '.join(bgp['extra'])}")
 
-                        if bgp_strict:
-                            strict_fail = True
+                if bgp_verbose:
+                    raw_text = (bgp.get("raw_text") or "").splitlines()
+                    if raw_text:
+                        print("      --- show bgp summary ---")
+                        for line in raw_text:
+                            print(f"      {line}")
 
-                if bgp_verbose and bgp_out:
-                    print("      --- show bgp summary ---")
-                    for line in bgp_out.splitlines():
-                        print(f"      {line}")
+            if running and routes_enabled and node_rec.get("type") == "frr":
+                rts = node_rec.get("routes") or {}
+                expected = rts.get("expected") or []
+                if expected:
+                    missing = rts.get("missing") or []
+                    present = len(expected) - len(missing)
+                    tot = len(expected)
+                    if rts.get("ok"):
+                        print(f"      ROUTES expected {tot} | Present {present}/{tot} (OK)")
+                    else:
+                        print(f"      ROUTES expected {tot} | Present {present}/{tot} (MISMATCH)")
+                        if missing:
+                            print(f"      ROUTES missing: {', '.join(missing)}")
 
-            except Exception as e:
-                print(f"      BGP: failed to query ({e})")
-                if bgp_strict and expected:
-                    strict_fail = True
+                if routes_verbose:
+                    raw_text = (rts.get("raw_text") or "").splitlines()
+                    if raw_text:
+                        print("      --- show ip route ---")
+                        for line in raw_text:
+                            print(f"      {line}")
 
-    # summary line
-    if show_summary:
-        parts = [f"containers {running_nodes}/{total_nodes} running"]
-        if bgp_enabled:
-            parts.append(f"BGP expected peers {exp_established_peers}/{exp_total_peers} established")
-            parts.append(f"FRR nodes w/expected peers {frr_nodes_with_expected_peers}")
-        print("Summary: " + " | ".join(parts))
+        if show_summary:
+            parts = [f"containers {running_nodes}/{total_nodes} running"]
+            if bgp_enabled:
+                parts.append(f"BGP expected peers {exp_established_peers}/{exp_total_peers} established")
+                parts.append(f"FRR nodes w/expected peers {frr_nodes_with_expected_peers}")
+            if routes_enabled:
+                parts.append(f"ROUTES expected {routes_present_prefixes}/{routes_total_prefixes} present")
+                parts.append(f"FRR nodes w/expected routes {frr_nodes_with_expected_routes}")
+            print("Summary: " + " | ".join(parts))
 
-    # strict exit behavior (CI-friendly)
-    if bgp_enabled and bgp_strict and strict_fail:
-        raise SystemExit(2)
-    
+        if strict and strict_fail:
+            raise SystemExit(2)
+
+    finally:
+        # Always restore prior QUIET_RUN state
+        QUIET_RUN = old_quiet
+
 def cmd_collect(args: argparse.Namespace) -> None:
     import json
     import re
@@ -2546,7 +2967,9 @@ def main() -> None:
     p_status.add_argument("--strict", action="store_true", help="Exit non-zero if any FRR peers are not Established")
     p_status.add_argument("--interfaces", action="store_true", help="Include 'ip -br a' output per node")
     p_status.add_argument("--summary", action="store_true", help="Print a one-line summary at the end")
-    p_status.add_argument("--json", action="store_true", help="Emit machine-readable JSON (no human output)")
+    p_status.add_argument("--json", action="store_true", help="Emit machine-readable JSON (no command echo)")
+    p_status.add_argument("--routes", action="store_true", help="Validate expected routes exist (read-only)")
+    p_status.add_argument("--routes-verbose", action="store_true", help="Include raw 'show ip route' output (human mode)")
     p_status.set_defaults(func=cmd_status)
 
     # test
