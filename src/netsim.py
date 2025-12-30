@@ -756,6 +756,178 @@ def wait_for_bgp(lab: str, node: str, timeout: int = 30) -> None:
 def container_name(lab_name: str, node: str) -> str:
     return f"clab-{lab_name}-{node}"
 
+def _node_index_by_name(topo: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    idx: dict[str, dict[str, Any]] = {}
+    for n in topo.get("nodes", []) or []:
+        name = n.get("name")
+        if isinstance(name, str) and name:
+            idx[name] = n
+    return idx
+
+
+def configure_frr_interfaces_from_topology(lab: str, topo: dict[str, Any]) -> None:
+    """
+    For each link with ipv4 addressing, assign the per-endpoint IP to the correct interface,
+    BUT only for endpoints that are FRR nodes.
+
+    Also configures loopback with router_id/32 if present.
+    """
+    nodes = _node_index_by_name(topo)
+
+    # 1) Assign interface IPs from links
+    for link in topo.get("links", []) or []:
+        endpoints = link.get("endpoints") or []
+        ipv4s = link.get("ipv4") or []
+
+        if not (isinstance(endpoints, list) and isinstance(ipv4s, list)):
+            continue
+        if len(endpoints) != len(ipv4s):
+            continue
+
+        for ep, ipcidr in zip(endpoints, ipv4s):
+            if not (isinstance(ep, str) and isinstance(ipcidr, str)):
+                continue
+            if ":" not in ep:
+                continue
+
+            node, iface = ep.split(":", 1)
+            n = nodes.get(node)
+            if not n or n.get("type") != "frr":
+                continue
+
+            cname = f"clab-{lab}-{node}"
+
+            # bring up + set address
+            run(["docker", "exec", cname, "ip", "link", "set", iface, "up"], check=False)
+            run(["docker", "exec", cname, "ip", "addr", "flush", "dev", iface], check=False)
+            run(["docker", "exec", cname, "ip", "addr", "add", ipcidr, "dev", iface], check=True)
+
+    # 2) Router-id loopback (router_id/32) if provided
+    for node, n in nodes.items():
+        if n.get("type") != "frr":
+            continue
+        rid = n.get("router_id")
+        if not (isinstance(rid, str) and rid):
+            continue
+
+        cname = f"clab-{lab}-{node}"
+        run(["docker", "exec", cname, "ip", "link", "set", "lo", "up"], check=False)
+        # Keep it simple: flush + set router_id/32
+        run(["docker", "exec", cname, "ip", "addr", "flush", "dev", "lo"], check=False)
+        run(["docker", "exec", cname, "ip", "addr", "add", f"{rid}/32", "dev", "lo"], check=True)
+
+
+def configure_frr_static_routes_from_topology(lab: str, topo: dict[str, Any]) -> None:
+    """
+    Apply node-level static_routes entries like:
+      - 192.168.2.0/24 via 10.0.0.1
+    """
+    nodes = _node_index_by_name(topo)
+
+    for node, n in nodes.items():
+        if n.get("type") != "frr":
+            continue
+        routes = n.get("static_routes") or []
+        if not isinstance(routes, list):
+            continue
+
+        cname = f"clab-{lab}-{node}"
+        for r in routes:
+            if not isinstance(r, str):
+                continue
+            # Expect "PREFIX via NEXTHOP"
+            # We'll just pass it directly to ip route replace
+            run(["docker", "exec", cname, "sh", "-lc", f"ip route replace {r}"], check=False)
+
+
+def configure_frr_bgp_from_topology(lab: str, topo: dict[str, Any]) -> None:
+    """
+    Minimal BGP neighbor provisioning:
+    - For each link between TWO FRR nodes with ipv4 /31 or /30 addressing:
+      configure them as neighbors (remote-as from topo nodes' asn).
+    - Configure router-id if present.
+    - Allow eBGP without policy (MVP) so later advertisements work.
+    """
+    nodes = _node_index_by_name(topo)
+
+    # Build a list of FRR-FRR adjacencies from links
+    adj: list[tuple[str, str, str, str]] = []
+    # (nodeA, ipA, nodeB, ipB)
+
+    for link in topo.get("links", []) or []:
+        endpoints = link.get("endpoints") or []
+        ipv4s = link.get("ipv4") or []
+        if not (isinstance(endpoints, list) and isinstance(ipv4s, list)):
+            continue
+        if len(endpoints) != 2 or len(ipv4s) != 2:
+            continue
+
+        ep1, ep2 = endpoints
+        ip1, ip2 = ipv4s
+        if not (isinstance(ep1, str) and isinstance(ep2, str) and isinstance(ip1, str) and isinstance(ip2, str)):
+            continue
+        if ":" not in ep1 or ":" not in ep2:
+            continue
+
+        n1, _if1 = ep1.split(":", 1)
+        n2, _if2 = ep2.split(":", 1)
+
+        if nodes.get(n1, {}).get("type") != "frr":
+            continue
+        if nodes.get(n2, {}).get("type") != "frr":
+            continue
+
+        # neighbor IPs: strip CIDR
+        nbr1 = ip2.split("/", 1)[0]
+        nbr2 = ip1.split("/", 1)[0]
+        adj.append((n1, nbr1, n2, nbr2))
+
+    # Apply config per node
+    for node, n in nodes.items():
+        if n.get("type") != "frr":
+            continue
+
+        asn = n.get("asn")
+        rid = n.get("router_id")
+        if not isinstance(asn, int):
+            # if your YAML stores as strings, support that too
+            if isinstance(asn, str) and asn.isdigit():
+                asn = int(asn)
+            else:
+                continue
+
+        cname = f"clab-{lab}-{node}"
+
+        # Start BGP process
+        cmds: list[str] = []
+        cmds.append("conf t")
+        cmds.append(f"router bgp {asn}")
+        if isinstance(rid, str) and rid:
+            cmds.append(f"bgp router-id {rid}")
+
+        # MVP friendliness: don't require policy for eBGP announcements
+        cmds.append("no bgp ebgp-requires-policy")
+
+        # Neighbors from adj list
+        for a, ip_to_b, b, _ip_to_a in adj:
+            if a != node:
+                continue
+            b_asn = nodes.get(b, {}).get("asn")
+            if isinstance(b_asn, str) and b_asn.isdigit():
+                b_asn = int(b_asn)
+            if not isinstance(b_asn, int):
+                continue
+
+            cmds.append(f"neighbor {ip_to_b} remote-as {b_asn}")
+
+        cmds.append("end")
+
+        # Execute via vtysh (one call per node)
+        vty_args = ["docker", "exec", cname, "vtysh"]
+        for c in cmds:
+            vty_args += ["-c", c]
+        run(vty_args, check=False)
+
 def configure_hosts_from_topology(lab_name: str, topo: dict) -> None:
     """
     Configure host nodes based on links that include explicit link['ipv4'] entries.
@@ -1664,14 +1836,11 @@ def cmd_up(args: argparse.Namespace) -> None:
     topo_path = (TOPO_DIR / args.topology) if not Path(args.topology).is_file() else Path(args.topology)
 
     # If --reconfigure: destroy + remove root-owned lab dir FIRST.
-    # This prevents:
-    # - stale bind-mount paths from previous runs
-    # - root-owned leftovers causing PermissionError in write_file()
     if getattr(args, "reconfigure", False):
         lab_name = None
         try:
             topo_for_name = load_yaml(topo_path)
-            lab_name = topo_for_name.get("name")
+            lab_name = (topo_for_name or {}).get("name")
         except Exception:
             lab_name = None
 
@@ -1680,13 +1849,13 @@ def cmd_up(args: argparse.Namespace) -> None:
             if existing_clab.exists():
                 run(["sudo", "containerlab", "destroy", "-t", str(existing_clab)], check=False)
 
-            # IMPORTANT: containerlab creates labs/clab-<lab> as root. Remove it as root so generator can rewrite mounts.
+            # containerlab creates labs/clab-<lab> as root; remove it as root
             run(["sudo", "rm", "-rf", str(lab_dir(lab_name))], check=False)
 
     # Generate AFTER destroy/cleanup
     out = write_containerlab_file(topo_path)
 
-    # Deploy WITHOUT containerlab --reconfigure (we already handled teardown safely)
+    # Deploy
     run(["sudo", "containerlab", "deploy", "-t", str(out)])
 
     lab_name = out.name.replace(".clab.yaml", "")
@@ -1694,7 +1863,7 @@ def cmd_up(args: argparse.Namespace) -> None:
     if not resolved_path.exists():
         return
 
-    topo = load_yaml(resolved_path)
+    topo = load_yaml(resolved_path) or {}
 
     # 1) Hosts (IPs + default route)
     configure_hosts_from_topology(lab_name, topo)
@@ -1705,13 +1874,18 @@ def cmd_up(args: argparse.Namespace) -> None:
     # 3) nft-fw static routes
     configure_nftfw_routes_from_topology(lab_name, topo)
 
-    # 4) nft rules last
+    # 4) nft rules last (so forwarding + routes exist first)
     for n in topo.get("nodes", []):
         if n.get("type") == "nft-fw":
             nft_fw_apply(lab_name, n["name"], gen_nft_fw_rules(n))
             nhs = fw_next_hops_from_links(topo, n["name"])
             if nhs:
                 verify_fw_routed_ready(lab_name, n["name"])
+
+    # 5) FRR provisioning (THIS was missing)
+    configure_frr_interfaces_from_topology(lab_name, topo)
+    configure_frr_static_routes_from_topology(lab_name, topo)
+    configure_frr_bgp_from_topology(lab_name, topo)
 
 def cmd_down(args: argparse.Namespace) -> None:
     out = lab_file_from_name(args.name)
@@ -1775,35 +1949,43 @@ def cmd_status(args: argparse.Namespace) -> None:
         print("  (no nodes found in topology.resolved.yaml)")
         return
 
-    want_bgp = bool(getattr(args, "bgp", False))
-
     for n in nodes:
-        name = str(n.get("name", "")).strip()
-        ntype = str(n.get("type", "")).strip()
-
+        name = str(n.get("name", ""))
+        ntype = str(n.get("type", ""))
         if not name:
             continue
 
         cname = f"clab-{lab}-{name}"
 
-        running = _container_is_running(cname)
+        # running?
+        try:
+            cp = run(
+                ["docker", "inspect", "-f", "{{.State.Running}}", cname],
+                check=False,
+                capture_output=True,
+            )
+            running = (cp.stdout.strip() == "true")
+        except Exception:
+            running = False
+
         state = "running" if running else "not running"
         print(f"  - {name:<8} ({cname}) : {state}")
 
         # optional BGP
-        if want_bgp and ntype == "frr" and running:
+        if args.bgp and ntype == "frr" and running:
             try:
-                bgp_out = run(
+                cp = run(
                     ["docker", "exec", cname, "vtysh", "-c", "show bgp summary"],
                     check=False,
-                ).rstrip()
-
-                print("      BGP:")
+                    capture_output=True,
+                )
+                bgp_out = (cp.stdout or "").strip()
                 if bgp_out:
+                    print("      BGP:")
                     for line in bgp_out.splitlines():
                         print(f"      {line}")
                 else:
-                    print("      (no output)")
+                    print("      BGP: no output")
             except Exception as e:
                 print(f"      BGP: failed to query ({e})")
 
