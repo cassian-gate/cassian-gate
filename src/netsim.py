@@ -13,11 +13,14 @@ See: docs/design-contract.md
 """
 import argparse
 import subprocess
-from pathlib import Path
 import sys
-import yaml
 import time
 import shutil
+
+from pathlib import Path
+from typing import Any
+
+import yaml
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TOPO_DIR = BASE_DIR / "topologies"
@@ -1111,6 +1114,42 @@ def ensure_ip_tools(lab: str, node: str) -> None:
     # Fallback: try install iproute2 (only works on Alpine/Debian-like with package manager)
     run(["docker", "exec", c, "sh", "-lc", "apk add --no-cache iproute2 >/dev/null || true"], check=False)
 
+def resolved_topology_path(lab: str) -> Path:
+    return lab_dir(lab) / "topology.resolved.yaml"
+
+def load_resolved_topology(lab: str) -> dict[str, Any] | None:
+    p = resolved_topology_path(lab)
+    if not p.exists():
+        return None
+    try:
+        return load_yaml(p)
+    except Exception:
+        return None
+
+def frr_nodes_from_topology(topo: dict[str, Any]) -> set[str]:
+    out: set[str] = set()
+    for n in topo.get("nodes", []):
+        if n.get("type") == "frr" and n.get("name"):
+            out.add(n["name"])
+    return out
+
+def _container_is_running(container_name: str) -> bool:
+    """
+    Return True if the given container exists and is running.
+    Uses docker inspect and captures output (no noisy stdout).
+    """
+    try:
+        out = subprocess.check_output(
+            ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
+            text=True,
+        )
+        return out.strip().lower() == "true"
+    except subprocess.CalledProcessError:
+        return False
+    except FileNotFoundError:
+        # docker binary missing
+        return False
+
 
 # -------------------------
 # Commands
@@ -1701,47 +1740,79 @@ def cmd_vty(args: argparse.Namespace) -> None:
     if cp.returncode != 0:
         die(f"vtysh command failed (exit {cp.returncode})", code=cp.returncode)
 
+def _load_resolved_topology(lab_name: str) -> dict[str, Any]:
+    lab_dir = LABS_DIR / f"clab-{lab_name}"
+    topo_path = lab_dir / "topology.resolved.yaml"
+    if not topo_path.is_file():
+        die(f"Resolved topology not found: {topo_path} (is the lab up?)")
+    return load_yaml(topo_path)
+
+def _iter_nodes(topo: dict[str, Any]) -> list[dict[str, Any]]:
+    nodes = topo.get("nodes", [])
+    # Support both styles: list (preferred) or dict (legacy)
+    if isinstance(nodes, list):
+        return [n for n in nodes if isinstance(n, dict)]
+    if isinstance(nodes, dict):
+        out: list[dict[str, Any]] = []
+        for name, n in nodes.items():
+            if isinstance(n, dict):
+                nn = dict(n)
+                nn.setdefault("name", name)
+                out.append(nn)
+        return out
+    return []
+
 def cmd_status(args: argparse.Namespace) -> None:
     lab = args.lab
-    nodes = parse_lab_nodes(lab)
+
+    topo = _load_resolved_topology(lab)
+    nodes = _iter_nodes(topo)
+
     print(f"Lab: {lab}")
     print("Nodes:")
 
+    if not nodes:
+        print("  (no nodes found in topology.resolved.yaml)")
+        return
+
+    want_bgp = bool(getattr(args, "bgp", False))
+
     for n in nodes:
-        c = container_name(lab, n)
-        running = docker_is_running(c)
-        state = "running" if running else "not-running"
-        print(f"  - {n:8} ({c}) : {state}")
+        name = str(n.get("name", "")).strip()
+        ntype = str(n.get("type", "")).strip()
 
-        if running and args.bgp:
-            cp = vty(lab, n, "show bgp summary")
-            # Print only if bgp output is present (FRR nodes). For non-FRR it will error.
-            if cp.returncode == 0 and cp.stdout:
-                lines = cp.stdout.strip().splitlines()
-                # Print header + neighbor lines (compact)
+        if not name:
+            continue
+
+        cname = f"clab-{lab}-{name}"
+
+        running = _container_is_running(cname)
+        state = "running" if running else "not running"
+        print(f"  - {name:<8} ({cname}) : {state}")
+
+        # optional BGP
+        if want_bgp and ntype == "frr" and running:
+            try:
+                bgp_out = run(
+                    ["docker", "exec", cname, "vtysh", "-c", "show bgp summary"],
+                    check=False,
+                ).rstrip()
+
                 print("      BGP:")
-                for line in lines:
-                    if line.startswith("Neighbor") or line.strip().startswith(tuple("0123456789")):
-                        print("      " + line)
-            # else ignore silently (likely not FRR)
-
-    if args.interfaces:
-        print("\nInterfaces (Linux view):")
-        for n in nodes:
-            c = container_name(lab, n)
-            if docker_is_running(c):
-                cp = run(["docker", "exec", c, "ip", "-br", "a"], check=False, capture=True)
-                if cp.returncode == 0:
-                    print(f"  {n}:")
-                    for line in cp.stdout.strip().splitlines():
-                        print("    " + line)
+                if bgp_out:
+                    for line in bgp_out.splitlines():
+                        print(f"      {line}")
+                else:
+                    print("      (no output)")
+            except Exception as e:
+                print(f"      BGP: failed to query ({e})")
 
 def cmd_collect(args: argparse.Namespace) -> None:
-    lab = args.lab
+    import json
+    import re
+    from typing import Any
 
-    # -----------------------------------------------------------------------------
-    # 0) Load & validate resolved topology (authoritative for this lab)
-    # -----------------------------------------------------------------------------
+    lab = args.lab
     tpath = topo_path_for_lab(lab)
     if not tpath.exists():
         die(f"Topology file not found for lab '{lab}': {tpath}")
@@ -1749,118 +1820,337 @@ def cmd_collect(args: argparse.Namespace) -> None:
     topo = load_yaml(tpath)
     ensure_valid_topology(topo)
 
-    nodes = topo.get("nodes", []) or []
-    nodes_sorted = sorted(nodes, key=lambda n: n.get("name", ""))
-
-    # -----------------------------------------------------------------------------
-    # 1) STRICT gate: all expected containers must be running
-    # -----------------------------------------------------------------------------
-    for n in nodes_sorted:
-        name = n.get("name")
-        if not name:
-            die("Invalid topology: node missing 'name'")
-        c = container_name(lab, name)
-        if not docker_is_running(c):
-            die(f"COLLECT FAIL: {c} is not running")
-
-    # -----------------------------------------------------------------------------
-    # 2) Output dir (deterministic location)
-    # -----------------------------------------------------------------------------
     outdir = lab_dir(lab) / "artifacts"
     outdir.mkdir(parents=True, exist_ok=True)
 
     def write(name: str, content: str) -> None:
-        (outdir / name).write_text(content or "", encoding="utf-8")
+        (outdir / name).write_text(content, encoding="utf-8")
 
-    # -----------------------------------------------------------------------------
-    # 3) High-level snapshot (DETERMINISTIC)
-    # -----------------------------------------------------------------------------
-    # IMPORTANT: do NOT include docker "Status" (it contains changing uptimes).
+    def require_running(container: str) -> None:
+        cp = run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", container],
+            check=False,
+            capture_output=True,
+        )
+        if (cp.stdout or "").strip() != "true":
+            die(f"COLLECT FAIL: {container} is not running")
+
+    def normalize_bgp_summary(text: str) -> str:
+        """
+        Deterministic BGP neighbor snapshot from `show bgp summary`.
+
+        We intentionally discard volatile counters/timers and keep only:
+        - neighbor address
+        - ASN (best-effort parse)
+        - state (Established vs Idle/Active/etc.)
+
+        Output format (one per neighbor):
+          <NEIGHBOR> AS=<ASN or ?> STATE=<STATE>
+        """
+        lines = (text or "").splitlines()
+        out: list[str] = []
+        in_table = False
+
+        for line in lines:
+            # Detect the table header
+            if ("Neighbor" in line) and ("Up/Down" in line):
+                in_table = True
+                out.append(line.rstrip())
+                continue
+
+            if not in_table:
+                # Keep pre-table lines as-is (usually stable)
+                out.append(line.rstrip())
+                continue
+
+            if not line.strip():
+                out.append("")
+                continue
+
+            parts = line.split()
+            if len(parts) < 2:
+                out.append(line.rstrip())
+                continue
+
+            nbr = parts[0]
+            # Neighbor column must look like an IP (v4/v6) to be a row
+            if not re.match(r"^[0-9A-Fa-f:.]+$", nbr):
+                out.append(line.rstrip())
+                continue
+
+            # Heuristic: AS is the first integer token shortly after the neighbor/V columns
+            asn: str | None = None
+            for tok in parts[1:6]:
+                if tok.isdigit():
+                    asn = tok
+                    break
+
+            # Last token often is State/PfxRcd. If it's numeric => Established.
+            last = parts[-1]
+            state = "Established" if last.isdigit() else last
+
+            out.append(f"{nbr} AS={asn or '?'} STATE={state}")
+
+        return "\n".join(out).rstrip() + "\n"
+
+    def scrub_containerlab_inspect_json(raw: str) -> str:
+        """
+        Containerlab inspect JSON can include volatile fields.
+        We remove common volatile keys and sort keys for stable output.
+        """
+        try:
+            obj = json.loads(raw)
+        except Exception:
+            # Fall back to raw text (useful, but may be nondeterministic)
+            return (raw or "").rstrip() + "\n"
+
+        volatile_keys = {
+            "pid", "pids",
+            "startedAt", "finishedAt",
+            "created", "createdAt",
+            "uptime",
+            "status", "state",
+            "container_id", "containerID",
+            "ipv4", "ipv6",
+            "mgmtIPv4Address", "mgmtIPv6Address",
+        }
+
+        def drop_keys(o: Any) -> None:
+            if isinstance(o, dict):
+                for k in list(o.keys()):
+                    if k in volatile_keys:
+                        o.pop(k, None)
+                for v in o.values():
+                    drop_keys(v)
+            elif isinstance(o, list):
+                for v in o:
+                    drop_keys(v)
+
+        drop_keys(obj)
+        return json.dumps(obj, sort_keys=True, indent=2).rstrip() + "\n"
+
+    # Strict: ensure all expected containers are running before collecting
+    nodes = sorted((topo.get("nodes", []) or []), key=lambda n: n.get("name", ""))
+    for n in nodes:
+        require_running(container_name(lab, n["name"]))
+
+    # Stable docker snapshot (sorted)
     cp = run(
         ["sh", "-lc", "docker ps --format '{{.Names}}\t{{.Image}}' | sort"],
-        check=True,
+        check=False,
         capture_output=True,
     )
-    write("docker-ps.txt", cp.stdout)
+    write("docker-ps.txt", cp.stdout or cp.stderr or "")
 
-    # containerlab inspect can be useful, but may include volatile fields depending on version.
-    # If you ever see hash drift again, remove this block.
+    # Containerlab inspect JSON (scrubbed)
     clab_yaml = LABS_DIR / f"{lab}.clab.yaml"
-    if not clab_yaml.exists():
-        die(f"COLLECT FAIL: containerlab file not found: {clab_yaml}")
-
     cp = run(
-        ["sudo", "containerlab", "inspect", "-t", str(clab_yaml)],
-        check=True,
+        ["sudo", "containerlab", "inspect", "-t", str(clab_yaml), "--format", "json"],
+        check=False,
         capture_output=True,
     )
-    write("containerlab-inspect.txt", (cp.stdout or "") + (cp.stderr or ""))
+    write("containerlab-inspect.json", scrub_containerlab_inspect_json(cp.stdout or cp.stderr or ""))
 
-    # -----------------------------------------------------------------------------
-    # 4) Per-node snapshots (STRICT + deterministic order)
-    # -----------------------------------------------------------------------------
-    for n in nodes_sorted:
+    # Optional: logs are nondeterministic; keep off by default
+    include_logs = False
+
+    # Per-node snapshots (deterministic order)
+    for n in nodes:
         name = n["name"]
         c = container_name(lab, name)
 
-        cp = run(["docker", "exec", c, "sh", "-lc", "ip -br a"], check=True, capture_output=True)
-        write(f"{name}.ip-addr.txt", (cp.stdout or "") + (cp.stderr or ""))
+        cp = run(["docker", "exec", c, "sh", "-lc", "ip -br a"], check=False, capture_output=True)
+        write(f"{name}.ip-addr.txt", (cp.stdout or cp.stderr or "").rstrip() + "\n")
 
-        cp = run(["docker", "exec", c, "sh", "-lc", "ip route"], check=True, capture_output=True)
-        write(f"{name}.ip-route.txt", (cp.stdout or "") + (cp.stderr or ""))
+        cp = run(["docker", "exec", c, "sh", "-lc", "ip route"], check=False, capture_output=True)
+        write(f"{name}.ip-route.txt", (cp.stdout or cp.stderr or "").rstrip() + "\n")
 
-        # NOTE: NO BGP SUMMARY HERE because it contains ticking Up/Down timers (non-deterministic)
-        # If you want it, add an explicit --volatile flag later.
+        if n.get("type") == "nft-fw":
+            cp = run(["docker", "exec", c, "sh", "-lc", "nft list ruleset"], check=False, capture_output=True)
+            write(f"{name}.nft-ruleset.txt", (cp.stdout or cp.stderr or "").rstrip() + "\n")
+
+            cp = run(["docker", "exec", c, "sh", "-lc", "sysctl -n net.ipv4.ip_forward"], check=False, capture_output=True)
+            write(f"{name}.ip-forward.txt", (cp.stdout or cp.stderr or "").strip() + "\n")
+
+        if n.get("type") == "frr":
+            cp = run(["docker", "exec", c, "vtysh", "-c", "show bgp summary"], check=False, capture_output=True)
+            write(f"{name}.bgp-summary.txt", normalize_bgp_summary(cp.stdout or cp.stderr or ""))
+
+        if include_logs:
+            cp = run(["docker", "logs", "--tail", "300", c], check=False, capture_output=True)
+            write(f"{name}.docker-logs.txt", (cp.stdout or cp.stderr or "").rstrip() + "\n")
 
     print(f"✅ COLLECT PASS: wrote artifacts to {outdir}")
 
-def main() -> None:
-    p = argparse.ArgumentParser(prog="netsim", description="ai-netsim: topo YAML -> containerlab (local MVP)")
-    sub = p.add_subparsers(dest="cmd", required=True)
+def cmd_run(args: argparse.Namespace) -> None:
+    """
+    Ephemeral workflow:
+      up -> test -> collect -> (down)
 
+    Teardown policy:
+      - Default: destroy ONLY on full success (so failures keep the lab for debugging)
+      - --destroy-always: attempt destroy even if something fails
+      - --keep: never destroy (overrides --destroy-always)
+
+    Other:
+      - collect runs best-effort even if test fails (unless --no-collect)
+    """
+    topo_path = (TOPO_DIR / args.topology) if not Path(args.topology).is_file() else Path(args.topology)
+
+    # Derive lab name robustly from topology (authoritative)
+    try:
+        topo_for_name = load_yaml(topo_path)
+    except Exception as e:
+        die(f"Failed to load topology YAML '{topo_path}': {e}")
+
+    lab_name = (topo_for_name or {}).get("name")
+    if not lab_name or not isinstance(lab_name, str):
+        die(f"Topology '{topo_path}' has no valid 'name' field (required).")
+
+    # Flags
+    keep = bool(getattr(args, "keep", False))
+    destroy_always = bool(getattr(args, "destroy_always", False))
+    do_collect = not bool(getattr(args, "no_collect", False))
+    do_reconfigure = bool(getattr(args, "reconfigure", False))
+
+    exit_code: int | None = None   # None means "no failure captured"
+    up_ok = False
+
+    def _as_exit_code(code: object) -> int:
+        # SystemExit.code can be None, int, str, etc.
+        try:
+            return int(code) if code is not None else 1
+        except Exception:
+            return 1
+
+    def record_failure(code: object = None) -> None:
+        nonlocal exit_code
+        if exit_code is None:
+            exit_code = _as_exit_code(code)
+
+    try:
+        # 1) up
+        try:
+            cmd_up(argparse.Namespace(topology=str(topo_path), reconfigure=do_reconfigure))
+            up_ok = True
+        except SystemExit as e:
+            record_failure(getattr(e, "code", 1))
+        except Exception:
+            record_failure(1)
+
+        # If up failed, skip the rest (but still hit finally + final reporting)
+        if up_ok:
+            # 2) test
+            try:
+                cmd_test(argparse.Namespace(lab=lab_name))
+            except SystemExit as e:
+                record_failure(getattr(e, "code", 1))
+            except Exception:
+                record_failure(1)
+
+            # 3) collect (best-effort; very useful for debugging failures)
+            if do_collect:
+                try:
+                    cmd_collect(argparse.Namespace(lab=lab_name))
+                except SystemExit as e:
+                    record_failure(getattr(e, "code", 1))
+                except Exception:
+                    record_failure(1)
+
+    finally:
+        # 4) down decision
+        # keep wins (never destroy)
+        # otherwise:
+        #   - destroy_always => always attempt down
+        #   - default => only down on full success (exit_code is None)
+        if keep:
+            should_destroy = False
+        elif destroy_always:
+            should_destroy = True
+        else:
+            should_destroy = (exit_code is None)
+
+        if should_destroy:
+            try:
+                cmd_down(argparse.Namespace(name=lab_name))
+            except SystemExit as e:
+                # If we were successful until teardown, teardown failure matters.
+                if exit_code is None:
+                    record_failure(getattr(e, "code", 1))
+            except Exception:
+                if exit_code is None:
+                    record_failure(1)
+
+    # Final reporting + exit behavior (never lie)
+    if exit_code is not None and int(exit_code) != 0:
+        if keep:
+            print(f"❌ RUN FAIL: exit={exit_code} (lab kept by --keep): {lab_name}")
+        elif destroy_always:
+            print(f"❌ RUN FAIL: exit={exit_code} (attempted teardown via --destroy-always): {lab_name}")
+        else:
+            print(f"❌ RUN FAIL: exit={exit_code} (lab kept for debugging): {lab_name}")
+        raise SystemExit(int(exit_code))
+
+    # Success
+    if keep:
+        print(f"✅ RUN PASS: up + test + collect completed (lab kept): {lab_name}")
+    else:
+        print(f"✅ RUN PASS: up + test + collect completed (lab destroyed): {lab_name}")
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        prog="netsim",
+        description="ai-netsim: topo YAML -> containerlab (local MVP)",
+    )
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    # gen
     p_gen = sub.add_parser("gen", help="Generate containerlab file from topology")
     p_gen.add_argument("topology", help="Topology YAML filename under ./topologies or a full path")
     p_gen.set_defaults(func=cmd_gen)
 
+    # up
     p_up = sub.add_parser("up", help="Generate + deploy")
     p_up.add_argument("topology", help="Topology YAML filename under ./topologies or a full path")
-
-    # ADD THIS
     p_up.add_argument(
-    "--reconfigure",
-    action="store_true",
-    help="Destroy the existing lab first, then redeploy (safe for generated bind-mount files).",
+        "--reconfigure",
+        action="store_true",
+        help="Destroy the existing lab first, then redeploy (safe for generated bind-mount files).",
     )
-
     p_up.set_defaults(func=cmd_up)
 
-
+    # down
     p_down = sub.add_parser("down", help="Destroy a deployed lab by name")
     p_down.add_argument("name", help="Lab name (topology 'name')")
     p_down.set_defaults(func=cmd_down)
 
+    # exec
     p_exec = sub.add_parser("exec", help="Exec a command inside a node container; if no command, open bash")
     p_exec.add_argument("lab", help="Lab name (topology 'name')")
     p_exec.add_argument("node", help="Node name (e.g. r1)")
     p_exec.add_argument("command", nargs=argparse.REMAINDER, help="Command to run inside container")
     p_exec.set_defaults(func=cmd_exec)
 
+    # collect
     p_collect = sub.add_parser("collect", help="Collect runtime artifacts for a lab")
     p_collect.add_argument("lab", help="Lab name (topology 'name')")
     p_collect.set_defaults(func=cmd_collect)
 
+    # vty
     p_vty = sub.add_parser("vty", help="Run a vtysh command easily")
     p_vty.add_argument("lab", help="Lab name (topology 'name')")
     p_vty.add_argument("node", help="Node name (e.g. r1)")
     p_vty.add_argument("command", help='vtysh command as one string, e.g. "show bgp summary"')
     p_vty.set_defaults(func=cmd_vty)
 
+    # status
     p_status = sub.add_parser("status", help="Show lab status (containers + optional BGP summary)")
     p_status.add_argument("lab", help="Lab name (topology 'name')")
     p_status.add_argument("--bgp", action="store_true", help="Include 'show bgp summary' for FRR nodes")
     p_status.add_argument("--interfaces", action="store_true", help="Include 'ip -br a' output per node")
     p_status.set_defaults(func=cmd_status)
 
+    # test
     p_test = sub.add_parser("test", help="Run declared tests for a lab")
     p_test.add_argument("lab", help="Lab name (e.g. three-frr-two-hosts-fw-routed)")
     p_test.add_argument("--name", help="Run only the test with this name (e.g. tests[4] or a named test)")
@@ -1877,7 +2167,32 @@ def main() -> None:
     )
     p_test.set_defaults(func=cmd_test)
 
-    args = p.parse_args()
+    # run
+    p_run = sub.add_parser("run", help="Ephemeral workflow: up -> test -> collect -> down (CI-friendly)")
+    p_run.add_argument("topology", help="Topology YAML filename under ./topologies or a full path")
+    p_run.add_argument(
+        "--reconfigure",
+        action="store_true",
+        help="Destroy the existing lab first, then redeploy (safe for generated bind-mount files).",
+    )
+    p_run.add_argument(
+        "--keep",
+        action="store_true",
+        help="Do not destroy the lab at the end (useful for debugging failures).",
+    )
+    p_run.add_argument(
+        "--destroy-always",
+        action="store_true",
+        help="Attempt to destroy the lab even if up/test/collect fails.",
+    )
+    p_run.add_argument(
+        "--no-collect",
+        action="store_true",
+        help="Skip collect (faster, but no artifacts).",
+    )
+    p_run.set_defaults(func=cmd_run)
+
+    args = parser.parse_args()
     args.func(args)
 
 
