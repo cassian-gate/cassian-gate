@@ -11,6 +11,8 @@ Design contract (must not be violated):
 
 See: docs/design-contract.md
 """
+from __future__ import annotations
+
 import argparse
 import subprocess
 import sys
@@ -71,11 +73,13 @@ def die(msg: str, code: int = 1) -> None:
     print(f"ERROR: {msg}", file=sys.stderr)
     raise SystemExit(code)
 
-def ensure_nc(lab: str, node: str) -> None:
-    c = container_name(lab, node)
-    cp = run(
-        ["docker", "exec", c, "sh", "-lc", "command -v nc >/dev/null"],
+def ensure_nc(rt: Runtime, lab: str, node: str) -> None:
+    cp = rt.exec(
+        lab,
+        node,
+        ["sh", "-lc", "command -v nc >/dev/null"],
         check=False,
+        capture_output=True,
     )
     if cp.returncode != 0:
         die(f"{node}: nc not found. Use wbitt/network-multitool for host/nft-fw nodes.")
@@ -87,28 +91,30 @@ def ip_no_mask(cidr: str) -> str:
 def find_nodes_by_type(topo: dict, ntype: str) -> list[dict]:
     return [n for n in topo.get("nodes", []) if n.get("type") == ntype]
 
-def start_tcp_listener(lab: str, node: str, port: int) -> None:
+def start_tcp_listener(rt: Runtime, lab: str, node: str, port: int) -> None:
     """
-    Start a TCP listener inside a container using netcat (nc).
+    Start a TCP listener inside a node using netcat (nc).
 
     Requirements:
     - nc must already exist (we do NOT install packages at runtime)
     - Must not fail if nothing is running yet
     - Must not fail if pkill exits non-zero
     """
-    ensure_nc(lab, node)
-
-    c = container_name(lab, node)
+    ensure_nc(rt, lab, node)
 
     # Kill any previous listener on that port (never fail)
-    run(
-        ["docker", "exec", c, "sh", "-lc", f'pkill -f "nc.*-p {port}" 2>/dev/null || true'],
+    rt.exec(
+        lab,
+        node,
+        ["sh", "-lc", f'pkill -f "nc.*-p {port}" 2>/dev/null || true'],
         check=False,
     )
 
     # Start listener in background
-    run(
-        ["docker", "exec", c, "sh", "-lc", f"nohup nc -lk -p {port} >/dev/null 2>&1 &"],
+    rt.exec(
+        lab,
+        node,
+        ["sh", "-lc", f"nohup nc -lk -p {port} >/dev/null 2>&1 &"],
         check=False,
     )
 
@@ -1066,7 +1072,7 @@ def compare_expected_vs_observed_bgp(expected: set[str], observed: dict[str, dic
     }
 
 
-def wait_for_bgp(lab: str, node: str, timeout: int = 30) -> None:
+def wait_for_bgp(rt: Runtime, lab: str, node: str, timeout: int = 30) -> None:
     """
     Wait for BGP to be Established-ish on a node.
 
@@ -1080,6 +1086,8 @@ def wait_for_bgp(lab: str, node: str, timeout: int = 30) -> None:
     Anything like Idle/Active/Connect/OpenSent/OpenConfirm is not OK.
     "(Policy)" is not OK.
     """
+    import time
+
     start = time.time()
     last_summary = ""
     last_neigh_lines: list[str] = []
@@ -1090,7 +1098,7 @@ def wait_for_bgp(lab: str, node: str, timeout: int = 30) -> None:
         return parts[9] if len(parts) >= 10 else ""
 
     while True:
-        cp = vty(lab, node, "show bgp summary")
+        cp = rt.exec(lab, node, ["vtysh", "-c", "show bgp summary"], check=False, capture_output=True)
         last_summary = cp.stdout or ""
         out = last_summary
 
@@ -1100,7 +1108,6 @@ def wait_for_bgp(lab: str, node: str, timeout: int = 30) -> None:
         # If we expect BGP and we have no neighbor lines yet, keep waiting
         if neigh_lines:
             if "(Policy)" in out:
-                # still not acceptable
                 pass
             else:
                 states = [parse_state_pfxrcd(ln) for ln in neigh_lines]
@@ -1476,7 +1483,7 @@ def nft_fw_apply(lab_name: str, node: str, ruleset: str) -> None:
     )
     run(["docker", "exec", c, "sh", "-lc", cmd], check=True)
 
-def verify_fw_routed_ready(lab: str, fw_node: str) -> None:
+def verify_fw_routed_ready(rt: Runtime, lab: str, fw_node: str) -> None:
     """
     Verify that a routed firewall node is ready to forward traffic.
 
@@ -1490,14 +1497,16 @@ def verify_fw_routed_ready(lab: str, fw_node: str) -> None:
     - deterministic
     - fail-fast with clear errors
     """
-    c = container_name(lab, fw_node)
 
     # ---------------------------------------------------------------------
     # 1) nft must exist in the image
     # ---------------------------------------------------------------------
-    cp = run(
-        ["docker", "exec", c, "sh", "-lc", "command -v nft >/dev/null"],
+    cp = rt.exec(
+        lab,
+        fw_node,
+        ["sh", "-lc", "command -v nft >/dev/null"],
         check=False,
+        capture_output=True,
     )
     if cp.returncode != 0:
         die(f"{fw_node}: nft not found (use an image with nftables preinstalled)")
@@ -1506,11 +1515,12 @@ def verify_fw_routed_ready(lab: str, fw_node: str) -> None:
     # 2) nft must be usable (kernel support + permissions)
     #    This catches cases where nft exists but cannot talk to the kernel.
     # ---------------------------------------------------------------------
-    cp = run(
-        ["docker", "exec", c, "sh", "-lc", "nft list ruleset >/dev/null 2>&1"],
+    cp = rt.exec(
+        lab,
+        fw_node,
+        ["sh", "-lc", "nft list ruleset >/dev/null 2>&1"],
         check=False,
         capture_output=True,
-        text=True,
     )
     if cp.returncode != 0:
         die(f"{fw_node}: nftables ruleset not accessible")
@@ -1518,17 +1528,18 @@ def verify_fw_routed_ready(lab: str, fw_node: str) -> None:
     # ---------------------------------------------------------------------
     # 3) IPv4 forwarding must be enabled (routed firewall)
     # ---------------------------------------------------------------------
-    cp = run(
-        ["docker", "exec", c, "sh", "-lc", "sysctl -n net.ipv4.ip_forward"],
+    cp = rt.exec(
+        lab,
+        fw_node,
+        ["sh", "-lc", "sysctl -n net.ipv4.ip_forward"],
         check=False,
         capture_output=True,
-        text=True,
     )
     val = (cp.stdout or "").strip()
     if val != "1":
         die(f"{fw_node}: ip_forward is not enabled (got '{val}')")
 
-def verify_host_ready(lab: str, host: str) -> None:
+def verify_host_ready(rt: Runtime, lab: str, host: str) -> None:
     """
     Host readiness gate (v1).
 
@@ -1540,47 +1551,46 @@ def verify_host_ready(lab: str, host: str) -> None:
     - Do not rely on awk/busybox differences across images.
     - Use `ip -4 -o addr show` which is consistent.
     """
-    c = container_name(lab, host)
 
     # ip command should exist
-    cp = run(["docker", "exec", c, "sh", "-lc", "command -v ip >/dev/null"], check=False)
+    cp = rt.exec(lab, host, ["sh", "-lc", "command -v ip >/dev/null"], check=False)
     if cp.returncode != 0:
         die(f"{host}: 'ip' not found")
 
     # must have at least one global IPv4 (excluding lo)
     # Example output:
     #   7: eth1    inet 192.168.1.10/24 brd 192.168.1.255 scope global eth1
-    cp = run(
-        ["docker", "exec", c, "sh", "-lc", "ip -4 -o addr show scope global | grep -q 'inet '"],
+    cp = rt.exec(
+        lab,
+        host,
+        ["sh", "-lc", "ip -4 -o addr show scope global | grep -q 'inet '"],
         check=False,
         capture_output=True,
-        text=True,
     )
     if cp.returncode != 0:
         # Helpful debug output
-        dbg = run(
-            ["docker", "exec", c, "sh", "-lc", "ip -br addr; echo '---'; ip -4 -o addr show scope global || true"],
+        dbg = rt.exec(
+            lab,
+            host,
+            ["sh", "-lc", "ip -br addr; echo '---'; ip -4 -o addr show scope global || true"],
             check=False,
             capture_output=True,
-            text=True,
         )
         die(f"{host}: no global IPv4 configured (host not ready)\n{(dbg.stdout or '').strip()}")
 
-def verify_frr_ready(lab: str, rtr: str) -> None:
-    c = container_name(lab, rtr)
-
+def verify_frr_ready(rt: Runtime, lab: str, rtr: str) -> None:
     # vtysh must work
-    cp = run(
-        ["docker", "exec", c, "vtysh", "-c", "show version"],
+    cp = rt.exec(
+        lab,
+        rtr,
+        ["vtysh", "-c", "show version"],
         check=False,
         capture_output=True,
-        text=True,
     )
     if cp.returncode != 0:
         die(f"{rtr}: vtysh not ready")
 
-
-def verify_lab_ready(topo: dict, lab: str) -> None:
+def verify_lab_ready(rt: Runtime, topo: dict, lab: str) -> None:
     nodes = topo.get("nodes", []) or []
     for n in nodes:
         name = n.get("name")
@@ -1590,11 +1600,11 @@ def verify_lab_ready(topo: dict, lab: str) -> None:
             die("Node missing 'name' or 'type' in topology")
 
         if t == "host":
-            verify_host_ready(lab, name)
+            verify_host_ready(rt, lab, name)
         elif t == "nft-fw":
-            verify_fw_routed_ready(lab, name)
+            verify_fw_routed_ready(rt, lab, name)
         elif t == "frr":
-            verify_frr_ready(lab, name)
+            verify_frr_ready(rt, lab, name)
 
 def fw_next_hops_from_links(topo: dict, fw_name: str) -> list[str]:
     """
@@ -1721,29 +1731,78 @@ class Runtime:
     v1: container-only
     future: vm runtime can be added behind this interface without changing command logic.
     """
-    def exec(self, lab: str, node: str, cmd: list[str], check: bool = False, capture_output: bool = False) -> subprocess.CompletedProcess:
+    def exec(
+        self,
+        lab: str,
+        node: str,
+        cmd: list[str],
+        *,
+        check: bool = False,
+        capture_output: bool = False,
+    ) -> subprocess.CompletedProcess:
         raise NotImplementedError
+
+    def sh(
+        self,
+        lab: str,
+        node: str,
+        script: str,
+        *,
+        check: bool = False,
+        capture_output: bool = False,
+    ) -> subprocess.CompletedProcess:
+        # Convenience wrapper for shell snippets
+        return self.exec(
+            lab,
+            node,
+            ["sh", "-lc", script],
+            check=check,
+            capture_output=capture_output,
+        )
 
     def is_running(self, lab: str, node: str) -> bool:
         raise NotImplementedError
 
 
 class ContainerRuntime(Runtime):
-    def exec(self, lab: str, node: str, cmd: list[str], check: bool = False, capture_output: bool = False) -> subprocess.CompletedProcess:
+    def exec(
+        self,
+        lab: str,
+        node: str,
+        cmd: list[str],
+        *,
+        check: bool = False,
+        capture_output: bool = False,
+    ) -> subprocess.CompletedProcess:
         c = container_name(lab, node)
         return run(["docker", "exec", c, *cmd], check=check, capture_output=capture_output)
 
     def is_running(self, lab: str, node: str) -> bool:
         c = container_name(lab, node)
         cp = run(["docker", "inspect", "-f", "{{.State.Running}}", c], check=False, capture_output=True)
-        return cp.returncode == 0 and (cp.stdout or "").strip() == "true"
+
+        if cp.returncode != 0:
+            return False
+
+        out = cp.stdout
+        if isinstance(out, bytes):
+            out = out.decode("utf-8", errors="replace")
+        return (out or "").strip() == "true"
 
 
 class VmRuntimeStub(Runtime):
     def __init__(self) -> None:
         self._msg = "VM runtime not implemented yet (Phase-1 stub). Use container runtime."
 
-    def exec(self, lab: str, node: str, cmd: list[str], check: bool = False, capture_output: bool = False) -> subprocess.CompletedProcess:
+    def exec(
+        self,
+        lab: str,
+        node: str,
+        cmd: list[str],
+        *,
+        check: bool = False,
+        capture_output: bool = False,
+    ) -> subprocess.CompletedProcess:
         die(self._msg)
 
     def is_running(self, lab: str, node: str) -> bool:
@@ -1757,7 +1816,6 @@ def get_runtime(topo: dict[str, Any] | None = None) -> Runtime:
       - default: container
       - allow future extension: topo['runtime'] or node['runtime'] (not required yet)
     """
-    # Keep it simple for v1: always container
     return ContainerRuntime()
 
 # -------------------------
@@ -1786,6 +1844,9 @@ def cmd_test(args: argparse.Namespace) -> None:
     topo = load_yaml(tpath)
     ensure_valid_topology(topo)
 
+    # Phase-1 runtime abstraction (container today, VM later)
+    rt = get_runtime(topo)
+
     nodes = topo.get("nodes", []) or []
     nodes_by_name = {n["name"]: n for n in nodes}
 
@@ -1803,11 +1864,10 @@ def cmd_test(args: argparse.Namespace) -> None:
             "failed": 0,
             "filtered_by_name": filter_name or "",
             "filtered_by_kind": filter_kind or "",
-            # Helps you debug “why didn’t my topology edit apply?”
             "resolved_topology_path": str(tpath),
             "resolved_topology_mtime": tpath.stat().st_mtime,
         },
-        "tests": [],  # list of per-test records
+        "tests": [],
     }
 
     def record_test(
@@ -1852,11 +1912,6 @@ def cmd_test(args: argparse.Namespace) -> None:
             print(json.dumps(results, indent=2))
 
     def retry_until(timeout_s: int, interval_s: float, fn) -> tuple[bool, object, int]:
-        """
-        Run fn() repeatedly until it returns (True, value) or timeout.
-        fn must return: (ok: bool, value: any)
-        Returns: (ok, last_value, attempts)
-        """
         start = time.time()
         attempts = 0
         last_val: object = None
@@ -1874,19 +1929,16 @@ def cmd_test(args: argparse.Namespace) -> None:
         if keep_going:
             print(f"ERROR: {msg}")
             return
-        # fail-fast default (results will still be written by finally where possible)
         die(msg)
 
     # =============================================================================
-    # 1) Verify all containers are running (hard prerequisite for everything else)
+    # 1) Verify all nodes are running (hard prerequisite for everything else)
     # =============================================================================
     for n in nodes:
         name = n["name"]
-        c = container_name(lab, name)
-        if not docker_is_running(c):
-            # We can write results deterministically here and exit
+        if not rt.is_running(lab, name):
             record_test(
-                name="prereq:container-running",
+                name="prereq:node-running",
                 kind="prereq",
                 src="",
                 dst=name,
@@ -1894,7 +1946,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 observed="fail",
                 verdict="fail",
                 duration_ms=0,
-                error=f"{c} is not running",
+                error=f"{name} is not running",
             )
             results["result"] = "fail"
             finished_at = time.time()
@@ -1904,13 +1956,15 @@ def cmd_test(args: argparse.Namespace) -> None:
             results["summary"]["passed"] = 0
             results["summary"]["failed"] = len(results["tests"])
             write_results()
-            die(f"{c} is not running")
+            die(f"{name} is not running")
 
     # =============================================================================
     # 2) Node readiness gate (no control-plane assumptions yet)
     # =============================================================================
     try:
-        verify_lab_ready(topo, lab)
+        # NOTE: if verify_lab_ready() is still docker-hardcoded internally,
+        # update it next to accept rt and use rt.exec/is_running.
+        verify_lab_ready(rt, topo, lab)
     except SystemExit:
         results["result"] = "fail"
         finished_at = time.time()
@@ -1942,7 +1996,9 @@ def cmd_test(args: argparse.Namespace) -> None:
     if bgp_participants:
         try:
             for n in bgp_participants:
-                wait_for_bgp(lab, n["name"], timeout=30)
+                # NOTE: if wait_for_bgp() is docker-hardcoded internally,
+                # update it next to accept rt and use rt.exec.
+                wait_for_bgp(rt, lab, n["name"], timeout=30)
         except SystemExit:
             results["result"] = "fail"
             finished_at = time.time()
@@ -1964,7 +2020,7 @@ def cmd_test(args: argparse.Namespace) -> None:
         results["summary"]["passed"] = 0
         results["summary"]["failed"] = 0
         write_results()
-        print("✅ TEST PASS: containers running" + (" + BGP OK" if bgp_participants else ""))
+        print("✅ TEST PASS: nodes running" + (" + BGP OK" if bgp_participants else ""))
         return
 
     def node_ip_or_die(node_name: str) -> str:
@@ -1979,7 +2035,9 @@ def cmd_test(args: argparse.Namespace) -> None:
         listeners_started.setdefault(dst, set())
         if port in listeners_started[dst]:
             return
-        start_tcp_listener(lab, dst, port)
+        # NOTE: if start_tcp_listener() is docker-hardcoded internally,
+        # update it next to accept rt and use rt.exec.
+        start_tcp_listener(rt, lab, dst, port)
         listeners_started[dst].add(port)
 
     matched = 0  # YAML tests that matched filters and were executed
@@ -1991,7 +2049,6 @@ def cmd_test(args: argparse.Namespace) -> None:
             if not test_name:
                 test_name = f"tests[{i}]"
 
-            # --name filter (after canonical naming)
             if filter_name and test_name != filter_name:
                 continue
 
@@ -2010,7 +2067,6 @@ def cmd_test(args: argparse.Namespace) -> None:
                 fail_or_continue(f"tests[{i}]: must be a dict")
                 continue
 
-            # ---- test kind normalization / validation ----
             if "kind" in t and "type" in t:
                 record_test(
                     name=test_name,
@@ -2060,11 +2116,9 @@ def cmd_test(args: argparse.Namespace) -> None:
                 fail_or_continue(f"tests[{i}]: unsupported kind '{kind}' (supported: ping, tcp)")
                 continue
 
-            # --kind filter (after validation)
             if filter_kind and kind != filter_kind:
                 continue
 
-            # At this point: it matched filters and will execute
             matched += 1
 
             if not src or not dst:
@@ -2091,14 +2145,14 @@ def cmd_test(args: argparse.Namespace) -> None:
                     expected = "pass"
 
                 count = int(t.get("count") or 2)
-
-                # Retry window to survive early ARP / route programming
                 timeout_s = int(t.get("timeout_s") or 15)
                 interval_s = float(t.get("retry_interval_s") or 1.0)
 
                 def attempt_ping():
-                    cp = run(
-                        ["docker", "exec", container_name(lab, src), "ping", "-c", str(count), "-W", "1", dst_ip],
+                    cp = rt.exec(
+                        lab,
+                        src,
+                        ["ping", "-c", str(count), "-W", "1", dst_ip],
                         check=False,
                     )
                     return (cp.returncode == 0), cp
@@ -2140,7 +2194,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             # ---- tcp ----
             port = t.get("port")
             expected = (t.get("expect") or "pass").lower()
-            listener = bool(t.get("listener", True))  # default True
+            listener = bool(t.get("listener", True))
 
             if expected not in ("pass", "fail"):
                 expected = "pass"
@@ -2163,13 +2217,14 @@ def cmd_test(args: argparse.Namespace) -> None:
             if listener:
                 start_listener(dst, port)
 
-            # Retry TCP connects only for expect=pass (helps with early readiness)
             timeout_s = int(t.get("timeout_s") or (10 if expected == "pass" else 0))
             interval_s = float(t.get("retry_interval_s") or 1.0)
 
             def attempt_tcp():
-                cp = run(
-                    ["docker", "exec", container_name(lab, src), "sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"],
+                cp = rt.exec(
+                    lab,
+                    src,
+                    ["sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"],
                     check=False,
                 )
                 return (cp.returncode == 0), cp
@@ -2178,9 +2233,10 @@ def cmd_test(args: argparse.Namespace) -> None:
             if expected == "pass" and timeout_s > 0:
                 ok, last_cp, attempts = retry_until(timeout_s, interval_s, attempt_tcp)
             else:
-                # Single-shot for expect=fail (you don't want "eventually allowed")
-                cp = run(
-                    ["docker", "exec", container_name(lab, src), "sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"],
+                cp = rt.exec(
+                    lab,
+                    src,
+                    ["sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"],
                     check=False,
                 )
                 ok, last_cp, attempts = (cp.returncode == 0), cp, 1
@@ -2220,17 +2276,17 @@ def cmd_test(args: argparse.Namespace) -> None:
     finally:
         # Always stop any listeners we started (deterministic cleanup)
         for dst_node in listeners_started.keys():
-            run(
-                ["docker", "exec", container_name(lab, dst_node), "sh", "-lc", 'pkill -f "nc.*-p" 2>/dev/null || true'],
+            rt.exec(
+                lab,
+                dst_node,
+                ["sh", "-lc", 'pkill -f "nc.*-p" 2>/dev/null || true'],
                 check=False,
             )
 
-        # Fill summary + final result and write results.json
         finished_at = time.time()
         results["summary"]["finished_at"] = finished_at
         results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
 
-        # Deterministic failure if filters were used and nothing matched
         if (filter_name or filter_kind) and matched == 0:
             label_parts = []
             if filter_name:
@@ -2268,7 +2324,6 @@ def cmd_test(args: argparse.Namespace) -> None:
     if results["result"] == "fail":
         die(f"TEST FAIL: {results['summary']['failed']} failed / {results['summary']['total']} total")
 
-    # If we got here, everything passed
     if bgp_participants:
         print(f"✅ Control-plane PASS: BGP established ({len(bgp_participants)} participants)")
     print(f"✅ Declared tests PASS ({results['summary']['passed']} checks)")
