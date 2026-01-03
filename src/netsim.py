@@ -1329,6 +1329,32 @@ def configure_hosts_from_topology(lab_name: str, topo: dict) -> None:
         if node_type.get(n2) == "host" and node_type.get(n1) in ("frr", "linux"):
             host_configure(lab_name, n2, if2, ip2, ip1.split("/")[0])
 
+def _parse_route_entry(fw_name: str, r: object) -> tuple[str, str]:
+    """
+    Parse a route entry into (prefix, via) strings.
+    Supports:
+      - "192.168.1.0/24 via 10.0.0.2"
+      - {"prefix": "192.168.1.0/24", "via": "10.0.0.2"}
+    """
+    if isinstance(r, str):
+        if " via " not in r:
+            die(f"{fw_name}: route string must look like 'PREFIX via NEXT_HOP' (got: {r!r})")
+        prefix, via = r.split(" via ", 1)
+        prefix, via = prefix.strip(), via.strip()
+
+    elif isinstance(r, dict):
+        prefix = str(r.get("prefix") or "").strip()
+        via = str(r.get("via") or "").strip()
+        if not prefix or not via:
+            die(f"{fw_name}: route dict must include 'prefix' and 'via' (got: {r!r})")
+
+    else:
+        die(f"{fw_name}: routes entries must be strings or dicts (got: {type(r).__name__})")
+
+    if not prefix or not via:
+        die(f"{fw_name}: invalid route (got prefix={prefix!r}, via={via!r})")
+
+    return prefix, via
 
 def configure_nftfw_routes_from_topology(lab: str, topo: dict) -> None:
     """
@@ -1351,42 +1377,50 @@ def configure_nftfw_routes_from_topology(lab: str, topo: dict) -> None:
     Uses `ip route replace` to be safe on repeated runs.
     """
     for n in topo.get("nodes", []) or []:
+        if not isinstance(n, dict):
+            continue
         if n.get("type") != "nft-fw":
             continue
 
         fw_name = n.get("name")
-        if not fw_name:
+        if not isinstance(fw_name, str) or not fw_name.strip():
             die("nft-fw node missing 'name'")
+        fw_name = fw_name.strip()
 
-        routes = n.get("routes", []) or []
-        if not routes:
+        routes = n.get("routes") or []
+        if not isinstance(routes, list) or not routes:
             continue
 
         for r in routes:
-            prefix = None
-            via = None
+            prefix: str
+            via: str
 
             # Format A: string "PREFIX via NEXT_HOP"
             if isinstance(r, str):
                 if " via " not in r:
                     die(f"{fw_name}: route string must look like 'PREFIX via NEXT_HOP' (got: {r!r})")
-                prefix, via = r.split(" via ", 1)
-                prefix = prefix.strip()
-                via = via.strip()
+                p, v = r.split(" via ", 1)
+                prefix = p.strip()
+                via = v.strip()
 
             # Format B: dict {"prefix": "...", "via": "..."}
             elif isinstance(r, dict):
-                prefix = (r.get("prefix") or "").strip()
-                via = (r.get("via") or "").strip()
+                prefix = str(r.get("prefix") or "").strip()
+                via = str(r.get("via") or "").strip()
                 if not prefix or not via:
                     die(f"{fw_name}: route dict must include 'prefix' and 'via' (got: {r!r})")
 
             else:
                 die(f"{fw_name}: routes entries must be strings or dicts (got: {type(r).__name__})")
 
-            # Apply route
-            run(["docker", "exec", container_name(lab, fw_name),
-                 "ip", "route", "replace", prefix, "via", via])
+            if not prefix or not via:
+                die(f"{fw_name}: invalid route (got prefix={prefix!r}, via={via!r})")
+
+            # Apply route (strings only, so type-checkers stop complaining)
+            run([
+                "docker", "exec", container_name(lab, fw_name),
+                "ip", "route", "replace", prefix, "via", via
+            ])
 
 def host_configure(lab_name: str, host: str, iface: str, ip_cidr: str, gw: str) -> None:
     """
@@ -1427,29 +1461,20 @@ def configure_nftfw_from_topology(lab_name: str, topo: dict) -> None:
 def nft_fw_apply(lab_name: str, node: str, ruleset: str) -> None:
     c = container_name(lab_name, node)
 
-    # Ensure nft exists (multitool does NOT include it)
+    # Require nft exists in the image (NO runtime installs)
     cp = run(["docker", "exec", c, "sh", "-lc", "command -v nft >/dev/null"], check=False)
     if cp.returncode != 0:
-        # Try Alpine install (works if the image is Alpine-based)
-        run(
-            ["docker", "exec", c, "sh", "-lc", "apk add --no-cache nftables >/dev/null 2>&1"],
-            check=False,
-        )
-        # Check again, fail clearly if still missing
-        cp2 = run(["docker", "exec", c, "sh", "-lc", "command -v nft >/dev/null"], check=False)
-        if cp2.returncode != 0:
-            die(f"{node}: nft not found (either use an nftables-capable image, or keep install logic)")
+        die(f"{node}: nft not found (use an nftables-capable image, e.g. netsim/nft-fw:latest)")
 
-    # Load ruleset
+    # Load ruleset (fail-fast if nft rejects it)
     cmd = (
         "set -e\n"
         "cat > /tmp/rules.nft <<'EOF'\n"
         f"{ruleset}\n"
         "EOF\n"
         "nft -f /tmp/rules.nft\n"
-        "nft list ruleset\n"
     )
-    run(["docker", "exec", c, "sh", "-lc", cmd])
+    run(["docker", "exec", c, "sh", "-lc", cmd], check=True)
 
 def verify_fw_routed_ready(lab: str, fw_node: str) -> None:
     """
@@ -1625,12 +1650,13 @@ def parse_lab_nodes(lab_name: str) -> list[str]:
     return nodes
 
 def docker_is_running(container: str) -> bool:
-    cp = run(["docker", "inspect", "-f", "{{.State.Running}}", container], check=False, capture=True)
-    return cp.returncode == 0 and cp.stdout.strip() == "true"
+    # kept for compatibility where you pass full container name
+    cp = run(["docker", "inspect", "-f", "{{.State.Running}}", container], check=False, capture_output=True)
+    return cp.returncode == 0 and (cp.stdout or "").strip() == "true"
 
 def vty(lab: str, node: str, cmd: str) -> subprocess.CompletedProcess:
-    c = container_name(lab, node)
-    return run(["docker", "exec", c, "vtysh", "-c", cmd], check=False, capture=True)
+    rt = get_runtime()
+    return rt.exec(lab, node, ["vtysh", "-c", cmd], check=False, capture_output=True)
 
 def topo_path_for_lab(lab_name: str) -> Path:
     p_resolved = lab_dir(lab_name) / "topology.resolved.yaml"
@@ -1648,13 +1674,9 @@ def nodes_by_type(topo: dict, ntype: str) -> list[str]:
 
 def ensure_ip_tools(lab: str, node: str) -> None:
     c = container_name(lab, node)
-    # If 'ip' exists and supports iproute2-ish output, we're good.
     cp = run(["docker", "exec", c, "sh", "-lc", "command -v ip >/dev/null"], check=False)
-    if cp.returncode == 0:
-        return
-
-    # Fallback: try install iproute2 (only works on Alpine/Debian-like with package manager)
-    run(["docker", "exec", c, "sh", "-lc", "apk add --no-cache iproute2 >/dev/null || true"], check=False)
+    if cp.returncode != 0:
+        die(f"{node}: 'ip' not found (image must include iproute2)")
 
 def resolved_topology_path(lab: str) -> Path:
     return lab_dir(lab) / "topology.resolved.yaml"
@@ -1691,7 +1713,52 @@ def _container_is_running(container_name: str) -> bool:
     except FileNotFoundError:
         # docker binary missing
         return False
+    
+class Runtime:
+    """
+    Runtime abstraction stub.
 
+    v1: container-only
+    future: vm runtime can be added behind this interface without changing command logic.
+    """
+    def exec(self, lab: str, node: str, cmd: list[str], check: bool = False, capture_output: bool = False) -> subprocess.CompletedProcess:
+        raise NotImplementedError
+
+    def is_running(self, lab: str, node: str) -> bool:
+        raise NotImplementedError
+
+
+class ContainerRuntime(Runtime):
+    def exec(self, lab: str, node: str, cmd: list[str], check: bool = False, capture_output: bool = False) -> subprocess.CompletedProcess:
+        c = container_name(lab, node)
+        return run(["docker", "exec", c, *cmd], check=check, capture_output=capture_output)
+
+    def is_running(self, lab: str, node: str) -> bool:
+        c = container_name(lab, node)
+        cp = run(["docker", "inspect", "-f", "{{.State.Running}}", c], check=False, capture_output=True)
+        return cp.returncode == 0 and (cp.stdout or "").strip() == "true"
+
+
+class VmRuntimeStub(Runtime):
+    def __init__(self) -> None:
+        self._msg = "VM runtime not implemented yet (Phase-1 stub). Use container runtime."
+
+    def exec(self, lab: str, node: str, cmd: list[str], check: bool = False, capture_output: bool = False) -> subprocess.CompletedProcess:
+        die(self._msg)
+
+    def is_running(self, lab: str, node: str) -> bool:
+        die(self._msg)
+        return False
+
+
+def get_runtime(topo: dict[str, Any] | None = None) -> Runtime:
+    """
+    Decide runtime. For now:
+      - default: container
+      - allow future extension: topo['runtime'] or node['runtime'] (not required yet)
+    """
+    # Keep it simple for v1: always container
+    return ContainerRuntime()
 
 # -------------------------
 # Commands
@@ -1772,9 +1839,15 @@ def cmd_test(args: argparse.Namespace) -> None:
         results["tests"].append(rec)
 
     def write_results() -> None:
+        # Machine artifact
         out = lab_dir(lab) / "results.json"
         out.write_text(json.dumps(results, indent=2), encoding="utf-8")
         print(f"Wrote: {out}")
+
+        # Human summary artifact
+        summary_path = write_test_summary_artifact(lab, results)
+        print(f"Wrote: {summary_path}")
+
         if print_json:
             print(json.dumps(results, indent=2))
 
@@ -1824,8 +1897,9 @@ def cmd_test(args: argparse.Namespace) -> None:
                 error=f"{c} is not running",
             )
             results["result"] = "fail"
-            results["summary"]["finished_at"] = time.time()
-            results["summary"]["duration_ms"] = int((results["summary"]["finished_at"] - started_at) * 1000)
+            finished_at = time.time()
+            results["summary"]["finished_at"] = finished_at
+            results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
             results["summary"]["total"] = len(results["tests"])
             results["summary"]["passed"] = 0
             results["summary"]["failed"] = len(results["tests"])
@@ -1839,8 +1913,9 @@ def cmd_test(args: argparse.Namespace) -> None:
         verify_lab_ready(topo, lab)
     except SystemExit:
         results["result"] = "fail"
-        results["summary"]["finished_at"] = time.time()
-        results["summary"]["duration_ms"] = int((results["summary"]["finished_at"] - started_at) * 1000)
+        finished_at = time.time()
+        results["summary"]["finished_at"] = finished_at
+        results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
         write_results()
         raise
 
@@ -1870,8 +1945,9 @@ def cmd_test(args: argparse.Namespace) -> None:
                 wait_for_bgp(lab, n["name"], timeout=30)
         except SystemExit:
             results["result"] = "fail"
-            results["summary"]["finished_at"] = time.time()
-            results["summary"]["duration_ms"] = int((results["summary"]["finished_at"] - started_at) * 1000)
+            finished_at = time.time()
+            results["summary"]["finished_at"] = finished_at
+            results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
             write_results()
             raise
 
@@ -1881,8 +1957,9 @@ def cmd_test(args: argparse.Namespace) -> None:
     tests = topo.get("tests", []) or []
     if not tests:
         results["result"] = "pass"
-        results["summary"]["finished_at"] = time.time()
-        results["summary"]["duration_ms"] = int((results["summary"]["finished_at"] - started_at) * 1000)
+        finished_at = time.time()
+        results["summary"]["finished_at"] = finished_at
+        results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
         results["summary"]["total"] = 0
         results["summary"]["passed"] = 0
         results["summary"]["failed"] = 0
@@ -2197,6 +2274,53 @@ def cmd_test(args: argparse.Namespace) -> None:
     print(f"✅ Declared tests PASS ({results['summary']['passed']} checks)")
     print("✅ TEST PASS: containers running + checks OK")
 
+def _format_test_summary(results: dict) -> str:
+    lab = results.get("lab", "")
+    summ = results.get("summary", {}) or {}
+    total = int(summ.get("total") or 0)
+    passed = int(summ.get("passed") or 0)
+    failed = int(summ.get("failed") or 0)
+    duration_ms = summ.get("duration_ms")
+
+    lines: list[str] = []
+    lines.append(f"lab: {lab}")
+    lines.append(f"result: {results.get('result', 'unknown')}")
+    if duration_ms is not None:
+        lines.append(f"duration_ms: {int(duration_ms)}")
+    lines.append(f"tests: total={total} passed={passed} failed={failed}")
+
+    failed_tests = []
+    for t in results.get("tests", []) or []:
+        if t.get("verdict") == "fail":
+            name = t.get("name", "<unnamed>")
+            kind = t.get("kind", "")
+            src = t.get("from", "")
+            dst = t.get("to", "")
+            err = t.get("error", "")
+            failed_tests.append((name, kind, src, dst, err))
+
+    failed_tests.sort()
+
+    if failed_tests:
+        lines.append("failed_tests:")
+        cap = 10
+        for (name, kind, src, dst, err) in failed_tests[:cap]:
+            line = f" - {name} ({kind}) {src}->{dst}"
+            if err:
+                line += f" : {err}"
+            lines.append(line)
+        if len(failed_tests) > cap:
+            lines.append(f" - (+{len(failed_tests) - cap} more)")
+    else:
+        lines.append("failed_tests: (none)")
+
+    return "\n".join(lines) + "\n"
+
+def write_test_summary_artifact(lab: str, results: dict) -> Path:
+    out = lab_dir(lab) / "results.summary.txt"
+    out.write_text(_format_test_summary(results), encoding="utf-8")
+    return out
+
 def cmd_gen(args: argparse.Namespace) -> None:
     topo_path = (TOPO_DIR / args.topology) if not Path(args.topology).is_file() else Path(args.topology)
     out = write_containerlab_file(topo_path)
@@ -2264,16 +2388,17 @@ def cmd_down(args: argparse.Namespace) -> None:
     run(["sudo", "containerlab", "destroy", "-t", str(out)])
 
 def cmd_exec(args: argparse.Namespace) -> None:
-    c = container_name(args.lab, args.node)
+    rt = get_runtime()
+
     if not args.command:
-        # Open interactive shell if no command given
+        # Interactive shell (container-only today)
+        c = container_name(args.lab, args.node)
         run(["docker", "exec", "-it", c, "bash"], check=False)
         return
 
-    # Use -t only (not -it) for non-interactive commands
-    cp = run(["docker", "exec", c] + args.command, check=False)
+    cp = rt.exec(args.lab, args.node, args.command, check=False, capture_output=False)
     if cp.returncode != 0:
-        die(f"Command failed inside {c} (exit {cp.returncode})", code=cp.returncode)
+        die(f"Command failed inside {container_name(args.lab, args.node)} (exit {cp.returncode})", code=cp.returncode)
 
 def cmd_vty(args: argparse.Namespace) -> None:
     # command is provided as a single string; e.g. "show bgp summary"
