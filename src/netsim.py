@@ -118,20 +118,32 @@ def start_tcp_listener(rt: Runtime, lab: str, node: str, port: int) -> None:
         check=False,
     )
 
-def stop_tcp_listeners(lab: str, node: str) -> None:
+def stop_tcp_listeners(rt: Runtime, lab: str, node: str) -> None:
     """
     Stop any nc listeners we started. Never fail the test.
     """
-    c = container_name(lab, node)
-    run(["docker", "exec", c, "sh", "-lc", "pkill -f \"nc.*-p\" 2>/dev/null || true"], check=False)
-
-def tcp_connect_test(lab: str, src_host: str, dst_ip: str, port: int, should_succeed: bool) -> None:
-    c = container_name(lab, src_host)
-
-    # 'nc -z' = zero-I/O connect test
-    cp = run(
-        ["docker", "exec", c, "sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"],
+    rt.exec(
+        lab,
+        node,
+        ["sh", "-lc", 'pkill -f "nc.*-p" 2>/dev/null || true'],
         check=False,
+    )
+
+def tcp_connect_test(
+    rt: Runtime,
+    lab: str,
+    src_host: str,
+    dst_ip: str,
+    port: int,
+    should_succeed: bool,
+) -> None:
+    # 'nc -z' = zero-I/O connect test
+    cp = rt.exec(
+        lab,
+        src_host,
+        ["sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"],
+        check=False,
+        capture_output=False,
     )
 
     ok = (cp.returncode == 0)
@@ -162,10 +174,20 @@ def node_first_ipv4(topo: dict, node_name: str) -> str:
     die(f"Could not determine IPv4 for node '{node_name}' from topology links")
 
 
-def run_ping_test(lab: str, src: str, dst_ip: str, count: int, should_succeed: bool) -> None:
-    cp = run(
-        ["docker", "exec", container_name(lab, src), "ping", "-c", str(count), dst_ip],
+def run_ping_test(
+    rt: Runtime,
+    lab: str,
+    src: str,
+    dst_ip: str,
+    count: int,
+    should_succeed: bool,
+) -> None:
+    cp = rt.exec(
+        lab,
+        src,
+        ["ping", "-c", str(count), dst_ip],
         check=False,
+        capture_output=False,
     )
     ok = (cp.returncode == 0)
     if should_succeed and not ok:
@@ -173,12 +195,21 @@ def run_ping_test(lab: str, src: str, dst_ip: str, count: int, should_succeed: b
     if (not should_succeed) and ok:
         die(f"PING FAIL (expected DROP): {src} -> {dst_ip}")
 
-
-def run_tcp_test(lab: str, src: str, dst_ip: str, port: int, should_succeed: bool) -> None:
+def run_tcp_test(
+    rt: Runtime,
+    lab: str,
+    src: str,
+    dst_ip: str,
+    port: int,
+    should_succeed: bool,
+) -> None:
     # nc -z checks connect() only
-    cp = run(
-        ["docker", "exec", container_name(lab, src), "sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"],
+    cp = rt.exec(
+        lab,
+        src,
+        ["sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"],
         check=False,
+        capture_output=False,
     )
     ok = (cp.returncode == 0)
     if should_succeed and not ok:
@@ -186,8 +217,7 @@ def run_tcp_test(lab: str, src: str, dst_ip: str, port: int, should_succeed: boo
     if (not should_succeed) and ok:
         die(f"TCP FAIL (expected DROP): {src} -> {dst_ip}:{port}")
 
-
-def run_declared_tests(lab: str, topo: dict) -> None:
+def run_declared_tests(rt: Runtime, lab: str, topo: dict) -> None:
     tests = topo.get("tests") or []
     if not tests:
         return
@@ -218,7 +248,7 @@ def run_declared_tests(lab: str, topo: dict) -> None:
 
             if ttype == "ping":
                 count = int(t.get("count") or 2)
-                run_ping_test(lab, src, dst_ip, count=count, should_succeed=should_succeed)
+                run_ping_test(rt, lab, src, dst_ip, count=count, should_succeed=should_succeed)
 
             elif ttype == "tcp":
                 port = int(t.get("port"))
@@ -226,10 +256,10 @@ def run_declared_tests(lab: str, topo: dict) -> None:
                     # start listener on the *dst node* (must be a node name)
                     if not isinstance(dst, str) or not any(n.get("name") == dst for n in topo.get("nodes", [])):
                         die(f"{tname}: listener=true requires dst to be a node name, got '{dst}'")
-                    start_tcp_listener(lab, dst, port)
+                    start_tcp_listener(rt, lab, dst, port)
                     listeners_started.append((dst, port))
 
-                run_tcp_test(lab, src, dst_ip, port=port, should_succeed=should_succeed)
+                run_tcp_test(rt, lab, src, dst_ip, port=port, should_succeed=should_succeed)
 
             else:
                 die(f"Unknown test type '{ttype}' in test '{tname}'")
@@ -238,7 +268,7 @@ def run_declared_tests(lab: str, topo: dict) -> None:
         # clean up listeners we started
         for (node, _port) in listeners_started:
             # easiest: stop all nc listeners on node
-            stop_tcp_listeners(lab, node)
+            stop_tcp_listeners(rt, lab, node)
 
     print(f"✅ Declared tests PASS ({len(tests)} checks)")
 
@@ -1131,7 +1161,12 @@ def wait_for_bgp(rt: Runtime, lab: str, node: str, timeout: int = 30) -> None:
         time.sleep(1)
 
 def container_name(lab_name: str, node: str) -> str:
-    return f"clab-{lab_name}-{node}"
+    """
+    Back-compat helper.
+    Historically returned the docker container name. Now returns the runtime node id.
+    """
+    rt = get_runtime()
+    return rt.node_id(lab_name, node)
 
 def _node_index_by_name(topo: dict[str, Any]) -> dict[str, dict[str, Any]]:
     idx: dict[str, dict[str, Any]] = {}
@@ -1142,12 +1177,16 @@ def _node_index_by_name(topo: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return idx
 
 
-def configure_frr_interfaces_from_topology(lab: str, topo: dict[str, Any]) -> None:
+def configure_frr_interfaces_from_topology(rt: "Runtime", lab: str, topo: dict[str, Any]) -> None:
     """
     For each link with ipv4 addressing, assign the per-endpoint IP to the correct interface,
     BUT only for endpoints that are FRR nodes.
 
     Also configures loopback with router_id/32 if present.
+
+    Runtime contract:
+      - No direct docker/container name usage here
+      - All node execution goes through rt.exec()/rt.sh()
     """
     nodes = _node_index_by_name(topo)
 
@@ -1172,12 +1211,10 @@ def configure_frr_interfaces_from_topology(lab: str, topo: dict[str, Any]) -> No
             if not n or n.get("type") != "frr":
                 continue
 
-            cname = f"clab-{lab}-{node}"
-
             # bring up + set address
-            run(["docker", "exec", cname, "ip", "link", "set", iface, "up"], check=False)
-            run(["docker", "exec", cname, "ip", "addr", "flush", "dev", iface], check=False)
-            run(["docker", "exec", cname, "ip", "addr", "add", ipcidr, "dev", iface], check=True)
+            rt.exec(lab, node, ["ip", "link", "set", iface, "up"], check=False, capture_output=False)
+            rt.exec(lab, node, ["ip", "addr", "flush", "dev", iface], check=False, capture_output=False)
+            rt.exec(lab, node, ["ip", "addr", "add", ipcidr, "dev", iface], check=True, capture_output=False)
 
     # 2) Router-id loopback (router_id/32) if provided
     for node, n in nodes.items():
@@ -1187,17 +1224,19 @@ def configure_frr_interfaces_from_topology(lab: str, topo: dict[str, Any]) -> No
         if not (isinstance(rid, str) and rid):
             continue
 
-        cname = f"clab-{lab}-{node}"
-        run(["docker", "exec", cname, "ip", "link", "set", "lo", "up"], check=False)
+        rt.exec(lab, node, ["ip", "link", "set", "lo", "up"], check=False, capture_output=False)
         # Keep it simple: flush + set router_id/32
-        run(["docker", "exec", cname, "ip", "addr", "flush", "dev", "lo"], check=False)
-        run(["docker", "exec", cname, "ip", "addr", "add", f"{rid}/32", "dev", "lo"], check=True)
+        rt.exec(lab, node, ["ip", "addr", "flush", "dev", "lo"], check=False, capture_output=False)
+        rt.exec(lab, node, ["ip", "addr", "add", f"{rid}/32", "dev", "lo"], check=True, capture_output=False)
 
-
-def configure_frr_static_routes_from_topology(lab: str, topo: dict[str, Any]) -> None:
+def configure_frr_static_routes_from_topology(rt: "Runtime", lab: str, topo: dict[str, Any]) -> None:
     """
     Apply node-level static_routes entries like:
       - 192.168.2.0/24 via 10.0.0.1
+
+    Runtime contract:
+      - No direct docker/container name usage here
+      - All node execution goes through rt.exec()/rt.sh()
     """
     nodes = _node_index_by_name(topo)
 
@@ -1208,28 +1247,31 @@ def configure_frr_static_routes_from_topology(lab: str, topo: dict[str, Any]) ->
         if not isinstance(routes, list):
             continue
 
-        cname = f"clab-{lab}-{node}"
         for r in routes:
             if not isinstance(r, str):
                 continue
             # Expect "PREFIX via NEXTHOP"
-            # We'll just pass it directly to ip route replace
-            run(["docker", "exec", cname, "sh", "-lc", f"ip route replace {r}"], check=False)
+            # Keep existing behavior: pass to ip route replace as a shell line.
+            rt.sh(lab, node, f"ip route replace {r}", check=False, capture_output=False)
 
-
-def configure_frr_bgp_from_topology(lab: str, topo: dict[str, Any]) -> None:
+def configure_frr_bgp_from_topology(rt: "Runtime", lab: str, topo: dict[str, Any]) -> None:
     """
     Minimal BGP neighbor provisioning:
+
     - For each link between TWO FRR nodes with ipv4 /31 or /30 addressing:
       configure them as neighbors (remote-as from topo nodes' asn).
     - Configure router-id if present.
     - Allow eBGP without policy (MVP) so later advertisements work.
+
+    Runtime contract:
+      - No direct docker/container name usage here.
+      - All node execution goes through rt.exec().
     """
     nodes = _node_index_by_name(topo)
 
     # Build a list of FRR-FRR adjacencies from links
+    # (nodeA, nbr_ip_on_A, nodeB, nbr_ip_on_B)
     adj: list[tuple[str, str, str, str]] = []
-    # (nodeA, ipA, nodeB, ipB)
 
     for link in topo.get("links", []) or []:
         endpoints = link.get("endpoints") or []
@@ -1273,8 +1315,6 @@ def configure_frr_bgp_from_topology(lab: str, topo: dict[str, Any]) -> None:
             else:
                 continue
 
-        cname = f"clab-{lab}-{node}"
-
         # Start BGP process
         cmds: list[str] = []
         cmds.append("conf t")
@@ -1300,17 +1340,22 @@ def configure_frr_bgp_from_topology(lab: str, topo: dict[str, Any]) -> None:
         cmds.append("end")
 
         # Execute via vtysh (one call per node)
-        vty_args = ["docker", "exec", cname, "vtysh"]
+        vty_cmd: list[str] = ["vtysh"]
         for c in cmds:
-            vty_args += ["-c", c]
-        run(vty_args, check=False)
+            vty_cmd += ["-c", c]
 
-def configure_hosts_from_topology(lab_name: str, topo: dict) -> None:
+        rt.exec(lab, node, vty_cmd, check=False, capture_output=False)
+
+def configure_hosts_from_topology(rt: "Runtime", lab_name: str, topo: dict) -> None:
     """
     Configure host nodes based on links that include explicit link['ipv4'] entries.
     For a host<->router link, we:
       - set host IP on its interface
       - set host default route via router IP on that same link
+
+    Runtime contract:
+      - No direct docker/container name usage here.
+      - All node execution goes through rt.exec()/rt.sh() via host_configure().
     """
     # Quick lookup: node name -> type
     node_type = {n["name"]: n["type"] for n in topo.get("nodes", [])}
@@ -1330,11 +1375,11 @@ def configure_hosts_from_topology(lab_name: str, topo: dict) -> None:
 
         # Host on side 1?
         if node_type.get(n1) == "host" and node_type.get(n2) in ("frr", "linux"):
-            host_configure(lab_name, n1, if1, ip1, ip2.split("/")[0])
+            host_configure(rt, lab_name, n1, if1, ip1, ip2.split("/")[0])
 
         # Host on side 2?
         if node_type.get(n2) == "host" and node_type.get(n1) in ("frr", "linux"):
-            host_configure(lab_name, n2, if2, ip2, ip1.split("/")[0])
+            host_configure(rt, lab_name, n2, if2, ip2, ip1.split("/")[0])
 
 def _parse_route_entry(fw_name: str, r: object) -> tuple[str, str]:
     """
@@ -1363,13 +1408,13 @@ def _parse_route_entry(fw_name: str, r: object) -> tuple[str, str]:
 
     return prefix, via
 
-def configure_nftfw_routes_from_topology(lab: str, topo: dict) -> None:
+def configure_nftfw_routes_from_topology(rt: "Runtime", lab: str, topo: dict) -> None:
     """
     Configure static routes on nft-fw nodes (Linux) based on topology.
 
     Supports BOTH formats:
 
-    1) String form (like your FRR static_routes):
+    1) String form (like FRR static_routes):
         routes:
           - "192.168.1.0/24 via 10.0.0.2"
           - "192.168.2.0/24 via 10.0.0.5"
@@ -1382,8 +1427,16 @@ def configure_nftfw_routes_from_topology(lab: str, topo: dict) -> None:
             via: "10.0.0.5"
 
     Uses `ip route replace` to be safe on repeated runs.
+
+    Runtime contract:
+      - No direct docker/container_name usage here.
+      - All node execution goes through rt.exec().
     """
-    for n in topo.get("nodes", []) or []:
+    nodes = topo.get("nodes", []) or []
+    if not isinstance(nodes, list):
+        die("topology 'nodes' must be a list")
+
+    for n in nodes:
         if not isinstance(n, dict):
             continue
         if n.get("type") != "nft-fw":
@@ -1423,32 +1476,29 @@ def configure_nftfw_routes_from_topology(lab: str, topo: dict) -> None:
             if not prefix or not via:
                 die(f"{fw_name}: invalid route (got prefix={prefix!r}, via={via!r})")
 
-            # Apply route (strings only, so type-checkers stop complaining)
-            run([
-                "docker", "exec", container_name(lab, fw_name),
-                "ip", "route", "replace", prefix, "via", via
-            ])
+            # Apply route inside the firewall node
+            rt.exec(
+                lab,
+                fw_name,
+                ["ip", "route", "replace", prefix, "via", via],
+                check=True,
+                capture_output=False,
+            )
 
-def host_configure(lab_name: str, host: str, iface: str, ip_cidr: str, gw: str) -> None:
+
+def host_configure(rt: "Runtime", lab_name: str, host: str, iface: str, ip_cidr: str, gw: str) -> None:
     """
-    Inside host container:
+    Inside host node:
       - flush and set IP on iface
       - bring iface up
       - set default route via gw
     """
-    c = container_name(lab_name, host)
+    rt.exec(lab_name, host, ["ip", "link", "set", iface, "up"], check=False, capture_output=False)
+    rt.exec(lab_name, host, ["ip", "addr", "flush", "dev", iface], check=False, capture_output=False)
+    rt.exec(lab_name, host, ["ip", "addr", "add", ip_cidr, "dev", iface], check=True, capture_output=False)
+    rt.exec(lab_name, host, ["ip", "route", "replace", "default", "via", gw], check=True, capture_output=False)
 
-    # Ensure interface exists/up
-    run(["docker", "exec", c, "ip", "link", "set", iface, "up"], check=False)
-
-    # Replace IP (flush then add)
-    run(["docker", "exec", c, "ip", "addr", "flush", "dev", iface], check=False)
-    run(["docker", "exec", c, "ip", "addr", "add", ip_cidr, "dev", iface])
-
-    # Default route
-    run(["docker", "exec", c, "ip", "route", "replace", "default", "via", gw])
-
-def configure_nftfw_from_topology(lab_name: str, topo: dict) -> None:
+def configure_nftfw_from_topology(rt: "Runtime", lab_name: str, topo: dict) -> None:
     for link in topo.get("links", []):
         eps = link.get("endpoints", [])
         ips = link.get("ipv4", [])
@@ -1459,17 +1509,22 @@ def configure_nftfw_from_topology(lab_name: str, topo: dict) -> None:
             node, iface = ep.split(":", 1)
             if not ip:
                 continue
-            if node.startswith("fw") or node == "fw1" or any(n.get("name") == node and n.get("type") == "nft-fw" for n in topo.get("nodes", [])):
-                c = container_name(lab_name, node)
-                run(["docker", "exec", c, "ip", "link", "set", iface, "up"])
-                run(["docker", "exec", c, "ip", "addr", "flush", "dev", iface])
-                run(["docker", "exec", c, "ip", "addr", "add", ip, "dev", iface])
 
-def nft_fw_apply(lab_name: str, node: str, ruleset: str) -> None:
-    c = container_name(lab_name, node)
+            is_fw = (
+                node.startswith("fw")
+                or node == "fw1"
+                or any(n.get("name") == node and n.get("type") == "nft-fw" for n in topo.get("nodes", []))
+            )
+            if not is_fw:
+                continue
 
+            rt.exec(lab_name, node, ["ip", "link", "set", iface, "up"], check=False, capture_output=False)
+            rt.exec(lab_name, node, ["ip", "addr", "flush", "dev", iface], check=False, capture_output=False)
+            rt.exec(lab_name, node, ["ip", "addr", "add", ip, "dev", iface], check=True, capture_output=False)
+
+def nft_fw_apply(rt: "Runtime", lab_name: str, node: str, ruleset: str) -> None:
     # Require nft exists in the image (NO runtime installs)
-    cp = run(["docker", "exec", c, "sh", "-lc", "command -v nft >/dev/null"], check=False)
+    cp = rt.sh(lab_name, node, "command -v nft >/dev/null", check=False, capture_output=False)
     if cp.returncode != 0:
         die(f"{node}: nft not found (use an nftables-capable image, e.g. netsim/nft-fw:latest)")
 
@@ -1481,7 +1536,7 @@ def nft_fw_apply(lab_name: str, node: str, ruleset: str) -> None:
         "EOF\n"
         "nft -f /tmp/rules.nft\n"
     )
-    run(["docker", "exec", c, "sh", "-lc", cmd], check=True)
+    rt.sh(lab_name, node, cmd, check=True, capture_output=False)
 
 def verify_fw_routed_ready(rt: Runtime, lab: str, fw_node: str) -> None:
     """
@@ -1633,9 +1688,7 @@ def fw_next_hops_from_links(topo: dict, fw_name: str) -> list[str]:
             out.append(h)
     return out
 
-def nft_fw_setup_bridge(lab_name: str, node: str) -> None:
-    c = container_name(lab_name, node)
-
+def nft_fw_setup_bridge(rt: "Runtime", lab_name: str, node: str) -> None:
     # Create bridge br0 and enslave eth1/eth2
     cmd = r"""
 set -e
@@ -1646,7 +1699,7 @@ ip link set eth1 master br0 2>/dev/null || true
 ip link set eth2 master br0 2>/dev/null || true
 ip link set br0 up
 """
-    run(["docker", "exec", c, "sh", "-lc", cmd])
+    rt.sh(lab_name, node, cmd, check=True, capture_output=False)
 
 def lab_file_from_name(lab_name: str) -> Path:
     return LABS_DIR / f"{lab_name}.clab.yaml"
@@ -1660,12 +1713,14 @@ def parse_lab_nodes(lab_name: str) -> list[str]:
     return nodes
 
 def docker_is_running(container: str) -> bool:
-    # kept for compatibility where you pass full container name
-    cp = run(["docker", "inspect", "-f", "{{.State.Running}}", container], check=False, capture_output=True)
-    return cp.returncode == 0 and (cp.stdout or "").strip() == "true"
-
-def vty(lab: str, node: str, cmd: str) -> subprocess.CompletedProcess:
+    """
+    Back-compat shim. If callers pass a container string, we can only support this
+    in docker runtime. Prefer rt.is_running(lab,node) everywhere.
+    """
     rt = get_runtime()
+    return rt.is_running_id(container)
+
+def vty(rt: Runtime, lab: str, node: str, cmd: str) -> subprocess.CompletedProcess:
     return rt.exec(lab, node, ["vtysh", "-c", cmd], check=False, capture_output=True)
 
 def topo_path_for_lab(lab_name: str) -> Path:
@@ -1682,9 +1737,22 @@ def topo_path_for_lab(lab_name: str) -> Path:
 def nodes_by_type(topo: dict, ntype: str) -> list[str]:
     return [n["name"] for n in topo.get("nodes", []) if n.get("type") == ntype]
 
-def ensure_ip_tools(lab: str, node: str) -> None:
-    c = container_name(lab, node)
-    cp = run(["docker", "exec", c, "sh", "-lc", "command -v ip >/dev/null"], check=False)
+def ensure_ip_tools(rt: "Runtime", lab: str, node: str) -> None:
+    """
+    Ensure the 'ip' command is available inside the node.
+
+    Runtime contract:
+      - No docker/container_name usage
+      - No package installs
+      - Pure capability check
+    """
+    cp = rt.sh(
+        lab,
+        node,
+        "command -v ip >/dev/null",
+        check=False,
+        capture_output=False,
+    )
     if cp.returncode != 0:
         die(f"{node}: 'ip' not found (image must include iproute2)")
 
@@ -1731,6 +1799,15 @@ class Runtime:
     v1: container-only
     future: vm runtime can be added behind this interface without changing command logic.
     """
+
+    def node_id(self, lab: str, node: str) -> str:
+        """
+        Return the runtime's stable identifier for a node instance.
+        DockerRuntime: "clab-<lab>-<node>"
+        VMRuntime (future): could be a VM name/uuid, etc.
+        """
+        raise NotImplementedError
+
     def exec(
         self,
         lab: str,
@@ -1739,6 +1816,7 @@ class Runtime:
         *,
         check: bool = False,
         capture_output: bool = False,
+        interactive: bool = False,
     ) -> subprocess.CompletedProcess:
         raise NotImplementedError
 
@@ -1763,8 +1841,11 @@ class Runtime:
     def is_running(self, lab: str, node: str) -> bool:
         raise NotImplementedError
 
-
 class ContainerRuntime(Runtime):
+    def node_id(self, lab: str, node: str) -> str:
+        # Containerlab naming convention
+        return f"clab-{lab}-{node}"
+
     def exec(
         self,
         lab: str,
@@ -1773,12 +1854,19 @@ class ContainerRuntime(Runtime):
         *,
         check: bool = False,
         capture_output: bool = False,
+        interactive: bool = False,
     ) -> subprocess.CompletedProcess:
-        c = container_name(lab, node)
-        return run(["docker", "exec", c, *cmd], check=check, capture_output=capture_output)
+        c = self.node_id(lab, node)
+
+        argv: list[str] = ["docker", "exec"]
+        if interactive:
+            argv += ["-it"]
+        argv += [c, *cmd]
+
+        return run(argv, check=check, capture_output=capture_output)
 
     def is_running(self, lab: str, node: str) -> bool:
-        c = container_name(lab, node)
+        c = self.node_id(lab, node)
         cp = run(["docker", "inspect", "-f", "{{.State.Running}}", c], check=False, capture_output=True)
 
         if cp.returncode != 0:
@@ -1788,7 +1876,6 @@ class ContainerRuntime(Runtime):
         if isinstance(out, bytes):
             out = out.decode("utf-8", errors="replace")
         return (out or "").strip() == "true"
-
 
 class VmRuntimeStub(Runtime):
     def __init__(self) -> None:
@@ -2386,14 +2473,15 @@ def cmd_up(args: argparse.Namespace) -> None:
 
     # If --reconfigure: destroy + remove root-owned lab dir FIRST.
     if getattr(args, "reconfigure", False):
-        lab_name = None
+        lab_name: str | None = None
         try:
             topo_for_name = load_yaml(topo_path)
             lab_name = (topo_for_name or {}).get("name")
         except Exception:
             lab_name = None
 
-        if lab_name:
+        if isinstance(lab_name, str) and lab_name.strip():
+            lab_name = lab_name.strip()
             existing_clab = LABS_DIR / f"{lab_name}.clab.yaml"
             if existing_clab.exists():
                 run(["sudo", "containerlab", "destroy", "-t", str(existing_clab)], check=False)
@@ -2407,34 +2495,56 @@ def cmd_up(args: argparse.Namespace) -> None:
     # Deploy
     run(["sudo", "containerlab", "deploy", "-t", str(out)])
 
+    # Derive lab name deterministically from generated file
     lab_name = out.name.replace(".clab.yaml", "")
+
+    # Load resolved topology (authoritative for provisioning)
     resolved_path = lab_dir(lab_name) / "topology.resolved.yaml"
     if not resolved_path.exists():
-        return
+        die(f"Resolved topology not found after deploy: {resolved_path}")
 
     topo = load_yaml(resolved_path) or {}
 
+    # Runtime is created AFTER topology is known (future-proof for vm/container selection)
+    rt = get_runtime(topo)
+
+    # ---------------------------------------------------------------------
+    # Provisioning (runtime-driven)
+    # ---------------------------------------------------------------------
+
     # 1) Hosts (IPs + default route)
-    configure_hosts_from_topology(lab_name, topo)
+    configure_hosts_from_topology(rt, lab_name, topo)
 
     # 2) nft-fw interface IPs + forwarding (NO nft rules here)
-    configure_nftfw_from_topology(lab_name, topo)
+    configure_nftfw_from_topology(rt, lab_name, topo)
 
     # 3) nft-fw static routes
-    configure_nftfw_routes_from_topology(lab_name, topo)
+    configure_nftfw_routes_from_topology(rt, lab_name, topo)
 
     # 4) nft rules last (so forwarding + routes exist first)
-    for n in topo.get("nodes", []):
-        if n.get("type") == "nft-fw":
-            nft_fw_apply(lab_name, n["name"], gen_nft_fw_rules(n))
-            nhs = fw_next_hops_from_links(topo, n["name"])
-            if nhs:
-                verify_fw_routed_ready(lab_name, n["name"])
+    for n in topo.get("nodes", []) or []:
+        if not isinstance(n, dict):
+            continue
+        if n.get("type") != "nft-fw":
+            continue
 
-    # 5) FRR provisioning (THIS was missing)
-    configure_frr_interfaces_from_topology(lab_name, topo)
-    configure_frr_static_routes_from_topology(lab_name, topo)
-    configure_frr_bgp_from_topology(lab_name, topo)
+        name = n.get("name")
+        if not isinstance(name, str) or not name.strip():
+            die("nft-fw node missing 'name'")
+        name = name.strip()
+
+        # Apply nft rules
+        nft_fw_apply(rt, lab_name, name, gen_nft_fw_rules(n))
+
+        # Routed fw readiness only if it has next-hops (derived from links)
+        nhs = fw_next_hops_from_links(topo, name)
+        if nhs:
+            verify_fw_routed_ready(rt, lab_name, name)
+
+    # 5) FRR provisioning
+    configure_frr_interfaces_from_topology(rt, lab_name, topo)
+    configure_frr_static_routes_from_topology(rt, lab_name, topo)
+    configure_frr_bgp_from_topology(rt, lab_name, topo)
 
 def cmd_down(args: argparse.Namespace) -> None:
     out = lab_file_from_name(args.name)
@@ -2446,18 +2556,21 @@ def cmd_exec(args: argparse.Namespace) -> None:
     rt = get_runtime()
 
     if not args.command:
-        # Interactive shell (container-only today)
-        c = container_name(args.lab, args.node)
-        run(["docker", "exec", "-it", c, "bash"], check=False)
+        # Interactive shell (runtime decides how)
+        cp = rt.exec(args.lab, args.node, ["bash"], check=False, capture_output=False, interactive=True)
         return
 
     cp = rt.exec(args.lab, args.node, args.command, check=False, capture_output=False)
     if cp.returncode != 0:
-        die(f"Command failed inside {container_name(args.lab, args.node)} (exit {cp.returncode})", code=cp.returncode)
+        die(f"Command failed inside {rt.node_id(args.lab, args.node)} (exit {cp.returncode})",
+            code=cp.returncode)
 
 def cmd_vty(args: argparse.Namespace) -> None:
+    rt = get_runtime()
+
     # command is provided as a single string; e.g. "show bgp summary"
-    cp = vty(args.lab, args.node, args.command)
+    cp = vty(rt, args.lab, args.node, args.command)
+
     # vtysh prints errors to stdout typically; just show output
     sys.stdout.write(cp.stdout or "")
     sys.stderr.write(cp.stderr or "")
@@ -2521,7 +2634,7 @@ def cmd_status(args: argparse.Namespace) -> None:
            "container not running: r2 (container=clab-<lab>-r2)"
     """
     import json
-
+    rt = get_runtime()
     lab = args.lab
 
     bgp_enabled = bool(getattr(args, "bgp", False))
@@ -2547,8 +2660,8 @@ def cmd_status(args: argparse.Namespace) -> None:
         expected_bgp_by_node = derive_expected_bgp_neighbors_from_links(topo)
         expected_routes_by_frr = derive_expected_routes_for_frr(topo) if routes_enabled else {}
 
-        def _docker_exec(cname: str, cmd: list[str]) -> str:
-            cp = run(["docker", "exec", cname, *cmd], check=False, capture_output=True)
+        def _node_exec(node: str, cmd: list[str]) -> str:
+            cp = rt.exec(lab, node, cmd, check=False, capture_output=True)
             out = cp.stdout.decode("utf-8", errors="replace") if isinstance(cp.stdout, bytes) else cp.stdout
             return (out or "").strip()
 
@@ -2653,7 +2766,7 @@ def cmd_status(args: argparse.Namespace) -> None:
             # Interfaces
             if running and show_intf:
                 try:
-                    node_rec["interfaces"] = _docker_exec(cname, ["sh", "-lc", "ip -br a"]).splitlines()
+                    node_rec["interfaces"] = _node_exec(name, ["sh", "-lc", "ip -br a"]).splitlines()
                 except Exception as e:
                     node_rec["interfaces_error"] = str(e)
 
@@ -2672,12 +2785,12 @@ def cmd_status(args: argparse.Namespace) -> None:
                 }
 
                 try:
-                    out_json = _docker_exec(cname, ["vtysh", "-c", "show bgp summary json"])
+                    out_json = _node_exec(name, ["vtysh", "-c", "show bgp summary json"])
                     observed = parse_frr_bgp_summary_neighbors_json(out_json)
                     if observed:
                         bgp_rec["parser_mode"] = "json"
                     else:
-                        out_text = _docker_exec(cname, ["vtysh", "-c", "show bgp summary"])
+                        out_text = _node_exec(name, ["vtysh", "-c", "show bgp summary"])
                         observed = parse_frr_bgp_summary_neighbors(out_text)
                         bgp_rec["parser_mode"] = "text"
 
@@ -2690,7 +2803,7 @@ def cmd_status(args: argparse.Namespace) -> None:
                         exp_established_peers += len(cmp["established"])
 
                     if bgp_verbose and not as_json:
-                        bgp_rec["raw_text"] = _docker_exec(cname, ["vtysh", "-c", "show bgp summary"])
+                        bgp_rec["raw_text"] = _node_exec(name, ["vtysh", "-c", "show bgp summary"])
 
                     if strict and expected and not bgp_rec["ok"]:
                         strict_fail = True
@@ -2719,13 +2832,13 @@ def cmd_status(args: argparse.Namespace) -> None:
                 }
 
                 try:
-                    rt_json = _docker_exec(cname, ["vtysh", "-c", "show ip route json"])
+                    rt_json = _node_exec(name, ["vtysh", "-c", "show ip route json"])
                     observed = parse_frr_show_ip_route_prefixes_json(rt_json)
                     rt_text = ""
                     if observed:
                         routes_rec["parser_mode"] = "json"
                     else:
-                        rt_text = _docker_exec(cname, ["vtysh", "-c", "show ip route"])
+                        rt_text = _node_exec(name, ["vtysh", "-c", "show ip route"])
                         observed = parse_frr_show_ip_route_prefixes(rt_text)
                         routes_rec["parser_mode"] = "text"
 
@@ -2891,6 +3004,8 @@ def cmd_collect(args: argparse.Namespace) -> None:
     from typing import Any
 
     lab = args.lab
+    rt = get_runtime()
+
     tpath = topo_path_for_lab(lab)
     if not tpath.exists():
         die(f"Topology file not found for lab '{lab}': {tpath}")
@@ -2903,15 +3018,6 @@ def cmd_collect(args: argparse.Namespace) -> None:
 
     def write(name: str, content: str) -> None:
         (outdir / name).write_text(content, encoding="utf-8")
-
-    def require_running(container: str) -> None:
-        cp = run(
-            ["docker", "inspect", "-f", "{{.State.Running}}", container],
-            check=False,
-            capture_output=True,
-        )
-        if (cp.stdout or "").strip() != "true":
-            die(f"COLLECT FAIL: {container} is not running")
 
     def normalize_bgp_summary(text: str) -> str:
         """
@@ -3007,20 +3113,21 @@ def cmd_collect(args: argparse.Namespace) -> None:
         drop_keys(obj)
         return json.dumps(obj, sort_keys=True, indent=2).rstrip() + "\n"
 
-    # Strict: ensure all expected containers are running before collecting
-    nodes = sorted((topo.get("nodes", []) or []), key=lambda n: n.get("name", ""))
+    # Strict: ensure all expected nodes are running before collecting
+    nodes_raw = topo.get("nodes", []) or []
+    nodes = sorted((nodes_raw if isinstance(nodes_raw, list) else []), key=lambda n: (n or {}).get("name", ""))
     for n in nodes:
-        require_running(container_name(lab, n["name"]))
+        if not isinstance(n, dict):
+            continue
+        name = n.get("name")
+        if not isinstance(name, str) or not name.strip():
+            die(f"Invalid node entry in topology (missing name): {n!r}")
+        name = name.strip()
 
-    # Stable docker snapshot (sorted)
-    cp = run(
-        ["sh", "-lc", "docker ps --format '{{.Names}}\t{{.Image}}' | sort"],
-        check=False,
-        capture_output=True,
-    )
-    write("docker-ps.txt", cp.stdout or cp.stderr or "")
+        if not rt.is_running(lab, name):
+            die(f"COLLECT FAIL: {rt.node_id(lab, name)} is not running")
 
-    # Containerlab inspect JSON (scrubbed)
+    # Containerlab inspect JSON (scrubbed) — stable, runtime-neutral enough for now
     clab_yaml = LABS_DIR / f"{lab}.clab.yaml"
     cp = run(
         ["sudo", "containerlab", "inspect", "-t", str(clab_yaml), "--format", "json"],
@@ -3034,29 +3141,34 @@ def cmd_collect(args: argparse.Namespace) -> None:
 
     # Per-node snapshots (deterministic order)
     for n in nodes:
-        name = n["name"]
-        c = container_name(lab, name)
+        if not isinstance(n, dict):
+            continue
+        name = n.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        name = name.strip()
 
-        cp = run(["docker", "exec", c, "sh", "-lc", "ip -br a"], check=False, capture_output=True)
+        cp = rt.sh(lab, name, "ip -br a", check=False, capture_output=True)
         write(f"{name}.ip-addr.txt", (cp.stdout or cp.stderr or "").rstrip() + "\n")
 
-        cp = run(["docker", "exec", c, "sh", "-lc", "ip route"], check=False, capture_output=True)
+        cp = rt.sh(lab, name, "ip route", check=False, capture_output=True)
         write(f"{name}.ip-route.txt", (cp.stdout or cp.stderr or "").rstrip() + "\n")
 
         if n.get("type") == "nft-fw":
-            cp = run(["docker", "exec", c, "sh", "-lc", "nft list ruleset"], check=False, capture_output=True)
+            cp = rt.sh(lab, name, "nft list ruleset", check=False, capture_output=True)
             write(f"{name}.nft-ruleset.txt", (cp.stdout or cp.stderr or "").rstrip() + "\n")
 
-            cp = run(["docker", "exec", c, "sh", "-lc", "sysctl -n net.ipv4.ip_forward"], check=False, capture_output=True)
+            cp = rt.sh(lab, name, "sysctl -n net.ipv4.ip_forward", check=False, capture_output=True)
             write(f"{name}.ip-forward.txt", (cp.stdout or cp.stderr or "").strip() + "\n")
 
         if n.get("type") == "frr":
-            cp = run(["docker", "exec", c, "vtysh", "-c", "show bgp summary"], check=False, capture_output=True)
+            cp = rt.exec(lab, name, ["vtysh", "-c", "show bgp summary"], check=False, capture_output=True)
             write(f"{name}.bgp-summary.txt", normalize_bgp_summary(cp.stdout or cp.stderr or ""))
 
         if include_logs:
-            cp = run(["docker", "logs", "--tail", "300", c], check=False, capture_output=True)
-            write(f"{name}.docker-logs.txt", (cp.stdout or cp.stderr or "").rstrip() + "\n")
+            # Runtime should own log collection in future; keep docker-less for now.
+            # If you later add rt.logs(...), call it here.
+            pass
 
     print(f"✅ COLLECT PASS: wrote artifacts to {outdir}")
 
