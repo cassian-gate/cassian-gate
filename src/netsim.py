@@ -1777,21 +1777,12 @@ def frr_nodes_from_topology(topo: dict[str, Any]) -> set[str]:
 
 def _container_is_running(container_name: str) -> bool:
     """
-    Return True if the given container exists and is running.
-    Uses docker inspect and captures output (no noisy stdout).
+    Legacy helper kept for compatibility.
+    IMPORTANT: must not call docker directly; runtime owns execution.
     """
-    try:
-        out = subprocess.check_output(
-            ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
-            text=True,
-        )
-        return out.strip().lower() == "true"
-    except subprocess.CalledProcessError:
-        return False
-    except FileNotFoundError:
-        # docker binary missing
-        return False
-    
+    rt = get_runtime()
+    return rt.is_running_id(container_name)
+
 class Runtime:
     """
     Runtime abstraction stub.
@@ -1801,11 +1792,6 @@ class Runtime:
     """
 
     def node_id(self, lab: str, node: str) -> str:
-        """
-        Return the runtime's stable identifier for a node instance.
-        DockerRuntime: "clab-<lab>-<node>"
-        VMRuntime (future): could be a VM name/uuid, etc.
-        """
         raise NotImplementedError
 
     def exec(
@@ -1829,7 +1815,6 @@ class Runtime:
         check: bool = False,
         capture_output: bool = False,
     ) -> subprocess.CompletedProcess:
-        # Convenience wrapper for shell snippets
         return self.exec(
             lab,
             node,
@@ -1841,9 +1826,17 @@ class Runtime:
     def is_running(self, lab: str, node: str) -> bool:
         raise NotImplementedError
 
+    def is_running_id(self, node_id: str) -> bool:
+        """
+        Return True if the runtime instance identified by node_id exists and is running.
+
+        ContainerRuntime: node_id is a docker container name like "clab-<lab>-<node>"
+        VMRuntime (future): node_id could be VM name/uuid, etc.
+        """
+        raise NotImplementedError
+
 class ContainerRuntime(Runtime):
     def node_id(self, lab: str, node: str) -> str:
-        # Containerlab naming convention
         return f"clab-{lab}-{node}"
 
     def exec(
@@ -1866,9 +1859,10 @@ class ContainerRuntime(Runtime):
         return run(argv, check=check, capture_output=capture_output)
 
     def is_running(self, lab: str, node: str) -> bool:
-        c = self.node_id(lab, node)
-        cp = run(["docker", "inspect", "-f", "{{.State.Running}}", c], check=False, capture_output=True)
+        return self.is_running_id(self.node_id(lab, node))
 
+    def is_running_id(self, node_id: str) -> bool:
+        cp = run(["docker", "inspect", "-f", "{{.State.Running}}", node_id], check=False, capture_output=True)
         if cp.returncode != 0:
             return False
 
@@ -1881,6 +1875,10 @@ class VmRuntimeStub(Runtime):
     def __init__(self) -> None:
         self._msg = "VM runtime not implemented yet (Phase-1 stub). Use container runtime."
 
+    def node_id(self, lab: str, node: str) -> str:
+        die(self._msg)
+        raise RuntimeError(self._msg)
+
     def exec(
         self,
         lab: str,
@@ -1889,10 +1887,16 @@ class VmRuntimeStub(Runtime):
         *,
         check: bool = False,
         capture_output: bool = False,
+        interactive: bool = False,
     ) -> subprocess.CompletedProcess:
         die(self._msg)
+        raise RuntimeError(self._msg)
 
     def is_running(self, lab: str, node: str) -> bool:
+        die(self._msg)
+        return False
+
+    def is_running_id(self, node_id: str) -> bool:
         die(self._msg)
         return False
 
@@ -1904,6 +1908,7 @@ def get_runtime(topo: dict[str, Any] | None = None) -> Runtime:
       - allow future extension: topo['runtime'] or node['runtime'] (not required yet)
     """
     return ContainerRuntime()
+
 
 # -------------------------
 # Commands
