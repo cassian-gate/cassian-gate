@@ -1775,6 +1775,381 @@ def frr_nodes_from_topology(topo: dict[str, Any]) -> set[str]:
             out.add(n["name"])
     return out
 
+def _iter_scenarios(topo: dict[str, Any]) -> list[dict[str, Any]]:
+    sc = topo.get("scenarios") or []
+    if sc is None:
+        return []
+    if not isinstance(sc, list):
+        die("topology 'scenarios' must be a list")
+    out: list[dict[str, Any]] = []
+    for s in sc:
+        if isinstance(s, dict):
+            out.append(s)
+        else:
+            die("each scenario entry must be a dict")
+    return out
+
+def validate_scenarios(topo: dict[str, Any]) -> None:
+    """
+    Deterministic schema validation for v1 scenarios.
+
+    Rules:
+      - scenarios is optional; if present must be a list
+      - each scenario has:
+          id: string (unique)
+          steps: list (non-empty)
+      - each step is exactly ONE of:
+          {run: <test_name>}
+          {fault: {...}}
+          {wait: {seconds: <int>}}
+          {wait_for: {...}}
+      - no loops/conditionals are possible in this schema (ordered list only)
+    """
+    scenarios = _iter_scenarios(topo)
+    if not scenarios:
+        return
+
+    seen_ids: set[str] = set()
+
+    for idx, s in enumerate(scenarios):
+        i = idx + 1
+        sid = s.get("id")
+        if not isinstance(sid, str) or not sid.strip():
+            die(f"scenarios[{i}]: missing/invalid 'id'")
+        sid = sid.strip()
+        if sid in seen_ids:
+            die(f"scenarios[{i}]: duplicate id '{sid}'")
+        seen_ids.add(sid)
+
+        steps = s.get("steps")
+        if not isinstance(steps, list) or not steps:
+            die(f"scenario '{sid}': 'steps' must be a non-empty list")
+
+        for jdx, step in enumerate(steps):
+            j = jdx + 1
+            if not isinstance(step, dict) or not step:
+                die(f"scenario '{sid}' step[{j}]: must be a non-empty dict")
+
+            keys = list(step.keys())
+            if len(keys) != 1:
+                die(f"scenario '{sid}' step[{j}]: must have exactly one key (got {keys})")
+
+            k = keys[0]
+            if k not in ("run", "fault", "wait", "wait_for"):
+                die(f"scenario '{sid}' step[{j}]: unknown step type '{k}'")
+
+            if k == "run":
+                v = step.get("run")
+                if not isinstance(v, str) or not v.strip():
+                    die(f"scenario '{sid}' step[{j}]: run must be a test name string")
+
+            elif k == "wait":
+                v = step.get("wait")
+                if not isinstance(v, dict):
+                    die(f"scenario '{sid}' step[{j}]: wait must be a dict like {{seconds: 5}}")
+                sec = v.get("seconds")
+                if not isinstance(sec, int) or sec < 0:
+                    die(f"scenario '{sid}' step[{j}]: wait.seconds must be a non-negative int")
+
+            elif k == "wait_for":
+                v = step.get("wait_for")
+                if not isinstance(v, dict):
+                    die(f"scenario '{sid}' step[{j}]: wait_for must be a dict")
+                t = v.get("type")
+                if t not in ("ping", "tcp"):
+                    die(f"scenario '{sid}' step[{j}]: wait_for.type must be ping|tcp")
+                src = v.get("from")
+                dst = v.get("to")
+                exp = (v.get("expect") or "pass").lower()
+                if not isinstance(src, str) or not src.strip():
+                    die(f"scenario '{sid}' step[{j}]: wait_for.from must be a node name")
+                if not isinstance(dst, str) or not dst.strip():
+                    die(f"scenario '{sid}' step[{j}]: wait_for.to must be an ip or node name")
+                if exp not in ("pass", "fail"):
+                    die(f"scenario '{sid}' step[{j}]: wait_for.expect must be pass|fail")
+                to = v.get("timeout")
+                if not isinstance(to, int) or to <= 0:
+                    die(f"scenario '{sid}' step[{j}]: wait_for.timeout must be a positive int")
+                if t == "tcp":
+                    port = v.get("port")
+                    if not isinstance(port, int) or not (1 <= port <= 65535):
+                        die(f"scenario '{sid}' step[{j}]: wait_for.port must be a valid int for tcp")
+
+            elif k == "fault":
+                # For Step 1 we only validate the shape; Step 2 will validate action details.
+                v = step.get("fault")
+                if not isinstance(v, dict) or not v:
+                    die(f"scenario '{sid}' step[{j}]: fault must be a non-empty dict")
+
+def build_test_index(topo: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """
+    Map test name -> test dict. Names must be unique.
+    """
+    tests = topo.get("tests") or []
+    idx: dict[str, dict[str, Any]] = {}
+
+    for i, t in enumerate(tests):
+        if not isinstance(t, dict):
+            continue
+        name = t.get("name") or f"tests[{i+1}]"
+        if not isinstance(name, str) or not name.strip():
+            name = f"tests[{i+1}]"
+        if name in idx:
+            die(f"Duplicate test name '{name}' (scenario run references require unique names)")
+        idx[name] = t
+    return idx
+
+def resolve_dst_to_ip(topo: dict[str, Any], dst: str) -> str:
+    """
+    dst may be:
+      - node name in topo.nodes -> resolve via node_first_ipv4
+      - an IP string -> return as-is
+    """
+    if isinstance(dst, str) and any(n.get("name") == dst for n in topo.get("nodes", []) or []):
+        return node_first_ipv4(topo, dst)
+    return dst
+
+def wait_for_condition(
+    rt: "Runtime",
+    lab: str,
+    topo: dict[str, Any],
+    cond: dict[str, Any],
+    *,
+    interval_s: float = 1.0,
+) -> tuple[bool, int]:
+    """
+    Explicit convergence wait. Retries only because user declared wait_for + timeout.
+    Returns: (ok, attempts)
+    """
+    ctype = cond.get("type")
+    src = cond.get("from")
+    dst = cond.get("to")
+    expect = (cond.get("expect") or "pass").lower()
+    timeout = int(cond.get("timeout") or 30)
+
+    if not isinstance(src, str) or not isinstance(dst, str):
+        die("wait_for: invalid from/to")
+
+    dst_ip = resolve_dst_to_ip(topo, dst)
+    should_succeed = (expect == "pass")
+
+    def attempt() -> tuple[bool, Any]:
+        if ctype == "ping":
+            cp = rt.exec(lab, src, ["ping", "-c", "2", "-W", "1", dst_ip], check=False)
+            ok = (cp.returncode == 0)
+            return (ok == should_succeed), cp
+
+        if ctype == "tcp":
+            port = int(cond.get("port"))
+            cp = rt.exec(lab, src, ["sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"], check=False)
+            ok = (cp.returncode == 0)
+            return (ok == should_succeed), cp
+
+        die(f"wait_for: unsupported type '{ctype}'")
+
+    ok, _last, attempts = (False, None, 0)
+
+    start = time.time()
+    while True:
+        attempts += 1
+        good, _ = attempt()
+        if good:
+            ok = True
+            break
+        if (time.time() - start) >= timeout:
+            ok = False
+            break
+        time.sleep(interval_s)
+
+    return ok, attempts
+
+def execute_scenario(
+    *,
+    rt: "Runtime",
+    lab: str,
+    topo: dict[str, Any],
+    scenario: dict[str, Any],
+    test_index: dict[str, dict[str, Any]],
+    run_atomic_test_fn,
+) -> dict[str, Any]:
+    """
+    Execute one scenario deterministically.
+
+    run_atomic_test_fn(test_dict) -> bool (pass=True/fail=False)
+    Must also record atomic test into results via existing record_test() pipeline.
+
+    Scenario verdict:
+      - pass only if all steps pass
+      - scenario step failures are visible and do not overwrite atomic verdicts
+    """
+    sid = str(scenario.get("id"))
+    steps = scenario.get("steps") or []
+
+    scen_rec: dict[str, Any] = {
+        "id": sid,
+        "description": str(scenario.get("description") or ""),
+        "steps": [],
+        "verdict": "pass",
+    }
+
+    for idx, step in enumerate(steps):
+        step_keys = list(step.keys())
+        stype = step_keys[0]
+        started = time.time()
+
+        step_rec: dict[str, Any] = {"type": stype}
+
+        # ---- run ----
+        if stype == "run":
+            ref = step["run"]
+            step_rec["ref"] = ref
+
+            t = test_index.get(ref)
+            if not t:
+                step_rec["verdict"] = "fail"
+                step_rec["error"] = f"unknown test ref '{ref}'"
+                step_rec["duration_ms"] = int((time.time() - started) * 1000)
+                scen_rec["steps"].append(step_rec)
+                scen_rec["verdict"] = "fail"
+                break
+
+            ok = bool(run_atomic_test_fn(t))
+            step_rec["verdict"] = "pass" if ok else "fail"
+            step_rec["duration_ms"] = int((time.time() - started) * 1000)
+            scen_rec["steps"].append(step_rec)
+
+            if not ok:
+                scen_rec["verdict"] = "fail"
+                break
+
+        # ---- wait ----
+        elif stype == "wait":
+            sec = int(step["wait"]["seconds"])
+            time.sleep(sec)
+            step_rec["seconds"] = sec
+            step_rec["verdict"] = "pass"
+            step_rec["duration_ms"] = int((time.time() - started) * 1000)
+            scen_rec["steps"].append(step_rec)
+
+        # ---- wait_for ----
+        elif stype == "wait_for":
+            cond = step["wait_for"]
+            step_rec["condition"] = cond
+            ok, attempts = wait_for_condition(rt, lab, topo, cond, interval_s=float(cond.get("interval_s") or 1.0))
+            step_rec["attempts"] = attempts
+            step_rec["verdict"] = "pass" if ok else "fail"
+            step_rec["duration_ms"] = int((time.time() - started) * 1000)
+            scen_rec["steps"].append(step_rec)
+
+            if not ok:
+                scen_rec["verdict"] = "fail"
+                break
+
+        # ---- fault ----
+        elif stype == "fault":
+            # Step 1: executor skeleton only.
+            # Step 2 will implement runtime-backed fault primitives.
+            step_rec["fault"] = step["fault"]
+            step_rec["verdict"] = "fail"
+            step_rec["error"] = "fault primitives not implemented yet (Step 2)"
+            step_rec["duration_ms"] = int((time.time() - started) * 1000)
+            scen_rec["steps"].append(step_rec)
+            scen_rec["verdict"] = "fail"
+            break
+
+        else:
+            step_rec["verdict"] = "fail"
+            step_rec["error"] = f"unknown step type '{stype}'"
+            step_rec["duration_ms"] = int((time.time() - started) * 1000)
+            scen_rec["steps"].append(step_rec)
+            scen_rec["verdict"] = "fail"
+            break
+
+    return scen_rec
+
+def _atomic_test_ids(topo: dict) -> list[str]:
+    tests = topo.get("tests", []) or []
+    ids: list[str] = []
+    for idx, t in enumerate(tests, start=1):
+        # Keep deterministic naming aligned with cmd_test()
+        if isinstance(t, dict) and t.get("name"):
+            ids.append(str(t["name"]))
+        else:
+            ids.append(f"tests[{idx}]")
+    return ids
+
+def validate_scenario_run_refs_or_die(topo: dict, scenario_ids: list[str] | None = None) -> None:
+    """
+    Hard rule — Scenario References Must Resolve (Fail-Fast)
+
+    Before executing ANY scenario steps, validate that every `steps[].run: <test_name>`
+    references a declared atomic test name in `topo["tests"]`.
+
+    If any ref is missing/invalid:
+      - FAIL FAST
+      - BEFORE executing any runtime actions
+      - WITH a clear deterministic error
+      - NO partial execution
+
+    scenario_ids:
+      - None  => validate all scenarios in topo
+      - list  => validate only those scenario ids
+    """
+    known = _atomic_test_ids(topo)  # authoritative list of test names (deterministic order)
+    known_set = set(known)
+
+    scenarios = topo.get("scenarios", []) or []
+    if not isinstance(scenarios, list):
+        die("ERROR: topology 'scenarios' must be a list")
+
+    # Filter scenarios if requested (deterministic)
+    if scenario_ids is not None:
+        want = set(str(x) for x in scenario_ids)
+        scenarios = [s for s in scenarios if isinstance(s, dict) and str(s.get("id", "")) in want]
+
+    # Deterministic ordering for validation / error reporting
+    scenarios_sorted = sorted(
+        (s for s in scenarios if isinstance(s, dict)),
+        key=lambda s: str(s.get("id", "")),
+    )
+
+    for s in scenarios_sorted:
+        sid = str(s.get("id") or "<unnamed>")
+        steps = s.get("steps", [])
+        if steps is None:
+            steps = []
+        if not isinstance(steps, list):
+            die(f"ERROR: scenario '{sid}' steps must be a list")
+
+        for idx, st in enumerate(steps, start=1):
+            if not isinstance(st, dict):
+                die(f"ERROR: scenario '{sid}' step[{idx}] must be a dict (invalid schema)")
+
+            # Only validate run refs here (fault/wait/wait_for validation is separate)
+            if "run" in st:
+                ref = st.get("run")
+
+                if not isinstance(ref, str) or not ref.strip():
+                    die(f"ERROR: scenario '{sid}' step[{idx}] has invalid run ref (must be non-empty string)")
+
+                ref = ref.strip()
+                if ref not in known_set:
+                    known_str = ", ".join(known)
+                    die(
+                        f"ERROR: scenario '{sid}' references unknown test '{ref}'\n"
+                        f"Known tests: [{known_str}]\n"
+                        f"Scenario execution aborted before any steps ran."
+                    )
+
+    # Optional: if the user asked to validate a specific scenario id and it doesn't exist,
+    # fail here (still pre-execution). This helps avoid “it ran nothing” ambiguity.
+    if scenario_ids is not None:
+        topo_ids = set(str(s.get("id", "")) for s in (topo.get("scenarios", []) or []) if isinstance(s, dict))
+        missing = [sid for sid in (str(x) for x in scenario_ids) if sid not in topo_ids]
+        if missing:
+            missing_sorted = ", ".join(sorted(missing))
+            die(f"ERROR: requested scenario id(s) not found in topology: {missing_sorted}")
+
 def _container_is_running(container_name: str) -> bool:
     """
     Legacy helper kept for compatibility.
@@ -1915,6 +2290,20 @@ def get_runtime(topo: dict[str, Any] | None = None) -> Runtime:
 # -------------------------
 
 def cmd_test(args: argparse.Namespace) -> None:
+    """
+    v1 update (Section C): Scenarios wired into cmd_test (minimal invasive).
+
+    - Default behavior unchanged: readiness + optional BGP + declared tests (steady-state).
+    - Opt-in scenarios:
+        * netsim test --scenario <id>
+        * netsim test --all-scenarios
+      When a scenario is requested, cmd_test executes ONLY the requested scenario(s).
+      Scenario steps call existing atomic tests via `run: <test_name>`.
+
+    Hard guardrail:
+      If scenarios are requested, validate ALL scenario run refs up-front and FAIL FAST
+      (before any runtime actions) if a referenced atomic test name does not exist.
+    """
     import json
     import time
 
@@ -1923,6 +2312,11 @@ def cmd_test(args: argparse.Namespace) -> None:
     filter_kind: str | None = getattr(args, "kind", None)
     keep_going: bool = bool(getattr(args, "keep_going", False))
     print_json: bool = bool(getattr(args, "json", False))
+
+    # Scenario CLI (opt-in)
+    scenario_id: str | None = getattr(args, "scenario", None)
+    all_scenarios: bool = bool(getattr(args, "all_scenarios", False))
+    want_scenarios = bool(scenario_id or all_scenarios)
 
     started_at = time.time()
 
@@ -1935,6 +2329,18 @@ def cmd_test(args: argparse.Namespace) -> None:
 
     topo = load_yaml(tpath)
     ensure_valid_topology(topo)
+
+    # -----------------------------------------------------------------------------
+    # Hard guardrail: validate scenario run refs up-front (no partial execution)
+    # This MUST happen before ANY runtime actions (docker/VM exec, faults, waits, etc.)
+    # -----------------------------------------------------------------------------
+    if want_scenarios:
+        scenario_ids: list[str] | None = None
+        if scenario_id:
+            scenario_ids = [scenario_id]
+        elif all_scenarios:
+            scenario_ids = None  # validate all
+        validate_scenario_run_refs_or_die(topo, scenario_ids=scenario_ids)
 
     # Phase-1 runtime abstraction (container today, VM later)
     rt = get_runtime(topo)
@@ -1958,8 +2364,11 @@ def cmd_test(args: argparse.Namespace) -> None:
             "filtered_by_kind": filter_kind or "",
             "resolved_topology_path": str(tpath),
             "resolved_topology_mtime": tpath.stat().st_mtime,
+            "scenario": scenario_id or "",
+            "all_scenarios": bool(all_scenarios),
         },
         "tests": [],
+        "scenarios": [],
     }
 
     def record_test(
@@ -1991,19 +2400,21 @@ def cmd_test(args: argparse.Namespace) -> None:
         results["tests"].append(rec)
 
     def write_results() -> None:
-        # Machine artifact
         out = lab_dir(lab) / "results.json"
         out.write_text(json.dumps(results, indent=2), encoding="utf-8")
         print(f"Wrote: {out}")
 
-        # Human summary artifact
         summary_path = write_test_summary_artifact(lab, results)
         print(f"Wrote: {summary_path}")
 
         if print_json:
             print(json.dumps(results, indent=2))
 
-    def retry_until(timeout_s: int, interval_s: float, fn) -> tuple[bool, object, int]:
+    def retry_until(timeout_s: int, interval_s: float, fn) -> tuple[bool, object, int, int]:
+        """
+        Returns: ok, last_val, attempts, duration_ms
+        Deterministic polling interval; no jitter; no hidden retries beyond caller request.
+        """
         start = time.time()
         attempts = 0
         last_val: object = None
@@ -2012,9 +2423,11 @@ def cmd_test(args: argparse.Namespace) -> None:
             ok, val = fn()
             last_val = val
             if ok:
-                return True, last_val, attempts
+                dur_ms = int((time.time() - start) * 1000)
+                return True, last_val, attempts, dur_ms
             if time.time() - start >= timeout_s:
-                return False, last_val, attempts
+                dur_ms = int((time.time() - start) * 1000)
+                return False, last_val, attempts, dur_ms
             time.sleep(interval_s)
 
     def fail_or_continue(msg: str) -> None:
@@ -2022,6 +2435,427 @@ def cmd_test(args: argparse.Namespace) -> None:
             print(f"ERROR: {msg}")
             return
         die(msg)
+
+    def node_ip_or_die(node_name: str) -> str:
+        ip = node_first_ipv4(topo, node_name)
+        if not ip:
+            die(f"TEST FAIL: could not determine IPv4 for node '{node_name}'")
+        return ip
+
+    # TCP listeners we started (for deterministic cleanup)
+    listeners_started: dict[str, set[int]] = {}
+
+    def start_listener(dst: str, port: int) -> None:
+        listeners_started.setdefault(dst, set())
+        if port in listeners_started[dst]:
+            return
+        start_tcp_listener(rt, lab, dst, port)
+        listeners_started[dst].add(port)
+
+    # -----------------------------
+    # Atomic test execution helpers
+    # -----------------------------
+    def run_ping_test(*, test_name: str, src: str, dst: str, t: dict) -> str:
+        expected = (t.get("expect") or "pass").lower()
+        if expected not in ("pass", "fail"):
+            expected = "pass"
+
+        dst_ip = node_ip_or_die(dst)
+        count = int(t.get("count") or 2)
+        timeout_s = int(t.get("timeout_s") or 15)
+        interval_s = float(t.get("retry_interval_s") or 1.0)
+
+        def attempt():
+            cp = rt.exec(lab, src, ["ping", "-c", str(count), "-W", "1", dst_ip], check=False)
+            return (cp.returncode == 0), cp
+
+        ok, last_cp, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
+
+        observed = "pass" if ok else "fail"
+        should_succeed = (expected == "pass")
+        verdict = "pass" if (ok == should_succeed) else "fail"
+
+        record_test(
+            name=test_name,
+            kind="ping",
+            src=src,
+            dst=dst,
+            expected=expected,
+            observed=observed,
+            verdict=verdict,
+            duration_ms=dur_ms,
+            error="" if verdict == "pass" else f"ping mismatch (expected {expected}, observed {observed})",
+            meta={
+                "dst_ip": dst_ip,
+                "count": count,
+                "attempts": attempts,
+                "timeout_s": timeout_s,
+                "retry_interval_s": interval_s,
+                "last_rc": getattr(last_cp, "returncode", None),
+            },
+        )
+        return verdict
+
+    def run_tcp_test(*, test_name: str, src: str, dst: str, t: dict) -> str:
+        expected = (t.get("expect") or "pass").lower()
+        if expected not in ("pass", "fail"):
+            expected = "pass"
+
+        port = t.get("port")
+        if not isinstance(port, int):
+            record_test(
+                name=test_name,
+                kind="tcp",
+                src=src,
+                dst=dst,
+                expected=expected,
+                observed="fail",
+                verdict="fail",
+                duration_ms=0,
+                error="'port' must be an int",
+            )
+            return "fail"
+
+        dst_ip = node_ip_or_die(dst)
+        listener = bool(t.get("listener", True))
+        if listener:
+            start_listener(dst, port)
+
+        timeout_s = int(t.get("timeout_s") or (10 if expected == "pass" else 0))
+        interval_s = float(t.get("retry_interval_s") or 1.0)
+
+        def attempt():
+            cp = rt.exec(lab, src, ["sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"], check=False)
+            return (cp.returncode == 0), cp
+
+        start = time.time()
+        if expected == "pass" and timeout_s > 0:
+            ok, last_cp, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
+        else:
+            cp = rt.exec(lab, src, ["sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"], check=False)
+            ok, last_cp, attempts = (cp.returncode == 0), cp, 1
+            dur_ms = int((time.time() - start) * 1000)
+
+        observed = "pass" if ok else "fail"
+        should_succeed = (expected == "pass")
+        verdict = "pass" if (ok == should_succeed) else "fail"
+
+        record_test(
+            name=test_name,
+            kind="tcp",
+            src=src,
+            dst=dst,
+            expected=expected,
+            observed=observed,
+            verdict=verdict,
+            duration_ms=dur_ms,
+            error="" if verdict == "pass" else f"tcp mismatch (expected {expected}, observed {observed})",
+            meta={
+                "dst_ip": dst_ip,
+                "port": int(port),
+                "listener": bool(listener),
+                "attempts": attempts,
+                "timeout_s": timeout_s,
+                "retry_interval_s": interval_s,
+                "rc": getattr(last_cp, "returncode", None),
+            },
+        )
+        return verdict
+
+    # Build name->test map once (authoritative declared tests)
+    declared_tests = topo.get("tests", []) or []
+    tests_by_name: dict[str, dict] = {}
+    for idx, t in enumerate(declared_tests):
+        if isinstance(t, dict) and t.get("name"):
+            tests_by_name[str(t["name"])] = t
+
+    def run_named_test(ref: str) -> str:
+        """
+        Execute a declared atomic test by name (used by scenarios).
+        Returns: "pass" | "fail"
+        """
+        if ref not in tests_by_name:
+            # With fail-fast validation, this should never happen.
+            die(f"INTERNAL ERROR: scenario referenced unknown test '{ref}' after pre-validation")
+
+        t = tests_by_name[ref]
+
+        # Apply existing filters even for scenario-runs (minimal invasive, consistent behavior)
+        kind = (t.get("kind") or t.get("type") or "").strip()
+        if filter_name and ref != filter_name:
+            return "pass"  # filtered-out: treat as non-executed (scenario still proceeds)
+        if filter_kind and kind != filter_kind:
+            return "pass"
+
+        src = t.get("src")
+        dst = t.get("dst")
+        if not src or not dst:
+            record_test(
+                name=ref,
+                kind=kind or "unknown",
+                src=src or "",
+                dst=dst or "",
+                expected="pass",
+                observed="fail",
+                verdict="fail",
+                duration_ms=0,
+                error="missing src/dst",
+            )
+            return "fail"
+
+        if kind == "ping":
+            return run_ping_test(test_name=ref, src=src, dst=dst, t=t)
+        if kind == "tcp":
+            return run_tcp_test(test_name=ref, src=src, dst=dst, t=t)
+
+        record_test(
+            name=ref,
+            kind=str(kind or "unknown"),
+            src=src,
+            dst=dst,
+            expected="pass",
+            observed="fail",
+            verdict="fail",
+            duration_ms=0,
+            error=f"unsupported kind '{kind}' (supported: ping, tcp)",
+        )
+        return "fail"
+
+    # -----------------------------
+    # Scenario execution (v1)
+    # -----------------------------
+    links_by_node = build_node_links(topo)
+
+    def _find_link_interfaces(a: str, b: str) -> tuple[str | None, str | None]:
+        """
+        Best-effort: relies on build_node_links() link dicts containing "ifname" and peer mapping.
+        """
+        a_if = None
+        b_if = None
+        for l in links_by_node.get(a, []) or []:
+            if l.get("peer") == b:
+                a_if = l.get("ifname") or l.get("iface") or l.get("interface")
+                b_if = l.get("peer_ifname") or l.get("peer_iface") or l.get("peer_interface")
+                break
+        if b_if is None:
+            for l in links_by_node.get(b, []) or []:
+                if l.get("peer") == a:
+                    b_if = l.get("ifname") or l.get("iface") or l.get("interface")
+                    if a_if is None:
+                        a_if = l.get("peer_ifname") or l.get("peer_iface") or l.get("peer_interface")
+                    break
+        return a_if, b_if
+
+    def apply_fault(fault: dict) -> tuple[str, str]:
+        """
+        Returns: (action, target_label)
+
+        v1 primitives:
+          - link_down/link_up: ip link set down/up on both ends (requires interface names)
+          - interface_down/interface_up: ip link set down/up on node interface
+          - node_stop/node_start: requires runtime support (rt.node_stop/rt.node_start)
+        """
+        if "link_down" in fault or "link_up" in fault:
+            action = "link_down" if "link_down" in fault else "link_up"
+            spec = fault.get(action) or {}
+            a = spec.get("a")
+            b = spec.get("b")
+            if not a or not b:
+                raise ValueError(f"{action}: requires a,b")
+            a_if, b_if = _find_link_interfaces(a, b)
+            if not a_if or not b_if:
+                raise ValueError(f"{action}: could not determine interfaces for link {a}<->{b}")
+            op = "down" if action == "link_down" else "up"
+            rt.exec(lab, a, ["ip", "link", "set", "dev", str(a_if), op], check=False)
+            rt.exec(lab, b, ["ip", "link", "set", "dev", str(b_if), op], check=False)
+            return action, f"{a}:{a_if}<->{b}:{b_if}"
+
+        if "interface_down" in fault or "interface_up" in fault:
+            action = "interface_down" if "interface_down" in fault else "interface_up"
+            spec = fault.get(action) or {}
+            node = spec.get("node")
+            iface = spec.get("if") or spec.get("iface") or spec.get("interface")
+            if not node or not iface:
+                raise ValueError(f"{action}: requires node + if")
+            op = "down" if action == "interface_down" else "up"
+            rt.exec(lab, node, ["ip", "link", "set", "dev", str(iface), op], check=False)
+            return action, f"{node}:{iface}"
+
+        if "node_stop" in fault or "node_start" in fault:
+            action = "node_stop" if "node_stop" in fault else "node_start"
+            spec = fault.get(action) or {}
+            node = spec.get("node")
+            if not node:
+                raise ValueError(f"{action}: requires node")
+            fn_name = "node_stop" if action == "node_stop" else "node_start"
+            if not hasattr(rt, fn_name):
+                raise ValueError(f"{action}: runtime does not implement {fn_name}() yet")
+            getattr(rt, fn_name)(lab, node)  # type: ignore[misc]
+            return action, str(node)
+
+        raise ValueError(f"unsupported fault primitive: {list(fault.keys())}")
+
+    def wait_seconds(seconds: int) -> int:
+        start = time.time()
+        time.sleep(max(0, int(seconds)))
+        return int((time.time() - start) * 1000)
+
+    def wait_for_predicate(wait_for: dict) -> tuple[str, str, str, int, dict, str]:
+        """
+        Returns: (type, expected, observed, duration_ms, meta, verdict)
+
+        v1 supports:
+          - type: ping (from/to/expect/timeout)
+        """
+        wtype = wait_for.get("type")
+        if wtype != "ping":
+            raise ValueError(f"wait_for: unsupported type '{wtype}' (v1 supports: ping)")
+
+        src = wait_for.get("from")
+        dst_ip = wait_for.get("to")
+
+        # Allow "to" to be either a literal IP/CIDR/hostname OR a node name.
+        # If it's a node name, resolve to its first IPv4 deterministically.
+        if isinstance(dst_ip, str) and dst_ip in {n.get("name") for n in (topo.get("nodes", []) or [])}:
+            resolved = node_first_ipv4(topo, dst_ip)
+            if not resolved:
+                raise ValueError(f"wait_for ping: could not determine IPv4 for node '{dst_ip}'")
+            dst_ip = resolved
+
+        expected = (wait_for.get("expect") or "pass").lower()
+        timeout_s = int(wait_for.get("timeout") or 30)
+        interval_s = float(wait_for.get("interval_s") or 1.0)
+
+        if expected not in ("pass", "fail"):
+            expected = "pass"
+        if not src or not dst_ip:
+            raise ValueError("wait_for ping: requires from + to")
+
+        def attempt():
+            cp = rt.exec(lab, src, ["ping", "-c", "1", "-W", "1", str(dst_ip)], check=False)
+            ok = (cp.returncode == 0)
+            return ok, cp
+
+        ok, last_cp, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
+        observed = "pass" if ok else "fail"
+
+        should_succeed = (expected == "pass")
+        verdict = "pass" if (ok == should_succeed) else "fail"
+
+        meta = {
+            "from": src,
+            "to": str(dst_ip),
+            "attempts": attempts,
+            "timeout_s": timeout_s,
+            "interval_s": interval_s,
+            "last_rc": getattr(last_cp, "returncode", None),
+        }
+        return "ping", expected, observed, dur_ms, meta, verdict
+
+    def run_scenario(s: dict) -> str:
+        sid = s.get("id") or ""
+        desc = s.get("description") or ""
+        steps = s.get("steps", []) or []
+        scen_started = time.time()
+
+        scen_rec: dict = {"id": sid, "description": desc, "steps": [], "verdict": "unknown", "duration_ms": None}
+
+        def scen_step(rec: dict) -> None:
+            scen_rec["steps"].append(rec)
+
+        scen_failed = False
+
+        for step in steps:
+            step_started = time.time()
+            if not isinstance(step, dict):
+                scen_step({"type": "invalid", "verdict": "fail", "duration_ms": 0, "error": "step must be a dict"})
+                scen_failed = True
+                if not keep_going:
+                    break
+                continue
+
+            if "run" in step:
+                ref = step.get("run")
+                if not isinstance(ref, str) or not ref:
+                    dur_ms = int((time.time() - step_started) * 1000)
+                    scen_step({"type": "run", "ref": str(ref), "verdict": "fail", "duration_ms": dur_ms, "error": "run must be a non-empty string"})
+                    scen_failed = True
+                    if not keep_going:
+                        break
+                    continue
+
+                verdict = run_named_test(ref)
+                dur_ms = int((time.time() - step_started) * 1000)
+                scen_step({"type": "run", "ref": ref, "verdict": verdict, "duration_ms": dur_ms})
+                if verdict != "pass":
+                    scen_failed = True
+                    if not keep_going:
+                        break
+                continue
+
+            if "fault" in step:
+                fault = step.get("fault")
+                if not isinstance(fault, dict):
+                    dur_ms = int((time.time() - step_started) * 1000)
+                    scen_step({"type": "fault", "verdict": "fail", "duration_ms": dur_ms, "error": "fault must be a dict"})
+                    scen_failed = True
+                    if not keep_going:
+                        break
+                    continue
+                try:
+                    action, target = apply_fault(fault)
+                    dur_ms = int((time.time() - step_started) * 1000)
+                    scen_step({"type": "fault", "action": action, "target": target, "verdict": "pass", "duration_ms": dur_ms})
+                except Exception as e:
+                    dur_ms = int((time.time() - step_started) * 1000)
+                    scen_step({"type": "fault", "verdict": "fail", "duration_ms": dur_ms, "error": str(e), "fault": fault})
+                    scen_failed = True
+                    if not keep_going:
+                        break
+                continue
+
+            if "wait" in step:
+                w = step.get("wait") or {}
+                seconds = int((w.get("seconds") or 0))
+                dur_ms = wait_seconds(seconds)
+                scen_step({"type": "wait", "seconds": seconds, "verdict": "pass", "duration_ms": dur_ms})
+                continue
+
+            if "wait_for" in step:
+                wf = step.get("wait_for")
+                if not isinstance(wf, dict):
+                    dur_ms = int((time.time() - step_started) * 1000)
+                    scen_step({"type": "wait_for", "verdict": "fail", "duration_ms": dur_ms, "error": "wait_for must be a dict"})
+                    scen_failed = True
+                    if not keep_going:
+                        break
+                    continue
+                try:
+                    wtype, expected, observed, dur_ms, meta, verdict = wait_for_predicate(wf)
+                    scen_step({"type": "wait_for", "wait_type": wtype, "expected": expected, "observed": observed, "verdict": verdict, "duration_ms": dur_ms, "meta": meta})
+                    if verdict != "pass":
+                        scen_failed = True
+                        if not keep_going:
+                            break
+                except Exception as e:
+                    dur_ms = int((time.time() - step_started) * 1000)
+                    scen_step({"type": "wait_for", "verdict": "fail", "duration_ms": dur_ms, "error": str(e), "wait_for": wf})
+                    scen_failed = True
+                    if not keep_going:
+                        break
+                continue
+
+            dur_ms = int((time.time() - step_started) * 1000)
+            scen_step({"type": "unknown", "verdict": "fail", "duration_ms": dur_ms, "error": f"unsupported step keys: {list(step.keys())}"})
+            scen_failed = True
+            if not keep_going:
+                break
+
+        scen_finished = time.time()
+        scen_rec["duration_ms"] = int((scen_finished - scen_started) * 1000)
+        scen_rec["verdict"] = "fail" if scen_failed else "pass"
+        results["scenarios"].append(scen_rec)
+        return scen_rec["verdict"]
 
     # =============================================================================
     # 1) Verify all nodes are running (hard prerequisite for everything else)
@@ -2054,8 +2888,6 @@ def cmd_test(args: argparse.Namespace) -> None:
     # 2) Node readiness gate (no control-plane assumptions yet)
     # =============================================================================
     try:
-        # NOTE: if verify_lab_ready() is still docker-hardcoded internally,
-        # update it next to accept rt and use rt.exec/is_running.
         verify_lab_ready(rt, topo, lab)
     except SystemExit:
         results["result"] = "fail"
@@ -2088,8 +2920,6 @@ def cmd_test(args: argparse.Namespace) -> None:
     if bgp_participants:
         try:
             for n in bgp_participants:
-                # NOTE: if wait_for_bgp() is docker-hardcoded internally,
-                # update it next to accept rt and use rt.exec.
                 wait_for_bgp(rt, lab, n["name"], timeout=30)
         except SystemExit:
             results["result"] = "fail"
@@ -2100,305 +2930,199 @@ def cmd_test(args: argparse.Namespace) -> None:
             raise
 
     # =============================================================================
-    # 4) Declared dataplane / policy tests (ping/tcp)
+    # 4) Scenarios (opt-in) OR Declared tests (default)
     # =============================================================================
-    tests = topo.get("tests", []) or []
-    if not tests:
-        results["result"] = "pass"
-        finished_at = time.time()
-        results["summary"]["finished_at"] = finished_at
-        results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
-        results["summary"]["total"] = 0
-        results["summary"]["passed"] = 0
-        results["summary"]["failed"] = 0
-        write_results()
-        print("✅ TEST PASS: nodes running" + (" + BGP OK" if bgp_participants else ""))
-        return
-
-    def node_ip_or_die(node_name: str) -> str:
-        ip = node_first_ipv4(topo, node_name)
-        if not ip:
-            die(f"TEST FAIL: could not determine IPv4 for node '{node_name}'")
-        return ip
-
-    listeners_started: dict[str, set[int]] = {}
-
-    def start_listener(dst: str, port: int) -> None:
-        listeners_started.setdefault(dst, set())
-        if port in listeners_started[dst]:
-            return
-        # NOTE: if start_tcp_listener() is docker-hardcoded internally,
-        # update it next to accept rt and use rt.exec.
-        start_tcp_listener(rt, lab, dst, port)
-        listeners_started[dst].add(port)
-
-    matched = 0  # YAML tests that matched filters and were executed
+    scenarios = topo.get("scenarios", []) or []
 
     try:
-        for idx, t in enumerate(tests):
-            i = idx + 1
-            test_name = t.get("name") if isinstance(t, dict) else None
-            if not test_name:
-                test_name = f"tests[{i}]"
-
-            if filter_name and test_name != filter_name:
-                continue
-
-            if not isinstance(t, dict):
+        if want_scenarios:
+            if not scenarios:
                 record_test(
-                    name=test_name,
-                    kind="unknown",
+                    name="scenarios:none-defined",
+                    kind="scenario",
                     src="",
                     dst="",
                     expected="pass",
                     observed="fail",
                     verdict="fail",
                     duration_ms=0,
-                    error="test entry must be a dict",
+                    error="no scenarios defined in topology (missing top-level 'scenarios:')",
                 )
-                fail_or_continue(f"tests[{i}]: must be a dict")
-                continue
-
-            if "kind" in t and "type" in t:
-                record_test(
-                    name=test_name,
-                    kind="unknown",
-                    src=t.get("src") or "",
-                    dst=t.get("dst") or "",
-                    expected="pass",
-                    observed="fail",
-                    verdict="fail",
-                    duration_ms=0,
-                    error="has both 'kind' and 'type'",
-                )
-                fail_or_continue(f"tests[{i}]: has both 'kind' and 'type' (use only 'kind')")
-                continue
-
-            kind = t.get("kind") or t.get("type")
-            if not kind:
-                record_test(
-                    name=test_name,
-                    kind="unknown",
-                    src=t.get("src") or "",
-                    dst=t.get("dst") or "",
-                    expected="pass",
-                    observed="fail",
-                    verdict="fail",
-                    duration_ms=0,
-                    error="missing 'kind'",
-                )
-                fail_or_continue(f"tests[{i}]: missing 'kind'")
-                continue
-
-            src = t.get("src")
-            dst = t.get("dst")
-
-            if kind not in ("ping", "tcp"):
-                record_test(
-                    name=test_name,
-                    kind=str(kind),
-                    src=src or "",
-                    dst=dst or "",
-                    expected="pass",
-                    observed="fail",
-                    verdict="fail",
-                    duration_ms=0,
-                    error=f"unsupported kind '{kind}'",
-                )
-                fail_or_continue(f"tests[{i}]: unsupported kind '{kind}' (supported: ping, tcp)")
-                continue
-
-            if filter_kind and kind != filter_kind:
-                continue
-
-            matched += 1
-
-            if not src or not dst:
-                record_test(
-                    name=test_name,
-                    kind=kind,
-                    src=src or "",
-                    dst=dst or "",
-                    expected="pass",
-                    observed="fail",
-                    verdict="fail",
-                    duration_ms=0,
-                    error="missing src/dst",
-                )
-                fail_or_continue(f"tests[{i}]: missing src/dst")
-                continue
-
-            dst_ip = node_ip_or_die(dst)
-
-            # ---- ping ----
-            if kind == "ping":
-                expected = (t.get("expect") or "pass").lower()
-                if expected not in ("pass", "fail"):
-                    expected = "pass"
-
-                count = int(t.get("count") or 2)
-                timeout_s = int(t.get("timeout_s") or 15)
-                interval_s = float(t.get("retry_interval_s") or 1.0)
-
-                def attempt_ping():
-                    cp = rt.exec(
-                        lab,
-                        src,
-                        ["ping", "-c", str(count), "-W", "1", dst_ip],
-                        check=False,
-                    )
-                    return (cp.returncode == 0), cp
-
-                start = time.time()
-                ok, last_cp, attempts = retry_until(timeout_s, interval_s, attempt_ping)
-                dur_ms = int((time.time() - start) * 1000)
-
-                observed = "pass" if ok else "fail"
-                should_succeed = (expected == "pass")
-                verdict = "pass" if (ok == should_succeed) else "fail"
-
-                record_test(
-                    name=test_name,
-                    kind="ping",
-                    src=src,
-                    dst=dst,
-                    expected=expected,
-                    observed=observed,
-                    verdict=verdict,
-                    duration_ms=dur_ms,
-                    error="" if verdict == "pass" else f"ping mismatch (expected {expected}, observed {observed})",
-                    meta={
-                        "dst_ip": dst_ip,
-                        "count": count,
-                        "attempts": attempts,
-                        "timeout_s": timeout_s,
-                        "retry_interval_s": interval_s,
-                        "last_rc": getattr(last_cp, "returncode", None),
-                    },
-                )
-
-                if verdict != "pass":
-                    fail_or_continue(
-                        f"tests[{i}] ping mismatch: {src} -> {dst} ({dst_ip}) expected {expected}, observed {observed}"
-                    )
-                continue
-
-            # ---- tcp ----
-            port = t.get("port")
-            expected = (t.get("expect") or "pass").lower()
-            listener = bool(t.get("listener", True))
-
-            if expected not in ("pass", "fail"):
-                expected = "pass"
-
-            if not isinstance(port, int):
-                record_test(
-                    name=test_name,
-                    kind="tcp",
-                    src=src,
-                    dst=dst,
-                    expected=expected,
-                    observed="fail",
-                    verdict="fail",
-                    duration_ms=0,
-                    error="'port' must be an int",
-                )
-                fail_or_continue(f"tests[{i}] tcp: 'port' must be an int")
-                continue
-
-            if listener:
-                start_listener(dst, port)
-
-            timeout_s = int(t.get("timeout_s") or (10 if expected == "pass" else 0))
-            interval_s = float(t.get("retry_interval_s") or 1.0)
-
-            def attempt_tcp():
-                cp = rt.exec(
-                    lab,
-                    src,
-                    ["sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"],
-                    check=False,
-                )
-                return (cp.returncode == 0), cp
-
-            start = time.time()
-            if expected == "pass" and timeout_s > 0:
-                ok, last_cp, attempts = retry_until(timeout_s, interval_s, attempt_tcp)
+                fail_or_continue("No scenarios defined in topology")
             else:
-                cp = rt.exec(
-                    lab,
-                    src,
-                    ["sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"],
-                    check=False,
-                )
-                ok, last_cp, attempts = (cp.returncode == 0), cp, 1
+                if all_scenarios:
+                    selected = [s for s in scenarios if isinstance(s, dict)]
+                else:
+                    selected = [s for s in scenarios if isinstance(s, dict) and s.get("id") == scenario_id]
 
-            dur_ms = int((time.time() - start) * 1000)
+                if not selected:
+                    record_test(
+                        name="scenarios:not-found",
+                        kind="scenario",
+                        src="",
+                        dst="",
+                        expected="pass",
+                        observed="fail",
+                        verdict="fail",
+                        duration_ms=0,
+                        error=f"scenario id not found: {scenario_id!r}",
+                    )
+                    fail_or_continue(f"Scenario not found: {scenario_id!r}")
+                else:
+                    for s in selected:
+                        sid = s.get("id") or "<unknown>"
+                        verdict = run_scenario(s)
+                        if verdict != "pass":
+                            fail_or_continue(f"Scenario FAIL: {sid}")
 
-            observed = "pass" if ok else "fail"
-            should_succeed = (expected == "pass")
-            verdict = "pass" if (ok == should_succeed) else "fail"
+        else:
+            # Default behavior: run declared tests (steady-state)
+            if not declared_tests:
+                results["result"] = "pass"
+                finished_at = time.time()
+                results["summary"]["finished_at"] = finished_at
+                results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
+                results["summary"]["total"] = 0
+                results["summary"]["passed"] = 0
+                results["summary"]["failed"] = 0
+                write_results()
+                print("✅ TEST PASS: nodes running" + (" + BGP OK" if bgp_participants else ""))
+                return
 
-            record_test(
-                name=test_name,
-                kind="tcp",
-                src=src,
-                dst=dst,
-                expected=expected,
-                observed=observed,
-                verdict=verdict,
-                duration_ms=dur_ms,
-                error="" if verdict == "pass" else f"tcp mismatch (expected {expected}, observed {observed})",
-                meta={
-                    "dst_ip": dst_ip,
-                    "port": int(port),
-                    "listener": bool(listener),
-                    "attempts": attempts,
-                    "timeout_s": timeout_s,
-                    "retry_interval_s": interval_s,
-                    "rc": getattr(last_cp, "returncode", None),
-                },
-            )
+            matched = 0
+            for idx, t in enumerate(declared_tests):
+                i = idx + 1
+                test_name = t.get("name") if isinstance(t, dict) else None
+                if not test_name:
+                    test_name = f"tests[{i}]"
 
-            if verdict != "pass":
-                fail_or_continue(
-                    f"tests[{i}] tcp mismatch: {src} -> {dst} ({dst_ip}:{port}) expected {expected}, observed {observed}"
+                if filter_name and test_name != filter_name:
+                    continue
+
+                if not isinstance(t, dict):
+                    record_test(
+                        name=test_name,
+                        kind="unknown",
+                        src="",
+                        dst="",
+                        expected="pass",
+                        observed="fail",
+                        verdict="fail",
+                        duration_ms=0,
+                        error="test entry must be a dict",
+                    )
+                    fail_or_continue(f"tests[{i}]: must be a dict")
+                    continue
+
+                if "kind" in t and "type" in t:
+                    record_test(
+                        name=test_name,
+                        kind="unknown",
+                        src=t.get("src") or "",
+                        dst=t.get("dst") or "",
+                        expected="pass",
+                        observed="fail",
+                        verdict="fail",
+                        duration_ms=0,
+                        error="has both 'kind' and 'type'",
+                    )
+                    fail_or_continue(f"tests[{i}]: has both 'kind' and 'type' (use only 'kind')")
+                    continue
+
+                kind = t.get("kind") or t.get("type")
+                if not kind:
+                    record_test(
+                        name=test_name,
+                        kind="unknown",
+                        src=t.get("src") or "",
+                        dst=t.get("dst") or "",
+                        expected="pass",
+                        observed="fail",
+                        verdict="fail",
+                        duration_ms=0,
+                        error="missing 'kind'",
+                    )
+                    fail_or_continue(f"tests[{i}]: missing 'kind'")
+                    continue
+
+                src = t.get("src")
+                dst = t.get("dst")
+
+                if kind not in ("ping", "tcp"):
+                    record_test(
+                        name=test_name,
+                        kind=str(kind),
+                        src=src or "",
+                        dst=dst or "",
+                        expected="pass",
+                        observed="fail",
+                        verdict="fail",
+                        duration_ms=0,
+                        error=f"unsupported kind '{kind}'",
+                    )
+                    fail_or_continue(f"tests[{i}]: unsupported kind '{kind}' (supported: ping, tcp)")
+                    continue
+
+                if filter_kind and kind != filter_kind:
+                    continue
+
+                matched += 1
+
+                if not src or not dst:
+                    record_test(
+                        name=test_name,
+                        kind=kind,
+                        src=src or "",
+                        dst=dst or "",
+                        expected="pass",
+                        observed="fail",
+                        verdict="fail",
+                        duration_ms=0,
+                        error="missing src/dst",
+                    )
+                    fail_or_continue(f"tests[{i}]: missing src/dst")
+                    continue
+
+                if kind == "ping":
+                    verdict = run_ping_test(test_name=test_name, src=src, dst=dst, t=t)
+                    if verdict != "pass":
+                        fail_or_continue(f"tests[{i}] ping mismatch: {src} -> {dst} expected {t.get('expect','pass')}")
+                    continue
+
+                verdict = run_tcp_test(test_name=test_name, src=src, dst=dst, t=t)
+                if verdict != "pass":
+                    port = t.get("port")
+                    fail_or_continue(f"tests[{i}] tcp mismatch: {src} -> {dst}:{port} expected {t.get('expect','pass')}")
+
+            if (filter_name or filter_kind) and matched == 0:
+                label_parts = []
+                if filter_name:
+                    label_parts.append(f"--name {filter_name!r}")
+                if filter_kind:
+                    label_parts.append(f"--kind {filter_kind!r}")
+                label = " ".join(label_parts) if label_parts else "(none)"
+                record_test(
+                    name="filter:no-match",
+                    kind=filter_kind or "unknown",
+                    src="",
+                    dst="",
+                    expected="pass",
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error=f"no test matched filters {label}",
                 )
 
     finally:
         # Always stop any listeners we started (deterministic cleanup)
         for dst_node in listeners_started.keys():
-            rt.exec(
-                lab,
-                dst_node,
-                ["sh", "-lc", 'pkill -f "nc.*-p" 2>/dev/null || true'],
-                check=False,
-            )
+            rt.exec(lab, dst_node, ["sh", "-lc", 'pkill -f "nc.*-p" 2>/dev/null || true'], check=False)
 
         finished_at = time.time()
         results["summary"]["finished_at"] = finished_at
         results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
 
-        if (filter_name or filter_kind) and matched == 0:
-            label_parts = []
-            if filter_name:
-                label_parts.append(f"--name {filter_name!r}")
-            if filter_kind:
-                label_parts.append(f"--kind {filter_kind!r}")
-            label = " ".join(label_parts) if label_parts else "(none)"
-
-            record_test(
-                name="filter:no-match",
-                kind=filter_kind or "unknown",
-                src="",
-                dst="",
-                expected="pass",
-                observed="fail",
-                verdict="fail",
-                duration_ms=0,
-                error=f"no test matched filters {label}",
-            )
-
+        # Atomic tests are authoritative (results["tests"])
         total = len(results["tests"])
         failed_count = sum(1 for r in results["tests"] if r.get("verdict") == "fail")
         passed_count = total - failed_count
@@ -2407,7 +3131,29 @@ def cmd_test(args: argparse.Namespace) -> None:
         results["summary"]["passed"] = passed_count
         results["summary"]["failed"] = failed_count
 
-        results["result"] = "fail" if failed_count > 0 else "pass"
+        # If scenarios were requested and any scenario failed but no atomic test recorded failure,
+        # mark overall fail by injecting a visibility record.
+        scenario_failed = any(s.get("verdict") == "fail" for s in (results.get("scenarios") or []))
+        if want_scenarios and scenario_failed and failed_count == 0:
+            record_test(
+                name="scenarios:verdict",
+                kind="scenario",
+                src="",
+                dst="",
+                expected="pass",
+                observed="fail",
+                verdict="fail",
+                duration_ms=0,
+                error="one or more scenarios failed (see results.scenarios)",
+            )
+            total = len(results["tests"])
+            failed_count = sum(1 for r in results["tests"] if r.get("verdict") == "fail")
+            passed_count = total - failed_count
+            results["summary"]["total"] = total
+            results["summary"]["passed"] = passed_count
+            results["summary"]["failed"] = failed_count
+
+        results["result"] = "fail" if results["summary"]["failed"] > 0 else "pass"
         write_results()
 
     # =============================================================================
@@ -2418,6 +3164,12 @@ def cmd_test(args: argparse.Namespace) -> None:
 
     if bgp_participants:
         print(f"✅ Control-plane PASS: BGP established ({len(bgp_participants)} participants)")
+
+    if want_scenarios:
+        passed_s = sum(1 for s in results["scenarios"] if s.get("verdict") == "pass")
+        total_s = len(results["scenarios"])
+        print(f"✅ Scenarios PASS ({passed_s}/{total_s})")
+
     print(f"✅ Declared tests PASS ({results['summary']['passed']} checks)")
     print("✅ TEST PASS: containers running + checks OK")
 
@@ -2436,6 +3188,19 @@ def _format_test_summary(results: dict) -> str:
         lines.append(f"duration_ms: {int(duration_ms)}")
     lines.append(f"tests: total={total} passed={passed} failed={failed}")
 
+    # -------------------------------------------------------------------------
+    # Scenarios summary (optional; non-authoritative; does not change result)
+    # -------------------------------------------------------------------------
+    scenarios = results.get("scenarios", []) or []
+    if scenarios:
+        sc_total = len(scenarios)
+        sc_passed = sum(1 for s in scenarios if s.get("verdict") == "pass")
+        sc_failed = sc_total - sc_passed
+        lines.append(f"scenarios: total={sc_total} passed={sc_passed} failed={sc_failed}")
+
+    # -------------------------------------------------------------------------
+    # Failed tests
+    # -------------------------------------------------------------------------
     failed_tests = []
     for t in results.get("tests", []) or []:
         if t.get("verdict") == "fail":
@@ -2460,6 +3225,75 @@ def _format_test_summary(results: dict) -> str:
             lines.append(f" - (+{len(failed_tests) - cap} more)")
     else:
         lines.append("failed_tests: (none)")
+
+    # -------------------------------------------------------------------------
+    # Failed scenarios list (optional)
+    # -------------------------------------------------------------------------
+    if scenarios:
+        failed_scenarios = []
+        for s in scenarios:
+            if s.get("verdict") == "fail":
+                sid = s.get("id", "<unnamed>")
+                failed_scenarios.append(sid)
+
+        failed_scenarios.sort()
+        if failed_scenarios:
+            lines.append("failed_scenarios:")
+            cap = 10
+            for sid in failed_scenarios[:cap]:
+                lines.append(f" - {sid}")
+            if len(failed_scenarios) > cap:
+                lines.append(f" - (+{len(failed_scenarios) - cap} more)")
+        else:
+            lines.append("failed_scenarios: (none)")
+
+    # -------------------------------------------------------------------------
+    # Scenario step breakdown (human-only, best-effort, non-authoritative)
+    # -------------------------------------------------------------------------
+    if scenarios:
+        lines.append("scenario_steps:")
+        for s in scenarios:
+            sid = s.get("id", "<unnamed>")
+            sverdict = s.get("verdict", "unknown")
+            sdur = s.get("duration_ms")
+            if sdur is None:
+                header = f" - {sid} verdict={sverdict}"
+            else:
+                header = f" - {sid} verdict={sverdict} duration_ms={int(sdur)}"
+            lines.append(header)
+
+            steps = s.get("steps", []) or []
+            for idx, st in enumerate(steps, start=1):
+                stype = st.get("type", "unknown")
+                sdur = st.get("duration_ms")
+                sdur_str = f"{int(sdur)}ms" if sdur is not None else "?"
+                sv = st.get("verdict")
+                sv_str = f" verdict={sv}" if sv else ""
+
+                # Keep it compact and stable across step types
+                if stype == "run":
+                    ref = st.get("ref", "<missing-ref>")
+                    lines.append(f"   {idx:02d}. run ref={ref}{sv_str} duration={sdur_str}")
+                elif stype == "wait_for":
+                    wtype = st.get("wait_type", "<missing-wait_type>")
+                    expected = st.get("expected")
+                    observed = st.get("observed")
+                    eo = ""
+                    if expected is not None or observed is not None:
+                        eo = f" expected={expected} observed={observed}"
+                    lines.append(f"   {idx:02d}. wait_for type={wtype}{eo}{sv_str} duration={sdur_str}")
+                elif stype == "fault":
+                    action = st.get("action", "<missing-action>")
+                    target = st.get("target", "")
+                    tgt = f" target={target}" if target else ""
+                    lines.append(f"   {idx:02d}. fault action={action}{tgt}{sv_str} duration={sdur_str}")
+                elif stype == "wait":
+                    meta = st.get("meta", {}) or {}
+                    seconds = meta.get("seconds")
+                    sec = f" seconds={seconds}" if seconds is not None else ""
+                    lines.append(f"   {idx:02d}. wait{sec}{sv_str} duration={sdur_str}")
+                else:
+                    lines.append(f"   {idx:02d}. {stype}{sv_str} duration={sdur_str}")
 
     return "\n".join(lines) + "\n"
 
@@ -3367,6 +4201,9 @@ def main() -> None:
         help="Print results.json to stdout in addition to writing the file",
     )
     p_test.set_defaults(func=cmd_test)
+    p_test.add_argument("--scenario", help="Run only this scenario id (scenarios[*].id)")
+    p_test.add_argument("--all-scenarios", action="store_true", help="Run all scenarios after steady-state tests")
+
 
     # run
     p_run = sub.add_parser("run", help="Ephemeral workflow: up -> test -> collect -> down (CI-friendly)")

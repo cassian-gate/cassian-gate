@@ -62,24 +62,39 @@ links:
     ipv4: ["192.168.2.10/24", "192.168.2.1/24"]
 
 tests:
-  - kind: ping
+  - name: h1_to_h2_ping
+    kind: ping
     src: h1
     dst: h2
 
-  - kind: ping
+  - name: h2_to_h1_ping
+    kind: ping
     src: h2
     dst: h1
 
-  - kind: tcp
+  - name: h1_to_h2_tcp_443_pass
+    kind: tcp
     src: h1
     dst: h2
     port: 443
     expect: pass
 
-  - kind: tcp
+  - name: h1_to_h2_tcp_22_fail
+    kind: tcp
     src: h1
     dst: h2
     port: 22
     expect: fail
 
-
+scenarios:
+  - id: steady_ping_twice
+    description: "Run h1->h2 ping twice with an explicit convergence gate"
+    steps:
+      - run: DOES_NOT_EXIST
+      - wait_for:
+          type: ping
+          from: h1
+          to: h2
+          expect: pass
+          timeout: 30
+      - run: h1_to_h2_ping
