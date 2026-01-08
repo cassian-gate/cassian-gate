@@ -20,6 +20,7 @@ import time
 import shutil
 import json
 import ipaddress
+import re
 
 from pathlib import Path
 from typing import Any
@@ -2176,7 +2177,7 @@ class Runtime:
         cmd: list[str],
         *,
         check: bool = False,
-        capture_output: bool = False,
+        capture_output: bool = True,   # <-- IMPORTANT: default True so helpers can parse stdout
         interactive: bool = False,
     ) -> subprocess.CompletedProcess:
         raise NotImplementedError
@@ -2188,7 +2189,7 @@ class Runtime:
         script: str,
         *,
         check: bool = False,
-        capture_output: bool = False,
+        capture_output: bool = True,   # <-- match exec default
     ) -> subprocess.CompletedProcess:
         return self.exec(
             lab,
@@ -2210,6 +2211,7 @@ class Runtime:
         """
         raise NotImplementedError
 
+
 class ContainerRuntime(Runtime):
     def node_id(self, lab: str, node: str) -> str:
         return f"clab-{lab}-{node}"
@@ -2221,17 +2223,25 @@ class ContainerRuntime(Runtime):
         cmd: list[str],
         *,
         check: bool = False,
-        capture_output: bool = False,
+        capture_output: bool = True,
         interactive: bool = False,
     ) -> subprocess.CompletedProcess:
         c = self.node_id(lab, node)
 
         argv: list[str] = ["docker", "exec"]
         if interactive:
+            # interactive calls should not capture output (TTY behavior)
             argv += ["-it"]
+            argv += [c, *cmd]
+            # Ensure we don't accidentally depend on stdout/stderr for interactive calls
+            return run(argv, check=check, capture_output=False)
+
         argv += [c, *cmd]
 
+        # Non-interactive calls: capture output by default so scenario helpers can parse stdout
+        # (e.g., ip route snapshots for deterministic restoration after link up)
         return run(argv, check=check, capture_output=capture_output)
+
 
     def is_running(self, lab: str, node: str) -> bool:
         return self.is_running_id(self.node_id(lab, node))
@@ -2245,6 +2255,7 @@ class ContainerRuntime(Runtime):
         if isinstance(out, bytes):
             out = out.decode("utf-8", errors="replace")
         return (out or "").strip() == "true"
+
 
 class VmRuntimeStub(Runtime):
     def __init__(self) -> None:
@@ -2261,7 +2272,7 @@ class VmRuntimeStub(Runtime):
         cmd: list[str],
         *,
         check: bool = False,
-        capture_output: bool = False,
+        capture_output: bool = True,
         interactive: bool = False,
     ) -> subprocess.CompletedProcess:
         die(self._msg)
@@ -2283,7 +2294,6 @@ def get_runtime(topo: dict[str, Any] | None = None) -> Runtime:
       - allow future extension: topo['runtime'] or node['runtime'] (not required yet)
     """
     return ContainerRuntime()
-
 
 # -------------------------
 # Commands
@@ -2316,6 +2326,7 @@ def cmd_test(args: argparse.Namespace) -> None:
     # Scenario CLI (opt-in)
     scenario_id: str | None = getattr(args, "scenario", None)
     all_scenarios: bool = bool(getattr(args, "all_scenarios", False))
+    scenario_verbose: bool = bool(getattr(args, "scenario_verbose", False))
     want_scenarios = bool(scenario_id or all_scenarios)
 
     started_at = time.time()
@@ -2341,6 +2352,10 @@ def cmd_test(args: argparse.Namespace) -> None:
         elif all_scenarios:
             scenario_ids = None  # validate all
         validate_scenario_run_refs_or_die(topo, scenario_ids=scenario_ids)
+
+    # Disallow filters when running scenarios: avoids silent "pass" with 0 executed runs
+    if want_scenarios and (filter_name or filter_kind):
+        die("ERROR: --name/--kind filters are not supported with --scenario/--all-scenarios (would skip scenario run steps).")
 
     # Phase-1 runtime abstraction (container today, VM later)
     rt = get_runtime(topo)
@@ -2369,6 +2384,7 @@ def cmd_test(args: argparse.Namespace) -> None:
         },
         "tests": [],
         "scenarios": [],
+        "events": [],
     }
 
     def record_test(
@@ -2398,6 +2414,39 @@ def cmd_test(args: argparse.Namespace) -> None:
         if meta:
             rec["meta"] = meta
         results["tests"].append(rec)
+
+    def record_event_test_run(
+        *,
+        scenario_id: str,
+        step_index: int,
+        name: str,
+        kind: str,
+        src: str,
+        dst: str,
+        expected: str,
+        observed: str,
+        verdict: str,
+        duration_ms: int,
+        error: str = "",
+        meta: dict | None = None,
+    ) -> None:
+        rec = {
+            "type": "scenario_test_run",
+            "scenario_id": scenario_id,
+            "step": int(step_index),
+            "name": name,
+            "kind": kind,
+            "from": src,
+            "to": dst,
+            "expected": expected,
+            "observed": observed,
+            "verdict": verdict,
+            "duration_ms": int(duration_ms),
+            "error": error,
+        }
+        if meta:
+            rec["meta"] = meta
+        results["events"].append(rec)
 
     def write_results() -> None:
         out = lab_dir(lab) / "results.json"
@@ -2455,7 +2504,7 @@ def cmd_test(args: argparse.Namespace) -> None:
     # -----------------------------
     # Atomic test execution helpers
     # -----------------------------
-    def run_ping_test(*, test_name: str, src: str, dst: str, t: dict) -> str:
+    def run_ping_test(*, test_name: str, src: str, dst: str, t: dict, record_fn=record_test) -> str:
         expected = (t.get("expect") or "pass").lower()
         if expected not in ("pass", "fail"):
             expected = "pass"
@@ -2475,7 +2524,7 @@ def cmd_test(args: argparse.Namespace) -> None:
         should_succeed = (expected == "pass")
         verdict = "pass" if (ok == should_succeed) else "fail"
 
-        record_test(
+        record_fn(
             name=test_name,
             kind="ping",
             src=src,
@@ -2494,16 +2543,17 @@ def cmd_test(args: argparse.Namespace) -> None:
                 "last_rc": getattr(last_cp, "returncode", None),
             },
         )
+
         return verdict
 
-    def run_tcp_test(*, test_name: str, src: str, dst: str, t: dict) -> str:
+    def run_tcp_test(*, test_name: str, src: str, dst: str, t: dict, record_fn=record_test) -> str:
         expected = (t.get("expect") or "pass").lower()
         if expected not in ("pass", "fail"):
             expected = "pass"
 
         port = t.get("port")
         if not isinstance(port, int):
-            record_test(
+            record_fn(
                 name=test_name,
                 kind="tcp",
                 src=src,
@@ -2513,6 +2563,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 verdict="fail",
                 duration_ms=0,
                 error="'port' must be an int",
+                meta={"port": port},
             )
             return "fail"
 
@@ -2540,7 +2591,7 @@ def cmd_test(args: argparse.Namespace) -> None:
         should_succeed = (expected == "pass")
         verdict = "pass" if (ok == should_succeed) else "fail"
 
-        record_test(
+        record_fn(
             name=test_name,
             kind="tcp",
             src=src,
@@ -2562,6 +2613,7 @@ def cmd_test(args: argparse.Namespace) -> None:
         )
         return verdict
 
+
     # Build name->test map once (authoritative declared tests)
     declared_tests = topo.get("tests", []) or []
     tests_by_name: dict[str, dict] = {}
@@ -2569,7 +2621,7 @@ def cmd_test(args: argparse.Namespace) -> None:
         if isinstance(t, dict) and t.get("name"):
             tests_by_name[str(t["name"])] = t
 
-    def run_named_test(ref: str) -> str:
+    def run_named_test(ref: str, *, scenario_ctx: tuple[str, int] | None = None) -> str:
         """
         Execute a declared atomic test by name (used by scenarios).
         Returns: "pass" | "fail"
@@ -2603,9 +2655,19 @@ def cmd_test(args: argparse.Namespace) -> None:
             )
             return "fail"
 
+        record_fn = None
+        if scenario_ctx:
+            sid, step_idx = scenario_ctx
+            record_fn = lambda **kw: record_event_test_run(scenario_id=sid, step_index=step_idx, **kw)
+
         if kind == "ping":
+            if record_fn:
+                return run_ping_test(test_name=ref, src=src, dst=dst, t=t, record_fn=record_fn)
             return run_ping_test(test_name=ref, src=src, dst=dst, t=t)
+
         if kind == "tcp":
+            if record_fn:
+                return run_tcp_test(test_name=ref, src=src, dst=dst, t=t, record_fn=record_fn)
             return run_tcp_test(test_name=ref, src=src, dst=dst, t=t)
 
         record_test(
@@ -2620,11 +2682,72 @@ def cmd_test(args: argparse.Namespace) -> None:
             error=f"unsupported kind '{kind}' (supported: ping, tcp)",
         )
         return "fail"
+    
+    # Scenario fault state (per test run, in-memory only; deterministic)
+    # key: (node, iface) -> list[str] of "ip route" lines to restore
+    fault_state_routes_v4: dict[tuple[str, str], list[str]] = {}
 
-    # -----------------------------
-    # Scenario execution (v1)
-    # -----------------------------
-    links_by_node = build_node_links(topo)
+    def _clean_route_line(line: str) -> str:
+        """
+        Remove transient/non-authoritative tokens from `ip route show` output so we can
+        deterministically restore routes after interface flaps.
+        """
+        s = line.strip()
+
+        # Remove transient kernel status tokens
+        # e.g. "via 10.0.0.2 linkdown" -> "via 10.0.0.2"
+        s = re.sub(r"\s+linkdown\b", "", s)
+
+        # Remove optional fields that can vary and aren't needed for restore
+        # Examples:
+        #   "proto bgp" / "proto static"
+        #   "metric 20"
+        #   "src 10.0.0.3"
+        #   "pref medium" (rare)
+        s = re.sub(r"\s+proto\s+\S+", "", s)
+        s = re.sub(r"\s+metric\s+\d+", "", s)
+        s = re.sub(r"\s+src\s+\S+", "", s)
+        s = re.sub(r"\s+pref\s+\S+", "", s)
+
+        # Collapse whitespace to keep stable splitting
+        s = re.sub(r"\s+", " ", s).strip()
+        return s
+
+    def _snapshot_v4_via_routes(node: str, iface: str) -> list[str]:
+        """
+        Capture interface-scoped *via* routes that Linux may remove when iface goes down.
+        Deterministic: exact command, stable filtering + sanitization.
+        """
+        cp = rt.exec(lab, node, ["ip", "-4", "route", "show", "dev", str(iface)], check=False)
+        out = (cp.stdout or "") if hasattr(cp, "stdout") else ""
+        lines: list[str] = []
+
+        for raw in out.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+
+            # Only restore routed entries (not connected proto kernel routes)
+            if " via " not in f" {line} ":
+                continue
+
+            # Ignore cached/temporary artifacts if present
+            if line.endswith(" cache") or " cache " in line:
+                continue
+
+            cleaned = _clean_route_line(line)
+            if cleaned:
+                lines.append(cleaned)
+
+        return sorted(set(lines))
+
+    def _restore_v4_routes(node: str, routes: list[str]) -> None:
+        """
+        Restore routes using `ip -4 route replace <route-line>`.
+        Best-effort but deterministic: run in sorted order, no retries.
+        """
+        for r in sorted(set(routes)):
+            rt.exec(lab, node, ["ip", "-4", "route", "replace"] + r.split(), check=False)
 
     def _find_link_interfaces_from_topology(topo: dict, a: str, b: str) -> tuple[str | None, str | None]:
         """
@@ -2637,26 +2760,26 @@ def cmd_test(args: argparse.Namespace) -> None:
         for link in links:
             if not isinstance(link, dict):
                continue
-             eps = link.get("endpoints") or []
+            eps = link.get("endpoints") or []
             if not (isinstance(eps, list) and len(eps) == 2):
                 continue
 
-        def split_ep(ep: object) -> tuple[str | None, str | None]:
-            if not isinstance(ep, str) or ":" not in ep:
-                return None, None
-            n, i = ep.split(":", 1)
-            return n.strip(), i.strip()
+            def split_ep(ep: object) -> tuple[str | None, str | None]:
+                if not isinstance(ep, str) or ":" not in ep:
+                    return None, None
+                n, i = ep.split(":", 1)
+                return n.strip(), i.strip()
 
-        n1, i1 = split_ep(eps[0])
-        n2, i2 = split_ep(eps[1])
+            n1, i1 = split_ep(eps[0])
+            n2, i2 = split_ep(eps[1])
 
-        if not n1 or not n2 or not i1 or not i2:
-            continue
+            if not n1 or not n2 or not i1 or not i2:
+                continue
 
-        if (n1 == a and n2 == b):
-            return i1, i2
-        if (n1 == b and n2 == a):
-            return i2, i1
+            if (n1 == a and n2 == b):
+                return i1, i2
+            if (n1 == b and n2 == a):
+                return i2, i1
 
         return None, None
 
@@ -2683,15 +2806,29 @@ def cmd_test(args: argparse.Namespace) -> None:
                     break
         return a_if, b_if
 
-    def apply_fault(fault: dict) -> tuple[str, str]:
+    def apply_fault(
+        fault: dict,
+        *,
+        fault_state_routes_v4: dict[tuple[str, str], list[str]],
+    ) -> tuple[str, str, dict]:
         """
-        Returns: (action, target_label)
+        Returns: (action, target_label, meta)
+        meta includes restored_routes for link_up/interface_up
+        """
 
-        v1 primitives:
-          - link_down/link_up: ip link set down/up on both ends (requires interface names)
-          - interface_down/interface_up: ip link set down/up on node interface
-          - node_stop/node_start: requires runtime support (rt.node_stop/rt.node_start)
-        """
+        def _iface_down(node: str, iface: str) -> None:
+            key = (node, iface)
+            fault_state_routes_v4[key] = _snapshot_v4_via_routes(node, iface)
+            rt.exec(lab, node, ["ip", "link", "set", "dev", str(iface), "down"], check=False)
+
+        def _iface_up(node: str, iface: str) -> int:
+            rt.exec(lab, node, ["ip", "link", "set", "dev", str(iface), "up"], check=False)
+            key = (node, iface)
+            routes = fault_state_routes_v4.get(key) or []
+            if routes:
+                _restore_v4_routes(node, routes)
+            return len(routes)
+
         if "link_down" in fault or "link_up" in fault:
             action = "link_down" if "link_down" in fault else "link_up"
             spec = fault.get(action) or {}
@@ -2699,13 +2836,19 @@ def cmd_test(args: argparse.Namespace) -> None:
             b = spec.get("b")
             if not a or not b:
                 raise ValueError(f"{action}: requires a,b")
+
             a_if, b_if = _find_link_interfaces(a, b)
             if not a_if or not b_if:
                 raise ValueError(f"{action}: could not determine interfaces for link {a}<->{b}")
-            op = "down" if action == "link_down" else "up"
-            rt.exec(lab, a, ["ip", "link", "set", "dev", str(a_if), op], check=False)
-            rt.exec(lab, b, ["ip", "link", "set", "dev", str(b_if), op], check=False)
-            return action, f"{a}:{a_if}<->{b}:{b_if}"
+
+            if action == "link_down":
+                _iface_down(a, a_if)
+                _iface_down(b, b_if)
+                return action, f"{a}:{a_if}<->{b}:{b_if}", {"restored_routes": 0}
+
+            ra = _iface_up(a, a_if)
+            rb = _iface_up(b, b_if)
+            return action, f"{a}:{a_if}<->{b}:{b_if}", {"restored_routes": (ra + rb)}
 
         if "interface_down" in fault or "interface_up" in fault:
             action = "interface_down" if "interface_down" in fault else "interface_up"
@@ -2714,9 +2857,13 @@ def cmd_test(args: argparse.Namespace) -> None:
             iface = spec.get("if") or spec.get("iface") or spec.get("interface")
             if not node or not iface:
                 raise ValueError(f"{action}: requires node + if")
-            op = "down" if action == "interface_down" else "up"
-            rt.exec(lab, node, ["ip", "link", "set", "dev", str(iface), op], check=False)
-            return action, f"{node}:{iface}"
+
+            if action == "interface_down":
+                _iface_down(node, str(iface))
+                return action, f"{node}:{iface}", {"restored_routes": 0}
+
+            r = _iface_up(node, str(iface))
+            return action, f"{node}:{iface}", {"restored_routes": r}
 
         if "node_stop" in fault or "node_start" in fault:
             action = "node_stop" if "node_stop" in fault else "node_start"
@@ -2728,7 +2875,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             if not hasattr(rt, fn_name):
                 raise ValueError(f"{action}: runtime does not implement {fn_name}() yet")
             getattr(rt, fn_name)(lab, node)  # type: ignore[misc]
-            return action, str(node)
+            return action, str(node), {"restored_routes": 0}
 
         raise ValueError(f"unsupported fault primitive: {list(fault.keys())}")
 
@@ -2742,50 +2889,64 @@ def cmd_test(args: argparse.Namespace) -> None:
         Returns: (type, expected, observed, duration_ms, meta, verdict)
 
         v1 supports:
-          - type: ping (from/to/expect/timeout)
+        - type: ping (from/to/expect/timeout)
+
+        Semantics:
+        - expect: pass => succeed when ping succeeds
+        - expect: fail => succeed when ping fails
         """
         wtype = wait_for.get("type")
         if wtype != "ping":
             raise ValueError(f"wait_for: unsupported type '{wtype}' (v1 supports: ping)")
 
         src = wait_for.get("from")
-        dst_ip = wait_for.get("to")
-
-        # Allow "to" to be either a literal IP/CIDR/hostname OR a node name.
-        # If it's a node name, resolve to its first IPv4 deterministically.
-        if isinstance(dst_ip, str) and dst_ip in {n.get("name") for n in (topo.get("nodes", []) or [])}:
-            resolved = node_first_ipv4(topo, dst_ip)
-            if not resolved:
-                raise ValueError(f"wait_for ping: could not determine IPv4 for node '{dst_ip}'")
-            dst_ip = resolved
-
+        to = wait_for.get("to")
         expected = (wait_for.get("expect") or "pass").lower()
         timeout_s = int(wait_for.get("timeout") or 30)
         interval_s = float(wait_for.get("interval_s") or 1.0)
 
         if expected not in ("pass", "fail"):
             expected = "pass"
-        if not src or not dst_ip:
+        if not src or not to:
             raise ValueError("wait_for ping: requires from + to")
 
-        def attempt():
-            cp = rt.exec(lab, src, ["ping", "-c", "1", "-W", "1", str(dst_ip)], check=False)
-            ok = (cp.returncode == 0)
-            return ok, cp
-
-        ok, last_cp, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
-        observed = "pass" if ok else "fail"
+        # If "to" looks like a node name, resolve to its first IPv4
+        dst_ip = None
+        if isinstance(to, str):
+            ip = node_first_ipv4(topo, to)
+            dst_ip = ip if ip else to
+        else:
+            dst_ip = str(to)
 
         should_succeed = (expected == "pass")
-        verdict = "pass" if (ok == should_succeed) else "fail"
+
+        def attempt():
+            cp = rt.exec(
+                lab,
+                str(src),
+                ["ping", "-c", "1", "-W", "1", str(dst_ip)],
+                check=False,
+            )
+            ping_ok = (cp.returncode == 0)
+
+            # Condition is met when ping_ok matches what we expect
+            condition_met = (ping_ok == should_succeed)
+            return condition_met, (cp, ping_ok)
+
+        ok, last_val, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
+        cp, ping_ok = last_val  # type: ignore[misc]
+
+        observed = "pass" if ping_ok else "fail"
+        verdict = "pass" if ok else "fail"
 
         meta = {
-            "from": src,
-            "to": str(dst_ip),
+            "from": str(src),
+            "to": str(to),
+            "dst_ip": str(dst_ip),
             "attempts": attempts,
             "timeout_s": timeout_s,
             "interval_s": interval_s,
-            "last_rc": getattr(last_cp, "returncode", None),
+            "last_rc": getattr(cp, "returncode", None),
         }
         return "ping", expected, observed, dur_ms, meta, verdict
 
@@ -2795,95 +2956,236 @@ def cmd_test(args: argparse.Namespace) -> None:
         steps = s.get("steps", []) or []
         scen_started = time.time()
 
-        scen_rec: dict = {"id": sid, "description": desc, "steps": [], "verdict": "unknown", "duration_ms": None}
+        scen_rec: dict = {
+            "id": sid,
+            "description": desc,
+            "steps": [],
+            "verdict": "unknown",
+            "duration_ms": None,
+        }
 
         def scen_step(rec: dict) -> None:
             scen_rec["steps"].append(rec)
 
+        # Optional: set this earlier from CLI flag:
+        # use the parsed flag from cmd_test scope
+        # (assumes scenario_verbose variable exists above)
+
+        def _sv(msg: str) -> None:
+            if scenario_verbose:
+                print(msg)
+
         scen_failed = False
 
-        for step in steps:
+        for step_idx, step in enumerate(steps, start=1):
             step_started = time.time()
+
             if not isinstance(step, dict):
-                scen_step({"type": "invalid", "verdict": "fail", "duration_ms": 0, "error": "step must be a dict"})
+                scen_step({
+                    "type": "invalid",
+                    "verdict": "fail",
+                    "duration_ms": 0,
+                    "error": "step must be a dict",
+                    "step": step_idx,
+                })
+                _sv(f"[scenario {sid}] {step_idx:02d}. invalid step (not a dict)")
                 scen_failed = True
                 if not keep_going:
                     break
                 continue
 
+            # -------------------------
+            # run: <test_name>
+            # -------------------------
             if "run" in step:
                 ref = step.get("run")
                 if not isinstance(ref, str) or not ref:
                     dur_ms = int((time.time() - step_started) * 1000)
-                    scen_step({"type": "run", "ref": str(ref), "verdict": "fail", "duration_ms": dur_ms, "error": "run must be a non-empty string"})
+                    scen_step({
+                        "type": "run",
+                        "ref": str(ref),
+                        "verdict": "fail",
+                        "duration_ms": dur_ms,
+                        "error": "run must be a non-empty string",
+                        "step": step_idx,
+                    })
+                    _sv(f"[scenario {sid}] {step_idx:02d}. run ref={ref!r} -> FAIL (invalid ref)")
                     scen_failed = True
                     if not keep_going:
                         break
                     continue
 
-                verdict = run_named_test(ref)
+                _sv(f"[scenario {sid}] {step_idx:02d}. run ref={ref}")
+                verdict = run_named_test(ref, scenario_ctx=(sid, step_idx))  # <-- IMPORTANT
                 dur_ms = int((time.time() - step_started) * 1000)
-                scen_step({"type": "run", "ref": ref, "verdict": verdict, "duration_ms": dur_ms})
+
+                scen_step({
+                    "type": "run",
+                    "ref": ref,
+                    "verdict": verdict,
+                    "duration_ms": dur_ms,
+                    "step": step_idx,
+                })
+
+                _sv(f"[scenario {sid}] {step_idx:02d}. run ref={ref} -> {verdict.upper()} ({dur_ms}ms)")
                 if verdict != "pass":
                     scen_failed = True
                     if not keep_going:
                         break
                 continue
 
+            # -------------------------
+            # fault: { ... }
+            # -------------------------
             if "fault" in step:
                 fault = step.get("fault")
                 if not isinstance(fault, dict):
                     dur_ms = int((time.time() - step_started) * 1000)
-                    scen_step({"type": "fault", "verdict": "fail", "duration_ms": dur_ms, "error": "fault must be a dict"})
+                    scen_step({
+                        "type": "fault",
+                        "verdict": "fail",
+                        "duration_ms": dur_ms,
+                        "error": "fault must be a dict",
+                        "step": step_idx,
+                    })
+                    _sv(f"[scenario {sid}] {step_idx:02d}. fault -> FAIL (fault not a dict)")
                     scen_failed = True
                     if not keep_going:
                         break
                     continue
+
                 try:
-                    action, target = apply_fault(fault)
+                    _sv(f"[scenario {sid}] {step_idx:02d}. fault apply")
+
+                    action, target, meta = apply_fault(
+                        fault,
+                        fault_state_routes_v4=fault_state_routes_v4,
+                    )
                     dur_ms = int((time.time() - step_started) * 1000)
-                    scen_step({"type": "fault", "action": action, "target": target, "verdict": "pass", "duration_ms": dur_ms})
+
+                    scen_step({
+                        "type": "fault",
+                        "action": action,
+                        "target": target,
+                        "verdict": "pass",
+                        "duration_ms": dur_ms,
+                        "step": step_idx,
+                        "meta": meta,
+                    })
+
+                    note = ""
+                    if action in ("link_up", "interface_up"):
+                        note = f" (restored_routes={int((meta or {}).get('restored_routes') or 0)})"
+
+                    _sv(
+                        f"[scenario {sid}] {step_idx:02d}. fault action={action} target={target}{note} -> PASS ({dur_ms}ms)"
+                    )
+
                 except Exception as e:
                     dur_ms = int((time.time() - step_started) * 1000)
-                    scen_step({"type": "fault", "verdict": "fail", "duration_ms": dur_ms, "error": str(e), "fault": fault})
+                    scen_step({
+                        "type": "fault",
+                        "verdict": "fail",
+                        "duration_ms": dur_ms,
+                        "error": str(e),
+                        "fault": fault,
+                        "step": step_idx,
+                    })
+                    _sv(f"[scenario {sid}] {step_idx:02d}. fault -> FAIL ({e})")
                     scen_failed = True
                     if not keep_going:
                         break
-                continue
 
+                continue
+            # -------------------------
+            # wait: {seconds: N}
+            # -------------------------
             if "wait" in step:
                 w = step.get("wait") or {}
                 seconds = int((w.get("seconds") or 0))
+                _sv(f"[scenario {sid}] {step_idx:02d}. wait seconds={seconds}")
                 dur_ms = wait_seconds(seconds)
-                scen_step({"type": "wait", "seconds": seconds, "verdict": "pass", "duration_ms": dur_ms})
+
+                scen_step({
+                    "type": "wait",
+                    "seconds": seconds,
+                    "verdict": "pass",
+                    "duration_ms": dur_ms,
+                    "step": step_idx,
+                })
+                _sv(f"[scenario {sid}] {step_idx:02d}. wait -> PASS ({dur_ms}ms)")
                 continue
 
+            # -------------------------
+            # wait_for: { ... }
+            # -------------------------
             if "wait_for" in step:
                 wf = step.get("wait_for")
                 if not isinstance(wf, dict):
                     dur_ms = int((time.time() - step_started) * 1000)
-                    scen_step({"type": "wait_for", "verdict": "fail", "duration_ms": dur_ms, "error": "wait_for must be a dict"})
+                    scen_step({
+                        "type": "wait_for",
+                        "verdict": "fail",
+                        "duration_ms": dur_ms,
+                        "error": "wait_for must be a dict",
+                        "step": step_idx,
+                    })
+                    _sv(f"[scenario {sid}] {step_idx:02d}. wait_for -> FAIL (not a dict)")
                     scen_failed = True
                     if not keep_going:
                         break
                     continue
+
                 try:
+                    _sv(f"[scenario {sid}] {step_idx:02d}. wait_for")
                     wtype, expected, observed, dur_ms, meta, verdict = wait_for_predicate(wf)
-                    scen_step({"type": "wait_for", "wait_type": wtype, "expected": expected, "observed": observed, "verdict": verdict, "duration_ms": dur_ms, "meta": meta})
+
+                    scen_step({
+                        "type": "wait_for",
+                        "wait_type": wtype,
+                        "expected": expected,
+                        "observed": observed,
+                        "verdict": verdict,
+                        "duration_ms": dur_ms,
+                        "meta": meta,
+                        "step": step_idx,
+                    })
+
+                    _sv(f"[scenario {sid}] {step_idx:02d}. wait_for type={wtype} expected={expected} observed={observed} -> {verdict.upper()} ({dur_ms}ms)")
+
                     if verdict != "pass":
                         scen_failed = True
                         if not keep_going:
                             break
+
                 except Exception as e:
                     dur_ms = int((time.time() - step_started) * 1000)
-                    scen_step({"type": "wait_for", "verdict": "fail", "duration_ms": dur_ms, "error": str(e), "wait_for": wf})
+                    scen_step({
+                        "type": "wait_for",
+                        "verdict": "fail",
+                        "duration_ms": dur_ms,
+                        "error": str(e),
+                        "wait_for": wf,
+                        "step": step_idx,
+                    })
+                    _sv(f"[scenario {sid}] {step_idx:02d}. wait_for -> FAIL ({e})")
                     scen_failed = True
                     if not keep_going:
                         break
                 continue
 
+            # -------------------------
+            # unknown step
+            # -------------------------
             dur_ms = int((time.time() - step_started) * 1000)
-            scen_step({"type": "unknown", "verdict": "fail", "duration_ms": dur_ms, "error": f"unsupported step keys: {list(step.keys())}"})
+            scen_step({
+                "type": "unknown",
+                "verdict": "fail",
+                "duration_ms": dur_ms,
+                "error": f"unsupported step keys: {list(step.keys())}",
+                "step": step_idx,
+            })
+            _sv(f"[scenario {sid}] {step_idx:02d}. unknown -> FAIL (unsupported keys)")
             scen_failed = True
             if not keep_going:
                 break
@@ -3207,23 +3509,49 @@ def cmd_test(args: argparse.Namespace) -> None:
         total_s = len(results["scenarios"])
         print(f"✅ Scenarios PASS ({passed_s}/{total_s})")
 
-    print(f"✅ Declared tests PASS ({results['summary']['passed']} checks)")
+        # Scenario-only runs record atomic invocations under results["events"]
+        event_runs = [
+            e for e in (results.get("events") or [])
+            if e.get("type") == "scenario_test_run"
+        ]
+        ev_pass = sum(1 for e in event_runs if e.get("verdict") == "pass")
+        ev_total = len(event_runs)
+        print(f"✅ Scenario test runs PASS ({ev_pass}/{ev_total})")
+    else:
+        print(f"✅ Declared tests PASS ({results['summary']['passed']} checks)")
+
     print("✅ TEST PASS: containers running + checks OK")
 
 def _format_test_summary(results: dict) -> str:
     lab = results.get("lab", "")
     summ = results.get("summary", {}) or {}
+    duration_ms = summ.get("duration_ms")
+
+    # Declared tests summary (authoritative steady-state tests)
+    # In scenario-only mode, you likely want these to remain 0/0/0 (by design).
     total = int(summ.get("total") or 0)
     passed = int(summ.get("passed") or 0)
     failed = int(summ.get("failed") or 0)
-    duration_ms = summ.get("duration_ms")
 
     lines: list[str] = []
     lines.append(f"lab: {lab}")
     lines.append(f"result: {results.get('result', 'unknown')}")
     if duration_ms is not None:
         lines.append(f"duration_ms: {int(duration_ms)}")
+
+    # Keep tests as declared tests summary (Option A)
     lines.append(f"tests: total={total} passed={passed} failed={failed}")
+
+    # -------------------------------------------------------------------------
+    # Scenario event runs summary (Option A): scenario_test_run events
+    # -------------------------------------------------------------------------
+    events = results.get("events", []) or []
+    scenario_runs = [e for e in events if e.get("type") == "scenario_test_run"]
+    if scenario_runs:
+        sr_total = len(scenario_runs)
+        sr_passed = sum(1 for e in scenario_runs if e.get("verdict") == "pass")
+        sr_failed = sr_total - sr_passed
+        lines.append(f"scenario_test_runs: total={sr_total} passed={sr_passed} failed={sr_failed}")
 
     # -------------------------------------------------------------------------
     # Scenarios summary (optional; non-authoritative; does not change result)
@@ -3236,7 +3564,7 @@ def _format_test_summary(results: dict) -> str:
         lines.append(f"scenarios: total={sc_total} passed={sc_passed} failed={sc_failed}")
 
     # -------------------------------------------------------------------------
-    # Failed tests
+    # Failed declared tests (results["tests"])
     # -------------------------------------------------------------------------
     failed_tests = []
     for t in results.get("tests", []) or []:
@@ -3300,17 +3628,18 @@ def _format_test_summary(results: dict) -> str:
             lines.append(header)
 
             steps = s.get("steps", []) or []
-            for idx, st in enumerate(steps, start=1):
+            for idx0, st in enumerate(steps, start=1):
+                idx = int(st.get("step") or idx0)
                 stype = st.get("type", "unknown")
-                sdur = st.get("duration_ms")
-                sdur_str = f"{int(sdur)}ms" if sdur is not None else "?"
+                sdur2 = st.get("duration_ms")
+                sdur_str = f"{int(sdur2)}ms" if sdur2 is not None else "?"
                 sv = st.get("verdict")
                 sv_str = f" verdict={sv}" if sv else ""
 
-                # Keep it compact and stable across step types
                 if stype == "run":
                     ref = st.get("ref", "<missing-ref>")
                     lines.append(f"   {idx:02d}. run ref={ref}{sv_str} duration={sdur_str}")
+
                 elif stype == "wait_for":
                     wtype = st.get("wait_type", "<missing-wait_type>")
                     expected = st.get("expected")
@@ -3319,16 +3648,31 @@ def _format_test_summary(results: dict) -> str:
                     if expected is not None or observed is not None:
                         eo = f" expected={expected} observed={observed}"
                     lines.append(f"   {idx:02d}. wait_for type={wtype}{eo}{sv_str} duration={sdur_str}")
+
                 elif stype == "fault":
                     action = st.get("action", "<missing-action>")
                     target = st.get("target", "")
                     tgt = f" target={target}" if target else ""
-                    lines.append(f"   {idx:02d}. fault action={action}{tgt}{sv_str} duration={sdur_str}")
+
+                    note = ""
+                    if action in ("link_up", "interface_up"):
+                        meta = st.get("meta") or {}
+                        rr_raw = meta.get("restored_routes")
+                        try:
+                            rr = int(rr_raw or 0)
+                        except Exception:
+                            rr = 0
+                        note = f" (restored_routes={rr})"
+
+                    lines.append(
+                        f"   {idx:02d}. fault action={action}{tgt}{note}{sv_str} duration={sdur_str}"
+                    )
+
                 elif stype == "wait":
-                    meta = st.get("meta", {}) or {}
-                    seconds = meta.get("seconds")
+                    seconds = st.get("seconds")
                     sec = f" seconds={seconds}" if seconds is not None else ""
                     lines.append(f"   {idx:02d}. wait{sec}{sv_str} duration={sdur_str}")
+
                 else:
                     lines.append(f"   {idx:02d}. {stype}{sv_str} duration={sdur_str}")
 
@@ -4240,7 +4584,7 @@ def main() -> None:
     p_test.set_defaults(func=cmd_test)
     p_test.add_argument("--scenario", help="Run only this scenario id (scenarios[*].id)")
     p_test.add_argument("--all-scenarios", action="store_true", help="Run all scenarios after steady-state tests")
-
+    p_test.add_argument("--scenario-verbose", action="store_true", help="Print each scenario step as it runs (human-only; does not change artifacts)",)
 
     # run
     p_run = sub.add_parser("run", help="Ephemeral workflow: up -> test -> collect -> down (CI-friendly)")

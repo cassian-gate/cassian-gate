@@ -87,14 +87,36 @@ tests:
     expect: fail
 
 scenarios:
-  - id: steady_ping_twice
-    description: "Run h1->h2 ping twice with an explicit convergence gate"
+  - id: fail_link_r2_fw1
+    description: "Bounce r2<->fw1 link and verify h1->h2 recovers"
     steps:
-      - run: DOES_NOT_EXIST
+      - run: h1_to_h2_ping
+
+      - fault:
+          link_down:
+            a: r2
+            b: fw1
+
+      - wait_for:
+          type: ping
+          from: h1
+          to: h2
+          expect: fail
+          timeout: 10
+          interval_s: 1.0
+
+      - fault:
+          link_up:
+            a: r2
+            b: fw1
+
       - wait_for:
           type: ping
           from: h1
           to: h2
           expect: pass
-          timeout: 30
+          timeout: 60
+          interval_s: 1.0
+
       - run: h1_to_h2_ping
+
