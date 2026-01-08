@@ -2626,10 +2626,47 @@ def cmd_test(args: argparse.Namespace) -> None:
     # -----------------------------
     links_by_node = build_node_links(topo)
 
+    def _find_link_interfaces_from_topology(topo: dict, a: str, b: str) -> tuple[str | None, str | None]:
+        """
+        Deterministically resolve interface names for a<->b from topo["links"].
+
+        Expects links like:
+        - endpoints: ["r2:eth2", "fw1:eth1"]
+        """
+        links = topo.get("links", []) or []
+        for link in links:
+            if not isinstance(link, dict):
+               continue
+             eps = link.get("endpoints") or []
+            if not (isinstance(eps, list) and len(eps) == 2):
+                continue
+
+        def split_ep(ep: object) -> tuple[str | None, str | None]:
+            if not isinstance(ep, str) or ":" not in ep:
+                return None, None
+            n, i = ep.split(":", 1)
+            return n.strip(), i.strip()
+
+        n1, i1 = split_ep(eps[0])
+        n2, i2 = split_ep(eps[1])
+
+        if not n1 or not n2 or not i1 or not i2:
+            continue
+
+        if (n1 == a and n2 == b):
+            return i1, i2
+        if (n1 == b and n2 == a):
+            return i2, i1
+
+        return None, None
+
     def _find_link_interfaces(a: str, b: str) -> tuple[str | None, str | None]:
-        """
-        Best-effort: relies on build_node_links() link dicts containing "ifname" and peer mapping.
-        """
+    # Prefer authoritative topo["links"] parsing (most reliable)
+        a_if, b_if = _find_link_interfaces_from_topology(topo, a, b)
+        if a_if and b_if:
+            return a_if, b_if
+
+    # Fallback: best-effort from build_node_links() if present
         a_if = None
         b_if = None
         for l in links_by_node.get(a, []) or []:
