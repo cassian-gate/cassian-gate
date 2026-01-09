@@ -787,11 +787,112 @@ def resolve_topology(topo: dict) -> dict:
 
     return resolved
 
+def validate_scenarios(topo: dict[str, Any]) -> None:
+    """
+    Fail-fast validation of scenario schema.
+    Must run before any scenario execution.
+    """
+    scenarios = topo.get("scenarios") or []
+    if not scenarios:
+        return
+
+    # Collect declared test names for run: validation
+    tests = topo.get("tests") or []
+    test_names = {t.get("name") for t in tests if isinstance(t, dict)}
+
+    for si, sc in enumerate(scenarios, start=1):
+        ctx = f"scenarios[{si}]"
+
+        if not isinstance(sc, dict):
+            die(f"{ctx}: must be a dict")
+
+        allowed_sc_keys = {"id", "description", "steps"}
+        unknown = set(sc) - allowed_sc_keys
+        if unknown:
+            die(f"{ctx}: unknown keys {sorted(unknown)}")
+
+        sid = sc.get("id")
+        if not isinstance(sid, str) or not sid.strip():
+            die(f"{ctx}: 'id' must be a non-empty string")
+
+        steps = sc.get("steps")
+        if not isinstance(steps, list) or not steps:
+            die(f"{ctx}: 'steps' must be a non-empty list")
+
+        for i, step in enumerate(steps, start=1):
+            sctx = f"{ctx}.steps[{i}]"
+
+            if not isinstance(step, dict):
+                die(f"{sctx}: step must be a dict")
+
+            keys = set(step)
+            allowed = {"run", "fault", "wait_for"}
+
+            if not keys:
+                die(f"{sctx}: empty step")
+
+            if not keys.issubset(allowed):
+                die(f"{sctx}: unknown keys {sorted(keys - allowed)}")
+
+            if len(keys) != 1:
+                die(f"{sctx}: step must contain exactly one of {sorted(allowed)}")
+
+            # ---- run ----
+            if "run" in step:
+                ref = step["run"]
+                if not isinstance(ref, str) or not ref.strip():
+                    die(f"{sctx}.run: must be a non-empty test name")
+
+                if ref not in test_names:
+                    die(f"{sctx}.run: unknown test '{ref}'")
+
+            # ---- fault ----
+            if "fault" in step:
+                fault = step["fault"]
+                if not isinstance(fault, dict) or len(fault) != 1:
+                    die(f"{sctx}.fault: must contain exactly one action")
+
+                action, spec = next(iter(fault.items()))
+                if action not in ("link_down", "link_up", "interface_down", "interface_up"):
+                    die(f"{sctx}.fault: unsupported action '{action}'")
+
+                if not isinstance(spec, dict):
+                    die(f"{sctx}.fault.{action}: must be a dict")
+
+                required = {"a", "b"}
+                missing = required - set(spec)
+                if missing:
+                    die(f"{sctx}.fault.{action}: missing keys {sorted(missing)}")
+
+            # ---- wait_for ----
+            if "wait_for" in step:
+                wf = step["wait_for"]
+                if not isinstance(wf, dict):
+                    die(f"{sctx}.wait_for: must be a dict")
+
+                required = {"type", "from", "to", "expect"}
+                missing = required - set(wf)
+                if missing:
+                    die(f"{sctx}.wait_for: missing keys {sorted(missing)}")
+
+                allowed_wf = required | {"timeout", "interval_s", "port"}
+                unknown = set(wf) - allowed_wf
+                if unknown:
+                    die(f"{sctx}.wait_for: unknown keys {sorted(unknown)}")
+
+                if wf["type"] not in ("ping", "tcp"):
+                    die(f"{sctx}.wait_for.type: must be ping|tcp")
+
+                if wf["expect"] not in ("pass", "fail"):
+                    die(f"{sctx}.wait_for.expect: must be pass|fail")
+
 def write_containerlab_file(topo_path: Path) -> Path:
     topo = load_yaml(topo_path)
     ensure_valid_topology(topo)
 
     resolved = resolve_topology(topo)
+    validate_scenarios(resolved)
+
 
     # Store both: original + resolved
     write_file(lab_dir(topo["name"]) / "topology.yaml", yaml.safe_dump(topo, sort_keys=False))
