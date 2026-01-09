@@ -744,6 +744,28 @@ def resolve_topology(topo: dict) -> dict:
             t["kind"] = t.pop("type")
 
         # ----------------------------
+        # v1: normalize test field aliases
+        # Accept 'from'/'to' as aliases for 'src'/'dst' with strict disagreement checks.
+        # ----------------------------
+        if "from" in t and "src" in t:
+            a = str(t.get("from") or "").strip()
+            b = str(t.get("src") or "").strip()
+            if a and b and a != b:
+                die(f"tests[{i}]: 'from' and 'src' disagree ({a!r} vs {b!r})")
+
+        if "to" in t and "dst" in t:
+            a = str(t.get("to") or "").strip()
+            b = str(t.get("dst") or "").strip()
+            if a and b and a != b:
+                die(f"tests[{i}]: 'to' and 'dst' disagree ({a!r} vs {b!r})")
+
+        if "src" not in t and "from" in t:
+            t["src"] = t.get("from")
+
+        if "dst" not in t and "to" in t:
+            t["dst"] = t.get("to")
+
+        # ----------------------------
         # v1 ping destination normalization
         # ----------------------------
         if t.get("kind") == "ping":
@@ -2637,6 +2659,7 @@ def cmd_test(args: argparse.Namespace) -> None:
 
     def write_results() -> None:
         out = lab_dir(lab) / "results.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(results, indent=2), encoding="utf-8")
         print(f"Wrote: {out}")
 
@@ -3910,11 +3933,17 @@ def cmd_up(args: argparse.Namespace) -> None:
     topo_path = (TOPO_DIR / args.topology) if not Path(args.topology).is_file() else Path(args.topology)
 
     # If --reconfigure: destroy + remove root-owned lab dir FIRST.
+    # Pre-validate topology BEFORE any destructive action (v1 deterministic, fail-fast)
+    topo_preview = load_yaml(topo_path)
+    ensure_valid_topology(topo_preview)
+    resolved_preview = resolve_topology(topo_preview)
+    validate_scenarios(resolved_preview)
+
+    # If --reconfigure: destroy + remove root-owned lab dir AFTER validation passes.
     if getattr(args, "reconfigure", False):
         lab_name: str | None = None
         try:
-            topo_for_name = load_yaml(topo_path)
-            lab_name = (topo_for_name or {}).get("name")
+            lab_name = (resolved_preview or {}).get("name")
         except Exception:
             lab_name = None
 
@@ -3923,8 +3952,6 @@ def cmd_up(args: argparse.Namespace) -> None:
             existing_clab = LABS_DIR / f"{lab_name}.clab.yaml"
             if existing_clab.exists():
                 run(["sudo", "containerlab", "destroy", "-t", str(existing_clab)], check=False)
-
-            # containerlab creates labs/clab-<lab> as root; remove it as root
             run(["sudo", "rm", "-rf", str(lab_dir(lab_name))], check=False)
 
     # Generate AFTER destroy/cleanup
