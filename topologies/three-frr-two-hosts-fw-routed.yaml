@@ -72,6 +72,19 @@ tests:
     src: h2
     dst: h1
 
+  # NEW: verify dst can be an IP literal
+  - name: h1_to_h2_ip_literal_ping
+    kind: ping
+    src: h1
+    dst: 192.168.2.10
+
+  # NEW: verify explicit destination override
+  - name: h1_to_h2_dst_ip_override_ping
+    kind: ping
+    src: h1
+    dst: h2
+    dst_ip: 192.168.2.10
+
   - name: h1_to_h2_tcp_443_pass
     kind: tcp
     src: h1
@@ -100,7 +113,7 @@ scenarios:
       - wait_for:
           type: ping
           from: h1
-          to: h2
+          to: 192.168.2.10
           expect: fail
           timeout: 10
           interval_s: 1.0

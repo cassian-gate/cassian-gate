@@ -74,6 +74,19 @@ def die(msg: str, code: int = 1) -> None:
     print(f"ERROR: {msg}", file=sys.stderr)
     raise SystemExit(code)
 
+def is_ip_literal(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value.strip())
+        return True
+    except Exception:
+        return False
+
+def validate_ip_literal(value: str, ctx: str) -> None:
+    try:
+        ipaddress.ip_address(value.strip())
+    except Exception:
+        die(f"{ctx}: invalid IPv4/IPv6 literal: {value!r}")
+
 def ensure_nc(rt: Runtime, lab: str, node: str) -> None:
     cp = rt.exec(
         lab,
@@ -153,27 +166,41 @@ def tcp_connect_test(
     if (not should_succeed) and ok:
         die(f"TCP connect should have failed but succeeded: {src_host} -> {dst_ip}:{port}")
 
-def node_first_ipv4(topo: dict, node_name: str) -> str:
+def node_first_ipv4(topo: dict[str, Any], name: str) -> str:
     """
-    Return the first IPv4 address (no prefix) found for node_name from topo['links'].
-    Assumes link entries have explicit 'ipv4' with same ordering as 'endpoints'.
+    Resolve a node name to its first IPv4 address from topology links.
+
+    v1-safe enhancement:
+      - If 'name' is already an IPv4/IPv6 literal, return it directly.
+        (This prevents IP literals from being treated as node names in wait_for/scenario paths.)
     """
+    if not isinstance(name, str) or not name.strip():
+        die("node_first_ipv4: name must be a non-empty string")
+
+    name_s = name.strip()
+
+    # v1: allow IP literal passthrough (explicit, deterministic)
+    if is_ip_literal(name_s):
+        validate_ip_literal(name_s, "node_first_ipv4")
+        return name_s
+
+    # --- existing behavior below (unchanged logic, just copied from your current function) ---
     for link in topo.get("links", []) or []:
-        eps = link.get("endpoints", []) or []
-        ips = link.get("ipv4", []) or []
-        if len(eps) != 2 or len(ips) != 2:
+        eps = link.get("endpoints") or []
+        ipv4s = link.get("ipv4") or []
+        if len(eps) != 2 or len(ipv4s) != 2:
             continue
 
-        nA = eps[0].split(":", 1)[0]
-        nB = eps[1].split(":", 1)[0]
+        a, b = eps[0], eps[1]
+        a_ip, b_ip = ipv4s[0], ipv4s[1]
 
-        if nA == node_name:
-            return ips[0].split("/")[0]
-        if nB == node_name:
-            return ips[1].split("/")[0]
+        # endpoint format: "node:ifname"
+        if isinstance(a, str) and a.startswith(name_s + ":"):
+            return str(a_ip).split("/")[0]
+        if isinstance(b, str) and b.startswith(name_s + ":"):
+            return str(b_ip).split("/")[0]
 
-    die(f"Could not determine IPv4 for node '{node_name}' from topology links")
-
+    die(f"Could not determine IPv4 for node '{name_s}' from topology links")
 
 def run_ping_test(
     rt: Runtime,
@@ -237,12 +264,16 @@ def run_declared_tests(rt: Runtime, lab: str, topo: dict) -> None:
                 die(f"Invalid test entry (missing type/src/dst): {t}")
 
             # dst can be a node name or an IP; if it looks like a node name, resolve it
-            dst_ip = t.get("dst_ip")
-            if not dst_ip:
-                if isinstance(dst, str) and any(n.get("name") == dst for n in topo.get("nodes", [])):
-                    dst_ip = node_first_ipv4(topo, dst)
-                else:
-                    dst_ip = dst  # treat as raw IP string
+            # Destination already normalized during validation
+            dst_kind = t.get("_dst_kind")
+            dst_value = t.get("_dst_value")
+
+            if dst_kind == "ip":
+                dst_ip = dst_value
+            elif dst_kind == "node":
+                dst_ip = node_first_ipv4(topo, dst_value)
+            else:
+                die(f"Ping test missing normalized destination: {t}")
 
             expect = (t.get("expect") or "pass").lower()
             should_succeed = (expect in ("pass", "allow", "ok", "true"))
@@ -712,8 +743,49 @@ def resolve_topology(topo: dict) -> dict:
         if "type" in t and "kind" not in t:
             t["kind"] = t.pop("type")
 
-    return resolved
+        # ----------------------------
+        # v1 ping destination normalization
+        # ----------------------------
+        if t.get("kind") == "ping":
+            ctx = f"tests[{i}] ({t.get('name', '<unnamed>')})"
 
+            src = t.get("src") or t.get("from")
+            dst = t.get("dst") or t.get("to")
+            dst_ip = t.get("dst_ip") or t.get("to_ip")
+
+            if not src or not isinstance(src, str):
+                die(f"{ctx}: ping test requires 'from/src' as a node name")
+
+            if not dst or not isinstance(dst, str):
+                die(f"{ctx}: ping test requires 'to/dst' as node name or IP literal")
+
+            dst = dst.strip()
+
+            # Case 1: to/dst is an IP literal
+            if is_ip_literal(dst):
+                if dst_ip is not None:
+                    die(f"{ctx}: 'to_ip/dst_ip' not allowed when 'to/dst' is already an IP")
+                validate_ip_literal(dst, ctx)
+                t["_dst_kind"] = "ip"
+                t["_dst_value"] = dst
+                continue
+
+            # Case 2: to/dst must be a node name
+            nodes = {n.get("name") for n in resolved.get("nodes", []) or []}
+            if dst not in nodes:
+                die(f"{ctx}: 'to/dst' must be a valid node name or IP literal")
+
+            if dst_ip is not None:
+                if not isinstance(dst_ip, str):
+                    die(f"{ctx}: 'to_ip/dst_ip' must be a string")
+                validate_ip_literal(dst_ip.strip(), ctx)
+                t["_dst_kind"] = "ip"
+                t["_dst_value"] = dst_ip.strip()
+            else:
+                t["_dst_kind"] = "node"
+                t["_dst_value"] = dst
+
+    return resolved
 
 def write_containerlab_file(topo_path: Path) -> Path:
     topo = load_yaml(topo_path)
@@ -1904,11 +1976,25 @@ def resolve_dst_to_ip(topo: dict[str, Any], dst: str) -> str:
     """
     dst may be:
       - node name in topo.nodes -> resolve via node_first_ipv4
-      - an IP string -> return as-is
+      - an IPv4/IPv6 literal -> return as-is
+    Anything else is an error (fail fast).
     """
-    if isinstance(dst, str) and any(n.get("name") == dst for n in topo.get("nodes", []) or []):
-        return node_first_ipv4(topo, dst)
-    return dst
+    if not isinstance(dst, str) or not dst.strip():
+        die("resolve_dst_to_ip: dst must be a non-empty string")
+
+    dst_s = dst.strip()
+
+    # If literal IP, use directly (v1-safe)
+    if is_ip_literal(dst_s):
+        validate_ip_literal(dst_s, "wait_for.to")
+        return dst_s
+
+    # Otherwise must be a node name
+    nodes = topo.get("nodes", []) or []
+    if any(isinstance(n, dict) and n.get("name") == dst_s for n in nodes):
+        return node_first_ipv4(topo, dst_s)
+
+    die(f"wait_for.to must be a valid node name or IPv4/IPv6 literal (got {dst_s!r})")
 
 def wait_for_condition(
     rt: "Runtime",
@@ -1928,10 +2014,18 @@ def wait_for_condition(
     expect = (cond.get("expect") or "pass").lower()
     timeout = int(cond.get("timeout") or 30)
 
-    if not isinstance(src, str) or not isinstance(dst, str):
-        die("wait_for: invalid from/to")
+    if ctype not in ("ping", "tcp"):
+        die(f"wait_for: unsupported type {ctype!r}")
 
-    dst_ip = resolve_dst_to_ip(topo, dst)
+    if not isinstance(src, str) or not src.strip():
+        die("wait_for: invalid from (must be node name)")
+    if not isinstance(dst, str) or not dst.strip():
+        die("wait_for: invalid to (must be node name or IP literal)")
+
+    if expect not in ("pass", "fail"):
+        die("wait_for: expect must be pass|fail")
+
+    dst_ip = resolve_dst_to_ip(topo, dst.strip())
     should_succeed = (expect == "pass")
 
     def attempt() -> tuple[bool, Any]:
@@ -1940,28 +2034,20 @@ def wait_for_condition(
             ok = (cp.returncode == 0)
             return (ok == should_succeed), cp
 
-        if ctype == "tcp":
-            port = int(cond.get("port"))
-            cp = rt.exec(lab, src, ["sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"], check=False)
-            ok = (cp.returncode == 0)
-            return (ok == should_succeed), cp
+        # tcp wait_for (if you use it)
+        port = cond.get("port")
+        try:
+            port_i = int(port)
+        except Exception:
+            die("wait_for tcp: port must be an int")
 
-        die(f"wait_for: unsupported type '{ctype}'")
+        ensure_nc(rt, lab, src)
+        cp = rt.exec(lab, src, ["sh", "-lc", f"nc -z -w 2 {dst_ip} {port_i}"], check=False)
+        ok = (cp.returncode == 0)
+        return (ok == should_succeed), cp
 
-    ok, _last, attempts = (False, None, 0)
-
-    start = time.time()
-    while True:
-        attempts += 1
-        good, _ = attempt()
-        if good:
-            ok = True
-            break
-        if (time.time() - start) >= timeout:
-            ok = False
-            break
-        time.sleep(interval_s)
-
+    # retry_until already enforces explicit wait semantics
+    ok, _last, attempts, _dur_ms = retry_until(timeout, interval_s, attempt)
     return ok, attempts
 
 def execute_scenario(
@@ -2509,7 +2595,38 @@ def cmd_test(args: argparse.Namespace) -> None:
         if expected not in ("pass", "fail"):
             expected = "pass"
 
-        dst_ip = node_ip_or_die(dst)
+        # ---- destination resolution (v1-safe) ----
+        # Prefer normalized fields from resolve_topology(), but support strict fallback too.
+        dst_kind = t.get("_dst_kind")
+        dst_value = t.get("_dst_value")
+
+        override = t.get("dst_ip") or t.get("to_ip")
+
+        if dst_kind == "ip":
+            dst_ip = str(dst_value).strip()
+            validate_ip_literal(dst_ip, f"test {test_name}")
+
+        elif dst_kind == "node":
+            # resolve node -> IP using your existing helper
+            dst_ip = node_ip_or_die(str(dst_value))
+
+        else:
+            # Fallback (still strict): allow literal IP in dst; allow override only when dst is node
+            if isinstance(dst, str) and is_ip_literal(dst.strip()):
+                if override is not None:
+                    die(f"test {test_name}: 'dst_ip/to_ip' not allowed when dst/to is already an IP literal")
+                dst_ip = dst.strip()
+                validate_ip_literal(dst_ip, f"test {test_name}")
+            else:
+                if override is not None:
+                    if not isinstance(override, str) or not override.strip():
+                        die(f"test {test_name}: 'dst_ip/to_ip' must be a non-empty IPv4/IPv6 literal")
+                    dst_ip = override.strip()
+                    validate_ip_literal(dst_ip, f"test {test_name}")
+                else:
+                    dst_ip = node_ip_or_die(dst)
+
+        # ---- execution ----
         count = int(t.get("count") or 2)
         timeout_s = int(t.get("timeout_s") or 15)
         interval_s = float(t.get("retry_interval_s") or 1.0)
