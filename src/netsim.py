@@ -809,105 +809,6 @@ def resolve_topology(topo: dict) -> dict:
 
     return resolved
 
-def validate_scenarios(topo: dict[str, Any]) -> None:
-    """
-    Fail-fast validation of scenario schema.
-    Must run before any scenario execution.
-    """
-    scenarios = topo.get("scenarios") or []
-    if not scenarios:
-        return
-
-    # Collect declared test names for run: validation
-    tests = topo.get("tests") or []
-    test_names = {t.get("name") for t in tests if isinstance(t, dict)}
-
-    for si, sc in enumerate(scenarios, start=1):
-        ctx = f"scenarios[{si}]"
-
-        if not isinstance(sc, dict):
-            die(f"{ctx}: must be a dict")
-
-        allowed_sc_keys = {"id", "description", "steps"}
-        unknown = set(sc) - allowed_sc_keys
-        if unknown:
-            die(f"{ctx}: unknown keys {sorted(unknown)}")
-
-        sid = sc.get("id")
-        if not isinstance(sid, str) or not sid.strip():
-            die(f"{ctx}: 'id' must be a non-empty string")
-
-        steps = sc.get("steps")
-        if not isinstance(steps, list) or not steps:
-            die(f"{ctx}: 'steps' must be a non-empty list")
-
-        for i, step in enumerate(steps, start=1):
-            sctx = f"{ctx}.steps[{i}]"
-
-            if not isinstance(step, dict):
-                die(f"{sctx}: step must be a dict")
-
-            keys = set(step)
-            allowed = {"run", "fault", "wait_for"}
-
-            if not keys:
-                die(f"{sctx}: empty step")
-
-            if not keys.issubset(allowed):
-                die(f"{sctx}: unknown keys {sorted(keys - allowed)}")
-
-            if len(keys) != 1:
-                die(f"{sctx}: step must contain exactly one of {sorted(allowed)}")
-
-            # ---- run ----
-            if "run" in step:
-                ref = step["run"]
-                if not isinstance(ref, str) or not ref.strip():
-                    die(f"{sctx}.run: must be a non-empty test name")
-
-                if ref not in test_names:
-                    die(f"{sctx}.run: unknown test '{ref}'")
-
-            # ---- fault ----
-            if "fault" in step:
-                fault = step["fault"]
-                if not isinstance(fault, dict) or len(fault) != 1:
-                    die(f"{sctx}.fault: must contain exactly one action")
-
-                action, spec = next(iter(fault.items()))
-                if action not in ("link_down", "link_up", "interface_down", "interface_up"):
-                    die(f"{sctx}.fault: unsupported action '{action}'")
-
-                if not isinstance(spec, dict):
-                    die(f"{sctx}.fault.{action}: must be a dict")
-
-                required = {"a", "b"}
-                missing = required - set(spec)
-                if missing:
-                    die(f"{sctx}.fault.{action}: missing keys {sorted(missing)}")
-
-            # ---- wait_for ----
-            if "wait_for" in step:
-                wf = step["wait_for"]
-                if not isinstance(wf, dict):
-                    die(f"{sctx}.wait_for: must be a dict")
-
-                required = {"type", "from", "to", "expect"}
-                missing = required - set(wf)
-                if missing:
-                    die(f"{sctx}.wait_for: missing keys {sorted(missing)}")
-
-                allowed_wf = required | {"timeout", "interval_s", "port"}
-                unknown = set(wf) - allowed_wf
-                if unknown:
-                    die(f"{sctx}.wait_for: unknown keys {sorted(unknown)}")
-
-                if wf["type"] not in ("ping", "tcp"):
-                    die(f"{sctx}.wait_for.type: must be ping|tcp")
-
-                if wf["expect"] not in ("pass", "fail"):
-                    die(f"{sctx}.wait_for.expect: must be pass|fail")
-
 def write_containerlab_file(topo_path: Path) -> Path:
     topo = load_yaml(topo_path)
     ensure_valid_topology(topo)
@@ -1987,95 +1888,192 @@ def _iter_scenarios(topo: dict[str, Any]) -> list[dict[str, Any]]:
 
 def validate_scenarios(topo: dict[str, Any]) -> None:
     """
-    Deterministic schema validation for v1 scenarios.
+    Fail-fast validation of scenario schema.
+    Must run before any scenario execution.
 
-    Rules:
-      - scenarios is optional; if present must be a list
-      - each scenario has:
-          id: string (unique)
-          steps: list (non-empty)
-      - each step is exactly ONE of:
-          {run: <test_name>}
-          {fault: {...}}
-          {wait: {seconds: <int>}}
-          {wait_for: {...}}
-      - no loops/conditionals are possible in this schema (ordered list only)
+    v1 rules:
+      - scenarios optional; if present must be list[dict]
+      - scenario keys only: id, description, steps
+      - steps is non-empty list
+      - each step must contain exactly one of: run | fault | wait_for
+      - run: must reference an existing test name
+      - fault: exactly one action:
+          link_down/link_up: requires a,b; optional a_if,b_if (both-or-none)
+          interface_down/interface_up: requires node + if/iface/interface
+      - wait_for: type ping|tcp; from/to required; expect pass|fail; tcp requires port
     """
-    scenarios = _iter_scenarios(topo)
+    scenarios = topo.get("scenarios") or []
     if not scenarios:
         return
 
+    # Collect declared test names for run: validation
+    tests = topo.get("tests") or []
+    test_names: set[str] = set()
+    for t in tests:
+        if isinstance(t, dict):
+            n = t.get("name")
+            if isinstance(n, str) and n.strip():
+                test_names.add(n.strip())
+
+    # Enforce unique scenario IDs (determinism)
     seen_ids: set[str] = set()
 
-    for idx, s in enumerate(scenarios):
-        i = idx + 1
-        sid = s.get("id")
+    if not isinstance(scenarios, list):
+        die("scenarios: must be a list")
+
+    for si, sc in enumerate(scenarios, start=1):
+        ctx = f"scenarios[{si}]"
+
+        if not isinstance(sc, dict):
+            die(f"{ctx}: must be a dict")
+
+        allowed_sc_keys = {"id", "description", "steps"}
+        unknown_sc = set(sc) - allowed_sc_keys
+        if unknown_sc:
+            die(f"{ctx}: unknown keys {sorted(unknown_sc)}")
+
+        sid = sc.get("id")
         if not isinstance(sid, str) or not sid.strip():
-            die(f"scenarios[{i}]: missing/invalid 'id'")
+            die(f"{ctx}: 'id' must be a non-empty string")
         sid = sid.strip()
+
         if sid in seen_ids:
-            die(f"scenarios[{i}]: duplicate id '{sid}'")
+            die(f"{ctx}: duplicate id '{sid}'")
         seen_ids.add(sid)
 
-        steps = s.get("steps")
+        steps = sc.get("steps")
         if not isinstance(steps, list) or not steps:
             die(f"scenario '{sid}': 'steps' must be a non-empty list")
 
-        for jdx, step in enumerate(steps):
-            j = jdx + 1
-            if not isinstance(step, dict) or not step:
-                die(f"scenario '{sid}' step[{j}]: must be a non-empty dict")
+        for step_i, step in enumerate(steps, start=1):
+            sctx = f"scenario '{sid}' step[{step_i}]"
 
-            keys = list(step.keys())
+            if not isinstance(step, dict):
+                die(f"{sctx}: step must be a dict")
+
+            if not step:
+                die(f"{sctx}: empty step")
+
+            allowed_step_keys = {"run", "fault", "wait_for"}
+            keys = set(step)
+            unknown_step = keys - allowed_step_keys
+            if unknown_step:
+                die(f"{sctx}: unknown keys {sorted(unknown_step)}")
+
             if len(keys) != 1:
-                die(f"scenario '{sid}' step[{j}]: must have exactly one key (got {keys})")
+                die(f"{sctx}: step must contain exactly one of {sorted(allowed_step_keys)}")
 
-            k = keys[0]
-            if k not in ("run", "fault", "wait", "wait_for"):
-                die(f"scenario '{sid}' step[{j}]: unknown step type '{k}'")
+            # ---- run ----
+            if "run" in step:
+                ref = step.get("run")
+                if not isinstance(ref, str) or not ref.strip():
+                    die(f"{sctx}.run: must be a non-empty test name string")
+                ref = ref.strip()
 
-            if k == "run":
-                v = step.get("run")
-                if not isinstance(v, str) or not v.strip():
-                    die(f"scenario '{sid}' step[{j}]: run must be a test name string")
+                if ref not in test_names:
+                    die(
+                        f"ERROR: scenario '{sid}' references unknown test '{ref}'\n"
+                        f"Known tests: [{', '.join(sorted(test_names))}]\n"
+                        "Scenario execution aborted before any steps ran."
+                    )
 
-            elif k == "wait":
-                v = step.get("wait")
-                if not isinstance(v, dict):
-                    die(f"scenario '{sid}' step[{j}]: wait must be a dict like {{seconds: 5}}")
-                sec = v.get("seconds")
-                if not isinstance(sec, int) or sec < 0:
-                    die(f"scenario '{sid}' step[{j}]: wait.seconds must be a non-negative int")
+            # ---- fault ----
+            if "fault" in step:
+                fault = step.get("fault")
+                if not isinstance(fault, dict) or len(fault) != 1:
+                    die(f"{sctx}.fault: must contain exactly one action")
 
-            elif k == "wait_for":
-                v = step.get("wait_for")
-                if not isinstance(v, dict):
-                    die(f"scenario '{sid}' step[{j}]: wait_for must be a dict")
-                t = v.get("type")
+                action, spec = next(iter(fault.items()))
+                if action not in ("link_down", "link_up", "interface_down", "interface_up"):
+                    die(f"{sctx}.fault: unsupported action '{action}'")
+
+                if not isinstance(spec, dict):
+                    die(f"{sctx}.fault.{action}: must be a dict")
+
+                if action in ("link_down", "link_up"):
+                    allowed_spec = {"a", "b", "a_if", "b_if"}
+                    unknown = set(spec) - allowed_spec
+                    if unknown:
+                        die(f"{sctx}.fault.{action}: unknown keys {sorted(unknown)}")
+
+                    for k in ("a", "b"):
+                        v = spec.get(k)
+                        if not isinstance(v, str) or not v.strip():
+                            die(f"{sctx}.fault.{action}.{k}: must be a non-empty string")
+
+                    a_if = spec.get("a_if")
+                    b_if = spec.get("b_if")
+
+                    # both-or-none
+                    if (a_if is None) ^ (b_if is None):
+                        die(f"{sctx}.fault.{action}: must provide both a_if and b_if (or neither)")
+
+                    if a_if is not None:
+                        if not isinstance(a_if, str) or not a_if.strip():
+                            die(f"{sctx}.fault.{action}.a_if: must be a non-empty string")
+                        if not isinstance(b_if, str) or not b_if.strip():
+                            die(f"{sctx}.fault.{action}.b_if: must be a non-empty string")
+
+                else:
+                    # interface_down / interface_up
+                    allowed_spec = {"node", "if", "iface", "interface"}
+                    unknown = set(spec) - allowed_spec
+                    if unknown:
+                        die(f"{sctx}.fault.{action}: unknown keys {sorted(unknown)}")
+
+                    node = spec.get("node")
+                    iface = spec.get("if") or spec.get("iface") or spec.get("interface")
+
+                    if not isinstance(node, str) or not node.strip():
+                        die(f"{sctx}.fault.{action}.node: must be a non-empty string")
+
+                    if not isinstance(iface, str) or not iface.strip():
+                        die(f"{sctx}.fault.{action}: must include a non-empty if/iface/interface")
+
+            # ---- wait_for ----
+            if "wait_for" in step:
+                wf = step.get("wait_for")
+                if not isinstance(wf, dict):
+                    die(f"{sctx}.wait_for: must be a dict")
+
+                required = {"type", "from", "to", "expect"}
+                missing = required - set(wf)
+                if missing:
+                    die(f"{sctx}.wait_for: missing keys {sorted(missing)}")
+
+                allowed_wf = required | {"timeout", "interval_s", "port"}
+                unknown = set(wf) - allowed_wf
+                if unknown:
+                    die(f"{sctx}.wait_for: unknown keys {sorted(unknown)}")
+
+                t = wf.get("type")
                 if t not in ("ping", "tcp"):
-                    die(f"scenario '{sid}' step[{j}]: wait_for.type must be ping|tcp")
-                src = v.get("from")
-                dst = v.get("to")
-                exp = (v.get("expect") or "pass").lower()
-                if not isinstance(src, str) or not src.strip():
-                    die(f"scenario '{sid}' step[{j}]: wait_for.from must be a node name")
-                if not isinstance(dst, str) or not dst.strip():
-                    die(f"scenario '{sid}' step[{j}]: wait_for.to must be an ip or node name")
-                if exp not in ("pass", "fail"):
-                    die(f"scenario '{sid}' step[{j}]: wait_for.expect must be pass|fail")
-                to = v.get("timeout")
-                if not isinstance(to, int) or to <= 0:
-                    die(f"scenario '{sid}' step[{j}]: wait_for.timeout must be a positive int")
-                if t == "tcp":
-                    port = v.get("port")
-                    if not isinstance(port, int) or not (1 <= port <= 65535):
-                        die(f"scenario '{sid}' step[{j}]: wait_for.port must be a valid int for tcp")
+                    die(f"{sctx}.wait_for.type: must be ping|tcp")
 
-            elif k == "fault":
-                # For Step 1 we only validate the shape; Step 2 will validate action details.
-                v = step.get("fault")
-                if not isinstance(v, dict) or not v:
-                    die(f"scenario '{sid}' step[{j}]: fault must be a non-empty dict")
+                exp = wf.get("expect")
+                if exp not in ("pass", "fail"):
+                    die(f"{sctx}.wait_for.expect: must be pass|fail")
+
+                for k in ("from", "to"):
+                    v = wf.get(k)
+                    if not isinstance(v, str) or not v.strip():
+                        die(f"{sctx}.wait_for.{k}: must be a non-empty string")
+
+                # Optional numeric checks (don’t require, but validate if present)
+                if "timeout" in wf:
+                    to = wf.get("timeout")
+                    if not isinstance(to, int) or to <= 0:
+                        die(f"{sctx}.wait_for.timeout: must be a positive int")
+
+                if "interval_s" in wf:
+                    iv = wf.get("interval_s")
+                    if not isinstance(iv, (int, float)) or float(iv) <= 0:
+                        die(f"{sctx}.wait_for.interval_s: must be a positive number")
+
+                if t == "tcp":
+                    port = wf.get("port")
+                    if not isinstance(port, int) or not (1 <= port <= 65535):
+                        die(f"{sctx}.wait_for.port: must be an int 1..65535 for tcp")
 
 def build_test_index(topo: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """
@@ -2657,6 +2655,44 @@ def cmd_test(args: argparse.Namespace) -> None:
             rec["meta"] = meta
         results["events"].append(rec)
 
+    def record_event_scenario_fault(
+        *,
+        scenario_id: str,
+        step_index: int,
+        verdict: str,
+        duration_ms: int,
+        error: str = "",
+        meta: dict | None = None,
+    ) -> None:
+        """
+        Persist a deterministic scenario fault event into results.json.
+        This is the authoritative machine-consumable record for scenario fault steps.
+        """
+        rec = {
+            "type": "scenario_fault",
+            "scenario_id": str(scenario_id),
+            "step": int(step_index),
+            "verdict": str(verdict),
+            "duration_ms": int(duration_ms),
+            "error": str(error or ""),
+        }
+        if meta:
+            rec["meta"] = meta
+
+        # --- HARD DETERMINISTIC GUARD ---
+        # Never allow more than one scenario_fault event
+        # for the same scenario_id + step_index
+        for e in results.get("events", []):
+            if (
+                e.get("type") == "scenario_fault"
+                and e.get("scenario_id") == scenario_id
+                and int(e.get("step") or -1) == int(step_index)
+            ):
+                return
+        # --------------------------------
+
+        results["events"].append(rec)
+
     def write_results() -> None:
         out = lab_dir(lab) / "results.json"
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -2990,62 +3026,126 @@ def cmd_test(args: argparse.Namespace) -> None:
         for r in sorted(set(routes)):
             rt.exec(lab, node, ["ip", "-4", "route", "replace"] + r.split(), check=False)
 
-    def _find_link_interfaces_from_topology(topo: dict, a: str, b: str) -> tuple[str | None, str | None]:
+    def _find_link_interfaces_from_topology(
+        topo: dict,
+        a: str,
+        b: str,
+        *,
+        a_if: str | None = None,
+        b_if: str | None = None,
+    ) -> tuple[str | None, str | None]:
         """
-        Deterministically resolve interface names for a<->b from topo["links"].
+        Deterministically map node pair -> interface pair.
 
-        Expects links like:
-        - endpoints: ["r2:eth2", "fw1:eth1"]
+        If a_if/b_if provided:
+        - must match a declared link exactly (order-insensitive, mapped to a->b direction)
+
+        If not provided:
+        - there must be exactly ONE link between a and b, otherwise fail fast.
         """
         links = topo.get("links", []) or []
+
+        def parse_ep(ep: str) -> tuple[str, str] | None:
+            if not isinstance(ep, str) or ":" not in ep:
+                return None
+            n, iface = ep.split(":", 1)
+            n = n.strip()
+            iface = iface.strip()
+            if not n or not iface:
+                return None
+            return n, iface
+
+        matches: list[tuple[str, str]] = []
         for link in links:
-            if not isinstance(link, dict):
-               continue
-            eps = link.get("endpoints") or []
-            if not (isinstance(eps, list) and len(eps) == 2):
+            eps = link.get("endpoints")
+            if not isinstance(eps, list) or len(eps) != 2:
+                continue
+            p0 = parse_ep(eps[0])
+            p1 = parse_ep(eps[1])
+            if not p0 or not p1:
                 continue
 
-            def split_ep(ep: object) -> tuple[str | None, str | None]:
-                if not isinstance(ep, str) or ":" not in ep:
-                    return None, None
-                n, i = ep.split(":", 1)
-                return n.strip(), i.strip()
+            (n0, if0), (n1, if1) = p0, p1
 
-            n1, i1 = split_ep(eps[0])
-            n2, i2 = split_ep(eps[1])
+            if n0 == a and n1 == b:
+                matches.append((if0, if1))
+            elif n0 == b and n1 == a:
+                matches.append((if1, if0))
 
-            if not n1 or not n2 or not i1 or not i2:
-                continue
+        # Explicit disambiguation path
+        if a_if is not None or b_if is not None:
+            if not (isinstance(a_if, str) and isinstance(b_if, str)):
+                die("fault link_down/link_up: a_if and b_if must be strings when provided")
 
-            if (n1 == a and n2 == b):
-                return i1, i2
-            if (n1 == b and n2 == a):
-                return i2, i1
+            a_if_s = a_if.strip()
+            b_if_s = b_if.strip()
+            if not a_if_s or not b_if_s:
+                die("fault link_down/link_up: a_if and b_if must be non-empty when provided")
 
-        return None, None
+            if (a_if_s, b_if_s) in matches:
+                return a_if_s, b_if_s
 
-    def _find_link_interfaces(a: str, b: str) -> tuple[str | None, str | None]:
-    # Prefer authoritative topo["links"] parsing (most reliable)
-        a_if, b_if = _find_link_interfaces_from_topology(topo, a, b)
-        if a_if and b_if:
-            return a_if, b_if
+            die(
+                f"fault link_down/link_up: provided {a}:{a_if_s}<->{b}:{b_if_s} "
+                f"does not match any declared link between {a} and {b}"
+            )
 
-    # Fallback: best-effort from build_node_links() if present
-        a_if = None
-        b_if = None
+        # Implicit path: must be unambiguous
+        if len(matches) == 0:
+            die(f"fault link_down/link_up: no link found between {a} and {b}")
+        if len(matches) > 1:
+            die(
+                f"fault link_down/link_up: ambiguous links between {a} and {b} "
+                f"({len(matches)} found); provide a_if/b_if"
+            )
+
+        return matches[0]
+
+    def _find_link_interfaces(
+        a: str,
+        b: str,
+        *,
+        a_if: str | None = None,
+        b_if: str | None = None,
+    ) -> tuple[str | None, str | None]:
+        """
+        Determine interface pair for a<->b.
+
+        Deterministic rules:
+        - If a_if/b_if provided: require topo["links"] to match exactly; fail fast otherwise.
+        - If not provided: prefer topo["links"] unambiguous match; else fall back to links_by_node best-effort.
+        """
+        # Prefer authoritative topo["links"] parsing (most reliable)
+        try:
+            ta_if, tb_if = _find_link_interfaces_from_topology(topo, a, b, a_if=a_if, b_if=b_if)
+            if ta_if and tb_if:
+                return ta_if, tb_if
+        except SystemExit:
+            # If user explicitly disambiguated, do NOT fall back to guessing.
+            if a_if is not None or b_if is not None:
+                raise
+            # Otherwise, allow fallback below.
+            pass
+
+        # Fallback: best-effort from build_node_links() if present (only when not explicitly disambiguated)
+        fa_if: str | None = None
+        fb_if: str | None = None
+
         for l in links_by_node.get(a, []) or []:
             if l.get("peer") == b:
-                a_if = l.get("ifname") or l.get("iface") or l.get("interface")
-                b_if = l.get("peer_ifname") or l.get("peer_iface") or l.get("peer_interface")
+                fa_if = l.get("ifname") or l.get("iface") or l.get("interface")
+                fb_if = l.get("peer_ifname") or l.get("peer_iface") or l.get("peer_interface")
                 break
-        if b_if is None:
+
+        if fb_if is None:
             for l in links_by_node.get(b, []) or []:
                 if l.get("peer") == a:
-                    b_if = l.get("ifname") or l.get("iface") or l.get("interface")
-                    if a_if is None:
-                        a_if = l.get("peer_ifname") or l.get("peer_iface") or l.get("peer_interface")
+                    fb_if = l.get("ifname") or l.get("iface") or l.get("interface")
+                    if fa_if is None:
+                        fa_if = l.get("peer_ifname") or l.get("peer_iface") or l.get("peer_interface")
                     break
-        return a_if, b_if
+
+        return fa_if, fb_if
 
     def apply_fault(
         fault: dict,
@@ -3070,6 +3170,10 @@ def cmd_test(args: argparse.Namespace) -> None:
                 _restore_v4_routes(node, routes)
             return len(routes)
 
+        # ----------------------------
+        # link_down / link_up
+        # Supports optional a_if/b_if for deterministic multi-link disambiguation.
+        # ----------------------------
         if "link_down" in fault or "link_up" in fault:
             action = "link_down" if "link_down" in fault else "link_up"
             spec = fault.get(action) or {}
@@ -3078,7 +3182,11 @@ def cmd_test(args: argparse.Namespace) -> None:
             if not a or not b:
                 raise ValueError(f"{action}: requires a,b")
 
-            a_if, b_if = _find_link_interfaces(a, b)
+            # Optional explicit interface disambiguation (validated earlier in validate_scenarios)
+            a_if_req = spec.get("a_if")
+            b_if_req = spec.get("b_if")
+
+            a_if, b_if = _find_link_interfaces(a, b, a_if=a_if_req, b_if=b_if_req)
             if not a_if or not b_if:
                 raise ValueError(f"{action}: could not determine interfaces for link {a}<->{b}")
 
@@ -3091,6 +3199,9 @@ def cmd_test(args: argparse.Namespace) -> None:
             rb = _iface_up(b, b_if)
             return action, f"{a}:{a_if}<->{b}:{b_if}", {"restored_routes": (ra + rb)}
 
+        # ----------------------------
+        # interface_down / interface_up
+        # ----------------------------
         if "interface_down" in fault or "interface_up" in fault:
             action = "interface_down" if "interface_down" in fault else "interface_up"
             spec = fault.get(action) or {}
@@ -3106,6 +3217,9 @@ def cmd_test(args: argparse.Namespace) -> None:
             r = _iface_up(node, str(iface))
             return action, f"{node}:{iface}", {"restored_routes": r}
 
+        # ----------------------------
+        # node_stop / node_start (future primitives)
+        # ----------------------------
         if "node_stop" in fault or "node_start" in fault:
             action = "node_stop" if "node_stop" in fault else "node_start"
             spec = fault.get(action) or {}
@@ -3208,10 +3322,6 @@ def cmd_test(args: argparse.Namespace) -> None:
         def scen_step(rec: dict) -> None:
             scen_rec["steps"].append(rec)
 
-        # Optional: set this earlier from CLI flag:
-        # use the parsed flag from cmd_test scope
-        # (assumes scenario_verbose variable exists above)
-
         def _sv(msg: str) -> None:
             if scenario_verbose:
                 print(msg)
@@ -3257,7 +3367,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     continue
 
                 _sv(f"[scenario {sid}] {step_idx:02d}. run ref={ref}")
-                verdict = run_named_test(ref, scenario_ctx=(sid, step_idx))  # <-- IMPORTANT
+                verdict = run_named_test(ref, scenario_ctx=(sid, step_idx))
                 dur_ms = int((time.time() - step_started) * 1000)
 
                 scen_step({
@@ -3290,6 +3400,17 @@ def cmd_test(args: argparse.Namespace) -> None:
                         "step": step_idx,
                     })
                     _sv(f"[scenario {sid}] {step_idx:02d}. fault -> FAIL (fault not a dict)")
+
+                    # deterministic event
+                    record_event_scenario_fault(
+                        scenario_id=sid,
+                        step_index=step_idx,
+                        verdict="fail",
+                        duration_ms=dur_ms,
+                        error="fault must be a dict",
+                        meta={"action": "invalid", "target": ""},
+                    )
+
                     scen_failed = True
                     if not keep_going:
                         break
@@ -3304,6 +3425,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     )
                     dur_ms = int((time.time() - step_started) * 1000)
 
+                    # keep existing scenario step trace
                     scen_step({
                         "type": "fault",
                         "action": action,
@@ -3314,9 +3436,36 @@ def cmd_test(args: argparse.Namespace) -> None:
                         "meta": meta,
                     })
 
+                    # -------- deterministic artifact event --------
+                    fmeta = dict(meta or {})
+                    fmeta["action"] = action
+                    fmeta["target"] = target
+
+                    # normalize restored_routes to int if present
+                    if "restored_routes" in fmeta:
+                        try:
+                            fmeta["restored_routes"] = int(fmeta.get("restored_routes") or 0)
+                        except Exception:
+                            fmeta["restored_routes"] = 0
+
+                    record_event_scenario_fault(
+                        scenario_id=sid,
+                        step_index=step_idx,
+                        verdict="pass",
+                        duration_ms=dur_ms,
+                        error="",
+                        meta=fmeta,
+                    )
+                    # ---------------------------------------------
+
                     note = ""
                     if action in ("link_up", "interface_up"):
-                        note = f" (restored_routes={int((meta or {}).get('restored_routes') or 0)})"
+                        rr = 0
+                        try:
+                            rr = int((meta or {}).get("restored_routes") or 0)
+                        except Exception:
+                            rr = 0
+                        note = f" (restored_routes={rr})"
 
                     _sv(
                         f"[scenario {sid}] {step_idx:02d}. fault action={action} target={target}{note} -> PASS ({dur_ms}ms)"
@@ -3333,11 +3482,23 @@ def cmd_test(args: argparse.Namespace) -> None:
                         "step": step_idx,
                     })
                     _sv(f"[scenario {sid}] {step_idx:02d}. fault -> FAIL ({e})")
+
+                    # deterministic event
+                    record_event_scenario_fault(
+                        scenario_id=sid,
+                        step_index=step_idx,
+                        verdict="fail",
+                        duration_ms=dur_ms,
+                        error=str(e),
+                        meta={"action": "error", "target": ""},
+                    )
+
                     scen_failed = True
                     if not keep_going:
                         break
 
                 continue
+
             # -------------------------
             # wait: {seconds: N}
             # -------------------------
@@ -3392,7 +3553,9 @@ def cmd_test(args: argparse.Namespace) -> None:
                         "step": step_idx,
                     })
 
-                    _sv(f"[scenario {sid}] {step_idx:02d}. wait_for type={wtype} expected={expected} observed={observed} -> {verdict.upper()} ({dur_ms}ms)")
+                    _sv(
+                        f"[scenario {sid}] {step_idx:02d}. wait_for type={wtype} expected={expected} observed={observed} -> {verdict.upper()} ({dur_ms}ms)"
+                    )
 
                     if verdict != "pass":
                         scen_failed = True

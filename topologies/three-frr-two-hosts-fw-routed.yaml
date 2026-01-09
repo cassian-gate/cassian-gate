@@ -39,6 +39,7 @@ nodes:
     interfaces:
       eth1: 10.0.0.3/31
       eth2: 10.0.0.4/31
+      eth3: 10.0.0.7/31
     routes:
       - "192.168.1.0/24 via 10.0.0.2"
       - "192.168.2.0/24 via 10.0.0.5"
@@ -60,6 +61,10 @@ links:
 
   - endpoints: ["h2:eth1", "r3:eth2"]
     ipv4: ["192.168.2.10/24", "192.168.2.1/24"]
+
+    # NEW: second parallel link (creates ambiguity)
+  - endpoints: ["r2:eth3", "fw1:eth3"]
+    ipv4: ["10.0.0.6/31", "10.0.0.7/31"]
 
 tests:
   - name: h1_to_h2_ping
@@ -100,15 +105,52 @@ tests:
     expect: fail
 
 scenarios:
-  - id: fail_link_r2_fw1
-    description: "Bounce r2<->fw1 link and verify h1->h2 recovers"
+  - id: bounce_link_r2_fw1_recover
+    description: "Bounce r2<->fw1 and verify h1->h2 fails then recovers"
     steps:
       - run: h1_to_h2_ping
 
       - fault:
           link_down:
             a: r2
+            a_if: eth2
             b: fw1
+            b_if: eth1
+
+      - wait_for:
+          type: ping
+          from: h1
+          to: 192.168.2.10     # IP literal path
+          expect: fail
+          timeout: 10
+          interval_s: 1.0
+
+      - fault:
+          link_up:
+            a: r2
+            a_if: eth2
+            b: fw1
+            b_if: eth1
+
+      - wait_for:
+          type: ping
+          from: h1
+          to: h2               # node name path
+          expect: pass
+          timeout: 60
+          interval_s: 1.0
+
+      - run: h1_to_h2_ping
+
+  - id: bounce_interface_r2_eth1_recover
+    description: "Bounce r2:eth1 (r1<->r2) and verify h1->h2 fails then recovers"
+    steps:
+      - run: h1_to_h2_ping
+
+      - fault:
+          interface_down:
+            node: r2
+            if: eth1
 
       - wait_for:
           type: ping
@@ -119,9 +161,9 @@ scenarios:
           interval_s: 1.0
 
       - fault:
-          link_up:
-            a: r2
-            b: fw1
+          interface_up:
+            node: r2
+            if: eth1
 
       - wait_for:
           type: ping
@@ -132,4 +174,5 @@ scenarios:
           interval_s: 1.0
 
       - run: h1_to_h2_ping
+
 
