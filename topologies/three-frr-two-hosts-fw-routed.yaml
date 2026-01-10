@@ -77,18 +77,19 @@ tests:
     src: h2
     dst: h1
 
-  # NEW: verify dst can be an IP literal
+  # NEW: verify ping can target an IP literal using 'to' (preferred)
   - name: h1_to_h2_ip_literal_ping
     kind: ping
     src: h1
-    dst: 192.168.2.10
+    to: 192.168.2.10
+    expect: pass
 
-  # NEW: verify explicit destination override
-  - name: h1_to_h2_dst_ip_override_ping
+  # NEW: verify compat alias 'to_ip' also works as primary destination
+  - name: h1_to_h2_to_ip_alias_ping
     kind: ping
     src: h1
-    dst: h2
-    dst_ip: 192.168.2.10
+    to_ip: 192.168.2.10
+    expect: pass
 
   - name: h1_to_h2_tcp_443_pass
     kind: tcp

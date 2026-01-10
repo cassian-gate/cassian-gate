@@ -763,49 +763,67 @@ def resolve_topology(topo: dict) -> dict:
             t["src"] = t.get("from")
 
         if "dst" not in t and "to" in t:
-            t["dst"] = t.get("to")
+            # IMPORTANT (v1): for ping tests, do NOT alias 'to' into 'dst'.
+            # Ping normalization below treats 'to'/'to_ip' as IP-literal targets.
+            if t.get("kind") != "ping":
+                t["dst"] = t.get("to")
 
         # ----------------------------
         # v1 ping destination normalization
+        # ----------------------------
+        # ----------------------------
+        # v1 ping destination normalization (strict)
+        #   - dst: node name
+        #   - to/to_ip: IP literal
+        #   - fail-fast on ambiguity
         # ----------------------------
         if t.get("kind") == "ping":
             ctx = f"tests[{i}] ({t.get('name', '<unnamed>')})"
 
             src = t.get("src") or t.get("from")
-            dst = t.get("dst") or t.get("to")
-            dst_ip = t.get("dst_ip") or t.get("to_ip")
-
             if not src or not isinstance(src, str):
                 die(f"{ctx}: ping test requires 'from/src' as a node name")
 
+            # Target forms
+            has_dst = "dst" in t and t.get("dst") is not None
+            has_to = "to" in t and t.get("to") is not None
+            has_to_ip = "to_ip" in t and t.get("to_ip") is not None
+
+            # Disallow ambiguous targets (v1 contract)
+            #   - dst (node) OR to/to_ip (ip) but not both
+            if has_dst and (has_to or has_to_ip):
+                die(f"{ctx}: ping test target is ambiguous: use 'dst' (node) OR 'to'/'to_ip' (ip literal), not both")
+            if has_to and has_to_ip:
+                die(f"{ctx}: ping test target is ambiguous: use only one of 'to' or 'to_ip'")
+
+            # IP-literal target path
+            if has_to or has_to_ip:
+                ip_val = t.get("to") if has_to else t.get("to_ip")
+                if not isinstance(ip_val, str) or not is_ip_literal(ip_val.strip()):
+                    die(f"{ctx}: ping test: 'to'/'to_ip' must be a valid IPv4/IPv6 literal")
+                ip_val = ip_val.strip()
+                validate_ip_literal(ip_val, ctx)
+                t["_dst_kind"] = "ip"
+                t["_dst_value"] = ip_val
+                continue
+
+            # Node-name target path (dst required)
+            dst = t.get("dst")
             if not dst or not isinstance(dst, str):
-                die(f"{ctx}: ping test requires 'to/dst' as node name or IP literal")
+                die(f"{ctx}: ping test requires 'dst' as a node name (or use 'to'/'to_ip' for an IP literal)")
 
             dst = dst.strip()
-
-            # Case 1: to/dst is an IP literal
             if is_ip_literal(dst):
-                if dst_ip is not None:
-                    die(f"{ctx}: 'to_ip/dst_ip' not allowed when 'to/dst' is already an IP")
-                validate_ip_literal(dst, ctx)
                 t["_dst_kind"] = "ip"
                 t["_dst_value"] = dst
                 continue
 
-            # Case 2: to/dst must be a node name
             nodes = {n.get("name") for n in resolved.get("nodes", []) or []}
             if dst not in nodes:
-                die(f"{ctx}: 'to/dst' must be a valid node name or IP literal")
+                die(f"{ctx}: 'dst' must be a valid node name")
 
-            if dst_ip is not None:
-                if not isinstance(dst_ip, str):
-                    die(f"{ctx}: 'to_ip/dst_ip' must be a string")
-                validate_ip_literal(dst_ip.strip(), ctx)
-                t["_dst_kind"] = "ip"
-                t["_dst_value"] = dst_ip.strip()
-            else:
-                t["_dst_kind"] = "node"
-                t["_dst_value"] = dst
+            t["_dst_kind"] = "node"
+            t["_dst_value"] = dst
 
     return resolved
 
@@ -2756,35 +2774,31 @@ def cmd_test(args: argparse.Namespace) -> None:
             expected = "pass"
 
         # ---- destination resolution (v1-safe) ----
-        # Prefer normalized fields from resolve_topology(), but support strict fallback too.
+        # Primary authority is resolve_topology(): _dst_kind/_dst_value.
+        # Fallback supports older schemas: dst (node) or to/to_ip (ip literal).
         dst_kind = t.get("_dst_kind")
         dst_value = t.get("_dst_value")
 
-        override = t.get("dst_ip") or t.get("to_ip")
-
-        if dst_kind == "ip":
-            dst_ip = str(dst_value).strip()
-            validate_ip_literal(dst_ip, f"test {test_name}")
-
-        elif dst_kind == "node":
-            # resolve node -> IP using your existing helper
-            dst_ip = node_ip_or_die(str(dst_value))
-
+        # Determine the logical destination token (node name or IP literal)
+        if dst_kind and dst_value:
+            dst_token = str(dst_value).strip()
         else:
-            # Fallback (still strict): allow literal IP in dst; allow override only when dst is node
-            if isinstance(dst, str) and is_ip_literal(dst.strip()):
-                if override is not None:
-                    die(f"test {test_name}: 'dst_ip/to_ip' not allowed when dst/to is already an IP literal")
-                dst_ip = dst.strip()
-                validate_ip_literal(dst_ip, f"test {test_name}")
-            else:
-                if override is not None:
-                    if not isinstance(override, str) or not override.strip():
-                        die(f"test {test_name}: 'dst_ip/to_ip' must be a non-empty IPv4/IPv6 literal")
-                    dst_ip = override.strip()
-                    validate_ip_literal(dst_ip, f"test {test_name}")
-                else:
-                    dst_ip = node_ip_or_die(dst)
+            # fallback order:
+            #   - dst (node or ip literal, legacy)
+            #   - to (ip literal, v1)
+            #   - to_ip (ip literal alias, v1 compat)
+            dst_token = (t.get("dst") or t.get("to") or t.get("to_ip") or "").strip()
+
+        if not dst_token:
+            die(f"test {test_name}: missing destination (need dst or to/to_ip)")
+
+        # Resolve dst_token -> dst_ip deterministically
+        if dst_kind == "ip" or is_ip_literal(dst_token):
+            dst_ip = dst_token
+            validate_ip_literal(dst_ip, f"test {test_name}")
+        else:
+            # node name -> IP
+            dst_ip = node_ip_or_die(dst_token)
 
         # ---- execution ----
         count = int(t.get("count") or 2)
@@ -2918,19 +2932,35 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         src = t.get("src")
         dst = t.get("dst")
-        if not src or not dst:
-            record_test(
-                name=ref,
-                kind=kind or "unknown",
-                src=src or "",
-                dst=dst or "",
-                expected="pass",
-                observed="fail",
-                verdict="fail",
-                duration_ms=0,
-                error="missing src/dst",
-            )
-            return "fail"
+
+        if kind == "ping":
+            if not src or not (dst or t.get("to") or t.get("to_ip")):
+                record_test(
+                    name=ref,
+                    kind=kind or "ping",
+                    src=src or "",
+                    dst=(dst or t.get("to") or t.get("to_ip") or ""),
+                    expected="pass",
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="missing src + (dst or to/to_ip)",
+                )
+                return "fail"
+        else:
+            if not src or not dst:
+                record_test(
+                    name=ref,
+                    kind=kind or "unknown",
+                    src=src or "",
+                    dst=dst or "",
+                    expected="pass",
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="missing src/dst",
+                )
+                return "fail"
 
         record_fn = None
         if scenario_ctx:
@@ -2939,7 +2969,8 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         if kind == "ping":
             if record_fn:
-                return run_ping_test(test_name=ref, src=src, dst=dst, t=t, record_fn=record_fn)
+                dst_label = dst or t.get("to") or t.get("to_ip") or ""
+                return run_ping_test(test_name=ref, src=src, dst=dst_label, t=t, record_fn=record_fn)
             return run_ping_test(test_name=ref, src=src, dst=dst, t=t)
 
         if kind == "tcp":
@@ -3811,23 +3842,45 @@ def cmd_test(args: argparse.Namespace) -> None:
 
                 matched += 1
 
-                if not src or not dst:
-                    record_test(
-                        name=test_name,
-                        kind=kind,
-                        src=src or "",
-                        dst=dst or "",
-                        expected="pass",
-                        observed="fail",
-                        verdict="fail",
-                        duration_ms=0,
-                        error="missing src/dst",
-                    )
-                    fail_or_continue(f"tests[{i}]: missing src/dst")
-                    continue
+                src = t.get("src")
+                dst = t.get("dst")
 
                 if kind == "ping":
-                    verdict = run_ping_test(test_name=test_name, src=src, dst=dst, t=t)
+                    # v1: ping supports dst (node) OR to/to_ip (ip literal)
+                    if not src or not (dst or t.get("to") or t.get("to_ip")):
+                        record_test(
+                            name=test_name,
+                            kind=kind,
+                            src=src or "",
+                            dst=(dst or t.get("to") or t.get("to_ip") or ""),
+                            expected="pass",
+                            observed="fail",
+                            verdict="fail",
+                            duration_ms=0,
+                            error="missing src/dst(to)",
+                        )
+                        fail_or_continue(f"tests[{i}]: missing src + (dst or to/to_ip)")
+                        continue
+                else:
+                    # tcp (and future kinds) keep legacy requirement
+                    if not src or not dst:
+                        record_test(
+                            name=test_name,
+                            kind=kind,
+                            src=src or "",
+                            dst=dst or "",
+                            expected="pass",
+                            observed="fail",
+                            verdict="fail",
+                            duration_ms=0,
+                            error="missing src/dst",
+                        )
+                        fail_or_continue(f"tests[{i}]: missing src/dst")
+                        continue
+
+                if kind == "ping":
+                    dst_label = dst or t.get("to") or t.get("to_ip") or ""
+                    verdict = run_ping_test(test_name=test_name, src=src, dst=dst_label, t=t)
                     if verdict != "pass":
                         fail_or_continue(f"tests[{i}] ping mismatch: {src} -> {dst} expected {t.get('expect','pass')}")
                     continue
