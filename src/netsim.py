@@ -1919,10 +1919,18 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
           link_down/link_up: requires a,b; optional a_if,b_if (both-or-none)
           interface_down/interface_up: requires node + if/iface/interface
       - wait_for: type ping|tcp; from/to required; expect pass|fail; tcp requires port
+
+    v1 deep validation (multi-link disambiguation):
+      - For link_down/link_up:
+          * if a_if/b_if omitted => there must be exactly ONE declared link between a and b
+          * if a_if/b_if provided => it must match a declared link exactly
     """
     scenarios = topo.get("scenarios") or []
     if not scenarios:
         return
+
+    if not isinstance(scenarios, list):
+        die("scenarios: must be a list")
 
     # Collect declared test names for run: validation
     tests = topo.get("tests") or []
@@ -1936,8 +1944,40 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
     # Enforce unique scenario IDs (determinism)
     seen_ids: set[str] = set()
 
-    if not isinstance(scenarios, list):
-        die("scenarios: must be a list")
+    def _link_matches(a: str, b: str) -> list[tuple[str, str]]:
+        """
+        Return all interface pairs (a_if, b_if) for declared links between a and b.
+        Deterministic: derived only from topo['links'] endpoints.
+        """
+        links = topo.get("links", []) or []
+
+        def parse_ep(ep: str) -> tuple[str, str] | None:
+            if not isinstance(ep, str) or ":" not in ep:
+                return None
+            n, iface = ep.split(":", 1)
+            n = n.strip()
+            iface = iface.strip()
+            if not n or not iface:
+                return None
+            return n, iface
+
+        matches: list[tuple[str, str]] = []
+        for link in links:
+            eps = link.get("endpoints")
+            if not isinstance(eps, list) or len(eps) != 2:
+                continue
+            p0 = parse_ep(eps[0])
+            p1 = parse_ep(eps[1])
+            if not p0 or not p1:
+                continue
+
+            (n0, if0), (n1, if1) = p0, p1
+            if n0 == a and n1 == b:
+                matches.append((if0, if1))
+            elif n0 == b and n1 == a:
+                matches.append((if1, if0))
+
+        return matches
 
     for si, sc in enumerate(scenarios, start=1):
         ctx = f"scenarios[{si}]"
@@ -1968,7 +2008,6 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
 
             if not isinstance(step, dict):
                 die(f"{sctx}: step must be a dict")
-
             if not step:
                 die(f"{sctx}: empty step")
 
@@ -1977,7 +2016,6 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
             unknown_step = keys - allowed_step_keys
             if unknown_step:
                 die(f"{sctx}: unknown keys {sorted(unknown_step)}")
-
             if len(keys) != 1:
                 die(f"{sctx}: step must contain exactly one of {sorted(allowed_step_keys)}")
 
@@ -2032,6 +2070,33 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                         if not isinstance(b_if, str) or not b_if.strip():
                             die(f"{sctx}.fault.{action}.b_if: must be a non-empty string")
 
+                    # --- deeper v1 validation: link disambiguation must match topo['links'] ---
+                    a = str(spec.get("a") or "").strip()
+                    b = str(spec.get("b") or "").strip()
+                    matches = _link_matches(a, b)
+
+                    if a_if is None and b_if is None:
+                        # implicit path must be unambiguous
+                        if len(matches) == 0:
+                            die(f"{sctx}.fault.{action}: no declared link found between {a} and {b}")
+                        if len(matches) > 1:
+                            die(
+                                f"{sctx}.fault.{action}: ambiguous links between {a} and {b} "
+                                f"({len(matches)} found); provide a_if/b_if"
+                            )
+                    else:
+                        # explicit path must match exactly one declared link
+                        a_if_s = str(a_if).strip()
+                        b_if_s = str(b_if).strip()
+                        if (a_if_s, b_if_s) not in matches:
+                            known = ", ".join([f"{a}:{x}<->{b}:{y}" for (x, y) in matches]) or "(none)"
+                            die(
+                                f"{sctx}.fault.{action}: provided {a}:{a_if_s}<->{b}:{b_if_s} "
+                                f"does not match any declared link between {a} and {b}. "
+                                f"Known links: {known}"
+                            )
+                    # -------------------------------------------------------------------------
+
                 else:
                     # interface_down / interface_up
                     allowed_spec = {"node", "if", "iface", "interface"}
@@ -2044,7 +2109,6 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
 
                     if not isinstance(node, str) or not node.strip():
                         die(f"{sctx}.fault.{action}.node: must be a non-empty string")
-
                     if not isinstance(iface, str) or not iface.strip():
                         die(f"{sctx}.fault.{action}: must include a non-empty if/iface/interface")
 
@@ -2077,7 +2141,6 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                     if not isinstance(v, str) or not v.strip():
                         die(f"{sctx}.wait_for.{k}: must be a non-empty string")
 
-                # Optional numeric checks (don’t require, but validate if present)
                 if "timeout" in wf:
                     to = wf.get("timeout")
                     if not isinstance(to, int) or to <= 0:
