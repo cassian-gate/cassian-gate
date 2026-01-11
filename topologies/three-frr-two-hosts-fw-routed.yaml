@@ -176,4 +176,12 @@ scenarios:
 
       - run: h1_to_h2_ping
 
+  - id: converge_bgp_r2
+    description: "Explicit convergence wait: ensure r2 BGP is established"
+    steps:
+      - wait_for_bgp:
+          node: r2
+          timeout: 30
+      - run: h1_to_h2_ping
+
 

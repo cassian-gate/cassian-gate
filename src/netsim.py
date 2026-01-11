@@ -2011,7 +2011,7 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
             if not step:
                 die(f"{sctx}: empty step")
 
-            allowed_step_keys = {"run", "fault", "wait_for"}
+            allowed_step_keys = {"run", "fault", "wait_for", "wait_for_bgp"}
             keys = set(step)
             unknown_step = keys - allowed_step_keys
             if unknown_step:
@@ -2155,6 +2155,36 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                     port = wf.get("port")
                     if not isinstance(port, int) or not (1 <= port <= 65535):
                         die(f"{sctx}.wait_for.port: must be an int 1..65535 for tcp")
+
+            # ---- wait_for_bgp ----
+            if "wait_for_bgp" in step:
+                wf = step.get("wait_for_bgp")
+                if not isinstance(wf, dict):
+                    die(f"{sctx}.wait_for_bgp: must be a dict")
+
+                allowed = {"node", "timeout"}
+                unknown = set(wf) - allowed
+                if unknown:
+                    die(f"{sctx}.wait_for_bgp: unknown keys {sorted(unknown)}")
+
+                node = wf.get("node")
+                if not isinstance(node, str) or not node.strip():
+                    die(f"{sctx}.wait_for_bgp.node: must be a non-empty string")
+
+                if "timeout" in wf:
+                    to = wf.get("timeout")
+                    if not isinstance(to, int) or to <= 0:
+                        die(f"{sctx}.wait_for_bgp.timeout: must be a positive int")
+
+                # Optional: ensure node exists + is frr (fail-fast, deterministic)
+                nodes = topo.get("nodes") or []
+                by_name = {n.get("name"): n for n in nodes if isinstance(n, dict)}
+                nrec = by_name.get(node.strip())
+                if not nrec:
+                    die(f"{sctx}.wait_for_bgp.node: unknown node '{node.strip()}'")
+                if nrec.get("type") != "frr":
+                    die(f"{sctx}.wait_for_bgp.node: node '{node.strip()}' is not type 'frr'")
+
 
 def build_test_index(topo: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """
@@ -3672,6 +3702,69 @@ def cmd_test(args: argparse.Namespace) -> None:
                         break
                 continue
 
+            # -------------------------
+            # wait_for_bgp: { node: <frr>, timeout: N }
+            # -------------------------
+            if "wait_for_bgp" in step:
+                wf = step.get("wait_for_bgp") or {}
+                node = wf.get("node")
+                timeout = int(wf.get("timeout") or 30)
+
+                if not isinstance(node, str) or not node.strip():
+                    dur_ms = int((time.time() - step_started) * 1000)
+                    scen_step({
+                        "type": "wait_for_bgp",
+                        "node": str(node),
+                        "verdict": "fail",
+                        "duration_ms": dur_ms,
+                        "error": "wait_for_bgp.node must be a non-empty string",
+                        "step": step_idx,
+                    })
+                    _sv(f"[scenario {sid}] {step_idx:02d}. wait_for_bgp -> FAIL (invalid node)")
+                    scen_failed = True
+                    if not keep_going:
+                        break
+                    continue
+
+                node = node.strip()
+                _sv(f"[scenario {sid}] {step_idx:02d}. wait_for_bgp node={node} timeout={timeout}")
+
+                try:
+                    wait_for_bgp(rt, lab, node, timeout=timeout)
+
+                    dur_ms = int((time.time() - step_started) * 1000)
+                    meta = {"node": node, "timeout_s": timeout}
+
+                    scen_step({
+                        "type": "wait_for_bgp",
+                        "node": node,
+                        "verdict": "pass",
+                        "duration_ms": dur_ms,
+                        "meta": meta,
+                        "step": step_idx,
+                    })
+                    _sv(f"[scenario {sid}] {step_idx:02d}. wait_for_bgp -> PASS ({dur_ms}ms)")
+
+                except SystemExit as e:
+                    dur_ms = int((time.time() - step_started) * 1000)
+                    meta = {"node": node, "timeout_s": timeout}
+
+                    scen_step({
+                        "type": "wait_for_bgp",
+                        "node": node,
+                        "verdict": "fail",
+                        "duration_ms": dur_ms,
+                        "meta": meta,
+                        "error": str(e),
+                        "step": step_idx,
+                    })
+                    _sv(f"[scenario {sid}] {step_idx:02d}. wait_for_bgp -> FAIL ({e})")
+
+                    scen_failed = True
+                    if not keep_going:
+                        break
+
+                continue
             # -------------------------
             # unknown step
             # -------------------------
