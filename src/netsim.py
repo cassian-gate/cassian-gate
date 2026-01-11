@@ -2646,6 +2646,7 @@ def cmd_test(args: argparse.Namespace) -> None:
     all_scenarios: bool = bool(getattr(args, "all_scenarios", False))
     scenario_verbose: bool = bool(getattr(args, "scenario_verbose", False))
     want_scenarios = bool(scenario_id or all_scenarios)
+    precheck_controlplane: bool = bool(getattr(args, "precheck_controlplane", False))
 
     started_at = time.time()
 
@@ -3847,7 +3848,13 @@ def cmd_test(args: argparse.Namespace) -> None:
         if expected_bgp_peers(n["name"]):
             bgp_participants.append(n)
 
-    if bgp_participants:
+    # Convergence semantics:
+    # - Default tests: keep legacy behavior (precheck BGP if participants exist)
+    # - Scenarios: skip global precheck unless user explicitly requests it
+    do_global_cp_precheck = (not want_scenarios) or precheck_controlplane
+    results["summary"]["precheck_controlplane"] = bool(do_global_cp_precheck)
+
+    if do_global_cp_precheck and bgp_participants:
         try:
             for n in bgp_participants:
                 wait_for_bgp(rt, lab, n["name"], timeout=30)
@@ -4114,8 +4121,10 @@ def cmd_test(args: argparse.Namespace) -> None:
     if results["result"] == "fail":
         die(f"TEST FAIL: {results['summary']['failed']} failed / {results['summary']['total']} total")
 
-    if bgp_participants:
+    if bgp_participants and results["summary"].get("precheck_controlplane"):
         print(f"✅ Control-plane PASS: BGP established ({len(bgp_participants)} participants)")
+    elif bgp_participants and want_scenarios:
+        print("ℹ️ Control-plane precheck skipped for scenarios (use --precheck-controlplane to enable)")
 
     if want_scenarios:
         passed_s = sum(1 for s in results["scenarios"] if s.get("verdict") == "pass")
@@ -5202,7 +5211,12 @@ def main() -> None:
     p_test.add_argument("--scenario", help="Run only this scenario id (scenarios[*].id)")
     p_test.add_argument("--all-scenarios", action="store_true", help="Run all scenarios after steady-state tests")
     p_test.add_argument("--scenario-verbose", action="store_true", help="Print each scenario step as it runs (human-only; does not change artifacts)",)
-
+    p_test.add_argument(
+    "--precheck-controlplane",
+    action="store_true",
+    help="Run global control-plane prechecks (e.g., BGP wait) before executing scenarios. "
+         "Default: off when --scenario/--all-scenarios is used.",
+    )
     # run
     p_run = sub.add_parser("run", help="Ephemeral workflow: up -> test -> collect -> down (CI-friendly)")
     p_run.add_argument("topology", help="Topology YAML filename under ./topologies or a full path")
