@@ -1913,7 +1913,7 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
       - scenarios optional; if present must be list[dict]
       - scenario keys only: id, description, steps
       - steps is non-empty list
-      - each step must contain exactly one of: run | fault | wait_for
+      - each step must contain exactly one of: run | fault | wait_for | wait_for_bgp
       - run: must reference an existing test name
       - fault: exactly one action:
           link_down/link_up: requires a,b; optional a_if,b_if (both-or-none)
@@ -2123,14 +2123,15 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                 if missing:
                     die(f"{sctx}.wait_for: missing keys {sorted(missing)}")
 
-                allowed_wf = required | {"timeout", "interval_s", "port"}
+                allowed_wf = required | {"timeout", "interval_s"}
                 unknown = set(wf) - allowed_wf
                 if unknown:
                     die(f"{sctx}.wait_for: unknown keys {sorted(unknown)}")
 
                 t = wf.get("type")
-                if t not in ("ping", "tcp"):
-                    die(f"{sctx}.wait_for.type: must be ping|tcp")
+                if t != "ping":
+                    die(f"{sctx}.wait_for.type: must be ping (v1)")
+
 
                 exp = wf.get("expect")
                 if exp not in ("pass", "fail"):
@@ -2151,11 +2152,6 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                     if not isinstance(iv, (int, float)) or float(iv) <= 0:
                         die(f"{sctx}.wait_for.interval_s: must be a positive number")
 
-                if t == "tcp":
-                    port = wf.get("port")
-                    if not isinstance(port, int) or not (1 <= port <= 65535):
-                        die(f"{sctx}.wait_for.port: must be an int 1..65535 for tcp")
-
             # ---- wait_for_bgp ----
             if "wait_for_bgp" in step:
                 wf = step.get("wait_for_bgp")
@@ -2170,6 +2166,7 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                 node = wf.get("node")
                 if not isinstance(node, str) or not node.strip():
                     die(f"{sctx}.wait_for_bgp.node: must be a non-empty string")
+                node = node.strip()
 
                 if "timeout" in wf:
                     to = wf.get("timeout")
@@ -2179,12 +2176,13 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                 # Optional: ensure node exists + is frr (fail-fast, deterministic)
                 nodes = topo.get("nodes") or []
                 by_name = {n.get("name"): n for n in nodes if isinstance(n, dict)}
-                nrec = by_name.get(node.strip())
+                nrec = by_name.get(node)
                 if not nrec:
-                    die(f"{sctx}.wait_for_bgp.node: unknown node '{node.strip()}'")
-                if nrec.get("type") != "frr":
-                    die(f"{sctx}.wait_for_bgp.node: node '{node.strip()}' is not type 'frr'")
+                    die(f"{sctx}.wait_for_bgp.node: unknown node '{node}'")
 
+                nt = nrec.get("type") or nrec.get("kind")
+                if nt != "frr":
+                    die(f"{sctx}.wait_for_bgp.node: node '{node}' is not type/kind 'frr' (got {nt!r})")
 
 def build_test_index(topo: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """
