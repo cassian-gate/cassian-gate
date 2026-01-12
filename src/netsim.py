@@ -2112,6 +2112,53 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                     if not isinstance(iface, str) or not iface.strip():
                         die(f"{sctx}.fault.{action}: must include a non-empty if/iface/interface")
 
+                    node_s = node.strip()
+                    iface_s = iface.strip()
+
+                    # --- deeper v1 validation: node exists in topo['nodes'] ---
+                    nodes = topo.get("nodes") or []
+                    by_name: dict[str, dict] = {
+                        n.get("name"): n for n in nodes if isinstance(n, dict) and isinstance(n.get("name"), str)
+                    }
+                    nrec = by_name.get(node_s)
+                    if not nrec:
+                        die(f"{sctx}.fault.{action}.node: unknown node '{node_s}'")
+
+                    # --- deeper v1 validation: interface exists for that node in topo['links'] endpoints ---
+                    links = topo.get("links", []) or []
+
+                    def _parse_ep(ep: str) -> tuple[str, str] | None:
+                        if not isinstance(ep, str) or ":" not in ep:
+                            return None
+                        n, ifx = ep.split(":", 1)
+                        n = n.strip()
+                        ifx = ifx.strip()
+                        if not n or not ifx:
+                            return None
+                        return n, ifx
+
+                    node_ifaces: set[str] = set()
+                    for link in links:
+                        eps = link.get("endpoints")
+                        if not isinstance(eps, list) or len(eps) != 2:
+                            continue
+                        for ep in eps:
+                            p = _parse_ep(ep)
+                            if not p:
+                                continue
+                            n, ifx = p
+                            if n == node_s:
+                                node_ifaces.add(ifx)
+
+                    if iface_s not in node_ifaces:
+                        known = ", ".join(sorted(node_ifaces)) if node_ifaces else "(none)"
+                        die(
+                            f"{sctx}.fault.{action}: interface '{iface_s}' not found on node '{node_s}'. "
+                            f"Known interfaces from links: {known}"
+                        )
+                    # -------------------------------------------------------------------------
+
+
             # ---- wait_for ----
             if "wait_for" in step:
                 wf = step.get("wait_for")
