@@ -2861,6 +2861,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             "resolved_topology_mtime": tpath.stat().st_mtime,
             "scenario": scenario_id or "",
             "all_scenarios": bool(all_scenarios),
+            "keep_going": bool(keep_going),
         },
         "tests": [],
         "scenarios": [],
