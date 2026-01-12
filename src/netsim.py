@@ -2252,7 +2252,7 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                 if missing:
                     die(f"{sctx}.wait_for: missing keys {sorted(missing)}")
 
-                allowed_wf = required | {"timeout", "interval_s"}
+                allowed_wf = required | {"timeout", "interval_s", "count", "per_attempt_timeout_s"}
                 unknown = set(wf) - allowed_wf
                 if unknown:
                     die(f"{sctx}.wait_for: unknown keys {sorted(unknown)}")
@@ -2261,6 +2261,15 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                 if t != "ping":
                     die(f"{sctx}.wait_for.type: must be ping (v1)")
 
+                if "count" in wf:
+                    c = wf.get("count")
+                    if not isinstance(c, int) or c < 1:
+                        die(f"{sctx}.wait_for.count: must be an int >= 1")
+
+                if "per_attempt_timeout_s" in wf:
+                    pat = wf.get("per_attempt_timeout_s")
+                    if not isinstance(pat, int) or pat < 1:
+                        die(f"{sctx}.wait_for.per_attempt_timeout_s: must be an int >= 1")
 
                 exp = wf.get("expect")
                 if exp not in ("pass", "fail"):
@@ -3537,6 +3546,16 @@ def cmd_test(args: argparse.Namespace) -> None:
         timeout_s = int(wait_for.get("timeout") or 30)
         interval_s = float(wait_for.get("interval_s") or 1.0)
 
+        # v1.x ping tuning (deterministic, explicit)
+        count = int(wait_for.get("count") or 1)
+        per_attempt_timeout_s = int(wait_for.get("per_attempt_timeout_s") or 1)
+
+        if count < 1:
+            raise ValueError("wait_for ping: count must be >= 1")
+        if per_attempt_timeout_s < 1:
+            raise ValueError("wait_for ping: per_attempt_timeout_s must be >= 1")
+
+
         if expected not in ("pass", "fail"):
             expected = "pass"
         if not src or not to:
@@ -3556,7 +3575,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             cp = rt.exec(
                 lab,
                 str(src),
-                ["ping", "-c", "1", "-W", "1", str(dst_ip)],
+                ["ping", "-c", str(count), "-W", str(per_attempt_timeout_s), str(dst_ip)],
                 check=False,
             )
             ping_ok = (cp.returncode == 0)
@@ -3578,6 +3597,8 @@ def cmd_test(args: argparse.Namespace) -> None:
             "attempts": attempts,
             "timeout_s": timeout_s,
             "interval_s": interval_s,
+            "count": count,
+            "per_attempt_timeout_s": per_attempt_timeout_s,
             "last_rc": getattr(cp, "returncode", None),
         }
         return "ping", expected, observed, dur_ms, meta, verdict

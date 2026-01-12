@@ -189,4 +189,21 @@ scenarios:
       - run:
           include: all
 
+  - id: ping_test
+    description: "Bounce r2<->fw1 and verify h1->h2 fails then recovers"
+    steps:
+      - run: h1_to_h2_ping
+
+      - wait_for:
+          type: ping
+          from: h1
+          to: 192.168.2.10
+          expect: pass
+          timeout: 5
+          interval_s: 1
+          count: 3
+          per_attempt_timeout_s: 2
+
+      - run: h1_to_h2_ping
+
 
