@@ -184,4 +184,9 @@ scenarios:
           timeout: 30
       - run: h1_to_h2_ping
 
+  - id: quick_all
+    steps:
+      - run:
+          include: all
+
 

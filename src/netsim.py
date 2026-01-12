@@ -825,6 +825,77 @@ def resolve_topology(topo: dict) -> dict:
             t["_dst_kind"] = "node"
             t["_dst_value"] = dst
 
+    # ----------------------------
+    # 3) v1.x ergonomics: scenario run include expansion
+    #    - Supports:  run: { include: all }
+    #    - Expands deterministically at resolve time into multiple run steps
+    #    - Uses declared tests order (as written in topology)
+    # ----------------------------
+    scenarios = resolved.get("scenarios", []) or []
+    if scenarios:
+        # Precompute ordered test names (declared order)
+        ordered_test_names: list[str] = []
+        unnamed_tests: list[str] = []
+        for idx, t in enumerate(tests):
+            if not isinstance(t, dict):
+                # already rejected above, but keep deterministic
+                continue
+            nm = t.get("name")
+            if isinstance(nm, str) and nm.strip():
+                ordered_test_names.append(nm.strip())
+            else:
+                unnamed_tests.append(f"tests[{idx+1}]")
+
+        for sidx, s in enumerate(scenarios):
+            if not isinstance(s, dict):
+                continue
+            sid = s.get("id")
+            sid_label = str(sid) if isinstance(sid, str) and sid.strip() else f"scenarios[{sidx+1}]"
+
+            steps = s.get("steps")
+            if not isinstance(steps, list):
+                continue
+
+            new_steps: list[dict] = []
+            for step_i, step in enumerate(steps, start=1):
+                # Only transform steps shaped like: {run: {include: all}}
+                if isinstance(step, dict) and "run" in step and isinstance(step.get("run"), dict):
+                    run_spec = step.get("run") or {}
+                    extra_keys = sorted(set(run_spec.keys()) - {"include"})
+                    if extra_keys:
+                        die(
+                            f"{sid_label}: steps[{step_i}].run: unsupported keys {extra_keys} "
+                            f"(v1 supports only: include)"
+                        )
+
+                    inc = run_spec.get("include")
+                    if not (isinstance(inc, str) and inc.strip().lower() == "all"):
+                        die(
+                            f"{sid_label}: steps[{step_i}].run.include: only 'all' is supported in v1 "
+                            f"(got {inc!r})"
+                        )
+
+                    # include: all requires every declared test to have a name,
+                    # because scenario run refs are name-based and must be auditable.
+                    if unnamed_tests:
+                        die(
+                            f"{sid_label}: steps[{step_i}]: run include: all requires every test to have a non-empty "
+                            f"'name' (missing for: {', '.join(unnamed_tests)})"
+                        )
+
+                    for tn in ordered_test_names:
+                        new_steps.append({"run": tn})
+                    continue
+
+                # default: keep step as-is
+                if isinstance(step, dict):
+                    new_steps.append(step)
+                else:
+                    # keep non-dict as-is; validate_scenarios will reject deterministically
+                    new_steps.append(step)
+
+            s["steps"] = new_steps
+
     return resolved
 
 def write_containerlab_file(topo_path: Path) -> Path:
@@ -2105,20 +2176,33 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                         die(f"{sctx}.fault.{action}: unknown keys {sorted(unknown)}")
 
                     node = spec.get("node")
-                    iface = spec.get("if") or spec.get("iface") or spec.get("interface")
-
                     if not isinstance(node, str) or not node.strip():
                         die(f"{sctx}.fault.{action}.node: must be a non-empty string")
-                    if not isinstance(iface, str) or not iface.strip():
-                        die(f"{sctx}.fault.{action}: must include a non-empty if/iface/interface")
-
                     node_s = node.strip()
-                    iface_s = iface.strip()
+
+                    # Exactly ONE of if/iface/interface must be provided (no ambiguity)
+                    iface_keys = ["if", "iface", "interface"]
+                    provided = [k for k in iface_keys if k in spec and spec.get(k) is not None]
+
+                    if len(provided) == 0:
+                        die(f"{sctx}.fault.{action}: must include exactly one of if/iface/interface")
+                    if len(provided) > 1:
+                        die(
+                            f"{sctx}.fault.{action}: provide only one of if/iface/interface "
+                            f"(got {provided})"
+                        )
+
+                    iface_val = spec.get(provided[0])
+                    if not isinstance(iface_val, str) or not iface_val.strip():
+                        die(f"{sctx}.fault.{action}.{provided[0]}: must be a non-empty string")
+                    iface_s = iface_val.strip()
 
                     # --- deeper v1 validation: node exists in topo['nodes'] ---
                     nodes = topo.get("nodes") or []
                     by_name: dict[str, dict] = {
-                        n.get("name"): n for n in nodes if isinstance(n, dict) and isinstance(n.get("name"), str)
+                        n.get("name"): n
+                        for n in nodes
+                        if isinstance(n, dict) and isinstance(n.get("name"), str)
                     }
                     nrec = by_name.get(node_s)
                     if not nrec:
@@ -2156,8 +2240,6 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                             f"{sctx}.fault.{action}: interface '{iface_s}' not found on node '{node_s}'. "
                             f"Known interfaces from links: {known}"
                         )
-                    # -------------------------------------------------------------------------
-
 
             # ---- wait_for ----
             if "wait_for" in step:
@@ -2466,15 +2548,40 @@ def validate_scenario_run_refs_or_die(topo: dict, scenario_ids: list[str] | None
     if not isinstance(scenarios, list):
         die("ERROR: topology 'scenarios' must be a list")
 
-    # Filter scenarios if requested (deterministic)
+    # Filter scenarios if requested (deterministic) + fail-fast if scenario id not found
+    scenarios_all = [s for s in scenarios if isinstance(s, dict)]
+
+    available_ids = sorted(
+        {str(s.get("id", "")).strip() for s in scenarios_all if str(s.get("id", "")).strip()}
+    )
+    available_set = set(available_ids)
+
     if scenario_ids is not None:
-        want = set(str(x) for x in scenario_ids)
-        scenarios = [s for s in scenarios if isinstance(s, dict) and str(s.get("id", "")) in want]
+        want_list = [str(x).strip() for x in scenario_ids if str(x).strip()]
+        want_set = set(want_list)
+
+        missing = sorted(want_set - available_set)
+        if missing:
+            if not available_ids:
+                die(
+                    f"no scenarios are defined in this topology (requested: {', '.join(missing)})"
+                )
+            if len(missing) == 1:
+                die(
+                    f"scenario id '{missing[0]}' not found. Valid scenario ids: {', '.join(available_ids)}"
+                )
+            die(
+                f"scenario ids not found: {', '.join(missing)}. Valid scenario ids: {', '.join(available_ids)}"
+            )
+
+        scenarios = [s for s in scenarios_all if str(s.get("id", "")).strip() in want_set]
+    else:
+        scenarios = scenarios_all
 
     # Deterministic ordering for validation / error reporting
     scenarios_sorted = sorted(
-        (s for s in scenarios if isinstance(s, dict)),
-        key=lambda s: str(s.get("id", "")),
+        scenarios,
+        key=lambda s: str(s.get("id", "")).strip(),
     )
 
     for s in scenarios_sorted:
