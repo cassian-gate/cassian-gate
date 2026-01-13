@@ -2289,6 +2289,18 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                     if not isinstance(v, str) or not v.strip():
                         die(f"{sctx}.wait_for.{k}: must be a non-empty string")
 
+                # v1: wait_for.to may be a node name OR an IP literal
+                to_raw = str(wf.get("to")).strip()
+
+                if is_ip_literal(to_raw):
+                    validate_ip_literal(to_raw, f"{sctx}.wait_for.to")
+                else:
+                    # must be an existing node name
+                    nodes = topo.get("nodes", []) or []
+                    if not any(isinstance(n, dict) and n.get("name") == to_raw for n in nodes):
+                        die(f"{sctx}.wait_for.to: must be a valid node name or IPv4/IPv6 literal")
+
+
                 if "timeout" in wf:
                     to = wf.get("timeout")
                     if not isinstance(to, int) or to <= 0:
@@ -2426,6 +2438,36 @@ def wait_for_condition(
     # retry_until already enforces explicit wait semantics
     ok, _last, attempts, _dur_ms = retry_until(timeout, interval_s, attempt)
     return ok, attempts
+
+def retry_until(timeout_s: int, interval_s: float, fn) -> tuple[bool, object, int, int]:
+    """
+    Returns: ok, last_val, attempts, duration_ms
+
+    Deterministic polling:
+      - fixed interval (no jitter)
+      - retries happen ONLY because caller explicitly requested a wait/timeout
+      - no hidden backoff or randomness
+    """
+    import time
+
+    start = time.time()
+    attempts = 0
+    last_val: object = None
+
+    while True:
+        attempts += 1
+        ok, val = fn()
+        last_val = val
+
+        if ok:
+            dur_ms = int((time.time() - start) * 1000)
+            return True, last_val, attempts, dur_ms
+
+        if (time.time() - start) >= float(timeout_s):
+            dur_ms = int((time.time() - start) * 1000)
+            return False, last_val, attempts, dur_ms
+
+        time.sleep(float(interval_s))
 
 def execute_scenario(
     *,
@@ -2988,25 +3030,8 @@ def cmd_test(args: argparse.Namespace) -> None:
         if print_json:
             print(json.dumps(results, indent=2))
 
-    def retry_until(timeout_s: int, interval_s: float, fn) -> tuple[bool, object, int, int]:
-        """
-        Returns: ok, last_val, attempts, duration_ms
-        Deterministic polling interval; no jitter; no hidden retries beyond caller request.
-        """
-        start = time.time()
-        attempts = 0
-        last_val: object = None
-        while True:
-            attempts += 1
-            ok, val = fn()
-            last_val = val
-            if ok:
-                dur_ms = int((time.time() - start) * 1000)
-                return True, last_val, attempts, dur_ms
-            if time.time() - start >= timeout_s:
-                dur_ms = int((time.time() - start) * 1000)
-                return False, last_val, attempts, dur_ms
-            time.sleep(interval_s)
+    # Use module-level retry_until() (authoritative)
+    # (Do not re-define it here; keep behavior consistent everywhere.)
 
     def fail_or_continue(msg: str) -> None:
         if keep_going:
@@ -3567,17 +3592,15 @@ def cmd_test(args: argparse.Namespace) -> None:
 
 
         if expected not in ("pass", "fail"):
-            expected = "pass"
+            raise ValueError("wait_for ping: expect must be pass|fail")
         if not src or not to:
             raise ValueError("wait_for ping: requires from + to")
 
         # If "to" looks like a node name, resolve to its first IPv4
-        dst_ip = None
-        if isinstance(to, str):
-            ip = node_first_ipv4(topo, to)
-            dst_ip = ip if ip else to
-        else:
-            dst_ip = str(to)
+        # v1-safe: "to" may be node name OR IP literal (fail-fast otherwise)
+        if not isinstance(to, str) or not to.strip():
+            raise ValueError("wait_for ping: to must be a non-empty string (node name or IP literal)")
+        dst_ip = resolve_dst_to_ip(topo, to.strip())
 
         should_succeed = (expected == "pass")
 
