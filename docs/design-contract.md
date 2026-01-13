@@ -1,207 +1,332 @@
-# ai-netsim Design Contract (v1)
+# ai-netsim Design Contract (Authoritative)
 
-This document defines the non-negotiable behavior of ai-netsim. Its purpose is to keep the simulator **deterministic, auditable, and reproducible** as features grow (including when code is written with AI assistance).
+**Version:** v1  
+**Status:** LOCKED  
+**Scope:** Applies to v1 and all future versions unless explicitly amended
 
-If a change conflicts with this contract, the change must be redesigned or placed behind an explicit opt-in mode/flag that preserves determinism and auditability.
+This document defines the **non-negotiable behavior** of ai-netsim.
+
+Its purpose is to ensure ai-netsim remains a **deterministic, auditable, CI-safe validation gate**, even as features expand (including AI-assisted capabilities).
+
+If a change conflicts with this contract, the change **must be redesigned**, **explicitly deferred**, or **placed behind a clearly named opt-in flag** that preserves default behavior.
 
 ---
 
-## 1) Repo structure and sources of truth
+## 1) Repo structure & sources of truth
 
 ### Authoritative inputs (source of truth)
+
 - `topologies/*.yaml`  
-  User-defined intent: nodes, links, addressing intent, and tests.
-- `src/netsim.py` (and any imported modules under `src/`)  
-  Execution engine + resolver + generators + test runner behavior.
+  User-declared **intent**: nodes, links, addressing, tests, scenarios, expectations.
+
+- `src/`  
+  Execution engine, resolvers, generators, runtime adapters, test semantics.
+
+**Contract rule:**  
+Only these inputs may change validation outcomes.
+
+---
 
 ### Generated outputs (never authoritative)
-- `labs/**`  
-  Per-lab generated artifacts (containerlab files, node configs, resolved topology, results).
-- `labs/*.clab.yaml` (and any `*.clab.yaml` produced)
+
+- `labs/**`
+- `labs/*.clab.yaml`
+- `labs/**/topology.resolved.yaml`
 - `labs/**/results.json`
-- `labs/**/topology.resolved.yaml` (or equivalent resolved output)
+- `labs/**/results.summary.txt`
+- any logs, pcaps, or evidence artifacts
 
-**Contract rule:** Editing files under `labs/` is unsupported and has undefined behavior.  
-The only supported way to change outcomes is by editing `topologies/` inputs or code in `src/`.
+**Contract rule:**  
+Editing anything under `labs/` is unsupported and has undefined behavior.
 
-### Runtime building blocks
-- `images/nft-fw/Dockerfile` (and future images under `images/`)  
-  These define runtime components. ai-netsim orchestrates them; it does not “simulate” device behavior internally.
+The only supported way to change outcomes is by editing:
+- `topologies/`
+- `src/`
 
-Tooling/IDE:
-- `.venv/`, `.vscode/` are developer environment only and must not be required for runtime correctness.
+---
+
+### Runtime components
+
+- `images/**` (e.g. `images/nft-fw/Dockerfile`)
+- Container images define runtime behavior
+- ai-netsim **orchestrates**, it does not emulate device logic internally
+
+Developer tooling (`.venv/`, `.vscode/`) must never be required for correctness.
 
 ---
 
 ## 2) Core product guarantees
 
-### Determinism
+### Determinism (non-negotiable)
+
 Given:
-- the same `topologies/*.yaml`
-- the same code version
-- the same container images (or pinned tags/digests)
-- the same declared timeouts
+- identical topology YAML
+- identical code version
+- identical container images (tags or digests)
+- identical declared timeouts
 
-ai-netsim must produce:
-- the same resolved topology output
-- the same generated configs
-- the same test verdicts (within the defined timeout semantics)
+ai-netsim **must produce**:
+- identical resolved topology
+- identical generated configs
+- identical test & scenario verdicts
 
-**Contract rule:** No hidden randomness. No time-based “smart behavior”. Any retry/timeout must be explicit and recorded.
+**Contract rule:**
+- No hidden randomness
+- No heuristic retries
+- No time-based guessing
+- All retries, waits, and timeouts must be explicit and recorded
+
+---
 
 ### Explicitness
-ai-netsim must not guess intent, auto-remediate silently, or mutate the requested design unless:
-- the behavior is a documented default applied during **resolve**, and
-- the applied default is visible in the resolved topology output.
+
+ai-netsim must **never**:
+
+- guess user intent
+- silently auto-fix misconfigurations
+- mutate requested design outside Resolve
+
+Defaults are allowed **only if**:
+- applied during **Resolve**
+- documented
+- visible in `topology.resolved.yaml`
+
+---
 
 ### Auditability
+
 Each run must produce:
 - a stable artifact directory under `labs/`
-- a machine-readable `results.json` with test evidence
-- logs that make it possible to reproduce and debug outcomes
+- a machine-readable `results.json`
+- artifacts sufficient to reproduce and explain outcomes
 
 ---
 
-## 3) Execution lifecycle (must remain in this order)
+## 3) Execution lifecycle (fixed order)
 
-ai-netsim runs a lab through these phases:
+ai-netsim executes strictly in this order:
 
 1. **Resolve**
-   - Read `topologies/<name>.yaml`
-   - Apply defaults/templates
-   - Validate schema and required fields
-   - Emit a resolved topology (e.g., `labs/<lab>/topology.resolved.yaml`)
+   - Validate schema and intent
+   - Apply defaults
+   - Expand scenarios
+   - Emit `topology.resolved.yaml`
 
 2. **Generate**
-   - Generate containerlab topology (`*.clab.yaml` or equivalent)
-   - Generate per-node configs under `labs/<lab>/nodes/<node>/...`
-   - Generate any provisioning scripts/rules needed
+   - Generate containerlab topology
+   - Generate per-node configs
+   - Generate provisioning artifacts
 
 3. **Deploy**
-   - Deploy the lab via containerlab into `labs/<lab>/...`
-   - Confirm containers exist and are running (readiness gating)
+   - Deploy via runtime backend
+   - Verify containers exist and are running
 
 4. **Provision**
-   - Apply host addressing/routes
-   - Apply FRR config (or equivalent) to FRR nodes
-   - Apply nftables rules to `nft-fw` nodes
-   - Confirm provisioning completion deterministically
+   - Apply host addressing & routes
+   - Apply firewall rules
+   - Apply FRR configuration
+   - Deterministic readiness checks
 
 5. **Test**
-   - Execute tests declared in the topology (e.g., ping/tcp)
-   - Collect evidence (exit codes, stdout/stderr snippets, etc.)
+   - Execute atomic tests
+   - Execute scenarios (if declared)
+   - No hidden remediation
 
 6. **Collect**
-   - Write `results.json` with the full structured outcomes
-   - Persist any additional evidence files under `labs/<lab>/`
+   - Write authoritative `results.json`
+   - Write non-authoritative summaries/evidence
 
-7. **Destroy** (unless explicitly kept)
-   - Tear down the lab deterministically
-   - No orphan containers, no lingering listeners, no leaked state
+7. **Destroy**
+   - Tear down lab deterministically
+   - No leaked containers or processes
 
-**Contract rule:** No later phase may implicitly modify earlier-phase artifacts.  
-Example: tests must not “fix routing” to make themselves pass.
-
----
-
-## 4) Defaults policy
-
-Defaults are allowed only if they meet all conditions:
-- Applied only during **Resolve**
-- Documented in this contract or in a single clearly-named defaults module/file
-- Visible in `topology.resolved.yaml` (or equivalent)
-
-**Contract rule:** Provision/Test phases must not introduce hidden defaults.
+**Contract rule:**  
+Later phases must not mutate artifacts from earlier phases.
 
 ---
 
-## 5) Test contract (ping/tcp and future tests)
+## 4) Gate-first UX (LOCKED)
 
-### Required test output fields
-Every test result must include:
-- `expected` — desired outcome (e.g., `"pass"` or `"fail"`)
-- `observed` — what actually happened (e.g., `"pass"` or `"fail"`)
-- `verdict` — whether observed matched expected (`"pass"` or `"fail"`)
-- `evidence` — minimal proof used to determine observed (exit code, error string, etc.)
+### `netsim test` (authoritative)
 
-### Negative tests are first-class
-If a test expects failure:
-- `expected: "fail"`
-- and the connection is blocked / unreachable / refused within the defined semantics:
-  - `observed: "fail"`
-  - `verdict: "pass"`
+- Always starts from a **clean state**
+- Destroys any existing lab
+- Executes deterministically
+- Returns a **binary verdict**
+- Produces authoritative artifacts
 
-**Contract rule:** A blocked connection counts as a PASS when failure is expected.
+### `netsim run` (non-authoritative)
+
+- Explicitly exploratory
+- No guarantees
+- Never used for CI gating
+
+**Contract rule:**  
+Gate semantics must never be bypassed or softened.
+
+---
+
+## 5) Scenario contract (v1)
+
+### Scenarios are:
+
+- Optional
+- Explicit
+- Ordered
+- Deterministic
+- Fail-fast on ambiguity
+
+### Scenario steps
+
+Each step must contain **exactly one** action:
+
+- `run`
+- `fault`
+- `wait_for`
+- `wait_for_bgp`
+
+Unknown keys are rejected.
+
+---
+
+### Fault semantics
+
+- `link_*` requires unambiguous link resolution
+- `interface_*` requires explicit interface
+- **1 fault step → 1 fault event** in `results.json`
+- No hidden side effects
+
+---
+
+### Convergence semantics
+
+- Global prechecks apply to default tests
+- Scenarios skip global prechecks by default
+- `wait_for_bgp` is authoritative inside scenarios
+- All convergence waits are explicit and recorded
+
+---
+
+## 6) Test contract
+
+### Required test result fields
+
+Each test must record:
+
+- `expected`
+- `observed`
+- `verdict`
+- `evidence`
+
+### Negative tests
+
+If `expected: fail` and failure occurs:
+- `observed: fail`
+- `verdict: pass`
+
+Blocked traffic counts as **success** when failure is expected.
+
+---
 
 ### Timeouts & retries
-- Timeouts must be explicit per test type (or per test)
-- Retries must be explicit and deterministic
-- Any retry behavior must be recorded in evidence/logging
+
+- Explicit
+- Deterministic
+- Recorded in artifacts
 
 ---
 
-## 6) Failure policy
+## 7) Failure policy
 
-### Hard failures (stop the run)
-- Deployment failure (containers not created/running)
-- Provisioning failure (required node config cannot be applied)
-- Missing required nodes/links
-- Internal exceptions that prevent a meaningful test run
+### Hard failures (stop execution)
 
-Hard failures should exit non-zero and clearly state:
-- which phase failed
-- which node/test failed
-- why (actionable message)
+- Deploy failure
+- Provision failure
+- Invalid topology/schema
+- Runtime execution failure
 
-### Test failures (do not crash the engine)
-A test failure is a normal outcome:
-- recorded in `results.json`
-- contributes to overall run status
-- does not terminate other tests unless explicitly configured
+Must report:
+- phase
+- node/test
+- actionable reason
 
 ---
 
-## 7) Model vs backend (future-proofing)
+### Test failures
 
-### Model layer
-The topology model should not assume containerlab forever.
-- `topologies/` describe intent (nodes/links/tests), not container-specific wiring.
-
-### Backend adapter (today: containerlab)
-Containerlab is the current execution backend.
-Future backends (VM/QEMU/vrnetlab/libvirt) must be able to reuse the same model and test semantics.
-
-**Contract rule:** Do not bake containerlab-only assumptions into the topology schema if avoidable. Keep them in backend adapters.
+- Normal outcome
+- Recorded
+- Do not crash the engine unless configured
 
 ---
 
-## 8) Security and hygiene constraints (v1)
+## 8) AI contract (authoritative boundary)
 
-- No shell injection: any user-provided strings used in commands must be safely handled.
-- No hidden network access beyond what the lab declares.
-- Clean teardown: no long-running listeners after `test`, no leaked processes.
+AI in ai-netsim is **assistive only**.
 
----
+AI commands:
+- are post-execution
+- consume artifacts only
+- are explicitly invoked
+- never affect verdicts
+- never affect exit codes
+- never mutate state
 
-## 9) Change control (how this contract is enforced)
+AI must always declare:
 
-Any change must answer:
-1. Does it preserve determinism?
-2. Does it preserve auditability and stable artifacts?
-3. Does it keep inputs authoritative and outputs generated?
-4. Does it preserve negative test semantics?
-
-If any answer is “no”, the change must be:
-- redesigned, or
-- moved into an explicitly named opt-in mode/flag that does not affect default behavior.
+**Contract rule:**  
+Tests and scenarios are the sole authority.
 
 ---
 
-## 10) v1 non-goals
+## 9) Model vs backend (future-proofing)
 
-- Automatic network design or “AI decides topology” during execution
-- Automatic remediation/healing during provision/test
-- Nondeterministic “best effort” behavior
-- Silent mutation of user intent outside Resolve
+- Topology model is runtime-agnostic
+- Backends (containerlab today, VM later) implement execution
+- Backend-specific logic must not leak into schema
 
-End of contract.
+---
+
+## 10) Security & hygiene
+
+- No shell injection
+- No implicit network access
+- Clean teardown
+- No leaked listeners or processes
+
+---
+
+## 11) Change control
+
+Every change must answer **yes** to:
+
+1. Deterministic?
+2. Auditable?
+3. Inputs authoritative?
+4. Outputs generated?
+5. Negative tests preserved?
+
+If **any answer is no**, the change is invalid unless explicitly gated.
+
+---
+
+## 12) Explicit non-goals (LOCKED)
+
+- No AI-driven pass/fail
+- No auto-remediation
+- No lab-first workflows
+- No nondeterministic behavior
+- No silent intent mutation
+- No probabilistic gating
+
+---
+
+## Contract authority
+
+This document is **authoritative**.
+
+If implementation, documentation, or AI suggestions conflict with this contract:
+- the contract wins
+- the change must be redesigned or deferred
+
+**End of contract.**

@@ -21,6 +21,8 @@ import shutil
 import json
 import ipaddress
 import re
+import os, time
+from typing import Any
 
 from pathlib import Path
 from typing import Any
@@ -5406,6 +5408,542 @@ def cmd_run(args: argparse.Namespace) -> None:
     else:
         print(f"✅ RUN PASS: up + test + collect completed (lab destroyed): {lab_name}")
 
+# --- Assistive AI (v1 skeleton: advisory-only, artifact-only, post-exec) ---
+
+def _ai_resolve_lab_and_dir(arg: str) -> tuple[str, str]:
+    """
+    If 'arg' looks like a topology file (*.yaml|*.yml), load it and use its 'name' as the lab.
+    Otherwise treat it as a lab name directly.
+    Returns (lab, lab_dir).
+    """
+    from pathlib import Path
+    import yaml
+
+    p = Path(arg)
+    if p.suffix in (".yaml", ".yml") and p.exists():
+        with p.open("r", encoding="utf-8") as f:
+            topo = yaml.safe_load(f) or {}
+        lab = str((topo.get("name") or "").strip())
+        if not lab:
+            print("AI usage error: topology must define 'name' to resolve lab.", file=sys.stderr)
+            sys.exit(2)
+    else:
+        lab = arg.strip()
+        if not lab:
+            print("AI usage error: lab name is empty.", file=sys.stderr)
+            sys.exit(2)
+    return lab, os.path.join("labs", f"clab-{lab}")
+
+def _ai_read_json(path: str) -> Any:
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def _ai_file_exists(path: str) -> bool:
+    try:
+        st = os.stat(path)
+        return st.st_size >= 0
+    except Exception:
+        return False
+
+def _ai_advisory_headers() -> dict:
+    return {
+        "authority": "advisory",
+        "non_authoritative": True,
+        "disclaimer": "Assistive AI is advisory-only. Tests & scenarios are authoritative.",
+    }
+
+def _ai_print_json(payload: dict, ensure_ascii: bool = False) -> None:
+    print(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=ensure_ascii))
+
+def _ai_default_bundle_out_path(labdir: str) -> str:
+    # v1 contract default
+    return os.path.join(labdir, "ai", "ai_bundle.json")
+
+def _ai_write_bundle(path: str, bundle: dict) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(bundle, f, indent=2, sort_keys=True, ensure_ascii=False)
+
+def _ai_online_stub(bundle: dict, args) -> dict:
+    """
+    v1 alignment stub: optional online assistive layer.
+    Must never gate. Always returns ai_status + ai_error.
+    Later we replace internals with real provider call.
+    """
+    # Explicitly online-only
+    # BYO key boundary (env only)
+    provider = os.getenv("AI_NETSIM_AI_PROVIDER", "").strip()
+    api_key = os.getenv("AI_NETSIM_AI_API_KEY", "").strip()
+    model = (getattr(args, "model", None) or os.getenv("AI_NETSIM_AI_MODEL", "")).strip() or "default"
+
+    if not provider:
+        return {"ai_status": "unavailable", "ai_error": "AI_NETSIM_AI_PROVIDER not set", "model_used": model}
+    if not api_key:
+        return {"ai_status": "unavailable", "ai_error": "AI_NETSIM_AI_API_KEY not set", "model_used": model}
+
+    # Stubbed (no network call yet)
+    return {"ai_status": "unavailable", "ai_error": "online provider not implemented in v1 skeleton", "model_used": model}
+
+def cmd_ai_explain(args) -> None:
+    """
+    Explain a prior run using artifacts only.
+
+    v1 contract:
+      - always builds a deterministic bundle
+      - --bundle prints bundle JSON and exits 0
+      - --bundle-out writes bundle and exits 0
+      - --online attempts optional model layer; failures never gate (exit 0)
+    Exit codes:
+      0 = success (including AI unavailable)
+      2 = CLI usage / missing required artifacts when --strict-inputs
+    """
+    lab, labdir = _ai_resolve_lab_and_dir(args.target)
+    res_path = os.path.join(labdir, "results.json")
+    topo_resolved_path = os.path.join(labdir, "topology.resolved.yaml")
+    summary_path = os.path.join(labdir, "results.summary.txt")
+
+    strict = bool(getattr(args, "strict_inputs", False))
+
+    # Required artifacts for v1 explain
+    missing = []
+    if not _ai_file_exists(res_path): missing.append("results.json")
+    if not _ai_file_exists(topo_resolved_path): missing.append("topology.resolved.yaml")
+
+    if missing and strict:
+        print(f"AI usage error: missing required artifacts in {labdir}: {', '.join(missing)}", file=sys.stderr)
+        sys.exit(2)
+
+    # Deterministic bundle (schema v1 minimal)
+    bundle = {
+        "schema_version": "1",
+        **_ai_advisory_headers(),
+        "command": "explain",
+        "lab": {"name": lab, "labdir": labdir},
+        "artifacts": {
+            "results_json": os.path.join(labdir, "results.json"),
+            "resolved_topology": os.path.join(labdir, "topology.resolved.yaml"),
+            "summary_txt": os.path.join(labdir, "results.summary.txt"),
+            "present": {
+                "results_json": _ai_file_exists(res_path),
+                "resolved_topology": _ai_file_exists(topo_resolved_path),
+                "summary_txt": _ai_file_exists(summary_path),
+            },
+        },
+        "verdict": {
+            "overall": None,
+            "failed_tests": [],
+            "failed_scenarios": [],
+            "wait_failures": [],
+        },
+        "notes": [],
+    }
+
+    # Deterministic scaffold (no model): extract stable evidence pointers
+    if _ai_file_exists(res_path):
+        try:
+            r = _ai_read_json(res_path)
+            bundle["verdict"]["overall"] = r.get("result")
+            results_ptr = f"{labdir}/results.json"
+
+            tests = list(r.get("tests") or [])
+            for i, t in enumerate(tests):
+                if not isinstance(t, dict):
+                    continue
+                if (t.get("verdict") or "").lower() == "fail":
+                    bundle["verdict"]["failed_tests"].append({
+                        "name": t.get("name"),
+                        "type": t.get("type"),
+                        "reason": t.get("reason"),
+                        "evidence": {"artifact": results_ptr, "path": f"tests[{i}]"},
+                    })
+
+            scenarios = list(r.get("scenarios") or [])
+            for si, s in enumerate(scenarios):
+                if not isinstance(s, dict):
+                    continue
+                sid = s.get("id")
+                steps = list(s.get("steps") or [])
+                for st_i, st in enumerate(steps):
+                    if not isinstance(st, dict):
+                        continue
+                    if (st.get("verdict") or "").lower() == "fail":
+                        bundle["verdict"]["failed_scenarios"].append({
+                            "scenario_id": sid,
+                            "step": st.get("step"),
+                            "type": st.get("type"),
+                            "error": st.get("error"),
+                            "meta": st.get("meta"),
+                            "evidence": {"artifact": results_ptr, "path": f"scenarios[{si}].steps[{st_i}]"},
+                        })
+
+                    st_type = st.get("type")
+                    st_verdict = (st.get("verdict") or "").lower()
+                    if st_type in ("wait_for", "wait_for_bgp") and st_verdict != "pass":
+                        bundle["verdict"]["wait_failures"].append({
+                            "scenario_id": sid,
+                            "step": st.get("step"),
+                            "type": st_type,
+                            "expected": st.get("expected"),
+                            "observed": st.get("observed"),
+                            "error": st.get("error"),
+                            "evidence": {"artifact": results_ptr, "path": f"scenarios[{si}].steps[{st_i}]"},
+                        })
+
+            # Deterministic sorting
+            def _k_test(x: dict) -> tuple:
+                ev = x.get("evidence", {}) or {}
+                return (str(x.get("name") or ""), str(x.get("type") or ""), str(ev.get("path") or ""))
+
+            def _k_step(x: dict) -> tuple:
+                step_v = x.get("step")
+                step_i = step_v if isinstance(step_v, int) else 10**9
+                return (str(x.get("scenario_id") or ""), step_i, str(x.get("type") or ""))
+
+            bundle["verdict"]["failed_tests"] = sorted(bundle["verdict"]["failed_tests"], key=_k_test)
+            bundle["verdict"]["failed_scenarios"] = sorted(bundle["verdict"]["failed_scenarios"], key=_k_step)
+            bundle["verdict"]["wait_failures"] = sorted(bundle["verdict"]["wait_failures"], key=_k_step)
+
+        except Exception as e:
+            bundle["notes"].append(f"Failed to parse results.json: {e!s}")
+
+    # Bundle output modes (no model calls)
+    if getattr(args, "bundle", False):
+        _ai_print_json(bundle)
+        return
+
+    if getattr(args, "bundle_out", None):
+        _ai_write_bundle(str(args.bundle_out), bundle)
+        # deterministic human line is ok
+        print(f"[advisory] wrote bundle: {args.bundle_out}")
+        return
+
+    # Default bundle-out path when lab is known (best practice)
+    default_bundle_path = _ai_default_bundle_out_path(labdir)
+    _ai_write_bundle(default_bundle_path, bundle)
+
+    # Optional online (stubbed)
+    online = bool(getattr(args, "online", False))
+    ai_meta = {"ai_status": "unavailable", "ai_error": "", "model_used": ""}
+
+    if online:
+        ai_meta = _ai_online_stub(bundle, args)
+
+    # Advisory output (contract)
+    out = {
+        **_ai_advisory_headers(),
+        "command": "explain",
+        "inputs": {
+            "lab": lab,
+            "bundle_path": default_bundle_path,
+        },
+        "ai_status": ai_meta.get("ai_status"),
+        "ai_error": ai_meta.get("ai_error") or "",
+        "model_used": ai_meta.get("model_used") or "",
+        "output": {
+            "summary": f"verdict={bundle['verdict']['overall']}",
+            "findings": {
+                "failed_tests": bundle["verdict"]["failed_tests"],
+                "failed_scenarios": bundle["verdict"]["failed_scenarios"],
+                "wait_failures": bundle["verdict"]["wait_failures"],
+            },
+            "suggestions": [],
+        },
+    }
+
+    if getattr(args, "format", "text") == "json":
+        _ai_print_json(out)
+        return
+
+    # deterministic text (no pretending)
+    print(f"[advisory] ai explain — lab={lab}")
+    print(out["disclaimer"])
+    print(f"bundle: {default_bundle_path}")
+    if online and out["ai_status"] != "ok":
+        print(f"ai_status: {out['ai_status']}")
+        print(f"ai_error: {out['ai_error']}")
+    print(f"verdict: {bundle['verdict']['overall']}")
+    if bundle["verdict"]["failed_tests"]:
+        print("failing tests:")
+        for ft in bundle["verdict"]["failed_tests"]:
+            print(f"  - {ft.get('name')} ({ft.get('type')}): {ft.get('reason')}")
+    if bundle["verdict"]["failed_scenarios"]:
+        print("scenario failures:")
+        for sf in bundle["verdict"]["failed_scenarios"]:
+            print(f"  - {sf.get('scenario_id')} step {sf.get('step')}: {sf.get('type')} -> {sf.get('error')}")
+    if bundle["verdict"]["wait_failures"]:
+        print("wait failures:")
+        for wf in bundle["verdict"]["wait_failures"]:
+            print(f"  - {wf.get('scenario_id')} step {wf.get('step')}: expected={wf.get('expected')} observed={wf.get('observed')} error={wf.get('error')}")
+    if bundle["notes"]:
+        print("notes:")
+        for n in bundle["notes"]:
+            print(f"  - {n}")
+
+def cmd_ai_review(args) -> None:
+    """
+    Review topology-only (no execution). Deterministic coverage sketch + bounded snippets.
+    Exit codes: 0 success, 2 usage error.
+    """
+    from pathlib import Path
+    import yaml
+
+    topo_path = Path(args.topology)
+    if not topo_path.exists():
+        print(f"AI usage error: topology not found: {topo_path}", file=sys.stderr)
+        sys.exit(2)
+
+    with topo_path.open("r", encoding="utf-8") as f:
+        topo = yaml.safe_load(f) or {}
+
+    nodes = topo.get("nodes") or []
+    tests = topo.get("tests") or []
+    scenarios = topo.get("scenarios") or []
+
+    max_items = max(0, int(getattr(args, "max_items", 50) or 50))
+
+    # ---- Deterministic inventory ----
+    node_names: list[str] = []
+    node_types: dict[str, str] = {}
+    for n in nodes:
+        if isinstance(n, dict):
+            nm = n.get("name")
+            tp = n.get("type")
+            if isinstance(nm, str) and nm.strip():
+                node_names.append(nm.strip())
+                if isinstance(tp, str) and tp.strip():
+                    node_types[nm.strip()] = tp.strip()
+    node_names = sorted(set(node_names))
+
+    # Identify "special" roles (simple, deterministic)
+    frr_nodes = sorted([n for n in node_names if node_types.get(n) == "frr"])
+    host_nodes = sorted([n for n in node_names if node_types.get(n) == "host"])
+    fw_nodes = sorted([n for n in node_names if node_types.get(n) in ("fw", "fw-routed", "firewall")])
+
+    # Collect test coverage
+    test_names: list[str] = []
+    covered_dst: set[str] = set()
+    kinds: set[str] = set()
+
+    for t in (tests or []):
+        if not isinstance(t, dict):
+            continue
+        nm = t.get("name")
+        if isinstance(nm, str) and nm.strip():
+            test_names.append(nm.strip())
+        kd = t.get("type") or t.get("kind")
+        if isinstance(kd, str) and kd.strip():
+            kinds.add(kd.strip())
+
+        # dst coverage: ping tests use to_ip (IP literal); still count it as "has a dst"
+        if "to" in t and isinstance(t.get("to"), str) and t.get("to").strip():
+            covered_dst.add(t.get("to").strip())
+        if "to_ip" in t and isinstance(t.get("to_ip"), str) and t.get("to_ip").strip():
+            covered_dst.add(t.get("to_ip").strip())
+
+    test_names = sorted(set(test_names))
+    kinds = set(sorted(kinds))
+
+    # Scenario coverage: do we have faults, do we revalidate (run_tests) after faults?
+    has_faults = False
+    has_postfault_revalidate = False
+    scenario_ids: list[str] = []
+    for s in (scenarios or []):
+        if not isinstance(s, dict):
+            continue
+        sid = s.get("id")
+        if isinstance(sid, str) and sid.strip():
+            scenario_ids.append(sid.strip())
+
+        for st in (s.get("steps") or []):
+            if not isinstance(st, dict):
+                continue
+            if "fault" in st:
+                has_faults = True
+            if "run_tests" in st:
+                # We treat any run_tests step as a revalidation point; deterministic and simple.
+                has_postfault_revalidate = True
+
+    scenario_ids = sorted(set(scenario_ids))
+
+    # ---- Deterministic gaps ----
+    gaps: list[dict[str, Any]] = []
+
+    # Nodes never referenced as dst in any test (by name only; IP targets won't match node names)
+    for nn in node_names:
+        if nn not in covered_dst:
+            gaps.append({"type": "node_uncovered_as_dst", "node": nn})
+
+    # Firewall present but no negative intent hint (very simple)
+    if fw_nodes:
+        gaps.append({"type": "firewall_present_consider_negative_tests", "nodes": fw_nodes})
+
+    # Faults present but no post-fault revalidation
+    if has_faults and not has_postfault_revalidate:
+        gaps.append({"type": "scenario_faults_without_postfault_revalidation", "hint": "Add a run_tests step after faults"})
+
+    # If EVPN is hinted by node names/types/config fields (keep ultra-simple to avoid heuristics drift)
+    # We only flag if the topology explicitly includes a top-level 'evpn' key or any node has 'evpn' key.
+    evpn_present = False
+    if isinstance(topo.get("evpn"), dict):
+        evpn_present = True
+    else:
+        for n in nodes:
+            if isinstance(n, dict) and "evpn" in n:
+                evpn_present = True
+                break
+    if evpn_present:
+        gaps.append({"type": "evpn_present_add_east_west_tests", "hint": "Add host-to-host reachability tests across VNIs/VLANs"})
+
+    # stable ordering of gaps
+    gaps = sorted(gaps, key=lambda g: (str(g.get("type") or ""), json.dumps(g, sort_keys=True)))
+
+    # ---- Copy-paste snippets (bounded, deterministic) ----
+    snippets: list[dict[str, str]] = []
+
+    # Choose deterministic example endpoints
+    src_host = host_nodes[0] if host_nodes else (node_names[0] if node_names else "src")
+    dst_host = host_nodes[1] if len(host_nodes) > 1 else (host_nodes[0] if host_nodes else (node_names[0] if node_names else "dst"))
+
+    # Snippet 1: add a basic ping test (IP-based, as v1 expects)
+    snippets.append({
+        "title": "Add steady-state ping reachability test (IP target)",
+        "language": "yaml",
+        "snippet": "\n".join([
+            "tests:",
+            "  - name: ping_host_to_host",
+            "    type: ping",
+            f"    from: {src_host}",
+            "    to_ip: 192.0.2.1  # replace with real destination IP",
+        ]),
+    })
+
+    # Snippet 2: add a basic tcp test
+    snippets.append({
+        "title": "Add steady-state TCP port test (IP target)",
+        "language": "yaml",
+        "snippet": "\n".join([
+            "tests:",
+            "  - name: tcp_service_reachability",
+            "    type: tcp",
+            f"    from: {src_host}",
+            "    to_ip: 192.0.2.1  # replace with real destination IP",
+            "    port: 443",
+        ]),
+    })
+
+    # Snippet 3: scenario post-fault revalidation (if scenarios exist or faults likely)
+    snippets.append({
+        "title": "Add post-fault revalidation in a scenario (run_tests after faults)",
+        "language": "yaml",
+        "snippet": "\n".join([
+            "scenarios:",
+            "  - id: example_failover_check",
+            "    steps:",
+            "      - fault:",
+            "          interface_down:",
+            "            node: r1",
+            "            interface: eth1",
+            "      - wait_for:",
+            "          type: ping",
+            f"          from: {src_host}",
+            f"          to: {dst_host}  # or an IP literal",
+            "          expect: pass",
+            "          timeout: 30",
+            "      - run_tests:",
+            "          include: all  # syntactic sugar expands deterministically",
+        ]),
+    })
+
+    # Bound + stable ordering
+    snippets = snippets[: max_items]
+
+    bundle = {
+        "schema_version": "1",
+        **_ai_advisory_headers(),
+        "command": "review",
+        "topology": str(topo_path),
+        "counts": {
+            "nodes": len(nodes),
+            "tests": len(tests),
+            "scenarios": len(scenarios),
+        },
+        "inventory": {
+            "node_names": node_names,
+            "node_types": {k: node_types[k] for k in sorted(node_types)},
+            "frr_nodes": frr_nodes,
+            "host_nodes": host_nodes,
+            "fw_nodes": fw_nodes,
+            "scenario_ids": scenario_ids,
+            "test_names": test_names,
+            "test_kinds": sorted(list(kinds)),
+            "has_faults": has_faults,
+            "has_postfault_revalidate": has_postfault_revalidate,
+        },
+        "gaps": gaps[:max_items],
+        "suggested_snippets": snippets,
+        "non_goals": [
+            "No lab execution from ai review.",
+            "No protocol sprawl or feature-parity assumptions.",
+            "Suggestions are advisory-only; tests/scenarios remain authoritative.",
+        ],
+    }
+
+    # --bundle must be JSON-only (so CI can pipe into jq)
+    if getattr(args, "bundle", False):
+        _ai_print_json(bundle)
+        return
+
+    if getattr(args, "json", False):
+        _ai_print_json(bundle)
+    else:
+        print(f"[advisory] ai review — topology={topo_path}")
+        print(bundle["disclaimer"])
+        c = bundle["counts"]
+        print(f"counts: nodes={c['nodes']} tests={c['tests']} scenarios={c['scenarios']}")
+        if bundle["gaps"]:
+            print("gaps:")
+            for g in bundle["gaps"][:max_items]:
+                print(f"  - {g.get('type')}: { {k:v for k,v in g.items() if k!='type'} }")
+        if bundle["suggested_snippets"]:
+            print("suggested snippets:")
+            for s in bundle["suggested_snippets"][:max_items]:
+                print(f"- {s.get('title')}")
+                print(s.get("snippet") or "")
+                print("")
+
+def cmd_ai_coach(args) -> None:
+    """
+    Coach/onboarding: deterministic, static guidance (no YAML emission).
+    Exit codes: 0 success, 2 usage error (none expected here).
+    """
+    guide = {
+        **_ai_advisory_headers(),
+        "command": "ai coach",
+        "model": "v1 onboarding",
+        "topics": [
+            "run vs test (explore vs gate)",
+            "atomic tests vs scenarios",
+            "artifacts: results.json, topology.resolved.yaml, results.summary.txt",
+            "negative tests and fail-fast philosophy",
+        ],
+        "what_to_validate_next": [
+            "Steady-state reachability (ping/tcp)",
+            "Control-plane convergence (wait_for_bgp)",
+            "Failure choreography (interface/link down/up + revalidation)",
+        ],
+    }
+    if getattr(args, "json", False):
+        _ai_print_json(guide)
+    else:
+        print("[advisory] ai coach — onboarding")
+        print(guide["disclaimer"])
+        print("topics:")
+        for t in guide["topics"]:
+            print(f"  - {t}")
+        print("what to validate next:")
+        for w in guide["what_to_validate_next"]:
+            print(f"  - {w}")
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="netsim",
@@ -5520,6 +6058,63 @@ def main() -> None:
         help="Skip collect (faster, but no artifacts).",
     )
     p_run.set_defaults(func=cmd_run)
+
+    # ai (group)
+    p_ai = sub.add_parser("ai", help="Assistive, non-authoritative AI (post-exec, artifact-only)")
+    ai_sub = p_ai.add_subparsers(dest="ai_cmd", required=True)
+
+    def _ai_add_common_flags(p):
+        p.add_argument(
+            "--bundle",
+            action="store_true",
+            help="Print deterministic bundle JSON to stdout and exit 0 (no model calls).",
+        )
+        p.add_argument(
+            "--bundle-out",
+            help="Write deterministic bundle JSON to this path and exit 0. "
+                 "Default: labs/clab-<lab>/ai/ai_bundle.json (when lab is known).",
+        )
+        p.add_argument(
+            "--online",
+            action="store_true",
+            help="Attempt optional online model call using BYO key. "
+                 "On failure, exit 0 with ai_status=unavailable and ai_error set.",
+        )
+        p.add_argument(
+            "--model",
+            help="Override model name (default from env/config). Advisory-only.",
+        )
+        p.add_argument(
+            "--format",
+            choices=["text", "json"],
+            default="text",
+            help="Output format for advisory output (bundle output always JSON).",
+        )
+
+    # ai explain
+    p_ai_explain = ai_sub.add_parser("explain", help="Explain a prior run using artifacts only")
+    p_ai_explain.add_argument("target", help="Lab name or topology file (to resolve lab)")
+    _ai_add_common_flags(p_ai_explain)
+    p_ai_explain.add_argument(
+        "--strict-inputs",
+        dest="strict_inputs",
+        action="store_true",
+        help="Usage error (exit 2) if required artifacts are missing.",
+    )
+    p_ai_explain.add_argument("--max-items", type=int, default=50, help="Bound findings/suggestions deterministically")
+    p_ai_explain.set_defaults(func=cmd_ai_explain)
+
+    # ai review
+    p_ai_review = ai_sub.add_parser("review", help="Review topology tests/scenarios coverage (no execution)")
+    p_ai_review.add_argument("topology", help="Topology YAML file")
+    _ai_add_common_flags(p_ai_review)
+    p_ai_review.add_argument("--max-items", type=int, default=50, help="Bound gaps/snippets deterministically")
+    p_ai_review.set_defaults(func=cmd_ai_review)
+
+    # ai coach
+    p_ai_coach = ai_sub.add_parser("coach", help="Onboarding and guidance (no YAML generation)")
+    _ai_add_common_flags(p_ai_coach)
+    p_ai_coach.set_defaults(func=cmd_ai_coach)
 
     args = parser.parse_args()
     args.func(args)
