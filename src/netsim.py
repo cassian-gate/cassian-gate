@@ -31,6 +31,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 TOPO_DIR = BASE_DIR / "topologies"
 LABS_DIR = BASE_DIR / "labs"
 QUIET_RUN = False
+_QUIET_DIE = False
 
 
 DEFAULT_IMAGES = {
@@ -70,7 +71,15 @@ def run(
         text=text,
     )
 
+LAST_ERROR_MSG: str | None = None
+
 def die(msg: str, code: int = 1) -> None:
+    global _QUIET_DIE
+    if _QUIET_DIE:
+        # IMPORTANT: raise with the MESSAGE (string), not the int code
+        # so cmd_validate can capture str(e) and put it into JSON.
+        raise SystemExit(str(msg))
+
     print(f"ERROR: {msg}", file=sys.stderr)
     raise SystemExit(code)
 
@@ -4485,19 +4494,71 @@ def cmd_gen(args: argparse.Namespace) -> None:
     print(f"Generated containerlab file: {out}")
 
 def cmd_validate(args: argparse.Namespace) -> None:
+    """
+    Validate topology + scenarios without deploying anything.
+
+    CI-friendly semantics:
+      - exit 0 on pass, exit 1 on fail
+      - with --json: emit exactly ONE JSON object and no extra "ERROR:" prefix
+      - without --json: keep human output (✅ / die(...))
+
+    NOTE: This relies on die() honoring a module-global `_QUIET_DIE` flag:
+      - when _QUIET_DIE is True, die() must NOT print "ERROR:" and must raise SystemExit(<message>)
+        (so str(SystemExit) is the message, not "1").
+    """
+    import json
+    import sys  # keep (often used elsewhere)
+
+    global _QUIET_DIE  # module-global flag used by die()
+
     topo_path = (TOPO_DIR / args.topology) if not Path(args.topology).is_file() else Path(args.topology)
+    want_json: bool = bool(getattr(args, "json", False))
 
-    topo = load_yaml(topo_path)
-    ensure_valid_topology(topo)
+    def emit(result: str, error: str = "") -> None:
+        payload = {
+            "schema_version": "1",
+            "command": "validate",
+            "topology": str(topo_path),
+            "result": result,
+            "error": error or "",
+        }
+        if want_json:
+            print(json.dumps(payload, indent=2))
+        else:
+            if result == "pass":
+                print(f"✅ VALIDATE PASS: {topo_path}")
+            else:
+                die(error or "validation failed")
 
-    resolved = resolve_topology(topo)
-    validate_scenarios(resolved)
+    prev_quiet = bool(globals().get("_QUIET_DIE", False))
+    _QUIET_DIE = want_json
+    try:
+        topo = load_yaml(topo_path)
+        ensure_valid_topology(topo)
 
-    # Reuse the same guardrail as cmd_test: scenario run refs must be valid before any runtime.
-    # validate all scenarios (no selection here)
-    validate_scenario_run_refs_or_die(resolved, scenario_ids=None)
+        resolved = resolve_topology(topo)
+        validate_scenarios(resolved)
 
-    print(f"✅ VALIDATE PASS: {topo_path}")
+        emit("pass", "")
+        return  # do not fall through
+
+    except SystemExit as e:
+        # In --json mode, die() should have raised SystemExit(<message>), so str(e) is the real error.
+        msg = str(e).strip() or "validation failed"
+        if want_json:
+            emit("fail", msg)
+            raise SystemExit(1)
+        raise
+
+    except Exception as e:
+        msg = str(e).strip() or "validation failed"
+        if want_json:
+            emit("fail", msg)
+            raise SystemExit(1)
+        die(msg)
+
+    finally:
+        _QUIET_DIE = prev_quiet
 
 def cmd_up(args: argparse.Namespace) -> None:
     topo_path = (TOPO_DIR / args.topology) if not Path(args.topology).is_file() else Path(args.topology)
@@ -5337,6 +5398,7 @@ def main() -> None:
     # validate
     p_val = sub.add_parser("validate", help="Validate topology + scenarios (no lab, no containers)")
     p_val.add_argument("topology", help="Topology YAML filename under ./topologies or a full path")
+    p_val.add_argument("--json", action="store_true", help="Emit machine-readable JSON (CI-friendly)")
     p_val.set_defaults(func=cmd_validate)
 
     # up
