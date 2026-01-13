@@ -4484,6 +4484,21 @@ def cmd_gen(args: argparse.Namespace) -> None:
     out = write_containerlab_file(topo_path)
     print(f"Generated containerlab file: {out}")
 
+def cmd_validate(args: argparse.Namespace) -> None:
+    topo_path = (TOPO_DIR / args.topology) if not Path(args.topology).is_file() else Path(args.topology)
+
+    topo = load_yaml(topo_path)
+    ensure_valid_topology(topo)
+
+    resolved = resolve_topology(topo)
+    validate_scenarios(resolved)
+
+    # Reuse the same guardrail as cmd_test: scenario run refs must be valid before any runtime.
+    # validate all scenarios (no selection here)
+    validate_scenario_run_refs_or_die(resolved, scenario_ids=None)
+
+    print(f"✅ VALIDATE PASS: {topo_path}")
+
 def cmd_up(args: argparse.Namespace) -> None:
     topo_path = (TOPO_DIR / args.topology) if not Path(args.topology).is_file() else Path(args.topology)
 
@@ -5318,6 +5333,11 @@ def main() -> None:
     p_gen = sub.add_parser("gen", help="Generate containerlab file from topology")
     p_gen.add_argument("topology", help="Topology YAML filename under ./topologies or a full path")
     p_gen.set_defaults(func=cmd_gen)
+
+    # validate
+    p_val = sub.add_parser("validate", help="Validate topology + scenarios (no lab, no containers)")
+    p_val.add_argument("topology", help="Topology YAML filename under ./topologies or a full path")
+    p_val.set_defaults(func=cmd_validate)
 
     # up
     p_up = sub.add_parser("up", help="Generate + deploy")
