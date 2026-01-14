@@ -144,6 +144,28 @@ if [ "$rc" -ne 2 ]; then
 fi
 echo "OK: ai explain strict-inputs exit 2"
 echo
+echo "=== AI) Key redaction (must not leak API key) ==="
+
+# Use a deterministic fake key value so we can assert it never appears in output.
+FAKE_KEY="sk-THIS_IS_NOT_REAL"
+export AI_NETSIM_AI_PROVIDER="openai"
+export AI_NETSIM_AI_API_KEY="$FAKE_KEY"
+export AI_NETSIM_AI_MODEL="gpt-4.1-mini"
+
+# Run online path (will fail with 401) but must never print the raw key.
+ai_err="$(./src/netsim.py ai explain "$LAB" --online --format json | jq -r '.ai_error' || true)"
+
+# Assert: raw key must not appear
+echo "$ai_err" | grep -Fq "$FAKE_KEY" \
+  && { echo "FAIL: ai_error leaked raw API key"; echo "$ai_err"; exit 1; } \
+  || echo "OK: ai_error does not contain raw API key"
+
+# Optional stronger assert: redaction marker present (your sanitizer uses "*******")
+echo "$ai_err" | grep -Eq 'sk-[A-Za-z0-9_-]*\*{3,}[A-Za-z0-9_-]*' \
+  && echo "OK: ai_error appears redacted" \
+  || echo "WARN: ai_error did not match redaction pattern (ensure sanitizer still applied)"
+
+echo
 echo
 echo "=== AI) Golden fixtures (bundle drift guardrail) ==="
 
