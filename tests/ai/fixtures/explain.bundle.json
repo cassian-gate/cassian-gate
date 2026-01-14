@@ -1,0 +1,28 @@
+{
+  "artifacts": {
+    "present": {
+      "resolved_topology": true,
+      "results_json": true,
+      "summary_txt": true
+    },
+    "resolved_topology": "labs/clab-three-frr-two-hosts-fw-routed/topology.resolved.yaml",
+    "results_json": "labs/clab-three-frr-two-hosts-fw-routed/results.json",
+    "summary_txt": "labs/clab-three-frr-two-hosts-fw-routed/results.summary.txt"
+  },
+  "authority": "advisory",
+  "command": "explain",
+  "disclaimer": "Assistive AI is advisory-only. Tests & scenarios are authoritative.",
+  "lab": {
+    "labdir": "labs/clab-three-frr-two-hosts-fw-routed",
+    "name": "three-frr-two-hosts-fw-routed"
+  },
+  "non_authoritative": true,
+  "notes": [],
+  "schema_version": "1",
+  "verdict": {
+    "failed_scenarios": [],
+    "failed_tests": [],
+    "overall": "pass",
+    "wait_failures": []
+  }
+}

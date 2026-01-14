@@ -1,0 +1,16 @@
+name: neg-include-all-unnamed-test
+nodes:
+  - name: r1
+    type: host
+  - name: r2
+    type: host
+links: []
+tests:
+  - kind: ping
+    src: r1
+    dst: r2
+scenarios:
+  - id: s1
+    steps:
+      - run:
+          include: all

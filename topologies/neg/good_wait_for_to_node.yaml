@@ -1,0 +1,21 @@
+schema_version: "1"
+name: good_wait_for_to_node
+
+nodes:
+  - name: h1
+    type: host
+  - name: h2
+    type: host
+
+links:
+  - endpoints: ["h1:eth1", "h2:eth1"]
+
+scenarios:
+  - id: wait_for_to_node_should_pass_validate
+    steps:
+      - wait_for:
+          type: ping
+          from: h1
+          to: h2
+          expect: pass
+          timeout: 1

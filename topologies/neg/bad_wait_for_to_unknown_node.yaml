@@ -1,0 +1,21 @@
+schema_version: "1"
+name: bad_wait_for_to_unknown_node
+
+nodes:
+  - name: h1
+    type: host
+  - name: h2
+    type: host
+
+links:
+  - endpoints: ["h1:eth1", "h2:eth1"]
+
+scenarios:
+  - id: wait_for_to_unknown_node_should_fail
+    steps:
+      - wait_for:
+          type: ping
+          from: h1
+          to: not_a_node
+          expect: pass
+          timeout: 1

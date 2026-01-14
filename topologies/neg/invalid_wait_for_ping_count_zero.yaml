@@ -1,0 +1,23 @@
+name: neg-waitfor-count-zero
+nodes:
+  - name: a
+    type: host
+  - name: b
+    type: host
+links: []
+tests:
+  - name: t1
+    kind: ping
+    src: a
+    dst: b
+scenarios:
+  - id: s1
+    steps:
+      - wait_for:
+          type: ping
+          from: a
+          to: 192.0.2.1
+          expect: pass
+          timeout: 1
+          interval_s: 1
+          count: 0

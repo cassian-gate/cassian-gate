@@ -1,0 +1,114 @@
+{
+  "authority": "advisory",
+  "command": "review",
+  "counts": {
+    "nodes": 6,
+    "scenarios": 5,
+    "tests": 6
+  },
+  "disclaimer": "Assistive AI is advisory-only. Tests & scenarios are authoritative.",
+  "gaps": [
+    {
+      "node": "fw1",
+      "type": "node_uncovered_as_dst"
+    },
+    {
+      "node": "h1",
+      "type": "node_uncovered_as_dst"
+    },
+    {
+      "node": "h2",
+      "type": "node_uncovered_as_dst"
+    },
+    {
+      "node": "r1",
+      "type": "node_uncovered_as_dst"
+    },
+    {
+      "node": "r2",
+      "type": "node_uncovered_as_dst"
+    },
+    {
+      "node": "r3",
+      "type": "node_uncovered_as_dst"
+    },
+    {
+      "hint": "Add a run_tests step after faults",
+      "type": "scenario_faults_without_postfault_revalidation"
+    }
+  ],
+  "inventory": {
+    "frr_nodes": [
+      "r1",
+      "r2",
+      "r3"
+    ],
+    "fw_nodes": [],
+    "has_faults": true,
+    "has_postfault_revalidate": false,
+    "host_nodes": [
+      "h1",
+      "h2"
+    ],
+    "node_names": [
+      "fw1",
+      "h1",
+      "h2",
+      "r1",
+      "r2",
+      "r3"
+    ],
+    "node_types": {
+      "fw1": "nft-fw",
+      "h1": "host",
+      "h2": "host",
+      "r1": "frr",
+      "r2": "frr",
+      "r3": "frr"
+    },
+    "scenario_ids": [
+      "bounce_interface_r2_eth1_recover",
+      "bounce_link_r2_fw1_recover",
+      "converge_bgp_r2",
+      "ping_test",
+      "quick_all"
+    ],
+    "test_kinds": [
+      "ping",
+      "tcp"
+    ],
+    "test_names": [
+      "h1_to_h2_ip_literal_ping",
+      "h1_to_h2_ping",
+      "h1_to_h2_tcp_22_fail",
+      "h1_to_h2_tcp_443_pass",
+      "h1_to_h2_to_ip_alias_ping",
+      "h2_to_h1_ping"
+    ]
+  },
+  "non_authoritative": true,
+  "non_goals": [
+    "No lab execution from ai review.",
+    "No protocol sprawl or feature-parity assumptions.",
+    "Suggestions are advisory-only; tests/scenarios remain authoritative."
+  ],
+  "schema_version": "1",
+  "suggested_snippets": [
+    {
+      "language": "yaml",
+      "snippet": "tests:\n  - name: ping_host_to_host\n    type: ping\n    from: h1\n    to_ip: 192.0.2.1  # replace with real destination IP",
+      "title": "Add steady-state ping reachability test (IP target)"
+    },
+    {
+      "language": "yaml",
+      "snippet": "tests:\n  - name: tcp_service_reachability\n    type: tcp\n    from: h1\n    to_ip: 192.0.2.1  # replace with real destination IP\n    port: 443",
+      "title": "Add steady-state TCP port test (IP target)"
+    },
+    {
+      "language": "yaml",
+      "snippet": "scenarios:\n  - id: example_failover_check\n    steps:\n      - fault:\n          interface_down:\n            node: r1\n            interface: eth1\n      - wait_for:\n          type: ping\n          from: h1\n          to: h2  # or an IP literal\n          expect: pass\n          timeout: 30\n      - run_tests:\n          include: all  # syntactic sugar expands deterministically",
+      "title": "Add post-fault revalidation in a scenario (run_tests after faults)"
+    }
+  ],
+  "topology": "topologies/three-frr-two-hosts-fw-routed.yaml"
+}

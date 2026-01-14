@@ -1,0 +1,21 @@
+schema_version: "1"
+name: bad_wait_for_expect_invalid
+
+nodes:
+  - name: h1
+    type: host
+  - name: h2
+    type: host
+
+links:
+  - endpoints: ["h1:eth1", "h2:eth1"]
+
+scenarios:
+  - id: bad_expect_should_fail
+    steps:
+      - wait_for:
+          type: ping
+          from: h1
+          to: 192.0.2.1
+          expect: maybe
+          timeout: 1

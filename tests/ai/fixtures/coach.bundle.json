@@ -1,0 +1,19 @@
+{
+  "authority": "advisory",
+  "command": "coach",
+  "disclaimer": "Assistive AI is advisory-only. Tests & scenarios are authoritative.",
+  "model": "v1 onboarding",
+  "non_authoritative": true,
+  "schema_version": "1",
+  "topics": [
+    "run vs test (explore vs gate)",
+    "atomic tests vs scenarios",
+    "artifacts: results.json, topology.resolved.yaml, results.summary.txt",
+    "negative tests and fail-fast philosophy"
+  ],
+  "what_to_validate_next": [
+    "Steady-state reachability (ping/tcp)",
+    "Control-plane convergence (wait_for_bgp)",
+    "Failure choreography (interface/link down/up + revalidation)"
+  ]
+}
