@@ -5507,6 +5507,24 @@ def _ai_online_config(args) -> dict[str, Any]:
         "base_url": base_url,
     }
 
+def _ai_sanitize_error(msg: str) -> str:
+    """
+    Sanitize provider error messages so they are safe to emit:
+      - remove API keys
+      - trim excessive length
+    """
+    if not msg:
+        return ""
+
+    # Never leak anything that looks like an API key
+    msg = re.sub(r"sk-[A-Za-z0-9]{10,}", "sk-REDACTED", msg)
+
+    # Bound size (CI / logs safety)
+    MAX = 500
+    if len(msg) > MAX:
+        msg = msg[:MAX] + "...(truncated)"
+
+    return msg
 
 def _ai_provider_openai(bundle: dict[str, Any], model: str, api_key: str, base_url: str | None) -> tuple[str, dict[str, Any], str]:
     """
@@ -5519,7 +5537,11 @@ def _ai_provider_openai(bundle: dict[str, Any], model: str, api_key: str, base_u
     try:
         from openai import OpenAI  # type: ignore
     except Exception as e:
-        return ("unavailable", {}, f"openai sdk not importable: {e!s}")
+        return (
+            "unavailable",
+            {},
+            _ai_sanitize_error(f"openai sdk not importable: {e!s}")
+        )
 
     try:
         client = OpenAI(api_key=api_key, base_url=base_url) if base_url else OpenAI(api_key=api_key)
@@ -5574,8 +5596,11 @@ def _ai_provider_openai(bundle: dict[str, Any], model: str, api_key: str, base_u
             return ("ok", {"raw_text": text}, "")
 
     except Exception as e:
-        return ("unavailable", {}, str(e))
-
+        return (
+            "unavailable",
+            {},
+            _ai_sanitize_error(str(e))
+        )
 
 def _ai_try_online(bundle: dict[str, Any], args) -> dict[str, Any]:
     """
