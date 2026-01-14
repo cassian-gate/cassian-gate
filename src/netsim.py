@@ -5447,6 +5447,7 @@ def _ai_file_exists(path: str) -> bool:
 
 def _ai_advisory_headers() -> dict:
     return {
+        "schema_version": "1",
         "authority": "advisory",
         "non_authoritative": True,
         "disclaimer": "Assistive AI is advisory-only. Tests & scenarios are authoritative.",
@@ -5918,7 +5919,7 @@ def cmd_ai_coach(args) -> None:
     """
     guide = {
         **_ai_advisory_headers(),
-        "command": "ai coach",
+        "command": "coach",
         "model": "v1 onboarding",
         "topics": [
             "run vs test (explore vs gate)",
@@ -5932,17 +5933,21 @@ def cmd_ai_coach(args) -> None:
             "Failure choreography (interface/link down/up + revalidation)",
         ],
     }
-    if getattr(args, "json", False):
+
+    # IMPORTANT: bundle mode outputs JSON deterministically
+    if getattr(args, "bundle", False):
         _ai_print_json(guide)
-    else:
-        print("[advisory] ai coach — onboarding")
-        print(guide["disclaimer"])
-        print("topics:")
-        for t in guide["topics"]:
-            print(f"  - {t}")
-        print("what to validate next:")
-        for w in guide["what_to_validate_next"]:
-            print(f"  - {w}")
+        return
+
+    # Otherwise: human text
+    print("[advisory] ai coach — onboarding")
+    print(guide["disclaimer"])
+    print("topics:")
+    for t in guide["topics"]:
+        print(f"  - {t}")
+    print("what to validate next:")
+    for w in guide["what_to_validate_next"]:
+        print(f"  - {w}")
 
 def main() -> None:
     parser = argparse.ArgumentParser(
