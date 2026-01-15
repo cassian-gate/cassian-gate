@@ -5526,6 +5526,69 @@ def _ai_sanitize_error(msg: str) -> str:
 
     return msg
 
+def _ai_validate_output_schema(out: Any) -> tuple[bool, str]:
+    """
+    Validate the v1 AI output schema.
+
+    Required schema:
+      {
+        "summary": "string",
+        "findings": [{"title":"string","evidence":"string","suggestion":"string"}],
+        "suggested_next_tests": ["string"]
+      }
+
+    Returns: (ok, error_string)
+    """
+    if not isinstance(out, dict):
+        return (False, "AI output must be a JSON object")
+
+    if "summary" not in out or not isinstance(out.get("summary"), str):
+        return (False, "AI output schema error: 'summary' must be a string")
+
+    findings = out.get("findings")
+    if not isinstance(findings, list):
+        return (False, "AI output schema error: 'findings' must be a list")
+
+    for i, f in enumerate(findings):
+        if not isinstance(f, dict):
+            return (False, f"AI output schema error: findings[{i}] must be an object")
+        for k in ("title", "evidence", "suggestion"):
+            if k not in f or not isinstance(f.get(k), str):
+                return (False, f"AI output schema error: findings[{i}].{k} must be a string")
+
+    nxt = out.get("suggested_next_tests")
+    if not isinstance(nxt, list):
+        return (False, "AI output schema error: 'suggested_next_tests' must be a list")
+    for i, s in enumerate(nxt):
+        if not isinstance(s, str):
+            return (False, f"AI output schema error: suggested_next_tests[{i}] must be a string")
+
+    return (True, "")
+
+
+def _ai_parse_and_validate_model_json(text: str) -> tuple[dict[str, Any], str]:
+    """
+    JSON-only contract:
+      - Must be valid JSON
+      - Must be a dict matching the required schema
+    Returns: (parsed_dict_or_empty, error_string_or_empty)
+    """
+    text = (text or "").strip()
+    if not text:
+        return ({}, "empty model response")
+
+    try:
+        out = json.loads(text)
+    except Exception as e:
+        return ({}, f"non-JSON model response: {e!s}")
+
+    ok, err = _ai_validate_output_schema(out)
+    if not ok:
+        return ({}, err)
+
+    # Safe: schema-validated dict. Keep as-is (do not rewrite content).
+    return (out, "")
+
 def _ai_provider_openai(bundle: dict[str, Any], model: str, api_key: str, base_url: str | None) -> tuple[str, dict[str, Any], str]:
     """
     Returns (ai_status, ai_output, ai_error)
@@ -5557,11 +5620,17 @@ def _ai_provider_openai(bundle: dict[str, Any], model: str, api_key: str, base_u
                 "no_runtime_calls": True,
             },
             "bundle": bundle,
-            "output_format": {
-                "summary": "string",
-                "findings": [{"title": "string", "evidence": "string", "suggestion": "string"}],
-                "suggested_next_tests": ["string"],
+            "output_contract": {
+                "json_only": True,
+                "no_markdown": True,
+                "no_prose_outside_json": True,
+                "schema": {
+                    "summary": "string",
+                    "findings": [{"title": "string", "evidence": "string", "suggestion": "string"}],
+                    "suggested_next_tests": ["string"],
+                },
             },
+
         }
 
         resp = client.responses.create(
@@ -5574,26 +5643,43 @@ def _ai_provider_openai(bundle: dict[str, Any], model: str, api_key: str, base_u
             ],
         )
 
-        # Defensive extraction
+        # Defensive extraction (Responses API)
         text = ""
         try:
-            for item in resp.output:  # type: ignore[attr-defined]
-                if getattr(item, "type", "") == "output_text":
-                    text += getattr(item, "text", "")
+            # Preferred: SDK convenience field
+            text = getattr(resp, "output_text", "") or ""
         except Exception:
-            text = str(resp)
+            text = ""
+
+        # Fallback: scan structured output for message content
+        if not text:
+            try:
+                for item in getattr(resp, "output", []) or []:
+                    if getattr(item, "type", "") == "message":
+                        for part in getattr(item, "content", []) or []:
+                            if getattr(part, "type", "") == "output_text":
+                                text += getattr(part, "text", "") or ""
+                            elif getattr(part, "type", "") == "text":
+                                # Some SDKs use "text" parts
+                                text += getattr(part, "text", "") or ""
+            except Exception:
+                text = ""
+
+        if not text:
+            # Last resort: string form (usually not useful, but keep deterministic behavior)
+            try:
+                text = str(resp)
+            except Exception:
+                text = ""
 
         text = (text or "").strip()
         if not text:
             return ("unavailable", {}, "empty model response")
 
-        try:
-            out = json.loads(text)
-            if isinstance(out, dict):
-                return ("ok", out, "")
-            return ("ok", {"parsed": out}, "")
-        except Exception:
-            return ("ok", {"raw_text": text}, "")
+        out, perr = _ai_parse_and_validate_model_json(text)
+        if perr:
+            return ("unavailable", {}, _ai_sanitize_error(perr))
+        return ("ok", out, "")
 
     except Exception as e:
         return (
