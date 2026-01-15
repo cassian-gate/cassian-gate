@@ -5589,6 +5589,62 @@ def _ai_parse_and_validate_model_json(text: str) -> tuple[dict[str, Any], str]:
     # Safe: schema-validated dict. Keep as-is (do not rewrite content).
     return (out, "")
 
+def _ai_sanitize_output_for_fixture(ai_output: Any) -> dict[str, Any]:
+    """
+    Convert schema-valid ai_output into a stable, content-free structure for fixtures.
+
+    This is a structural contract sanitizer:
+      - does NOT validate correctness of content
+      - does NOT pin wording
+      - only preserves schema shape + required keys
+    """
+    # If it's not schema-valid, return empty dict (caller should already validate schema).
+    if not isinstance(ai_output, dict):
+        return {}
+
+    # Enforce only the allowed schema keys in the sanitized fixture
+    allowed_top = {"summary", "findings", "suggested_next_tests"}
+    out: dict[str, Any] = {}
+
+    # summary
+    if "summary" in ai_output and isinstance(ai_output.get("summary"), str):
+        out["summary"] = "<string>"
+    else:
+        out["summary"] = "<missing>"
+
+    # findings
+    findings = ai_output.get("findings")
+    san_findings: list[dict[str, str]] = []
+    if isinstance(findings, list):
+        for f in findings:
+            if isinstance(f, dict):
+                san_findings.append({
+                    "title": "<string>" if isinstance(f.get("title"), str) else "<missing>",
+                    "evidence": "<string>" if isinstance(f.get("evidence"), str) else "<missing>",
+                    "suggestion": "<string>" if isinstance(f.get("suggestion"), str) else "<missing>",
+                })
+            else:
+                san_findings.append({
+                    "title": "<invalid>",
+                    "evidence": "<invalid>",
+                    "suggestion": "<invalid>",
+                })
+    out["findings"] = san_findings
+
+    # suggested_next_tests
+    nxt = ai_output.get("suggested_next_tests")
+    if isinstance(nxt, list):
+        # Keep only type shape, not values.
+        out["suggested_next_tests"] = ["<string>" for _ in nxt]
+    else:
+        out["suggested_next_tests"] = []
+
+    # If additional keys exist, record them explicitly (so fixtures can guard expansion).
+    extras = sorted([k for k in ai_output.keys() if k not in allowed_top])
+    out["_extra_keys"] = extras  # must be [] in fixtures
+
+    return out
+
 def _ai_provider_openai(bundle: dict[str, Any], model: str, api_key: str, base_url: str | None) -> tuple[str, dict[str, Any], str]:
     """
     Returns (ai_status, ai_output, ai_error)
