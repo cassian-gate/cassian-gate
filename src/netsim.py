@@ -357,6 +357,76 @@ def ensure_valid_topology(topo: dict) -> None:
             if node not in names:
                 die(f"Endpoint references unknown node '{node}' in link #{i}.")
 
+        # ----------------------------
+    # v1: Change Context (Step 1) — candidate_changes declaration validation
+    #   - context only; never consumed by runtime
+    #   - no file reads here
+    # ----------------------------
+    if "candidate_changes" in topo and topo["candidate_changes"] is not None:
+        cc = topo["candidate_changes"]
+        if not isinstance(cc, list):
+            die("'candidate_changes' must be a list.")
+
+        allowed_keys = {"id", "description", "scope", "file", "inline", "format"}
+        seen_ids: set[str] = set()
+
+        for idx, item in enumerate(cc, start=1):
+            if not isinstance(item, dict):
+                die(f"candidate_changes[{idx}]: must be a dict")
+
+            extra = sorted(set(item.keys()) - allowed_keys)
+            if extra:
+                die(f"candidate_changes[{idx}]: unknown keys: {extra} (allowed: {sorted(allowed_keys)})")
+
+            cid = item.get("id")
+            if not isinstance(cid, str) or not cid.strip():
+                die(f"candidate_changes[{idx}].id: must be a non-empty string")
+            cid = cid.strip()
+            if cid in seen_ids:
+                die(f"candidate_changes[{idx}].id: duplicate id '{cid}'")
+            seen_ids.add(cid)
+
+            # Exactly one source: file OR inline
+            has_file = "file" in item and item.get("file") is not None
+            has_inline = "inline" in item and item.get("inline") is not None
+            if has_file and has_inline:
+                die(f"candidate_changes[{idx}] ({cid}): choose only one of 'file' or 'inline'")
+            if not has_file and not has_inline:
+                die(f"candidate_changes[{idx}] ({cid}): missing source: provide 'file' or 'inline'")
+
+            if has_file:
+                f = item.get("file")
+                if not isinstance(f, str) or not f.strip():
+                    die(f"candidate_changes[{idx}] ({cid}).file: must be a non-empty string")
+
+            if has_inline:
+                s = item.get("inline")
+                if not isinstance(s, str) or not s.strip():
+                    die(f"candidate_changes[{idx}] ({cid}).inline: must be a non-empty string")
+
+            # Optional description
+            if "description" in item and item.get("description") is not None:
+                d = item.get("description")
+                if not isinstance(d, str) or not d.strip():
+                    die(f"candidate_changes[{idx}] ({cid}).description: must be a non-empty string if provided")
+
+            # Optional format
+            if "format" in item and item.get("format") is not None:
+                fmt = item.get("format")
+                if not isinstance(fmt, str) or not fmt.strip():
+                    die(f"candidate_changes[{idx}] ({cid}).format: must be a non-empty string if provided")
+
+            # Optional scope: list of node names (must exist)
+            if "scope" in item and item.get("scope") is not None:
+                scope = item.get("scope")
+                if not isinstance(scope, list):
+                    die(f"candidate_changes[{idx}] ({cid}).scope: must be a list of node names")
+                for j, nname in enumerate(scope, start=1):
+                    if not isinstance(nname, str) or not nname.strip():
+                        die(f"candidate_changes[{idx}] ({cid}).scope[{j}]: must be a non-empty string")
+                    if nname.strip() not in names:
+                        die(f"candidate_changes[{idx}] ({cid}).scope[{j}]: unknown node '{nname.strip()}'")
+
 # -------------------------
 # Paths for generated lab artifacts
 # -------------------------
@@ -906,6 +976,76 @@ def resolve_topology(topo: dict) -> dict:
                     new_steps.append(step)
 
             s["steps"] = new_steps
+
+        # ----------------------------
+    # v1: Change Context (Step 1) — candidate_changes declaration validation
+    #   - context only; never consumed by runtime
+    #   - no file reads here
+    # ----------------------------
+    if "candidate_changes" in topo and topo["candidate_changes"] is not None:
+        cc = topo["candidate_changes"]
+        if not isinstance(cc, list):
+            die("'candidate_changes' must be a list.")
+
+        allowed_keys = {"id", "description", "scope", "file", "inline", "format"}
+        seen_ids: set[str] = set()
+
+        for idx, item in enumerate(cc, start=1):
+            if not isinstance(item, dict):
+                die(f"candidate_changes[{idx}]: must be a dict")
+
+            extra = sorted(set(item.keys()) - allowed_keys)
+            if extra:
+                die(f"candidate_changes[{idx}]: unknown keys: {extra} (allowed: {sorted(allowed_keys)})")
+
+            cid = item.get("id")
+            if not isinstance(cid, str) or not cid.strip():
+                die(f"candidate_changes[{idx}].id: must be a non-empty string")
+            cid = cid.strip()
+            if cid in seen_ids:
+                die(f"candidate_changes[{idx}].id: duplicate id '{cid}'")
+            seen_ids.add(cid)
+
+            # Exactly one source: file OR inline
+            has_file = "file" in item and item.get("file") is not None
+            has_inline = "inline" in item and item.get("inline") is not None
+            if has_file and has_inline:
+                die(f"candidate_changes[{idx}] ({cid}): choose only one of 'file' or 'inline'")
+            if not has_file and not has_inline:
+                die(f"candidate_changes[{idx}] ({cid}): missing source: provide 'file' or 'inline'")
+
+            if has_file:
+                f = item.get("file")
+                if not isinstance(f, str) or not f.strip():
+                    die(f"candidate_changes[{idx}] ({cid}).file: must be a non-empty string")
+
+            if has_inline:
+                s = item.get("inline")
+                if not isinstance(s, str) or not s.strip():
+                    die(f"candidate_changes[{idx}] ({cid}).inline: must be a non-empty string")
+
+            # Optional description
+            if "description" in item and item.get("description") is not None:
+                d = item.get("description")
+                if not isinstance(d, str) or not d.strip():
+                    die(f"candidate_changes[{idx}] ({cid}).description: must be a non-empty string if provided")
+
+            # Optional format
+            if "format" in item and item.get("format") is not None:
+                fmt = item.get("format")
+                if not isinstance(fmt, str) or not fmt.strip():
+                    die(f"candidate_changes[{idx}] ({cid}).format: must be a non-empty string if provided")
+
+            # Optional scope: list of node names (must exist)
+            if "scope" in item and item.get("scope") is not None:
+                scope = item.get("scope")
+                if not isinstance(scope, list):
+                    die(f"candidate_changes[{idx}] ({cid}).scope: must be a list of node names")
+                for j, nname in enumerate(scope, start=1):
+                    if not isinstance(nname, str) or not nname.strip():
+                        die(f"candidate_changes[{idx}] ({cid}).scope[{j}]: must be a non-empty string")
+                    if nname.strip() not in names:
+                        die(f"candidate_changes[{idx}] ({cid}).scope[{j}]: unknown node '{nname.strip()}'")
 
     return resolved
 

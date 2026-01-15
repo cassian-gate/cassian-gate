@@ -199,6 +199,8 @@ must_fail_with "topologies/neg/bad_interface_missing_key.yaml" "must include exa
 must_fail_with "topologies/neg/bad_interface_multi_keys.yaml" "provide only one of if/iface/interface"
 must_fail_with "topologies/neg/bad_wait_for_to_unknown_node.yaml" "wait_for.to: must be a valid node name or IPv4/IPv6 literal"
 must_fail_with "topologies/neg/bad_wait_for_expect_invalid.yaml" "wait_for.expect: must be pass|fail"
+must_fail_with "topologies/neg/bad_candidate_changes_dup_id.yaml" "duplicate id 'change1'"
+must_fail_with "topologies/neg/bad_candidate_changes_both_sources.yaml" "choose only one of 'file' or 'inline'"
 
 echo
 echo "=== NEG) invalid include:all (unnamed test) ==="
