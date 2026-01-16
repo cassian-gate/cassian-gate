@@ -346,6 +346,38 @@ def ensure_valid_topology(topo: dict) -> None:
             die(f"Duplicate node name: {n['name']}")
         names.add(n["name"])
 
+    # v1.x guardrail hardening: type-specific required fields (fail-fast at validate time)
+    # FRR nodes must include:
+    #   - asn (int-coercible)
+    #   - router_id (IPv4 literal)
+    for i, n in enumerate(topo["nodes"], start=1):
+        if not isinstance(n, dict):
+            continue
+        if n.get("type") != "frr":
+            continue
+
+        name = n.get("name") or f"nodes[{i}]"
+
+        if "asn" not in n:
+            die(f"Topology invalid: nodes[{i}] '{name}': missing required field 'asn' for type 'frr'")
+        try:
+            int(n.get("asn"))
+        except Exception:
+            die(f"Topology invalid: nodes[{i}] '{name}': field 'asn' must be int-coercible for type 'frr'")
+
+        if "router_id" not in n:
+            die(f"Topology invalid: nodes[{i}] '{name}': missing required field 'router_id' for type 'frr'")
+        rid = str(n.get("router_id") or "").strip()
+        try:
+            ip = ipaddress.ip_address(rid)
+            if ip.version != 4:
+                raise ValueError("router_id must be IPv4")
+        except Exception:
+            die(
+                f"Topology invalid: nodes[{i}] '{name}': field 'router_id' must be an IPv4 literal "
+                f"(e.g. 1.1.1.1) for type 'frr'"
+            )
+
     for i, link in enumerate(topo["links"], start=1):
         eps = link.get("endpoints")
         if not isinstance(eps, list) or len(eps) != 2:
@@ -2990,6 +3022,19 @@ def cmd_test(args: argparse.Namespace) -> None:
     import time
 
     lab = args.lab
+    # v1.x UX hardening: users commonly try `netsim test topologies/foo.yaml`
+    # `netsim test` is lab-driven by design, so fail early with an actionable message.
+    if isinstance(lab, str):
+        s = lab.strip()
+        if s.endswith((".yaml", ".yml")) or "/" in s or s.startswith("topologies/") or s.startswith("./") or s.startswith("../"):
+            die(
+                "ERROR: netsim test expects a lab name, not a topology file.\n\n"
+                f"You ran:\n  netsim test {lab}\n\n"
+                "Did you mean:\n"
+                f"  netsim up {lab} --reconfigure\n"
+                f"  netsim test <lab-name>\n\n"
+                "Tip: lab name usually matches the topology 'name:' field."
+            )
     filter_name: str | None = getattr(args, "name", None)
     filter_kind: str | None = getattr(args, "kind", None)
     keep_going: bool = bool(getattr(args, "keep_going", False))
@@ -4161,7 +4206,16 @@ def cmd_test(args: argparse.Namespace) -> None:
             results["summary"]["passed"] = 0
             results["summary"]["failed"] = len(results["tests"])
             write_results()
-            die(f"{name} is not running")
+            # v1.x UX hardening: lab exists but containers are stopped (common after reboot / manual clab destroy)
+            hint_lines = [
+                "Lab exists but one or more containers are not running.",
+                "Try:",
+                "  netsim up <topology.yaml> --reconfigure",
+                "or (advanced):",
+                f"  sudo containerlab deploy -t {tpath}",
+            ]
+            die(f"{name} is not running\n\n" + "\n".join(hint_lines))
+
 
     # =============================================================================
     # 2) Node readiness gate (no control-plane assumptions yet)
@@ -4393,7 +4447,28 @@ def cmd_test(args: argparse.Namespace) -> None:
                     dst_label = dst or t.get("to") or t.get("to_ip") or ""
                     verdict = run_ping_test(test_name=test_name, src=src, dst=dst_label, t=t)
                     if verdict != "pass":
-                        fail_or_continue(f"tests[{i}] ping mismatch: {src} -> {dst} expected {t.get('expect','pass')}")
+                        dst_label = (
+                            t.get("dst")
+                            or t.get("to")
+                            or t.get("to_ip")
+                            or t.get("to_ip4")
+                            or t.get("to_ip6")
+                            or dst
+                        )
+
+                        dst_ip = None
+                        try:
+                            meta = r.get("meta") if isinstance(r, dict) else None
+                            if isinstance(meta, dict):
+                                dst_ip = meta.get("dst_ip")
+                        except Exception:
+                            dst_ip = None
+
+                        extra = f" ({dst_ip})" if dst_ip else ""
+
+                        fail_or_continue(
+                            f"tests[{i}] ping mismatch: {src} -> {dst_label}{extra} expected {t.get('expect','pass')}"
+                        )
                     continue
 
                 verdict = run_tcp_test(test_name=test_name, src=src, dst=dst, t=t)
@@ -5674,7 +5749,14 @@ def _ai_validate_output_schema(out: Any) -> tuple[bool, str]:
       {
         "summary": "string",
         "findings": [{"title":"string","evidence":"string","suggestion":"string"}],
-        "suggested_next_tests": ["string"]
+        "suggested_next_tests": [
+            {
+              "id": "string",
+              "title": "string",
+              "why": "string",
+              "yaml": "string"
+            }
+        ]
       }
 
     Returns: (ok, error_string)
@@ -5696,15 +5778,27 @@ def _ai_validate_output_schema(out: Any) -> tuple[bool, str]:
             if k not in f or not isinstance(f.get(k), str):
                 return (False, f"AI output schema error: findings[{i}].{k} must be a string")
 
+    # suggested_next_tests: optional list[dict] (human-actionable)
+    # Each item must include:
+    #   - id: short stable identifier
+    #   - title: human-readable title
+    #   - why: short explanation
+    #   - yaml: copy-paste YAML snippet (ai-netsim test/scenario syntax)
     nxt = out.get("suggested_next_tests")
-    if not isinstance(nxt, list):
-        return (False, "AI output schema error: 'suggested_next_tests' must be a list")
-    for i, s in enumerate(nxt):
-        if not isinstance(s, str):
-            return (False, f"AI output schema error: suggested_next_tests[{i}] must be a string")
+    if nxt is not None:
+        if not isinstance(nxt, list):
+            return (False, "AI output schema error: 'suggested_next_tests' must be a list")
+        for i, item in enumerate(nxt):
+            if not isinstance(item, dict):
+                return (False, f"AI output schema error: suggested_next_tests[{i}] must be an object")
+            for k in ("id", "title", "why", "yaml"):
+                if k not in item or not isinstance(item.get(k), str):
+                    return (
+                        False,
+                        f"AI output schema error: suggested_next_tests[{i}].{k} must be a string"
+                    )
 
     return (True, "")
-
 
 def _ai_parse_and_validate_model_json(text: str) -> tuple[dict[str, Any], str]:
     """
@@ -5785,7 +5879,12 @@ def _ai_sanitize_output_for_fixture(ai_output: Any) -> dict[str, Any]:
 
     return out
 
-def _ai_provider_openai(bundle: dict[str, Any], model: str, api_key: str, base_url: str | None) -> tuple[str, dict[str, Any], str]:
+def _ai_provider_openai(
+    bundle: dict[str, Any],
+    model: str,
+    api_key: str,
+    base_url: str | None
+) -> tuple[str, dict[str, Any], str]:
     """
     Returns (ai_status, ai_output, ai_error)
 
@@ -5820,13 +5919,21 @@ def _ai_provider_openai(bundle: dict[str, Any], model: str, api_key: str, base_u
                 "json_only": True,
                 "no_markdown": True,
                 "no_prose_outside_json": True,
+                "rules": [
+                    "Return JSON only. No YAML, no markdown, no prose outside the JSON object.",
+                    "Never claim correctness or safety. Do NOT use words like: validated, correct, safe, approved, guaranteed.",
+                    "Anchor claims to observed evidence (tests/scenarios/results pointers) where possible. Config text is context only.",
+                    "Candidate changes are context-only and are never executed/simulated/validated by ai-netsim.",
+                    "Suggested tests MUST be actionable: include a copy-paste YAML snippet that fits ai-netsim v1 schema.",
+                ],
                 "schema": {
                     "summary": "string",
                     "findings": [{"title": "string", "evidence": "string", "suggestion": "string"}],
-                    "suggested_next_tests": ["string"],
+                    "suggested_next_tests": [
+                        {"id": "string", "title": "string", "why": "string", "yaml": "string"},
+                    ],
                 },
             },
-
         }
 
         resp = client.responses.create(

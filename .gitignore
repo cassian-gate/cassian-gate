@@ -11,3 +11,11 @@ results.json
 # OS / editor
 .vscode/
 .DS_Store
+
+# local / experiments
+*.bak
+.codex/
+.NO_CODEX
+images/
+changes/
+docs/future/
