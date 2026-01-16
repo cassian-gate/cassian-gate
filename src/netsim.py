@@ -5928,6 +5928,32 @@ def _ai_finalize_and_emit(command_name: str, bundle: dict[str, Any], args) -> No
       - --online: attempt provider call; failures never gate; exit 0
       - output controlled by --format json|text (default json per argparse)
     """
+
+    def _cc_summary_text(bundle_in: dict[str, Any]) -> str | None:
+        # Support legacy keys + current key.
+        cc = bundle_in.get("change_context") or bundle_in.get("change_review") or bundle_in.get("change_explain")
+        if not isinstance(cc, dict):
+            return None
+
+        present = bool(cc.get("present", False))
+        counts = cc.get("counts") if isinstance(cc.get("counts"), dict) else {}
+
+        items = int(counts.get("items", 0) or 0)
+        included = int(counts.get("included", 0) or 0)
+        missing = int(counts.get("missing", 0) or 0)
+        blocked = int(counts.get("blocked", 0) or 0)
+        too_large = int(counts.get("too_large", 0) or 0)
+
+        if not present:
+            return "Change context: none"
+
+        # Reinforce non-authority + non-execution
+        return (
+            f"Change context detected: items={items} included={included} "
+            f"missing={missing} blocked={blocked} too_large={too_large} "
+            f"(context only; NOT executed; does not affect verdicts)"
+        )
+
     # Ensure mandatory deterministic headers exist (do NOT overwrite if already set)
     bundle.setdefault("schema_version", "1")
     for k, v in _ai_advisory_headers().items():
@@ -5952,6 +5978,11 @@ def _ai_finalize_and_emit(command_name: str, bundle: dict[str, Any], args) -> No
         else:
             print(f"[advisory] ai {command_name}")
             print(bundle_with_ptr.get("disclaimer"))
+
+            cc_line = _cc_summary_text(bundle)
+            if cc_line:
+                print(cc_line)
+
             print(f"bundle_path: {bundle_with_ptr['bundle_path']}")
         return
 
@@ -5962,6 +5993,11 @@ def _ai_finalize_and_emit(command_name: str, bundle: dict[str, Any], args) -> No
         else:
             print(f"[advisory] ai {command_name}")
             print(bundle.get("disclaimer"))
+
+            cc_line = _cc_summary_text(bundle)
+            if cc_line:
+                print(cc_line)
+
             print(json.dumps(bundle, indent=2, sort_keys=True))
         return
 
@@ -6005,6 +6041,11 @@ def _ai_finalize_and_emit(command_name: str, bundle: dict[str, Any], args) -> No
     # text mode
     print(f"[advisory] ai {command_name}")
     print(out.get("disclaimer"))
+
+    cc_line = _cc_summary_text(bundle)
+    if cc_line:
+        print(cc_line)
+
     if out["inputs"].get("bundle_path"):
         print(f"bundle_path: {out['inputs']['bundle_path']}")
     print(f"ai_status: {out.get('ai_status')}")
@@ -6873,7 +6914,7 @@ def cmd_ai_review(args) -> None:
         ],
     }
 
-    bundle["change_context"] = _ai_cc_build_change_context(topo, base_dir=topo_path.parent)
+    bundle["change_context"] = _ai_cc_build_change_context(topo, base_dir=Path(os.getcwd()))
     bundle["change_review"] = _ai_review_change_sections(bundle)
 
     _ai_finalize_and_emit("review", bundle, args)
