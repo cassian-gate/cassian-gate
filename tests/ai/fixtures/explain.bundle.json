@@ -10,6 +10,46 @@
     "summary_txt": "labs/clab-three-frr-two-hosts-fw-routed/results.summary.txt"
   },
   "authority": "advisory",
+  "change_context": {
+    "counts": {
+      "blocked": 0,
+      "errors": 0,
+      "included": 0,
+      "items": 0,
+      "missing": 0,
+      "too_large": 0
+    },
+    "items": [],
+    "limits": {
+      "item_max_bytes": 65536,
+      "max_items": 50,
+      "preview_max_chars": 4096,
+      "total_max_bytes": 262144
+    },
+    "notes": [],
+    "present": false
+  },
+  "change_explain": {
+    "mapping": {
+      "affected_change_ids": [],
+      "affected_nodes": [],
+      "node_to_change_ids": {}
+    },
+    "notes": [
+      "No candidate change context was provided, so this explanation is based on test/scenario evidence only."
+    ],
+    "present": false,
+    "reminders": [
+      "This is advisory context only. Tests & scenarios are authoritative.",
+      "No vendor parsing was performed; mapping uses declared metadata only.",
+      "No remediation instructions are provided."
+    ],
+    "summary": {
+      "affected_change_ids": [],
+      "affected_nodes": [],
+      "change_ids": []
+    }
+  },
   "command": "explain",
   "disclaimer": "Assistive AI is advisory-only. Tests & scenarios are authoritative.",
   "lab": {

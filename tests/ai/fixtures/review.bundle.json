@@ -1,5 +1,101 @@
 {
   "authority": "advisory",
+  "change_context": {
+    "counts": {
+      "blocked": 0,
+      "errors": 0,
+      "included": 0,
+      "items": 0,
+      "missing": 0,
+      "too_large": 0
+    },
+    "items": [],
+    "limits": {
+      "item_max_bytes": 65536,
+      "max_items": 50,
+      "preview_max_chars": 4096,
+      "total_max_bytes": 262144
+    },
+    "notes": [],
+    "present": false
+  },
+  "change_review": {
+    "minimal_proof_set": [
+      {
+        "name": "baseline_reachability",
+        "purpose": "Prove the network still forwards the intended steady-state traffic.",
+        "templates": [
+          {
+            "from": "<src_node>",
+            "kind": "ping",
+            "to_ip": "<dst_ip_or_service_vip>"
+          },
+          {
+            "from": "<src_node>",
+            "kind": "tcp",
+            "port": 443,
+            "to_ip": "<dst_ip_or_service_vip>"
+          }
+        ]
+      },
+      {
+        "name": "control_plane_convergence",
+        "purpose": "Prove routing converges to the expected state after events (if applicable).",
+        "templates": [
+          {
+            "node": "<frr_node>",
+            "scenario_step": "wait_for_bgp",
+            "timeout": 60
+          },
+          {
+            "expect": "pass",
+            "from": "<src_node>",
+            "scenario_step": "wait_for",
+            "timeout": 30,
+            "to": "<dst_node_or_ip>",
+            "type": "ping"
+          }
+        ]
+      },
+      {
+        "name": "policy_negative",
+        "purpose": "Prove must-not traffic is still blocked (if policy/firewall is in path).",
+        "templates": [
+          {
+            "expected": "fail",
+            "from": "<src_node>",
+            "kind": "tcp",
+            "port": 22,
+            "to_ip": "<dst_ip>"
+          }
+        ]
+      }
+    ],
+    "missing_something": [
+      {
+        "hint": "Do you have steady-state tests that pass before the change? (baseline proof)",
+        "type": "pre_change_baseline"
+      },
+      {
+        "hint": "If a firewall/policy exists, do you have at least one expected-fail (blocked) test?",
+        "type": "negative_tests"
+      },
+      {
+        "hint": "If the change could affect failover, do you have a scenario with fault + wait_for + post-fault revalidation?",
+        "type": "failover_scenarios"
+      }
+    ],
+    "notes": [
+      "Change context is advisory-only; tests and scenarios remain authoritative.",
+      "This section is vendor-agnostic and does not interpret configs."
+    ],
+    "what_changed": [
+      {
+        "summary": "No candidate_changes declared in topology.",
+        "type": "no_change_context"
+      }
+    ]
+  },
   "command": "review",
   "counts": {
     "nodes": 6,

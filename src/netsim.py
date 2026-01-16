@@ -6019,6 +6019,125 @@ def _ai_finalize_and_emit(command_name: str, bundle: dict[str, Any], args) -> No
         else:
             print(str(out["ai_output"]))
 
+def _ai_explain_change_sections(bundle: dict[str, Any]) -> dict[str, Any]:
+    """
+    Step 4 (v1): Change-aware explain scaffold.
+
+    Rules:
+      - deterministic
+      - vendor-agnostic (no parsing)
+      - advisory-only
+      - no remediation instructions
+      - links failures to "affected areas" based on declared candidate_changes metadata only
+    """
+    cc = bundle.get("change_context") or {}
+    items = list(cc.get("items") or [])
+
+    # deterministic ordering
+    def _k_item(it: dict) -> tuple:
+        return (str(it.get("id") or ""), str(it.get("node") or ""), str(it.get("description") or ""))
+
+    items = sorted([it for it in items if isinstance(it, dict)], key=_k_item)
+
+    # Build a light-weight index: node -> change ids
+    node_to_changes: dict[str, list[str]] = {}
+    change_ids: list[str] = []
+    for it in items:
+        cid = str(it.get("id") or "").strip()
+        if cid:
+            change_ids.append(cid)
+        node = it.get("node")
+        if isinstance(node, str) and node.strip() and cid:
+            node_to_changes.setdefault(node.strip(), []).append(cid)
+
+    for k in list(node_to_changes.keys()):
+        node_to_changes[k] = sorted(set(node_to_changes[k]))
+
+    change_ids = sorted(set(change_ids))
+
+    verdict = bundle.get("verdict") or {}
+    failed_tests = list(verdict.get("failed_tests") or [])
+    failed_steps = list(verdict.get("failed_scenarios") or [])
+    wait_failures = list(verdict.get("wait_failures") or [])
+
+    # Helper: try to extract node-ish strings from a failure record without guessing too hard
+    def _extract_nodes_from_failure(rec: dict) -> set[str]:
+        out: set[str] = set()
+        if not isinstance(rec, dict):
+            return out
+
+        # Common spots
+        for key in ("name", "reason", "error"):
+            v = rec.get(key)
+            if isinstance(v, str):
+                # light heuristic: if a node name appears exactly as a token in the string, match it
+                # (still deterministic, but best-effort)
+                for n in node_to_changes.keys():
+                    if n and (f" {n} " in f" {v} " or v.strip() == n):
+                        out.add(n)
+
+        meta = rec.get("meta")
+        if isinstance(meta, dict):
+            for key in ("node", "src", "dst", "from", "to"):
+                v = meta.get(key)
+                if isinstance(v, str) and v.strip() in node_to_changes:
+                    out.add(v.strip())
+
+        return out
+
+    affected_nodes: set[str] = set()
+    for rec in failed_tests:
+        affected_nodes |= _extract_nodes_from_failure(rec)
+    for rec in failed_steps:
+        affected_nodes |= _extract_nodes_from_failure(rec)
+    for rec in wait_failures:
+        affected_nodes |= _extract_nodes_from_failure(rec)
+
+    affected_nodes = set(sorted(affected_nodes))
+
+    affected_changes: list[str] = []
+    for n in affected_nodes:
+        affected_changes.extend(node_to_changes.get(n) or [])
+    affected_changes = sorted(set(affected_changes))
+
+    # Calm, on-call friendly notes (no remediation)
+    notes: list[str] = []
+    present = bool(cc.get("present"))
+    if not present:
+        notes.append("No candidate change context was provided, so this explanation is based on test/scenario evidence only.")
+    else:
+        if cc.get("counts", {}).get("missing"):
+            notes.append("Some change_context files were missing at bundle time; affected-area mapping may be incomplete.")
+        if cc.get("counts", {}).get("blocked"):
+            notes.append("Some change_context items were blocked for safety (path rules); mapping may be incomplete.")
+        if cc.get("counts", {}).get("too_large"):
+            notes.append("Some change_context items were too large and were not included; mapping may be incomplete.")
+
+    mapping = {
+        "affected_nodes": sorted(list(affected_nodes)),
+        "affected_change_ids": affected_changes,
+        "node_to_change_ids": {k: node_to_changes[k] for k in sorted(node_to_changes)},
+    }
+
+    # Minimal structured output required by Step 4
+    out = {
+        "present": bool(cc.get("present")),
+        "summary": {
+            "change_ids": change_ids,
+            "affected_nodes": mapping["affected_nodes"],
+            "affected_change_ids": mapping["affected_change_ids"],
+        },
+        "mapping": mapping,
+        "notes": notes,
+        "reminders": [
+            "This is advisory context only. Tests & scenarios are authoritative.",
+            "No vendor parsing was performed; mapping uses declared metadata only.",
+            "No remediation instructions are provided.",
+        ],
+    }
+
+    return out
+
 def cmd_ai_explain(args) -> None:
     """
     Explain a prior run using artifacts only.
@@ -6077,6 +6196,30 @@ def cmd_ai_explain(args) -> None:
         },
         "notes": [],
     }
+
+    # Change Context (bundle-time only): pull from resolved topology if present
+    if _ai_file_exists(topo_resolved_path):
+        try:
+            topo_resolved = _ai_read_yaml(topo_resolved_path)
+            # Best-effort base_dir for file reads:
+            # - use current working directory as root so repo-relative paths can work
+            # - still blocks traversal + absolute paths deterministically
+            bundle["change_context"] = _ai_cc_build_change_context(topo_resolved, base_dir=Path(os.getcwd()))
+        except Exception as e:
+            bundle["change_context"] = {
+                "present": False,
+                "counts": {"items": 0, "included": 0, "blocked": 0, "missing": 0, "errors": 1, "too_large": 0},
+                "limits": {
+                    "item_max_bytes": _AI_CC_ITEM_MAX_BYTES,
+                    "total_max_bytes": _AI_CC_TOTAL_MAX_BYTES,
+                    "preview_max_chars": _AI_CC_PREVIEW_MAX_CHARS,
+                    "max_items": _AI_CC_MAX_ITEMS,
+                },
+                "items": [],
+                "notes": [f"Failed to parse topology.resolved.yaml for change_context: {e!s}"],
+            }
+    else:
+        bundle["change_context"] = _ai_cc_build_change_context({}, base_dir=Path(os.getcwd()))
 
     # Deterministic scaffold: extract stable evidence pointers
     if _ai_file_exists(res_path):
@@ -6164,7 +6307,366 @@ def cmd_ai_explain(args) -> None:
             bundle["notes"].append(f"Failed to parse results.json: {e!s}")
 
     # IMPORTANT: all output logic lives in the shared finalizer
+    bundle["change_explain"] = _ai_explain_change_sections(bundle)
     _ai_finalize_and_emit("explain", bundle, args)
+
+# ----------------------------
+# v1: Change Context (Step 2) — AI bundle-only packaging helpers
+#   - best-effort, deterministic
+#   - size-limited, redacted
+#   - NEVER affects runtime / verdicts / exit codes
+# ----------------------------
+
+_AI_CC_ITEM_MAX_BYTES = 64 * 1024        # 64 KiB per item read cap
+_AI_CC_TOTAL_MAX_BYTES = 256 * 1024      # 256 KiB total cap across items
+_AI_CC_PREVIEW_MAX_CHARS = 4096          # preview chars per item (after redaction)
+_AI_CC_MAX_ITEMS = 50                    # hard cap for safety
+
+
+def _ai_cc_redact(text: str) -> str:
+    """
+    Deterministic, conservative redaction for common secret-like patterns.
+    Not a security guarantee; just hygiene to reduce accidental leakage.
+    """
+    if not text:
+        return text
+
+    out_lines: list[str] = []
+    keys = ("password", "passwd", "secret", "token", "api_key", "apikey", "private_key")
+
+    for line in text.splitlines(True):  # keep newlines
+        low = line.lower()
+        if any(k in low for k in keys):
+            # redact value after common separators
+            for sep in (":", "=", " "):
+                if sep in line:
+                    left, right = line.split(sep, 1)
+                    # keep left + sep, replace remainder
+                    line = f"{left}{sep} <redacted>\n" if line.endswith("\n") else f"{left}{sep} <redacted>"
+                    break
+        out_lines.append(line)
+
+    return "".join(out_lines)
+
+
+def _ai_cc_safe_read_text_file(base_dir: Path, rel_path: str, max_bytes: int) -> tuple[str, dict]:
+    """
+    Best-effort safe read:
+      - only allows paths within base_dir (no traversal)
+      - blocks absolute paths
+      - reads at most max_bytes
+    Returns: (text, meta)
+    """
+    meta: dict[str, Any] = {
+        "source_kind": "file",
+        "path": rel_path,
+        "status": "unavailable",
+        "bytes": 0,
+        "truncated": False,
+        "reason": "",
+    }
+
+    try:
+        if not isinstance(rel_path, str) or not rel_path.strip():
+            meta["status"] = "invalid"
+            meta["reason"] = "empty path"
+            return "", meta
+
+        rp = rel_path.strip()
+        p = Path(rp)
+
+        if p.is_absolute():
+            meta["status"] = "blocked"
+            meta["reason"] = "absolute paths are blocked"
+            return "", meta
+
+        # Resolve under base_dir and prevent traversal
+        base = base_dir.resolve()
+        full = (base / p).resolve()
+        if str(full) == str(base) or (not str(full).startswith(str(base) + os.sep)):
+            meta["status"] = "blocked"
+            meta["reason"] = "path traversal / outside base_dir blocked"
+            return "", meta
+
+        if not full.exists() or not full.is_file():
+            meta["status"] = "missing"
+            meta["reason"] = "file not found"
+            return "", meta
+
+        # bounded read
+        with full.open("rb") as f:
+            raw = f.read(max_bytes + 1)
+
+        if len(raw) > max_bytes:
+            raw = raw[:max_bytes]
+            meta["truncated"] = True
+
+        # decode best-effort as utf-8; replace errors deterministically
+        txt = raw.decode("utf-8", errors="replace")
+        meta["status"] = "ok"
+        meta["bytes"] = len(raw)
+        return txt, meta
+
+    except Exception as e:
+        meta["status"] = "error"
+        meta["reason"] = str(e)
+        return "", meta
+
+
+def _ai_cc_build_change_context(topo_obj: dict, base_dir: Path) -> dict[str, Any]:
+    """
+    Build deterministic change_context bundle payload from topo candidate_changes.
+    Reads candidate content ONLY here (bundle-time), size-limited.
+    """
+    cc = topo_obj.get("candidate_changes")
+    out: dict[str, Any] = {
+        "present": bool(cc),
+        "counts": {"items": 0, "included": 0, "blocked": 0, "missing": 0, "errors": 0, "too_large": 0},
+        "limits": {
+            "item_max_bytes": _AI_CC_ITEM_MAX_BYTES,
+            "total_max_bytes": _AI_CC_TOTAL_MAX_BYTES,
+            "preview_max_chars": _AI_CC_PREVIEW_MAX_CHARS,
+            "max_items": _AI_CC_MAX_ITEMS,
+        },
+        "items": [],
+        "notes": [],
+    }
+
+    if not isinstance(cc, list) or not cc:
+        return out
+
+    total_budget = _AI_CC_TOTAL_MAX_BYTES
+    included = 0
+
+    # Preserve declared ordering (author intent), but cap number of items deterministically
+    for idx, item in enumerate(cc[:_AI_CC_MAX_ITEMS], start=1):
+        if not isinstance(item, dict):
+            continue
+
+        cid = item.get("id")
+        cid = cid.strip() if isinstance(cid, str) else f"candidate_changes[{idx}]"
+
+        entry: dict[str, Any] = {
+            "id": cid,
+            "description": (item.get("description").strip() if isinstance(item.get("description"), str) else ""),
+            "format": (item.get("format").strip() if isinstance(item.get("format"), str) else ""),
+            "scope": (item.get("scope") if isinstance(item.get("scope"), list) else []),
+            "source": {},
+            "preview": {"text": "", "redacted": True},
+        }
+
+        # inline wins only if present (Step 1 enforces exactly one)
+        if item.get("inline") is not None:
+            s = item.get("inline")
+            if not isinstance(s, str):
+                s = str(s)
+            raw = s
+            # enforce per-item cap via bytes
+            b = raw.encode("utf-8", errors="replace")
+            meta = {
+                "source_kind": "inline",
+                "status": "ok",
+                "bytes": min(len(b), _AI_CC_ITEM_MAX_BYTES),
+                "truncated": len(b) > _AI_CC_ITEM_MAX_BYTES,
+                "reason": "",
+            }
+            if len(b) > _AI_CC_ITEM_MAX_BYTES:
+                raw = b[:_AI_CC_ITEM_MAX_BYTES].decode("utf-8", errors="replace")
+            # total budget enforcement
+            if meta["bytes"] > total_budget:
+                meta["status"] = "too_large"
+                meta["reason"] = "exceeds remaining total budget"
+                out["counts"]["too_large"] += 1
+                entry["source"] = meta
+                out["items"].append(entry)
+                continue
+
+            total_budget -= meta["bytes"]
+            red = _ai_cc_redact(raw)
+            entry["source"] = meta
+            entry["preview"]["text"] = red[:_AI_CC_PREVIEW_MAX_CHARS]
+            included += 1
+            out["items"].append(entry)
+            continue
+
+        # file path
+        rel_path = item.get("file")
+        rel_path = rel_path.strip() if isinstance(rel_path, str) else str(rel_path)
+
+        # if no budget left, record deterministically
+        if total_budget <= 0:
+            entry["source"] = {
+                "source_kind": "file",
+                "path": rel_path,
+                "status": "too_large",
+                "bytes": 0,
+                "truncated": False,
+                "reason": "no remaining total budget",
+            }
+            out["counts"]["too_large"] += 1
+            out["items"].append(entry)
+            continue
+
+        max_bytes = min(_AI_CC_ITEM_MAX_BYTES, total_budget)
+        txt, meta = _ai_cc_safe_read_text_file(base_dir, rel_path, max_bytes=max_bytes)
+
+        # update counters
+        st = meta.get("status")
+        if st == "ok":
+            included += 1
+        elif st == "blocked":
+            out["counts"]["blocked"] += 1
+        elif st == "missing":
+            out["counts"]["missing"] += 1
+        elif st == "error":
+            out["counts"]["errors"] += 1
+        elif st == "too_large":
+            out["counts"]["too_large"] += 1
+
+        # budget accounting only if we actually read bytes
+        if st == "ok":
+            total_budget -= int(meta.get("bytes") or 0)
+
+        entry["source"] = meta
+        if st == "ok":
+            red = _ai_cc_redact(txt)
+            entry["preview"]["text"] = red[:_AI_CC_PREVIEW_MAX_CHARS]
+        out["items"].append(entry)
+
+    out["counts"]["items"] = min(len(cc), _AI_CC_MAX_ITEMS)
+    out["counts"]["included"] = included
+    if len(cc) > _AI_CC_MAX_ITEMS:
+        out["notes"].append(f"candidate_changes truncated to first {_AI_CC_MAX_ITEMS} items (safety cap)")
+
+    return out
+
+def _ai_read_yaml(path: str) -> Any:
+    import yaml
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+    
+def _ai_review_change_sections(bundle: dict[str, Any]) -> dict[str, Any]:
+    """
+    Deterministic, vendor-agnostic offline review sections for Change Context.
+    No remediation. No vendor parsing. Advisory only.
+    """
+    cc = (bundle.get("change_context") or {}) if isinstance(bundle, dict) else {}
+    items = cc.get("items") if isinstance(cc.get("items"), list) else []
+    counts = cc.get("counts") if isinstance(cc.get("counts"), dict) else {}
+    present = bool(cc.get("present"))
+
+    # ---- 1) What Changed? ----
+    what_changed: list[dict[str, Any]] = []
+    if not present:
+        what_changed.append(
+            {"type": "no_change_context", "summary": "No candidate_changes declared in topology."}
+        )
+    else:
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            src = it.get("source") or {}
+            what_changed.append(
+                {
+                    "id": it.get("id"),
+                    "format": it.get("format") or "",
+                    "scope": it.get("scope") or [],
+                    "source_status": src.get("status"),
+                    "source_kind": src.get("source_kind"),
+                    "summary": it.get("description") or "",
+                }
+            )
+
+    # ---- 2) Am I Missing Something? ----
+    missing: list[dict[str, Any]] = []
+
+    if present and int(counts.get("included") or 0) == 0:
+        missing.append(
+            {
+                "type": "change_context_not_included",
+                "hint": "Candidate changes were declared but none could be included in the bundle (missing/blocked/too_large).",
+            }
+        )
+
+    # scope hygiene: if any item has empty scope, nudge to add it (still optional)
+    if present:
+        any_empty_scope = False
+        any_has_scope = False
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            sc = it.get("scope")
+            if isinstance(sc, list) and sc:
+                any_has_scope = True
+            else:
+                any_empty_scope = True
+        if any_empty_scope:
+            missing.append(
+                {
+                    "type": "scope_not_specified",
+                    "hint": "Some candidate changes have no scope. Consider adding scope: [node1, node2] to clarify what should be proven.",
+                }
+            )
+        if not any_has_scope:
+            missing.append(
+                {
+                    "type": "no_scopes_present",
+                    "hint": "No candidate changes specify scope. Proof suggestions will be generic (still safe).",
+                }
+            )
+
+    # deterministic checklist reminders (generic, not vendor-specific)
+    missing.extend(
+        [
+            {"type": "pre_change_baseline", "hint": "Do you have steady-state tests that pass before the change? (baseline proof)"},
+            {"type": "negative_tests", "hint": "If a firewall/policy exists, do you have at least one expected-fail (blocked) test?"},
+            {"type": "failover_scenarios", "hint": "If the change could affect failover, do you have a scenario with fault + wait_for + post-fault revalidation?"},
+        ]
+    )
+
+    # ---- 3) Minimal Proof Set (template-level) ----
+    proof: list[dict[str, Any]] = []
+
+    # Always include a tiny deterministic proof set template (does not claim correctness)
+    proof.append(
+        {
+            "name": "baseline_reachability",
+            "purpose": "Prove the network still forwards the intended steady-state traffic.",
+            "templates": [
+                {"kind": "ping", "from": "<src_node>", "to_ip": "<dst_ip_or_service_vip>"},
+                {"kind": "tcp", "from": "<src_node>", "to_ip": "<dst_ip_or_service_vip>", "port": 443},
+            ],
+        }
+    )
+    proof.append(
+        {
+            "name": "control_plane_convergence",
+            "purpose": "Prove routing converges to the expected state after events (if applicable).",
+            "templates": [
+                {"scenario_step": "wait_for_bgp", "node": "<frr_node>", "timeout": 60},
+                {"scenario_step": "wait_for", "type": "ping", "from": "<src_node>", "to": "<dst_node_or_ip>", "expect": "pass", "timeout": 30},
+            ],
+        }
+    )
+    proof.append(
+        {
+            "name": "policy_negative",
+            "purpose": "Prove must-not traffic is still blocked (if policy/firewall is in path).",
+            "templates": [
+                {"kind": "tcp", "from": "<src_node>", "to_ip": "<dst_ip>", "port": 22, "expected": "fail"},
+            ],
+        }
+    )
+
+    return {
+        "what_changed": what_changed,
+        "missing_something": missing,
+        "minimal_proof_set": proof,
+        "notes": [
+            "Change context is advisory-only; tests and scenarios remain authoritative.",
+            "This section is vendor-agnostic and does not interpret configs.",
+        ],
+    }
 
 def cmd_ai_review(args) -> None:
     """
@@ -6370,6 +6872,9 @@ def cmd_ai_review(args) -> None:
             "Suggestions are advisory-only; tests/scenarios remain authoritative.",
         ],
     }
+
+    bundle["change_context"] = _ai_cc_build_change_context(topo, base_dir=topo_path.parent)
+    bundle["change_review"] = _ai_review_change_sections(bundle)
 
     _ai_finalize_and_emit("review", bundle, args)
 
