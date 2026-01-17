@@ -213,14 +213,14 @@ def node_first_ipv4(topo: dict[str, Any], name: str) -> str:
 
     die(f"Could not determine IPv4 for node '{name_s}' from topology links")
 
-def run_ping_test(
+def run_ping_once_or_die(
     rt: Runtime,
     lab: str,
     src: str,
     dst_ip: str,
     count: int,
     should_succeed: bool,
-) -> None:
+) -> str:
     cp = rt.exec(
         lab,
         src,
@@ -229,10 +229,16 @@ def run_ping_test(
         capture_output=False,
     )
     ok = (cp.returncode == 0)
-    if should_succeed and not ok:
-        die(f"PING FAIL (expected PASS): {src} -> {dst_ip}")
-    if (not should_succeed) and ok:
-        die(f"PING FAIL (expected DROP): {src} -> {dst_ip}")
+
+    # expected outcome mapping
+    expected = "pass" if should_succeed else "drop"
+    observed = "pass" if ok else "drop"
+
+    # return verdict for the caller to handle (keep-going, results.json, etc.)
+    if observed == expected:
+        return "pass"
+
+    return "fail"
 
 def run_tcp_test(
     rt: Runtime,
@@ -291,7 +297,7 @@ def run_declared_tests(rt: Runtime, lab: str, topo: dict) -> None:
 
             if ttype == "ping":
                 count = int(t.get("count") or 2)
-                run_ping_test(rt, lab, src, dst_ip, count=count, should_succeed=should_succeed)
+                run_ping_once_or_die(rt, lab, src, dst_ip, count=count, should_succeed=should_succeed)
 
             elif ttype == "tcp":
                 port = int(t.get("port"))
@@ -3245,36 +3251,27 @@ def cmd_test(args: argparse.Namespace) -> None:
     # -----------------------------
     # Atomic test execution helpers
     # -----------------------------
-    def run_ping_test(*, test_name: str, src: str, dst: str, t: dict, record_fn=record_test) -> str:
+    def run_ping_test(*, test_name: str, src: str, dst: str, t: dict, record_fn=record_test) -> dict:
         expected = (t.get("expect") or "pass").lower()
         if expected not in ("pass", "fail"):
             expected = "pass"
 
         # ---- destination resolution (v1-safe) ----
-        # Primary authority is resolve_topology(): _dst_kind/_dst_value.
-        # Fallback supports older schemas: dst (node) or to/to_ip (ip literal).
         dst_kind = t.get("_dst_kind")
         dst_value = t.get("_dst_value")
 
-        # Determine the logical destination token (node name or IP literal)
         if dst_kind and dst_value:
             dst_token = str(dst_value).strip()
         else:
-            # fallback order:
-            #   - dst (node or ip literal, legacy)
-            #   - to (ip literal, v1)
-            #   - to_ip (ip literal alias, v1 compat)
             dst_token = (t.get("dst") or t.get("to") or t.get("to_ip") or "").strip()
 
         if not dst_token:
             die(f"test {test_name}: missing destination (need dst or to/to_ip)")
 
-        # Resolve dst_token -> dst_ip deterministically
         if dst_kind == "ip" or is_ip_literal(dst_token):
             dst_ip = dst_token
             validate_ip_literal(dst_ip, f"test {test_name}")
         else:
-            # node name -> IP
             dst_ip = node_ip_or_die(dst_token)
 
         # ---- execution ----
@@ -3292,17 +3289,17 @@ def cmd_test(args: argparse.Namespace) -> None:
         should_succeed = (expected == "pass")
         verdict = "pass" if (ok == should_succeed) else "fail"
 
-        record_fn(
-            name=test_name,
-            kind="ping",
-            src=src,
-            dst=dst,
-            expected=expected,
-            observed=observed,
-            verdict=verdict,
-            duration_ms=dur_ms,
-            error="" if verdict == "pass" else f"ping mismatch (expected {expected}, observed {observed})",
-            meta={
+        rec = {
+            "name": test_name,
+            "kind": "ping",
+            "from": src,
+            "to": dst,
+            "expected": expected,
+            "observed": observed,
+            "verdict": verdict,
+            "duration_ms": int(dur_ms),
+            "error": "" if verdict == "pass" else f"ping mismatch to {dst_ip} (expected {expected}, observed {observed})",
+            "meta": {
                 "dst_ip": dst_ip,
                 "count": count,
                 "attempts": attempts,
@@ -3310,9 +3307,23 @@ def cmd_test(args: argparse.Namespace) -> None:
                 "retry_interval_s": interval_s,
                 "last_rc": getattr(last_cp, "returncode", None),
             },
+        }
+
+        # Record once, always
+        record_fn(
+            name=rec["name"],
+            kind=rec["kind"],
+            src=rec["from"],
+            dst=rec["to"],
+            expected=rec["expected"],
+            observed=rec["observed"],
+            verdict=rec["verdict"],
+            duration_ms=rec["duration_ms"],
+            error=rec["error"],
+            meta=rec["meta"],
         )
 
-        return verdict
+        return rec
 
     def run_tcp_test(*, test_name: str, src: str, dst: str, t: dict, record_fn=record_test) -> str:
         expected = (t.get("expect") or "pass").lower()
@@ -4444,30 +4455,26 @@ def cmd_test(args: argparse.Namespace) -> None:
                         continue
 
                 if kind == "ping":
-                    dst_label = dst or t.get("to") or t.get("to_ip") or ""
-                    verdict = run_ping_test(test_name=test_name, src=src, dst=dst_label, t=t)
-                    if verdict != "pass":
-                        dst_label = (
-                            t.get("dst")
-                            or t.get("to")
-                            or t.get("to_ip")
-                            or t.get("to_ip4")
-                            or t.get("to_ip6")
-                            or dst
-                        )
+                    dst_label = (
+                        t.get("dst")
+                        or t.get("to")
+                        or t.get("to_ip")
+                        or t.get("to_ip4")
+                        or t.get("to_ip6")
+                        or dst
+                        or ""
+                    )
 
+                    r = run_ping_test(test_name=test_name, src=src, dst=dst_label, t=t)
+
+                    if r.get("verdict") != "pass":
                         dst_ip = None
-                        try:
-                            meta = r.get("meta") if isinstance(r, dict) else None
-                            if isinstance(meta, dict):
-                                dst_ip = meta.get("dst_ip")
-                        except Exception:
-                            dst_ip = None
-
+                        meta = r.get("meta")
+                        if isinstance(meta, dict):
+                            dst_ip = meta.get("dst_ip")
                         extra = f" ({dst_ip})" if dst_ip else ""
-
                         fail_or_continue(
-                            f"tests[{i}] ping mismatch: {src} -> {dst_label}{extra} expected {t.get('expect','pass')}"
+                            f"tests[{i}] ping mismatch: {src} -> {dst_label}{extra} expected {r.get('expected')}, observed {r.get('observed')}"
                         )
                     continue
 
@@ -5745,29 +5752,25 @@ def _ai_validate_output_schema(out: Any) -> tuple[bool, str]:
     """
     Validate the v1 AI output schema.
 
-    Required schema:
-      {
-        "summary": "string",
-        "findings": [{"title":"string","evidence":"string","suggestion":"string"}],
-        "suggested_next_tests": [
-            {
-              "id": "string",
-              "title": "string",
-              "why": "string",
-              "yaml": "string"
-            }
-        ]
-      }
+    Required:
+      - summary: string
+
+    Optional (but if present must match shape):
+      - findings: list of {title,evidence,suggestion} strings
+      - suggested_next_tests: list of {id,title,why,yaml} strings
 
     Returns: (ok, error_string)
     """
     if not isinstance(out, dict):
         return (False, "AI output must be a JSON object")
 
-    if "summary" not in out or not isinstance(out.get("summary"), str):
+    summary = out.get("summary")
+    if not isinstance(summary, str):
         return (False, "AI output schema error: 'summary' must be a string")
 
-    findings = out.get("findings")
+    findings = out.get("findings", [])
+    if findings is None:
+        findings = []
     if not isinstance(findings, list):
         return (False, "AI output schema error: 'findings' must be a list")
 
@@ -5778,12 +5781,6 @@ def _ai_validate_output_schema(out: Any) -> tuple[bool, str]:
             if k not in f or not isinstance(f.get(k), str):
                 return (False, f"AI output schema error: findings[{i}].{k} must be a string")
 
-    # suggested_next_tests: optional list[dict] (human-actionable)
-    # Each item must include:
-    #   - id: short stable identifier
-    #   - title: human-readable title
-    #   - why: short explanation
-    #   - yaml: copy-paste YAML snippet (ai-netsim test/scenario syntax)
     nxt = out.get("suggested_next_tests")
     if nxt is not None:
         if not isinstance(nxt, list):
@@ -5793,10 +5790,7 @@ def _ai_validate_output_schema(out: Any) -> tuple[bool, str]:
                 return (False, f"AI output schema error: suggested_next_tests[{i}] must be an object")
             for k in ("id", "title", "why", "yaml"):
                 if k not in item or not isinstance(item.get(k), str):
-                    return (
-                        False,
-                        f"AI output schema error: suggested_next_tests[{i}].{k} must be a string"
-                    )
+                    return (False, f"AI output schema error: suggested_next_tests[{i}].{k} must be a string")
 
     return (True, "")
 
@@ -5867,11 +5861,21 @@ def _ai_sanitize_output_for_fixture(ai_output: Any) -> dict[str, Any]:
 
     # suggested_next_tests
     nxt = ai_output.get("suggested_next_tests")
+    san_nxt: list[dict[str, str]] = []
     if isinstance(nxt, list):
-        # Keep only type shape, not values.
-        out["suggested_next_tests"] = ["<string>" for _ in nxt]
-    else:
-        out["suggested_next_tests"] = []
+        for item in nxt:
+            if isinstance(item, dict):
+                san_nxt.append(
+                    {
+                        "id": "<string>" if isinstance(item.get("id"), str) else "<missing>",
+                        "title": "<string>" if isinstance(item.get("title"), str) else "<missing>",
+                        "why": "<string>" if isinstance(item.get("why"), str) else "<missing>",
+                        "yaml": "<string>" if isinstance(item.get("yaml"), str) else "<missing>",
+                    }
+                )
+            else:
+                san_nxt.append({"id": "<invalid>", "title": "<invalid>", "why": "<invalid>", "yaml": "<invalid>"})
+    out["suggested_next_tests"] = san_nxt
 
     # If additional keys exist, record them explicitly (so fixtures can guard expansion).
     extras = sorted([k for k in ai_output.keys() if k not in allowed_top])
@@ -6035,6 +6039,122 @@ def _ai_finalize_and_emit(command_name: str, bundle: dict[str, Any], args) -> No
       - --online: attempt provider call; failures never gate; exit 0
       - output controlled by --format json|text (default json per argparse)
     """
+
+    def _cc_summary_text(bundle_in: dict[str, Any]) -> str | None:
+        # Support legacy keys + current key.
+        cc = bundle_in.get("change_context") or bundle_in.get("change_review") or bundle_in.get("change_explain")
+        if not isinstance(cc, dict):
+            return None
+
+        present = bool(cc.get("present", False))
+        if not present:
+            return None
+
+        counts = cc.get("counts") if isinstance(cc.get("counts"), dict) else {}
+        items = int(counts.get("items", 0) or 0)
+        included = int(counts.get("included", 0) or 0)
+        missing = int(counts.get("missing", 0) or 0)
+        blocked = int(counts.get("blocked", 0) or 0)
+        too_large = int(counts.get("too_large", 0) or 0)
+
+        # One-line banner: explicit non-execution + non-authority.
+        return (
+            f"Change context detected: items={items} included={included} missing={missing} "
+            f"blocked={blocked} too_large={too_large} "
+            f"(context only; NOT executed; does not affect verdicts)"
+        )
+
+    def _ai_contains_forbidden_correctness_language(obj: Any) -> bool:
+        # Non-blocking lint: warn in text mode (never gate).
+        forbidden = ("validated", "correct", "safe", "approved", "guaranteed")
+        try:
+            s = json.dumps(obj, ensure_ascii=True).lower()
+            return any(w in s for w in forbidden)
+        except Exception:
+            return False
+
+    def _render_ai_output_text(ai_out: Any) -> None:
+        """
+        Human-friendly rendering for engineers.
+
+        Expected ai_out schema:
+          {
+            "summary": str,
+            "findings": [{title,evidence,suggestion}],
+            "suggested_next_tests": [{id,title,why,yaml}]
+          }
+        Backward compatible: if suggested_next_tests is list[str], print as generic.
+        """
+        if not ai_out:
+            return
+
+        if not isinstance(ai_out, dict):
+            print(str(ai_out))
+            return
+
+        summary = ai_out.get("summary")
+        if isinstance(summary, str) and summary.strip():
+            print("summary:")
+            print(f"  {summary.strip()}")
+            print("  (Informational only. Only tests & scenarios prove behavior.)")
+            print()
+
+        findings = ai_out.get("findings")
+        if isinstance(findings, list) and findings:
+            print("findings:")
+            n = 0
+            for f in findings:
+                if not isinstance(f, dict):
+                    continue
+                title = str(f.get("title") or "").strip()
+                suggestion = str(f.get("suggestion") or "").strip()
+                evidence = str(f.get("evidence") or "").strip()
+                if not (title or suggestion or evidence):
+                    continue
+                n += 1
+                head = title if title else f"finding {n}"
+                print(f"  {n}. {head}")
+                if suggestion:
+                    print(f"     suggestion: {suggestion}")
+                if evidence:
+                    print(f"     evidence: {evidence}")
+            print()
+
+        nxt = ai_out.get("suggested_next_tests")
+        if isinstance(nxt, list) and nxt:
+            print("suggested_next_tests (copy/paste):")
+            for item in nxt:
+                if isinstance(item, str):
+                    # Backward-compat: older models may still return strings.
+                    print(f"  - {item} (generic; no YAML provided)")
+                    continue
+                if not isinstance(item, dict):
+                    continue
+
+                tid = str(item.get("id") or "").strip()
+                title = str(item.get("title") or "").strip()
+                why = str(item.get("why") or "").strip()
+                yaml_snip = str(item.get("yaml") or "").rstrip()
+
+                head = ""
+                if tid and title:
+                    head = f"{tid}: {title}"
+                elif title:
+                    head = title
+                elif tid:
+                    head = tid
+                else:
+                    head = "test"
+
+                print(f"  - {head}")
+                if why:
+                    print(f"    why: {why}")
+                if yaml_snip:
+                    print("    add to topology:")
+                    for line in yaml_snip.splitlines():
+                        print(f"      {line}")
+            print()
+
     # Ensure mandatory deterministic headers exist (do NOT overwrite if already set)
     bundle.setdefault("schema_version", "1")
     for k, v in _ai_advisory_headers().items():
@@ -6051,14 +6171,17 @@ def _ai_finalize_and_emit(command_name: str, bundle: dict[str, Any], args) -> No
     # 1) --bundle-out: write bundle and exit (no online)
     if bundle_out:
         _ai_write_bundle(str(bundle_out), bundle)
-        # include a stable pointer for CI consumers
         bundle_with_ptr = dict(bundle)
         bundle_with_ptr["bundle_path"] = str(bundle_out)
+
         if fmt == "json":
             _ai_print_json(bundle_with_ptr)
         else:
             print(f"[advisory] ai {command_name}")
             print(bundle_with_ptr.get("disclaimer"))
+            cc_line = _cc_summary_text(bundle)
+            if cc_line:
+                print(cc_line)
             print(f"bundle_path: {bundle_with_ptr['bundle_path']}")
         return
 
@@ -6069,6 +6192,9 @@ def _ai_finalize_and_emit(command_name: str, bundle: dict[str, Any], args) -> No
         else:
             print(f"[advisory] ai {command_name}")
             print(bundle.get("disclaimer"))
+            cc_line = _cc_summary_text(bundle)
+            if cc_line:
+                print(cc_line)
             print(json.dumps(bundle, indent=2, sort_keys=True))
         return
 
@@ -6078,11 +6204,15 @@ def _ai_finalize_and_emit(command_name: str, bundle: dict[str, Any], args) -> No
         try:
             _ai_write_bundle(default_path, bundle)
         except Exception:
-            # never gate on bundle write; continue silently
             default_path = None
 
     # 4) Optional online call
-    online_res = {"ai_status": "unavailable", "ai_error": "online not requested", "model_used": None, "ai_output": {}}
+    online_res = {
+        "ai_status": "unavailable",
+        "ai_error": "online not requested",
+        "model_used": None,
+        "ai_output": {},
+    }
     if bool(getattr(args, "online", False)):
         try:
             online_res = _ai_try_online(bundle=bundle, args=args)
@@ -6094,9 +6224,7 @@ def _ai_finalize_and_emit(command_name: str, bundle: dict[str, Any], args) -> No
         "schema_version": "1",
         **_ai_advisory_headers(),
         "command": command_name,
-        "inputs": {
-            "bundle_path": default_path,
-        },
+        "inputs": {"bundle_path": default_path},
         "ai_status": online_res.get("ai_status"),
         "ai_error": online_res.get("ai_error") or "",
         "model_used": online_res.get("model_used"),
@@ -6109,22 +6237,29 @@ def _ai_finalize_and_emit(command_name: str, bundle: dict[str, Any], args) -> No
         _ai_print_json(out)
         return
 
-    # text mode
+    # text mode (human-friendly)
     print(f"[advisory] ai {command_name}")
     print(out.get("disclaimer"))
+
+    cc_line = _cc_summary_text(bundle)
+    if cc_line:
+        print(cc_line)
+
     if out["inputs"].get("bundle_path"):
         print(f"bundle_path: {out['inputs']['bundle_path']}")
+
     print(f"ai_status: {out.get('ai_status')}")
+
     if out.get("ai_error"):
         print(f"ai_error: {out.get('ai_error')}")
+
     if out.get("model_used"):
         print(f"model_used: {out.get('model_used')}")
+
     if out.get("ai_output"):
-        print("ai_output:")
-        if isinstance(out["ai_output"], (dict, list)):
-            print(json.dumps(out["ai_output"], indent=2, sort_keys=True))
-        else:
-            print(str(out["ai_output"]))
+        if _ai_contains_forbidden_correctness_language(out["ai_output"]):
+            print("warning: AI output contained correctness/safety language. Treat as advisory and prove via tests.")
+        _render_ai_output_text(out["ai_output"])
 
 def _ai_explain_change_sections(bundle: dict[str, Any]) -> dict[str, Any]:
     """
@@ -6305,13 +6440,13 @@ def cmd_ai_explain(args) -> None:
     }
 
     # Change Context (bundle-time only): pull from resolved topology if present
+    # Use labdir as the deterministic base_dir so explain works from artifacts alone.
+    cc_base_dir = Path(labdir)
+
     if _ai_file_exists(topo_resolved_path):
         try:
             topo_resolved = _ai_read_yaml(topo_resolved_path)
-            # Best-effort base_dir for file reads:
-            # - use current working directory as root so repo-relative paths can work
-            # - still blocks traversal + absolute paths deterministically
-            bundle["change_context"] = _ai_cc_build_change_context(topo_resolved, base_dir=Path(os.getcwd()))
+            bundle["change_context"] = _ai_cc_build_change_context(topo_resolved, base_dir=cc_base_dir)
         except Exception as e:
             bundle["change_context"] = {
                 "present": False,
@@ -6326,7 +6461,7 @@ def cmd_ai_explain(args) -> None:
                 "notes": [f"Failed to parse topology.resolved.yaml for change_context: {e!s}"],
             }
     else:
-        bundle["change_context"] = _ai_cc_build_change_context({}, base_dir=Path(os.getcwd()))
+        bundle["change_context"] = _ai_cc_build_change_context({}, base_dir=cc_base_dir)
 
     # Deterministic scaffold: extract stable evidence pointers
     if _ai_file_exists(res_path):
