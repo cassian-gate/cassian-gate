@@ -324,6 +324,34 @@ def run_declared_tests(rt: Runtime, lab: str, topo: dict) -> None:
 # -------------------------
 # YAML + validation
 # -------------------------
+def _is_direct_link(topo: dict, a: str, b: str) -> bool:
+    for link in topo.get("links", []) or []:
+        eps = link.get("endpoints") or []
+        if not isinstance(eps, list) or len(eps) != 2:
+            continue
+        try:
+            n1 = str(eps[0]).split(":", 1)[0]
+            n2 = str(eps[1]).split(":", 1)[0]
+        except Exception:
+            continue
+        if (n1 == a and n2 == b) or (n1 == b and n2 == a):
+            return True
+    return False
+
+def _has_candidate_context(topo: dict) -> bool:
+    cc = topo.get("candidate_changes")
+    return isinstance(cc, list) and len(cc) > 0
+
+def _is_multihop_ping_test(topo: dict, test: dict) -> bool:
+    # v1 scope: only ping kind
+    if test.get("kind") != "ping":
+        return False
+    src = test.get("src")
+    dst = test.get("dst")
+    if not (isinstance(src, str) and isinstance(dst, str) and src and dst):
+        return False
+    # If directly linked, it is not multi-hop.
+    return not _is_direct_link(topo, src, dst)
 
 def load_yaml(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as f:
@@ -352,10 +380,11 @@ def ensure_valid_topology(topo: dict) -> None:
             die(f"Duplicate node name: {n['name']}")
         names.add(n["name"])
 
-    # v1.x guardrail hardening: type-specific required fields (fail-fast at validate time)
-    # FRR nodes must include:
-    #   - asn (int-coercible)
-    #   - router_id (IPv4 literal)
+    # v1.x guardrail hardening (clarified):
+    # - Topology MUST NOT encode routing mechanics (protocols/metrics/policy).
+    # - FRR nodes MAY include metadata like asn/router_id, but these do not imply routing.
+    # - If present, validate types deterministically.
+
     for i, n in enumerate(topo["nodes"], start=1):
         if not isinstance(n, dict):
             continue
@@ -364,25 +393,36 @@ def ensure_valid_topology(topo: dict) -> None:
 
         name = n.get("name") or f"nodes[{i}]"
 
-        if "asn" not in n:
-            die(f"Topology invalid: nodes[{i}] '{name}': missing required field 'asn' for type 'frr'")
-        try:
-            int(n.get("asn"))
-        except Exception:
-            die(f"Topology invalid: nodes[{i}] '{name}': field 'asn' must be int-coercible for type 'frr'")
-
-        if "router_id" not in n:
-            die(f"Topology invalid: nodes[{i}] '{name}': missing required field 'router_id' for type 'frr'")
-        rid = str(n.get("router_id") or "").strip()
-        try:
-            ip = ipaddress.ip_address(rid)
-            if ip.version != 4:
-                raise ValueError("router_id must be IPv4")
-        except Exception:
+        # Reject topology-encoded routing mechanics (locked boundary)
+        if "static_routes" in n and n.get("static_routes") not in (None, [], {}):
             die(
-                f"Topology invalid: nodes[{i}] '{name}': field 'router_id' must be an IPv4 literal "
-                f"(e.g. 1.1.1.1) for type 'frr'"
+                f"Topology invalid: nodes[{i}] '{name}': 'static_routes' is not allowed. "
+                f"Routing mechanics must be provided by device configuration (candidate config or equivalent), "
+                f"and proven via tests."
             )
+
+        # asn is optional metadata; if present, must be int-coercible
+        if "asn" in n and n.get("asn") is not None:
+            try:
+                int(n.get("asn"))
+            except Exception:
+                die(
+                    f"Topology invalid: nodes[{i}] '{name}': field 'asn' must be int-coercible if provided "
+                    f"(e.g. 65001)."
+                )
+
+        # router_id is optional metadata; if present, must be IPv4 literal
+        if "router_id" in n and n.get("router_id") is not None:
+            rid = str(n.get("router_id") or "").strip()
+            try:
+                ip = ipaddress.ip_address(rid)
+                if ip.version != 4:
+                    raise ValueError("router_id must be IPv4")
+            except Exception:
+                die(
+                    f"Topology invalid: nodes[{i}] '{name}': field 'router_id' must be an IPv4 literal if provided "
+                    f"(e.g. 1.1.1.1)."
+                )
 
     for i, link in enumerate(topo["links"], start=1):
         eps = link.get("endpoints")
@@ -395,7 +435,7 @@ def ensure_valid_topology(topo: dict) -> None:
             if node not in names:
                 die(f"Endpoint references unknown node '{node}' in link #{i}.")
 
-        # ----------------------------
+    # ----------------------------
     # v1: Change Context (Step 1) — candidate_changes declaration validation
     #   - context only; never consumed by runtime
     #   - no file reads here
@@ -464,6 +504,35 @@ def ensure_valid_topology(topo: dict) -> None:
                         die(f"candidate_changes[{idx}] ({cid}).scope[{j}]: must be a non-empty string")
                     if nname.strip() not in names:
                         die(f"candidate_changes[{idx}] ({cid}).scope[{j}]: unknown node '{nname.strip()}'")
+
+    # v1.x fail-fast educational guardrail (v1-truthful):
+    # - ai-netsim v1 does NOT infer routing intent and does NOT auto-configure routing protocols.
+    # - Therefore, multi-hop reachability cannot be *proven* to pass from topology alone.
+    # - If a multi-hop test expects PASS, it must rely on an equivalent pre-configured device image/config
+    #   outside ai-netsim v1, otherwise the expectation is invalid and should be changed.
+    tests = topo.get("tests") or []
+    if isinstance(tests, list) and tests:
+        offenders: list[str] = []
+        for idx, t in enumerate(tests, start=1):
+            if not isinstance(t, dict):
+                continue
+            if not _is_multihop_ping_test(topo, t):
+                continue
+
+            exp = (t.get("expect") or "").strip().lower() if isinstance(t.get("expect"), str) else t.get("expect")
+            if exp == "pass":
+                nm = t.get("name")
+                label = nm.strip() if isinstance(nm, str) and nm.strip() else f"tests[{idx}]"
+                offenders.append(label)
+
+        if offenders:
+            die(
+                "Topology invalid: multi-hop ping test(s) declare expect: pass, but ai-netsim v1 does not infer routing "
+                "intent or auto-configure routing protocols, so multi-hop pass cannot be proven from topology alone. "
+                "Fix: either (a) change these tests to expect: fail, (b) limit tests to directly-connected reachability, "
+                "or (c) run with an equivalent pre-configured device image/config outside ai-netsim v1. "
+                f"Affected tests: {', '.join(offenders)}"
+            )
 
 # -------------------------
 # Paths for generated lab artifacts
@@ -643,22 +712,19 @@ def connected_prefixes_for_router(topo: dict, router_name: str) -> list[str]:
 
 def gen_frr_conf(node: dict, topo: dict) -> str:
     """
-    Generate FRR integrated config.
+    Generate FRR integrated config (routing-neutral).
 
-    - Configures interfaces based on topo links (only for this node)
-    - Builds eBGP neighbors ONLY to peers that have an ASN (i.e. other FRR nodes)
-    - Advertises loopback /32
-    - Adds optional node["static_routes"] into config so they exist at boot
-      (important because /etc/frr/frr.conf is bind-mounted read-only)
+    - Configures interface IPs from topology links (only for this node)
+    - Optionally configures loopback /32 if router_id is provided
+    - Does NOT configure routing protocols (BGP/OSPF/etc.)
+    - Does NOT accept topology-encoded routing mechanics (static routes, policy, metrics)
+      Routing behavior must come from device configuration (candidate config or equivalent)
+      and be proven via tests.
     """
     name = node["name"]
-    asn = int(node["asn"])
-    rid = node.get("router_id")
-    if not rid:
-        die(f"FRR node '{name}' missing router_id")
 
-    # quick lookup: node_name -> node_dict
-    nodes_by_name = {n["name"]: n for n in topo.get("nodes", [])}
+    rid = node.get("router_id")
+    rid = str(rid).strip() if rid is not None else ""
 
     # Build node link list from topology
     links_by_node = build_node_links(topo)
@@ -672,10 +738,11 @@ def gen_frr_conf(node: dict, topo: dict) -> str:
     cfg.append("service integrated-vtysh-config")
     cfg.append("!")
 
-    # Loopback / router-id
-    cfg.append("interface lo")
-    cfg.append(f" ip address {rid}/32")
-    cfg.append("!")
+    # Optional loopback / router-id (metadata only; does not imply protocols)
+    if rid:
+        cfg.append("interface lo")
+        cfg.append(f" ip address {rid}/32")
+        cfg.append("!")
 
     # Interfaces from topology endpoints (only this node's endpoints)
     for l in node_links:
@@ -683,50 +750,6 @@ def gen_frr_conf(node: dict, topo: dict) -> str:
         cfg.append(f" ip address {l['ip']}")
         cfg.append("!")
 
-    # Static routes (optional) - rendered into config at boot.
-    # Accepts strings like:
-    #   static_routes:
-    #     - "192.168.1.0/24 via 10.0.0.0"
-    for r in node.get("static_routes", []) or []:
-        if not isinstance(r, str) or " via " not in r:
-            die(f"{name}: static_routes must be strings like 'PREFIX via NEXT_HOP'")
-
-        prefix, nh = r.split(" via ", 1)
-        cfg.append(f"ip route {prefix.strip()} {nh.strip()}")
-
-    if node.get("static_routes"):
-        cfg.append("!")
-
-    # BGP
-    cfg.append(f"router bgp {asn}")
-    cfg.append(f" bgp router-id {rid}")
-    cfg.append(" no bgp ebgp-requires-policy")
-
-    # Add BGP neighbors ONLY for directly-connected peers that have an ASN
-    for l in node_links:
-        peer_name = l["peer"]
-        peer = nodes_by_name.get(peer_name)
-
-        # If peer is not an FRR/BGP node (e.g. host or nft-fw), skip
-        if not peer or "asn" not in peer:
-            continue
-
-        peer_asn = int(peer["asn"])
-        cfg.append(f" neighbor {l['peer_ip']} remote-as {peer_asn}")
-
-    cfg.append(" !")
-    cfg.append(" address-family ipv4 unicast")
-    cfg.append(f"  network {rid}/32")
-
-    for l in node_links:
-        peer_name = l["peer"]
-        peer = nodes_by_name.get(peer_name)
-        if not peer or "asn" not in peer:
-            continue
-        cfg.append(f"  neighbor {l['peer_ip']} activate")
-
-    cfg.append(" exit-address-family")
-    cfg.append("!")
     cfg.append("line vty")
     cfg.append("!")
     return "\n".join(cfg) + "\n"
@@ -4478,6 +4501,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                         )
                     continue
 
+
                 verdict = run_tcp_test(test_name=test_name, src=src, dst=dst, t=t)
                 if verdict != "pass":
                     port = t.get("port")
@@ -4886,8 +4910,6 @@ def cmd_up(args: argparse.Namespace) -> None:
 
     # 5) FRR provisioning
     configure_frr_interfaces_from_topology(rt, lab_name, topo)
-    configure_frr_static_routes_from_topology(rt, lab_name, topo)
-    configure_frr_bgp_from_topology(rt, lab_name, topo)
 
 def cmd_down(args: argparse.Namespace) -> None:
     out = lab_file_from_name(args.name)

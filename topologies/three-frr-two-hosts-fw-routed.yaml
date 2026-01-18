@@ -3,25 +3,12 @@ name: three-frr-two-hosts-fw-routed
 nodes:
   - name: r1
     type: frr
-    asn: 65001
-    router_id: 1.1.1.1
-    static_routes:
-      - "192.168.2.0/24 via 10.0.0.1"
 
   - name: r2
     type: frr
-    asn: 65002
-    router_id: 2.2.2.2
-    static_routes:
-      - "192.168.1.0/24 via 10.0.0.0"
-      - "192.168.2.0/24 via 10.0.0.3"
 
   - name: r3
     type: frr
-    asn: 65003
-    router_id: 3.3.3.3
-    static_routes:
-      - "192.168.1.0/24 via 10.0.0.4"
 
   - name: h1
     type: host
@@ -62,7 +49,7 @@ links:
   - endpoints: ["h2:eth1", "r3:eth2"]
     ipv4: ["192.168.2.10/24", "192.168.2.1/24"]
 
-    # NEW: second parallel link (creates ambiguity)
+  # Second parallel link (creates ambiguity for link-level faults unless endpoints are explicit)
   - endpoints: ["r2:eth3", "fw1:eth3"]
     ipv4: ["10.0.0.6/31", "10.0.0.7/31"]
 
@@ -71,32 +58,34 @@ tests:
     kind: ping
     src: h1
     dst: h2
+    expect: fail
 
   - name: h2_to_h1_ping
     kind: ping
     src: h2
     dst: h1
+    expect: fail
 
-  # NEW: verify ping can target an IP literal using 'to' (preferred)
+  # IP literal ping (v1-truthful: without routing config, multi-hop should fail)
   - name: h1_to_h2_ip_literal_ping
     kind: ping
     src: h1
     to: 192.168.2.10
-    expect: pass
+    expect: fail
 
-  # NEW: verify compat alias 'to_ip' also works as primary destination
+  # compat alias 'to_ip'
   - name: h1_to_h2_to_ip_alias_ping
     kind: ping
     src: h1
     to_ip: 192.168.2.10
-    expect: pass
+    expect: fail
 
   - name: h1_to_h2_tcp_443_pass
     kind: tcp
     src: h1
     dst: h2
     port: 443
-    expect: pass
+    expect: fail
 
   - name: h1_to_h2_tcp_22_fail
     kind: tcp
@@ -107,7 +96,7 @@ tests:
 
 scenarios:
   - id: bounce_link_r2_fw1_recover
-    description: "Bounce r2<->fw1 and verify h1->h2 fails then recovers"
+    description: "Bounce r2<->fw1 and verify h1->h2 fails then stays failed under v1 (no routing auto-config)"
     steps:
       - run: h1_to_h2_ping
 
@@ -121,7 +110,7 @@ scenarios:
       - wait_for:
           type: ping
           from: h1
-          to: 192.168.2.10     # IP literal path
+          to: 192.168.2.10
           expect: fail
           timeout: 10
           interval_s: 1.0
@@ -136,15 +125,15 @@ scenarios:
       - wait_for:
           type: ping
           from: h1
-          to: h2               # node name path
-          expect: pass
-          timeout: 60
+          to: h2
+          expect: fail
+          timeout: 10
           interval_s: 1.0
 
       - run: h1_to_h2_ping
 
   - id: bounce_interface_r2_eth1_recover
-    description: "Bounce r2:eth1 (r1<->r2) and verify h1->h2 fails then recovers"
+    description: "Bounce r2:eth1 (r1<->r2) and verify h1->h2 remains failed under v1 (no routing auto-config)"
     steps:
       - run: h1_to_h2_ping
 
@@ -170,18 +159,10 @@ scenarios:
           type: ping
           from: h1
           to: h2
-          expect: pass
-          timeout: 60
+          expect: fail
+          timeout: 10
           interval_s: 1.0
 
-      - run: h1_to_h2_ping
-
-  - id: converge_bgp_r2
-    description: "Explicit convergence wait: ensure r2 BGP is established"
-    steps:
-      - wait_for_bgp:
-          node: r2
-          timeout: 30
       - run: h1_to_h2_ping
 
   - id: quick_all
@@ -190,7 +171,7 @@ scenarios:
           include: all
 
   - id: ping_test
-    description: "Bounce r2<->fw1 and verify h1->h2 fails then recovers"
+    description: ping test
     steps:
       - run: h1_to_h2_ping
 
@@ -198,12 +179,10 @@ scenarios:
           type: ping
           from: h1
           to: 192.168.2.10
-          expect: pass
+          expect: fail
           timeout: 5
           interval_s: 1
           count: 3
           per_attempt_timeout_s: 2
 
       - run: h1_to_h2_ping
-
-

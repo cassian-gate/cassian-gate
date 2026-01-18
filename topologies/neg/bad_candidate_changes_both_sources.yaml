@@ -2,8 +2,6 @@ name: bad_candidate_changes_both_sources
 nodes:
   - name: r1
     type: frr
-    asn: 65001
-    router_id: 1.1.1.1
 links: []
 candidate_changes:
   - id: change1
