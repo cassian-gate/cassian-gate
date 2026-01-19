@@ -397,8 +397,8 @@ def ensure_valid_topology(topo: dict) -> None:
         if "static_routes" in n and n.get("static_routes") not in (None, [], {}):
             die(
                 f"Topology invalid: nodes[{i}] '{name}': 'static_routes' is not allowed. "
-                f"Routing mechanics must be provided by device configuration (candidate config or equivalent), "
-                f"and proven via tests."
+                f"v1 boundary: routing mechanics must come from device configuration outside ai-netsim v1 "
+                f"(preconfigured images/config or manual exploration), and must be proven via tests."
             )
 
         # asn is optional metadata; if present, must be int-coercible
@@ -1158,12 +1158,10 @@ def derive_expected_routes_for_frr(topo: dict[str, Any]) -> dict[str, set[str]]:
     v1 rules:
       - router_id => expect router_id/32
       - FRR<->host links => expect connected subnet prefix (network of router-side IP)
-      - node.static_routes => expect each prefix part (before ' via ')
+      - v1 does NOT infer routing from topology (no static_routes, no auto-BGP)
     """
     nodes = topo.get("nodes", []) or []
     node_type = {n.get("name"): n.get("type") for n in nodes if isinstance(n, dict)}
-    nodes_by_name = {n.get("name"): n for n in nodes if isinstance(n, dict)}
-
     expected: dict[str, set[str]] = {}
 
     # 1) Loopbacks from router_id
@@ -1204,32 +1202,9 @@ def derive_expected_routes_for_frr(topo: dict[str, Any]) -> dict[str, set[str]]:
         else:
             continue
 
-        # Convert router interface IP/mask into its network prefix
         norm = _normalize_prefix(router_ip)
         if norm:
             expected.setdefault(router, set()).add(norm)
-
-    # 3) Static routes declared on FRR nodes
-    for n in nodes:
-        if not isinstance(n, dict):
-            continue
-        if n.get("type") != "frr":
-            continue
-        name = n.get("name")
-        if not isinstance(name, str) or not name:
-            continue
-
-        srs = n.get("static_routes") or []
-        if not isinstance(srs, list):
-            continue
-
-        for r in srs:
-            if not isinstance(r, str) or " via " not in r:
-                continue
-            prefix, _nh = r.split(" via ", 1)
-            p = _normalize_prefix(prefix)
-            if p:
-                expected.setdefault(name, set()).add(p)
 
     return expected
 
@@ -1629,13 +1604,14 @@ def configure_frr_interfaces_from_topology(rt: "Runtime", lab: str, topo: dict[s
 
 def configure_frr_static_routes_from_topology(rt: "Runtime", lab: str, topo: dict[str, Any]) -> None:
     """
-    Apply node-level static_routes entries like:
-      - 192.168.2.0/24 via 10.0.0.1
+    v1 contract: topology must NOT encode routing mechanics.
 
-    Runtime contract:
-      - No direct docker/container name usage here
-      - All node execution goes through rt.exec()/rt.sh()
+    This function is intentionally hard-disabled in v1/v1.x to prevent accidental
+    authority creep (static routing derived from topology).
     """
+    die("v1 contract: static routing from topology is not supported. Use preconfigured images/config outside ai-netsim v1.")
+
+    # Unreachable: retained only as a historical stub (do not remove without a versioned contract change).
     nodes = _node_index_by_name(topo)
 
     for node, n in nodes.items():
@@ -1648,27 +1624,20 @@ def configure_frr_static_routes_from_topology(rt: "Runtime", lab: str, topo: dic
         for r in routes:
             if not isinstance(r, str):
                 continue
-            # Expect "PREFIX via NEXTHOP"
-            # Keep existing behavior: pass to ip route replace as a shell line.
             rt.sh(lab, node, f"ip route replace {r}", check=False, capture_output=False)
 
 def configure_frr_bgp_from_topology(rt: "Runtime", lab: str, topo: dict[str, Any]) -> None:
     """
-    Minimal BGP neighbor provisioning:
+    v1 contract: topology must NOT encode routing mechanics.
 
-    - For each link between TWO FRR nodes with ipv4 /31 or /30 addressing:
-      configure them as neighbors (remote-as from topo nodes' asn).
-    - Configure router-id if present.
-    - Allow eBGP without policy (MVP) so later advertisements work.
-
-    Runtime contract:
-      - No direct docker/container name usage here.
-      - All node execution goes through rt.exec().
+    This function is intentionally hard-disabled in v1/v1.x to prevent accidental
+    authority creep (BGP provisioning derived from topology).
     """
+    die("v1 contract: BGP provisioning from topology is not supported. Use preconfigured images/config outside ai-netsim v1.")
+
+    # Unreachable: retained only as a historical stub (do not remove without a versioned contract change).
     nodes = _node_index_by_name(topo)
 
-    # Build a list of FRR-FRR adjacencies from links
-    # (nodeA, nbr_ip_on_A, nodeB, nbr_ip_on_B)
     adj: list[tuple[str, str, str, str]] = []
 
     for link in topo.get("links", []) or []:
@@ -1694,12 +1663,10 @@ def configure_frr_bgp_from_topology(rt: "Runtime", lab: str, topo: dict[str, Any
         if nodes.get(n2, {}).get("type") != "frr":
             continue
 
-        # neighbor IPs: strip CIDR
         nbr1 = ip2.split("/", 1)[0]
         nbr2 = ip1.split("/", 1)[0]
         adj.append((n1, nbr1, n2, nbr2))
 
-    # Apply config per node
     for node, n in nodes.items():
         if n.get("type") != "frr":
             continue
@@ -1707,23 +1674,19 @@ def configure_frr_bgp_from_topology(rt: "Runtime", lab: str, topo: dict[str, Any
         asn = n.get("asn")
         rid = n.get("router_id")
         if not isinstance(asn, int):
-            # if your YAML stores as strings, support that too
             if isinstance(asn, str) and asn.isdigit():
                 asn = int(asn)
             else:
                 continue
 
-        # Start BGP process
         cmds: list[str] = []
         cmds.append("conf t")
         cmds.append(f"router bgp {asn}")
         if isinstance(rid, str) and rid:
             cmds.append(f"bgp router-id {rid}")
 
-        # MVP friendliness: don't require policy for eBGP announcements
         cmds.append("no bgp ebgp-requires-policy")
 
-        # Neighbors from adj list
         for a, ip_to_b, b, _ip_to_a in adj:
             if a != node:
                 continue
@@ -1737,7 +1700,6 @@ def configure_frr_bgp_from_topology(rt: "Runtime", lab: str, topo: dict[str, Any
 
         cmds.append("end")
 
-        # Execute via vtysh (one call per node)
         vty_cmd: list[str] = ["vtysh"]
         for c in cmds:
             vty_cmd += ["-c", c]
@@ -6079,21 +6041,33 @@ def _ai_finalize_and_emit(command_name: str, bundle: dict[str, Any], args) -> No
         blocked = int(counts.get("blocked", 0) or 0)
         too_large = int(counts.get("too_large", 0) or 0)
 
-        # One-line banner: explicit non-execution + non-authority.
+        # One-line banner: explicit non-execution + non-authority (v1 contract).
         return (
-            f"Change context detected: items={items} included={included} missing={missing} "
-            f"blocked={blocked} too_large={too_large} "
-            f"(context only; NOT executed; does not affect verdicts)"
+            f"change_context: present (items={items} included={included} missing={missing} "
+            f"blocked={blocked} too_large={too_large}) — context-only, NOT executed, does not affect verdicts"
         )
+
 
     def _ai_contains_forbidden_correctness_language(obj: Any) -> bool:
         # Non-blocking lint: warn in text mode (never gate).
-        forbidden = ("validated", "correct", "safe", "approved", "guaranteed")
+        # Expand list to cover common implied authority / safety claims.
+        forbidden = (
+            "validated",
+            "correct",
+            "safe",
+            "approved",
+            "guaranteed",
+            "compliant",
+            "secure",
+            "certified",
+            "verified",
+        )
         try:
             s = json.dumps(obj, ensure_ascii=True).lower()
             return any(w in s for w in forbidden)
         except Exception:
             return False
+
 
     def _render_ai_output_text(ai_out: Any) -> None:
         """

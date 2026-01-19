@@ -187,6 +187,35 @@ must_fail_with() {
   echo "OK: $topo"
   echo "    matched: $needle"
 }
+must_fail_with_re() {
+  local topo="$1"
+  local pattern="$2"
+  local cmd="./src/netsim.py up \"$topo\" --reconfigure"
+
+  set +e
+  out="$(./src/netsim.py up "$topo" --reconfigure 2>&1)"
+  rc=$?
+  set -e
+
+  if [ $rc -eq 0 ]; then
+    echo "FAIL: expected validation failure, but command succeeded:"
+    echo "  $cmd"
+    exit 1
+  fi
+
+  echo "$out" | grep -Eq "$pattern" || {
+    echo "FAIL: expected error pattern not found"
+    echo "  cmd: $cmd"
+    echo "  expected regex: $pattern"
+    echo "  got:"
+    echo "$out"
+    exit 1
+  }
+
+  echo "OK: $topo"
+  echo "    matched regex: $pattern"
+}
+
 
 # Each negative file tests exactly one invariant (deterministic fail-fast)
 must_fail_with "topologies/neg/bad_steps_not_dict.yaml" "step must be a dict"
@@ -201,6 +230,7 @@ must_fail_with "topologies/neg/bad_wait_for_to_unknown_node.yaml" "wait_for.to: 
 must_fail_with "topologies/neg/bad_wait_for_expect_invalid.yaml" "wait_for.expect: must be pass|fail"
 must_fail_with "topologies/neg/bad_candidate_changes_dup_id.yaml" "duplicate id 'change1'"
 must_fail_with "topologies/neg/bad_candidate_changes_both_sources.yaml" "choose only one of 'file' or 'inline'"
+must_fail_with_re "topologies/neg/bad_static_routes_rejected.yaml" "static_routes|static route|routing.*topology|not supported"
 
 echo
 echo "=== NEG) invalid include:all (unnamed test) ==="
