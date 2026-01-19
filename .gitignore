@@ -16,6 +16,15 @@ results.json
 *.bak
 .codex/
 .NO_CODEX
-images/
+# Ignore everything under images by default
+images/**
+
+# …but allow demo and runtime images
+!images/frr-demo-bgp-r1/**
+!images/frr-demo-bgp-r2/**
+!images/frr-demo-static-r1/**
+!images/frr-demo-static-r2/**
+!images/nft-fw/**
+
 changes/
 docs/future/
