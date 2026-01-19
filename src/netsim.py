@@ -510,29 +510,56 @@ def ensure_valid_topology(topo: dict) -> None:
     # - Therefore, multi-hop reachability cannot be *proven* to pass from topology alone.
     # - If a multi-hop test expects PASS, it must rely on an equivalent pre-configured device image/config
     #   outside ai-netsim v1, otherwise the expectation is invalid and should be changed.
+    #
+    # v1.x exception:
+    # - If ALL FRR nodes in the topology are explicitly declared as frr_mode: preconfigured,
+    #   then multi-hop expect: pass is allowed (routing comes from the image/config outside v1).
     tests = topo.get("tests") or []
     if isinstance(tests, list) and tests:
         offenders: list[str] = []
-        for idx, t in enumerate(tests, start=1):
-            if not isinstance(t, dict):
-                continue
-            if not _is_multihop_ping_test(topo, t):
-                continue
 
-            exp = (t.get("expect") or "").strip().lower() if isinstance(t.get("expect"), str) else t.get("expect")
-            if exp == "pass":
-                nm = t.get("name")
-                label = nm.strip() if isinstance(nm, str) and nm.strip() else f"tests[{idx}]"
-                offenders.append(label)
+        # Determine whether the topology explicitly declares preconfigured routing on all FRR nodes.
+        nodes = topo.get("nodes") or []
+        all_frr_preconfigured = True
+        saw_frr = False
 
-        if offenders:
-            die(
-                "Topology invalid: multi-hop ping test(s) declare expect: pass, but ai-netsim v1 does not infer routing "
-                "intent or auto-configure routing protocols, so multi-hop pass cannot be proven from topology alone. "
-                "Fix: either (a) change these tests to expect: fail, (b) limit tests to directly-connected reachability, "
-                "or (c) run with an equivalent pre-configured device image/config outside ai-netsim v1. "
-                f"Affected tests: {', '.join(offenders)}"
-            )
+        if isinstance(nodes, list):
+            for n in nodes:
+                if not isinstance(n, dict):
+                    continue
+                if n.get("type") != "frr":
+                    continue
+                saw_frr = True
+                mode = n.get("frr_mode")
+                mode_norm = str(mode).strip().lower() if mode is not None else "generated"
+                if mode_norm != "preconfigured":
+                    all_frr_preconfigured = False
+                    break
+        else:
+            all_frr_preconfigured = False
+
+        # Only enforce the fail-fast rule when we are NOT explicitly in "preconfigured routing" mode.
+        if not (saw_frr and all_frr_preconfigured):
+            for idx, t in enumerate(tests, start=1):
+                if not isinstance(t, dict):
+                    continue
+                if not _is_multihop_ping_test(topo, t):
+                    continue
+
+                exp = (t.get("expect") or "").strip().lower() if isinstance(t.get("expect"), str) else t.get("expect")
+                if exp == "pass":
+                    nm = t.get("name")
+                    label = nm.strip() if isinstance(nm, str) and nm.strip() else f"tests[{idx}]"
+                    offenders.append(label)
+
+            if offenders:
+                die(
+                    "Topology invalid: multi-hop ping test(s) declare expect: pass, but ai-netsim v1 does not infer routing "
+                    "intent or auto-configure routing protocols, so multi-hop pass cannot be proven from topology alone. "
+                    "Fix: either (a) change these tests to expect: fail, (b) limit tests to directly-connected reachability, "
+                    "or (c) run with an equivalent pre-configured device image/config outside ai-netsim v1. "
+                    f"Affected tests: {', '.join(offenders)}"
+                )
 
 # -------------------------
 # Paths for generated lab artifacts

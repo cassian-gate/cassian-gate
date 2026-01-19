@@ -16,14 +16,26 @@ results.json
 *.bak
 .codex/
 .NO_CODEX
-# Ignore everything under images by default
+# Ignore images by default...
 images/**
 
-# …but allow demo and runtime images
+# ...but allow the images directory itself (so un-ignores can work)
+!images/
+
+# Allow specific build contexts we want in-repo (CI builds)
+!images/frr-demo-bgp-r1/
 !images/frr-demo-bgp-r1/**
+
+!images/frr-demo-bgp-r2/
 !images/frr-demo-bgp-r2/**
+
+!images/frr-demo-static-r1/
 !images/frr-demo-static-r1/**
+
+!images/frr-demo-static-r2/
 !images/frr-demo-static-r2/**
+
+!images/nft-fw/
 !images/nft-fw/**
 
 changes/
