@@ -1,0 +1,189 @@
+name: three-frr-two-hosts-fw-routed
+
+nodes:
+  - name: r1
+    type: frr
+
+  - name: r2
+    type: frr
+      - "192.168.2.0/24 via 10.0.0.3"
+
+  - name: r3
+    type: frr
+
+  - name: h1
+    type: host
+    ip: 192.168.1.10/24
+    gw: 192.168.1.1
+
+  - name: h2
+    type: host
+    ip: 192.168.2.10/24
+    gw: 192.168.2.1
+
+  - name: fw1
+    type: nft-fw
+    routed: true
+    interfaces:
+      eth1: 10.0.0.3/31
+      eth2: 10.0.0.4/31
+      eth3: 10.0.0.7/31
+    routes:
+      - "192.168.1.0/24 via 10.0.0.2"
+      - "192.168.2.0/24 via 10.0.0.5"
+    allow_icmp: true
+    allow_tcp: [443]
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["10.0.0.0/31", "10.0.0.1/31"]
+
+  - endpoints: ["r2:eth2", "fw1:eth1"]
+    ipv4: ["10.0.0.2/31", "10.0.0.3/31"]
+
+  - endpoints: ["fw1:eth2", "r3:eth1"]
+    ipv4: ["10.0.0.4/31", "10.0.0.5/31"]
+
+  - endpoints: ["h1:eth1", "r1:eth2"]
+    ipv4: ["192.168.1.10/24", "192.168.1.1/24"]
+
+  - endpoints: ["h2:eth1", "r3:eth2"]
+    ipv4: ["192.168.2.10/24", "192.168.2.1/24"]
+
+    # NEW: second parallel link (creates ambiguity)
+  - endpoints: ["r2:eth3", "fw1:eth3"]
+    ipv4: ["10.0.0.6/31", "10.0.0.7/31"]
+
+tests:
+  - name: h1_to_h2_ping
+    kind: ping
+    src: h1
+    dst: h2
+
+  - name: h2_to_h1_ping
+    kind: ping
+    src: h2
+    dst: h1
+
+  # NEW: verify ping can target an IP literal using 'to' (preferred)
+  - name: h1_to_h2_ip_literal_ping
+    kind: ping
+    src: h1
+    to: 192.168.2.10
+    expect: pass
+
+  # NEW: verify compat alias 'to_ip' also works as primary destination
+  - name: h1_to_h2_to_ip_alias_ping
+    kind: ping
+    src: h1
+    to_ip: 192.168.2.10
+    expect: pass
+
+  - name: h1_to_h2_tcp_443_pass
+    kind: tcp
+    src: h1
+    dst: h2
+    port: 443
+    expect: pass
+
+  - name: h1_to_h2_tcp_22_fail
+    kind: tcp
+    src: h1
+    dst: h2
+    port: 22
+    expect: fail
+
+scenarios:
+  - id: bounce_link_r2_fw1_recover
+    description: "Bounce r2<->fw1 and verify h1->h2 fails then recovers"
+    steps:
+      - run: h1_to_h2_ping
+
+      - fault:
+          link_down:
+            a: r2
+            a_if: eth2
+            b: fw1
+            b_if: eth1
+
+      - wait_for:
+          type: ping
+          from: h1
+          to: 192.168.2.10     # IP literal path
+          expect: fail
+          timeout: 10
+          interval_s: 1.0
+
+      - fault:
+          link_up:
+            a: r2
+            a_if: eth2
+            b: fw1
+            b_if: eth1
+
+      - wait_for:
+          type: ping
+          from: h1
+          to: h2               # node name path
+          expect: pass
+          timeout: 60
+          interval_s: 1.0
+
+      - run: h1_to_h2_ping
+
+  - id: bounce_interface_r2_eth1_recover
+    description: "Bounce r2:eth1 (r1<->r2) and verify h1->h2 fails then recovers"
+    steps:
+      - run: h1_to_h2_ping
+
+      - fault:
+          interface_down:
+            node: r2
+            if: eth1
+
+      - wait_for:
+          type: ping
+          from: h1
+          to: 192.168.2.10
+          expect: fail
+          timeout: 10
+          interval_s: 1.0
+
+      - fault:
+          interface_up:
+            node: r2
+            if: eth1
+
+      - wait_for:
+          type: ping
+          from: h1
+          to: h2
+          expect: pass
+          timeout: 60
+          interval_s: 1.0
+
+      - run: h1_to_h2_ping
+
+  - id: bounce_link_r2_fw1_ambiguous_should_fail
+    description: "Should fail validation: r2<->fw1 has multiple links and no a_if/b_if provided"
+    steps:
+      - fault:
+          link_down:
+            a: r2
+            b: fw1
+
+  - id: bad_wait_for_tcp_should_fail
+    description: "Validator must reject wait_for.type=tcp in v1"
+    steps:
+      - wait_for:
+          type: tcp
+          from: h1
+          to: h2
+          expect: pass
+          port: 443
+          timeout: 5
+          interval_s: 1.0
+
+
+
+

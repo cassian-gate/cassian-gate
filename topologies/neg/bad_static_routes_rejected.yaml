@@ -1,0 +1,26 @@
+# topologies/neg/bad_static_routes_rejected.yaml
+schema_version: "1"
+
+name: bad_static_routes_rejected
+
+nodes:
+  - name: r1
+    type: frr
+    asn: 65001
+    router_id: 10.255.0.1
+    static_routes:
+      - "192.168.2.0/24 via 10.0.0.1"
+
+  - name: h1
+    type: host
+
+links:
+  - endpoints: ["r1:eth0", "h1:eth0"]
+    ipv4: ["10.0.0.1/24", "10.0.0.2/24"]
+
+tests:
+  - ping:
+      from: h1
+      to: r1
+      expect: pass
+

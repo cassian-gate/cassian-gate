@@ -766,37 +766,44 @@ def topo_to_containerlab(topo: dict) -> dict:
 
     for n in topo["nodes"]:
         ntype = n["type"]
+
+        # Resolve image once (node.image overrides defaults)
         image = n.get("image") or DEFAULT_IMAGES.get(ntype)
         if not image:
             die(f"No default image for node type '{ntype}'. Set node.image explicitly.")
 
-        binds = []
+        node_def = {"kind": "linux", "image": image}
+
+        binds: list[str] = []
+
         if ntype == "frr":
-            cfgdir = node_cfg_dir(topo["name"], n["name"])
-            write_file(cfgdir / "daemons", gen_frr_daemons())
-            write_file(cfgdir / "vtysh.conf", gen_vtysh_conf())
-            write_file(cfgdir / "frr.conf", gen_frr_conf(n, topo))
+            # v1.x: allow demo/preconfigured FRR images without any /etc/frr binds
+            # frr_mode:
+            #   - "generated" (default): bind generated /etc/frr/{daemons,vtysh.conf,frr.conf}
+            #   - "preconfigured": do NOT bind /etc/frr/* (image owns routing + daemons)
+            frr_mode = (n.get("frr_mode") or "generated").strip().lower()
+            if frr_mode not in ("generated", "preconfigured"):
+                die(
+                    f"Topology invalid: node '{n.get('name')}': "
+                    f"frr_mode must be 'generated' or 'preconfigured'"
+                )
 
-            binds = [
-                f"{cfgdir}/daemons:/etc/frr/daemons:ro",
-                f"{cfgdir}/vtysh.conf:/etc/frr/vtysh.conf:ro",
-                f"{cfgdir}/frr.conf:/etc/frr/frr.conf:ro",
-            ]
+            if frr_mode == "generated":
+                cfgdir = node_cfg_dir(topo["name"], n["name"])
+                write_file(cfgdir / "daemons", gen_frr_daemons())
+                write_file(cfgdir / "vtysh.conf", gen_vtysh_conf())
+                write_file(cfgdir / "frr.conf", gen_frr_conf(n, topo))
 
-        node_def = {"kind": "linux"}
+                binds = [
+                    f"{cfgdir}/daemons:/etc/frr/daemons:ro",
+                    f"{cfgdir}/vtysh.conf:/etc/frr/vtysh.conf:ro",
+                    f"{cfgdir}/frr.conf:/etc/frr/frr.conf:ro",
+                ]
+            else:
+                # preconfigured: image provides /etc/frr/* and starts the right daemons (e.g., bgpd)
+                binds = []
 
-        t = n.get("type")
-
-        if t == "host":
-            node_def["image"] = "wbitt/network-multitool:latest"
-        elif t == "nft-fw":
-            node_def["image"] = "netsim/nft-fw:latest"
-        elif t == "frr":
-            node_def["image"] = "frrouting/frr:latest"
-        else:
-            node_def["image"] = n.get("image") or "alpine:latest"
-
-        # Hosts should stay alive (alpine has no long-running process by default)
+        # Hosts should stay alive
         if ntype == "host":
             node_def["cmd"] = "sleep infinity"
 
@@ -807,13 +814,12 @@ def topo_to_containerlab(topo: dict) -> dict:
                 "net.ipv4.ip_forward": "1",
                 "net.ipv4.conf.all.rp_filter": "0",
                 "net.ipv4.conf.default.rp_filter": "0",
-
                 # Let bridged IPv4/IPv6 traffic hit the inet forward hook (iptables/nft)
                 "net.bridge.bridge-nf-call-iptables": "1",
-            "net.bridge.bridge-nf-call-ip6tables": "1",
+                "net.bridge.bridge-nf-call-ip6tables": "1",
             }
 
-        # FRR nodes should behave like routers (kernel forwarding + no rp_filter drops)
+        # FRR nodes should behave like routers
         if ntype == "frr":
             node_def["sysctls"] = {
                 "net.ipv4.ip_forward": "1",

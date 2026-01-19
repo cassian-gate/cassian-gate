@@ -1,0 +1,20 @@
+name: change-context-simple
+nodes:
+  - name: r1
+    type: frr
+  - name: h1
+    type: host
+
+links:
+  - endpoints: ["h1:eth1", "r1:eth1"]
+
+tests:
+  - name: ping_h1_to_r1
+    type: ping
+    from: h1
+    dst: r1
+
+candidate_changes:
+  - id: srx-policy-tightening
+    description: "Juniper SRX: tighten outbound policy (context only; NOT executed)"
+    file: changes/srx-policy-tightening.conf

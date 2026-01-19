@@ -1,0 +1,39 @@
+schema_version: "1"
+name: ex02-bgp-multihop-tcp
+
+nodes:
+  - name: r1
+    type: frr
+    frr_mode: preconfigured
+    image: ghcr.io/andrew-ai-netsim/ai-netsim/frr-demo-bgp-r1:v1x
+
+  - name: r2
+    type: frr
+    frr_mode: preconfigured
+    image: ghcr.io/andrew-ai-netsim/ai-netsim/frr-demo-bgp-r2:v1x
+
+  - name: h1
+    type: host
+
+  - name: h2
+    type: host
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["10.0.12.0/31", "10.0.12.1/31"]
+
+  - endpoints: ["r1:eth2", "h1:eth1"]
+    ipv4: ["10.10.1.1/24", "10.10.1.2/24"]
+
+  - endpoints: ["r2:eth2", "h2:eth1"]
+    ipv4: ["10.10.2.1/24", "10.10.2.2/24"]
+
+tests:
+  - name: tcp_h1_to_h2_should_pass
+    type: tcp
+    src: h1
+    dst: h2
+    port: 8080
+    listener: true
+    expect: pass
+

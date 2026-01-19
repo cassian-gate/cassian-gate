@@ -1,0 +1,33 @@
+name: change-context-hard
+
+nodes:
+  - name: r1
+    type: frr
+  - name: r2
+    type: frr
+  - name: h1
+    type: host
+
+links:
+  - endpoints: ["h1:eth1", "r1:eth1"]
+  - endpoints: ["r1:eth2", "r2:eth1"]
+
+tests:
+  # Simple "it works" proof (no forwarding needed)
+  - name: ping_h1_to_r1
+    type: ping
+    from: h1
+    to_ip: 10.0.0.1
+    expect: pass
+
+  # Intentionally failing proof (negative test semantics)
+  - name: ping_h1_to_bogus_ip
+    type: ping
+    from: h1
+    to_ip: 203.0.113.123
+    expect: fail
+
+candidate_changes:
+  - id: srx-risky-nat-policy
+    description: "Juniper SRX: NAT + strict outbound policy (context only; NOT executed)"
+    file: changes/srx-risky-nat-policy.conf

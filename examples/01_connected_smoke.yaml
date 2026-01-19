@@ -1,0 +1,34 @@
+schema_version: "1"
+name: ex01-connected-smoke
+
+nodes:
+  - name: r1
+    type: frr
+    router_id: 10.255.0.1
+
+  - name: h1
+    type: host
+
+  - name: h2
+    type: host
+
+links:
+  - endpoints: ["r1:eth1", "h1:eth1"]
+    ipv4: ["10.20.1.1/24", "10.20.1.2/24"]
+
+  - endpoints: ["r1:eth2", "h2:eth1"]
+    ipv4: ["10.20.2.1/24", "10.20.2.2/24"]
+
+tests:
+  - name: ping_h1_to_r1
+    type: ping
+    src: h1
+    dst: r1
+    expect: pass
+
+  - name: ping_h1_to_h2_expected_fail
+    type: ping
+    src: h1
+    dst: 10.20.2.99
+    expect: fail
+

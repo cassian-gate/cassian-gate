@@ -1,0 +1,21 @@
+=== AI) Guardrails: ai code must not call runtime/deploy primitives ===
+OK: ai code is artifact-only (no runtime/deploy refs)
+
+=== AI) Smoke: advisory headers + strict-inputs exit code ===
+OK: ai coach runs
+OK: ai coach bundle headers
+OK: ai review bundle headers
+OK: ai explain strict-inputs exit 2
+
+=== AI) Key redaction (must not leak API key) ===
+OK: ai_error does not contain raw API key
+WARN: ai_error had no key-like substring (cannot assert redaction pattern)
+
+=== AI) Golden fixtures (bundle drift guardrail) ===
+OK: ai explain bundle matches golden
+OK: ai review bundle matches golden
+OK: ai coach bundle matches golden
+OK: ai coach does not emit YAML blocks
+
+=== AI) Optional: online structured-output schema (explicit opt-in) ===
+FAIL: AI_NETSIM_VERIFY_ONLINE_OK=1 but no OPENAI_API_KEY/AI_NETSIM_AI_API_KEY set
