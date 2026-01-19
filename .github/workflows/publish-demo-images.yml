@@ -1,0 +1,113 @@
+name: Publish demo images (GHCR)
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "images/frr-demo-**"
+      - ".github/workflows/publish-demo-images.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Base: ghcr.io/<owner>/<repo>
+      - name: Set image base
+        id: base
+        run: echo "BASE=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}" >> "$GITHUB_OUTPUT"
+
+      # ---- frr-demo-bgp-r1 ----
+      - name: Meta (frr-demo-bgp-r1)
+        id: meta_bgp_r1
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.base.outputs.BASE }}/frr-demo-bgp-r1
+          tags: |
+            type=raw,value=v1x
+            type=raw,value=latest
+
+      - name: Build and push (frr-demo-bgp-r1)
+        uses: docker/build-push-action@v6
+        with:
+          context: images/frr-demo-bgp-r1
+          push: true
+          tags: ${{ steps.meta_bgp_r1.outputs.tags }}
+          labels: ${{ steps.meta_bgp_r1.outputs.labels }}
+          provenance: false
+
+      # ---- frr-demo-bgp-r2 ----
+      - name: Meta (frr-demo-bgp-r2)
+        id: meta_bgp_r2
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.base.outputs.BASE }}/frr-demo-bgp-r2
+          tags: |
+            type=raw,value=v1x
+            type=raw,value=latest
+
+      - name: Build and push (frr-demo-bgp-r2)
+        uses: docker/build-push-action@v6
+        with:
+          context: images/frr-demo-bgp-r2
+          push: true
+          tags: ${{ steps.meta_bgp_r2.outputs.tags }}
+          labels: ${{ steps.meta_bgp_r2.outputs.labels }}
+          provenance: false
+
+      # ---- frr-demo-static-r1 ----
+      - name: Meta (frr-demo-static-r1)
+        id: meta_static_r1
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.base.outputs.BASE }}/frr-demo-static-r1
+          tags: |
+            type=raw,value=v1x
+            type=raw,value=latest
+
+      - name: Build and push (frr-demo-static-r1)
+        uses: docker/build-push-action@v6
+        with:
+          context: images/frr-demo-static-r1
+          push: true
+          tags: ${{ steps.meta_static_r1.outputs.tags }}
+          labels: ${{ steps.meta_static_r1.outputs.labels }}
+          provenance: false
+
+      # ---- frr-demo-static-r2 ----
+      - name: Meta (frr-demo-static-r2)
+        id: meta_static_r2
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.base.outputs.BASE }}/frr-demo-static-r2
+          tags: |
+            type=raw,value=v1x
+            type=raw,value=latest
+
+      - name: Build and push (frr-demo-static-r2)
+        uses: docker/build-push-action@v6
+        with:
+          context: images/frr-demo-static-r2
+          push: true
+          tags: ${{ steps.meta_static_r2.outputs.tags }}
+          labels: ${{ steps.meta_static_r2.outputs.labels }}
+          provenance: false
+
