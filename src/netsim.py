@@ -5213,6 +5213,100 @@ def cmd_down(args: argparse.Namespace) -> None:
         die(f"Lab file not found: {out} (did you run gen/up first?)")
     run(["sudo", "containerlab", "destroy", "-t", str(out)])
 
+def list_owned_labs_from_artifacts() -> list[tuple[str, Path]]:
+    """
+    Ownership source of truth (LOCKED):
+      - ONLY labs with artifact directories under labs/clab-*
+      - Never scan Docker globally
+      - Deterministic ordering (lexicographic by directory name)
+    Returns: [(lab_name, artifact_dir), ...]
+    """
+    if not LABS_DIR.exists():
+        return []
+
+    out: list[tuple[str, Path]] = []
+    for p in LABS_DIR.iterdir():
+        if not p.is_dir():
+            continue
+        if not p.name.startswith("clab-"):
+            continue
+        lab = p.name[len("clab-") :].strip()
+        if not lab:
+            continue
+        out.append((lab, p))
+
+    out.sort(key=lambda t: t[1].name)
+    return out
+
+def cmd_cleanup(args: argparse.Namespace) -> None:
+    """
+    v1.x ops helper (non-authoritative):
+      netsim cleanup --all [--yes]
+
+    Safety:
+      - ONLY targets ai-netsim labs that have artifacts under labs/clab-*
+      - Dry-run by default; --yes required to destroy
+      - Never touches labs not present in labs/
+      - Does NOT delete artifacts
+    """
+    if not getattr(args, "all", False):
+        die("cleanup requires --all. This command only targets ai-netsim labs present in labs/ (labs/clab-*).")
+
+    candidates = list_owned_labs_from_artifacts()
+
+    print("Cleanup plan (dry-run):" if not getattr(args, "yes", False) else "Cleanup plan (execute):")
+    if not candidates:
+        print("- (none)  No ai-netsim lab artifacts found under labs/clab-*")
+        return
+
+    for lab, artifact_dir in candidates:
+        print(f"- {lab}   ({artifact_dir})")
+
+    if not getattr(args, "yes", False):
+        print("Run with --yes to destroy these labs. (Artifacts under labs/clab-* are not deleted automatically.)")
+        return
+
+    # Execute: best-effort, deterministic order, never stops on per-lab failure
+    failures: list[str] = []
+
+    for lab, artifact_dir in candidates:
+        clab_yaml = lab_file_from_name(lab)
+
+        # If the generated containerlab file is missing, we still keep safety:
+        # we DO NOT scan Docker; we treat this as a safe no-op attempt.
+        if not clab_yaml.exists():
+            print(f"OK  {lab}: no {clab_yaml.name} found (treating as already down; artifacts kept)")
+            continue
+
+        cp = run(
+            ["sudo", "containerlab", "destroy", "-t", str(clab_yaml)],
+            check=False,
+            capture_output=True,
+        )
+
+        if cp.returncode == 0:
+            print(f"OK  {lab}: destroyed")
+            continue
+
+        # Best-effort classification: containerlab may say "not found" if already down.
+        combined = ((cp.stdout or "") + "\n" + (cp.stderr or "")).strip()
+        low = combined.lower()
+        if "not found" in low or "no such" in low:
+            print(f"OK  {lab}: already down / not found (artifacts kept)")
+            continue
+
+        # Otherwise warn and continue
+        summary = combined.splitlines()[-1].strip() if combined else f"exit {cp.returncode}"
+        print(f"WARN {lab}: destroy failed: {summary}")
+        failures.append(f"{lab}: {summary}")
+
+    if failures:
+        print("Cleanup completed with warnings:")
+        for f in failures:
+            print(f"- {f}")
+    else:
+        print("Cleanup completed successfully. (Artifacts were not deleted.)")
+
 def cmd_exec(args: argparse.Namespace) -> None:
     rt = get_runtime()
 
@@ -7507,6 +7601,23 @@ def main() -> None:
     p_down = sub.add_parser("down", help="Destroy a deployed lab by name")
     p_down.add_argument("name", help="Lab name (topology 'name')")
     p_down.set_defaults(func=cmd_down)
+
+    # cleanup
+    p_cleanup = sub.add_parser(
+        "cleanup",
+        help="Safely clean up ai-netsim-owned labs found under labs/ (dry-run unless --yes)",
+    )
+    p_cleanup.add_argument(
+        "--all",
+        action="store_true",
+        help="Required. Only targets ai-netsim labs with artifact dirs under labs/clab-* (never scans Docker).",
+    )
+    p_cleanup.add_argument(
+        "--yes",
+        action="store_true",
+        help="Actually destroy labs listed in the plan (artifacts are NOT deleted).",
+    )
+    p_cleanup.set_defaults(func=cmd_cleanup)
 
     # exec
     p_exec = sub.add_parser("exec", help="Exec a command inside a node container; if no command, open bash")
