@@ -384,7 +384,6 @@ def ensure_valid_topology(topo: dict) -> None:
     # - Topology MUST NOT encode routing mechanics (protocols/metrics/policy).
     # - FRR nodes MAY include metadata like asn/router_id, but these do not imply routing.
     # - If present, validate types deterministically.
-
     for i, n in enumerate(topo["nodes"], start=1):
         if not isinstance(n, dict):
             continue
@@ -504,6 +503,46 @@ def ensure_valid_topology(topo: dict) -> None:
                         die(f"candidate_changes[{idx}] ({cid}).scope[{j}]: must be a non-empty string")
                     if nname.strip() not in names:
                         die(f"candidate_changes[{idx}] ({cid}).scope[{j}]: unknown node '{nname.strip()}'")
+
+    # ----------------------------
+    # v1 gate semantics guardrails (tests)
+    # ----------------------------
+    tests = topo.get("tests") or []
+    if isinstance(tests, list) and tests:
+        for idx, t in enumerate(tests, start=1):
+            if not isinstance(t, dict):
+                continue
+
+            kind = (t.get("kind") or t.get("type") or "").strip().lower()
+            nm = t.get("name")
+            label = nm.strip() if isinstance(nm, str) and nm.strip() else f"tests[{idx}]"
+
+            exp = t.get("expect") or "pass"
+            exp = exp.strip().lower() if isinstance(exp, str) else exp
+            if exp not in ("pass", "fail"):
+                exp = "pass"
+
+            # Ping: count must be int >= 1 if provided
+            if kind == "ping" and "count" in t and t.get("count") is not None:
+                try:
+                    c = int(t.get("count"))
+                    if c < 1:
+                        raise ValueError()
+                except Exception:
+                    die(f"Topology invalid: {label}: ping count must be an integer >= 1")
+
+            # Ping: expected FAIL must be fail-fast (no retries/timeouts)
+            if kind == "ping" and exp == "fail":
+                if "timeout_s" in t and t.get("timeout_s") is not None:
+                    die(
+                        f"Topology invalid: {label}: ping expect: fail must not set timeout_s "
+                        f"(v1 fail-fast semantics)"
+                    )
+                if "retry_interval_s" in t and t.get("retry_interval_s") is not None:
+                    die(
+                        f"Topology invalid: {label}: ping expect: fail must not set retry_interval_s "
+                        f"(v1 fail-fast semantics)"
+                    )
 
     # v1.x fail-fast educational guardrail (v1-truthful):
     # - ai-netsim v1 does NOT infer routing intent and does NOT auto-configure routing protocols.
@@ -3304,16 +3343,32 @@ def cmd_test(args: argparse.Namespace) -> None:
         else:
             dst_ip = node_ip_or_die(dst_token)
 
-        # ---- execution ----
+        # ---- execution params ----
         count = int(t.get("count") or 2)
-        timeout_s = int(t.get("timeout_s") or 15)
-        interval_s = float(t.get("retry_interval_s") or 1.0)
+
+        # ICMP per-attempt timeout (-W). Keep it small and explicit.
+        per_attempt_timeout_s = int(t.get("per_attempt_timeout_s") or 1)
+
+        # Retry window applies only when we expect success (convergence)
+        retry_timeout_s = int(t.get("timeout_s") or 15)
+        retry_interval_s = float(t.get("retry_interval_s") or 1.0)
 
         def attempt():
-            cp = rt.exec(lab, src, ["ping", "-c", str(count), "-W", "1", dst_ip], check=False)
+            cp = rt.exec(
+                lab,
+                src,
+                ["ping", "-c", str(count), "-W", str(per_attempt_timeout_s), dst_ip],
+                check=False,
+            )
             return (cp.returncode == 0), cp
 
-        ok, last_cp, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
+        if expected == "fail":
+            # v1 gate semantics: expected fail is fail-fast (single attempt)
+            ok, last_cp = attempt()
+            attempts = 1
+            dur_ms = 0
+        else:
+            ok, last_cp, attempts, dur_ms = retry_until(retry_timeout_s, retry_interval_s, attempt)
 
         observed = "pass" if ok else "fail"
         should_succeed = (expected == "pass")
@@ -3332,9 +3387,10 @@ def cmd_test(args: argparse.Namespace) -> None:
             "meta": {
                 "dst_ip": dst_ip,
                 "count": count,
+                "per_attempt_timeout_s": per_attempt_timeout_s,
                 "attempts": attempts,
-                "timeout_s": timeout_s,
-                "retry_interval_s": interval_s,
+                "retry_timeout_s": (retry_timeout_s if expected == "pass" else 0),
+                "retry_interval_s": (retry_interval_s if expected == "pass" else 0),
                 "last_rc": getattr(last_cp, "returncode", None),
             },
         }
