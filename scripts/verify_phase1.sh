@@ -239,4 +239,26 @@ echo "=== NEG) invalid include:all (unnamed test) ==="
   || echo "OK: include:all unnamed test rejected"
 echo
 
+echo
+echo "=== 10) Optional: examples smoke (quickstart) ==="
+if [ "${AI_NETSIM_VERIFY_EXAMPLES:-0}" = "1" ]; then
+  # ex01 should PASS (connected reachability)
+  ./src/netsim.py up examples/01_connected_smoke.yaml --reconfigure >/dev/null
+  ./src/netsim.py test ex01-connected-smoke
+
+  # ex03 should PASS (static demo images prove multi-hop)
+  ./src/netsim.py up examples/03_static_multihop_ping.yaml --reconfigure >/dev/null
+  ./src/netsim.py test ex03-static-multihop
+
+  # ex02 should PASS (BGP demo images prove multi-hop + tcp)
+  ./src/netsim.py up examples/02_bgp_multihop_tcp.yaml --reconfigure >/dev/null
+  ./src/netsim.py test ex02-bgp-multihop-tcp
+
+  echo "OK: examples smoke pass"
+else
+  echo "SKIP: set AI_NETSIM_VERIFY_EXAMPLES=1 to run examples smoke"
+fi
+echo
+
+
 echo "✅ PHASE1 VERIFIED"

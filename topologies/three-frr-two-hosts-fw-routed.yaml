@@ -59,12 +59,14 @@ tests:
     src: h1
     dst: h2
     expect: fail
+    count: 1
 
   - name: h2_to_h1_ping
     kind: ping
     src: h2
     dst: h1
     expect: fail
+    count: 1
 
   # IP literal ping (v1-truthful: without routing config, multi-hop should fail)
   - name: h1_to_h2_ip_literal_ping
@@ -72,6 +74,7 @@ tests:
     src: h1
     to: 192.168.2.10
     expect: fail
+    count: 1
 
   # compat alias 'to_ip'
   - name: h1_to_h2_to_ip_alias_ping
@@ -79,6 +82,7 @@ tests:
     src: h1
     to_ip: 192.168.2.10
     expect: fail
+    count: 1
 
   - name: h1_to_h2_tcp_443_pass
     kind: tcp

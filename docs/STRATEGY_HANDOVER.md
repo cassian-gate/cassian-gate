@@ -66,12 +66,11 @@ Every run produces authoritative artifacts:
 
 Resolve → Generate → Deploy → Provision → Test → Collect → Destroy
 
-
 No later phase may modify earlier artifacts implicitly.
 
 ---
 
-## 3) Deterministic Core vs Probabilistic Edge (Locked)
+## 3) Deterministic Core vs Probabilistic Edge (LOCKED)
 
 ### Deterministic Core (Authoritative)
 
@@ -105,9 +104,10 @@ v1 is complete **only when all three pillars exist**.
 ### A) Deterministic Validation Core
 
 - atomic tests (ping, tcp)
-- negative tests
+- negative tests (first-class)
 - strict schema validation
 - fail-fast guardrails
+- artifact-first truth model
 
 ### B) Scenario-Based Failure Choreography
 
@@ -131,15 +131,16 @@ AI in v1 is:
 - optional
 - explicitly invoked
 - advisory only
+- schema-validated and CI-safe
 
 ---
 
-## 5) v1 Explicit Non-Goals
+## 5) v1 Explicit Non-Goals (LOCKED)
 
 The following are **out of scope for v1**:
 
-- EVPN control-plane inspection
-- MAC/IP route parsing
+- EVPN control-plane inspection or semantic validation (MAC/IP routes, VNI/VTEP behavior)
+- protocol modeling or metric interpretation
 - grey failures (loss, jitter, delay)
 - VM runtime
 - vendor NOS execution
@@ -152,11 +153,30 @@ These belong to **v1.5+**.
 
 ## 6) VXLAN / EVPN Strategy (No Drift)
 
+### EVPN Clarification (v1 — Important)
+
+**v1 does not implement EVPN control-plane semantics.**
+
+In v1, EVPN/VXLAN is validated **only implicitly via outcome-based tests**, such as:
+
+- reachability
+- non-reachability (must-not)
+- failure survival
+- convergence via scenarios
+
+v1 explicitly does **not**:
+
+- parse EVPN routes (MAC/IP, IMET, Type-5)
+- model VNI or VTEP semantics
+- inspect EVPN control-plane state
+- derive intent from EVPN configuration
+
+EVPN may exist in the runtime (e.g. preconfigured images), but ai-netsim **observes outcomes only**.
+
 ### v1
 
-- EVPN validated **implicitly via outcomes**
+- outcome-based validation only
 - minimal representative fabrics
-- reachability + failure survival
 - no EVPN internals
 
 ### v1.5
@@ -175,7 +195,31 @@ These belong to **v1.5+**.
 
 ---
 
-## 7) Pre/Post Operational State Capture (Supporting Evidence)
+## 7) Adoption & Demo Strategy (v1.x)
+
+To reduce first-run friction **without violating v1 authority**, v1.x includes
+**preconfigured demo runtimes**.
+
+### Principles
+
+- Routing may exist **outside** ai-netsim authority
+- ai-netsim never generates or validates routing logic
+- Tests and scenarios remain the sole authority
+
+### Mechanism
+
+- FRR nodes declare explicit `frr_mode`:
+
+  - `generated` (default): routing-neutral, v1-pure
+  - `preconfigured`: routing provided by the image/config
+
+- Multi-hop `expect: pass` is allowed **only** when all relevant nodes are explicitly preconfigured.
+
+This enables fast onboarding while preserving honesty.
+
+---
+
+## 8) Pre/Post Operational State Capture (Supporting Evidence)
 
 **Authority:** NON-AUTHORITATIVE
 
@@ -200,14 +244,15 @@ These belong to **v1.5+**.
 
 ---
 
-## 8) Versioning & Monetization Model (Locked)
+## 9) Versioning & Monetization Model (LOCKED)
 
 ### v1 — Free / Open Core
 
-- deterministic validation
+- deterministic validation gate
 - scenarios
 - assistive AI
 - basic evidence capture
+- demo-ready onboarding
 
 ### Pro — Paid (Individual Engineers)
 
@@ -228,47 +273,38 @@ These belong to **v1.5+**.
 
 ---
 
-## 9) Current Status (Truthful Snapshot)
+## 10) Current Status (Truthful Snapshot)
 
-### v1 Core
+### v1 / v1.x
 
 ✅ deterministic engine  
 ✅ scenario semantics  
 ✅ fault determinism  
 ✅ convergence handling  
 ✅ negative regression suite  
-✅ validation-only mode  
+✅ assistive AI (hardened)  
+✅ adoption demos & onboarding  
 
-### Remaining for v1
-
-🚧 Assistive AI implementation (`ai explain / review / coach`)
-
-Nothing else blocks v1.
+**v1 semantics are considered complete and stable.**
 
 ---
 
-## 10) Current Focus (“NOW”)
+## 11) Current Focus (“NEXT”)
 
-> **Implement v1 Assistive AI (Advisory Only)**
+> **Begin v1.5 work: advisory static preflight, candidate-config workflows, EVPN awareness.**
 
-Hard rules:
-
-- artifact-only inputs
-- explicit invocation
-- zero side effects
-- always exit `0`
-- must state **“advisory only”**
-
-Offline deterministic AI scaffolding is acceptable.
-Online BYO-key AI may be layered later.
+v1 will receive **only**:
+- bug fixes
+- UX clarity improvements
+- guardrail hardening
 
 ---
 
-## 11) Implementation Workflow (Locked)
+## 12) Implementation Workflow (LOCKED)
 
 Every change follows this loop:
 
-1. Declare the target (v1-safe)
+1. Declare the target version
 2. Paste current code
 3. Receive surgical instructions
 4. Implement locally
@@ -281,7 +317,7 @@ No guessing.
 
 ---
 
-## 12) Adoption Guardrails (Locked)
+## 13) Adoption Guardrails (LOCKED)
 
 - `netsim test` is authoritative
 - clean-state execution
@@ -296,15 +332,6 @@ Adoption success looks like:
 Not:
 
 > “The tool feels wrong.”
-
----
-
-## 13) How This Document Is Used
-
-- Paste this document at the start of any **Milestone Strategy chat**
-- Refer to it explicitly when rejecting scope creep
-- Do **not** rely on chat memory
-- If something is missing, update this file — **not the chat**
 
 ---
 
@@ -325,7 +352,8 @@ Implementation details **do not belong here**.
 - Tests & scenarios decide outcomes
 - AI explains; never decides
 - v1 includes assistive AI
-- EVPN internals are v1.5+
+- EVPN semantics are v1.5+
+- Routing mechanics never appear in topology
 - State capture is non-authoritative
 - Vendor NOS images are user-provided
 - Pro = individual paid tier
@@ -339,6 +367,3 @@ Implementation details **do not belong here**.
 > **ai-netsim replaces guesswork with proof.**  
 > **AI accelerates understanding, never authority.**  
 > **Determinism is sacred.**
-
----
-

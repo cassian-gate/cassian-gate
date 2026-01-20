@@ -791,11 +791,19 @@ def topo_to_containerlab(topo: dict) -> dict:
         "topology": {"nodes": {}, "links": []},
     }
 
+    # Hard defaults for core node types (deterministic + first-time UX safe).
+    # node.image always overrides these.
+    hard_defaults = {
+        "host": "wbitt/network-multitool:latest",
+        "nft-fw": "netsim/nft-fw:latest",
+        "frr": "frrouting/frr:latest",
+    }
+
     for n in topo["nodes"]:
         ntype = n["type"]
 
         # Resolve image once (node.image overrides defaults)
-        image = n.get("image") or DEFAULT_IMAGES.get(ntype)
+        image = n.get("image") or hard_defaults.get(ntype) or DEFAULT_IMAGES.get(ntype)
         if not image:
             die(f"No default image for node type '{ntype}'. Set node.image explicitly.")
 
@@ -3142,6 +3150,7 @@ def cmd_test(args: argparse.Namespace) -> None:
         duration_ms: int,
         error: str = "",
         meta: dict | None = None,
+        evidence: dict | None = None,
     ) -> None:
         rec = {
             "name": name,
@@ -3153,6 +3162,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             "verdict": verdict,
             "duration_ms": duration_ms,
             "error": error,
+            "evidence": evidence,
         }
         if meta:
             rec["meta"] = meta
@@ -3172,6 +3182,7 @@ def cmd_test(args: argparse.Namespace) -> None:
         duration_ms: int,
         error: str = "",
         meta: dict | None = None,
+        evidence: dict | None = None,
     ) -> None:
         rec = {
             "type": "scenario_test_run",
@@ -3186,6 +3197,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             "verdict": verdict,
             "duration_ms": int(duration_ms),
             "error": error,
+            "evidence": evidence,
         }
         if meta:
             rec["meta"] = meta
@@ -3336,6 +3348,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             expected=rec["expected"],
             observed=rec["observed"],
             verdict=rec["verdict"],
+            evidence={"cmd": "ping"},
             duration_ms=rec["duration_ms"],
             error=rec["error"],
             meta=rec["meta"],
@@ -3358,6 +3371,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 expected=expected,
                 observed="fail",
                 verdict="fail",
+                evidence={"reason": "invalid_port"},
                 duration_ms=0,
                 error="'port' must be an int",
                 meta={"port": port},
@@ -3396,6 +3410,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             expected=expected,
             observed=observed,
             verdict=verdict,
+            evidence={"cmd": "nc -z"},
             duration_ms=dur_ms,
             error="" if verdict == "pass" else f"tcp mismatch (expected {expected}, observed {observed})",
             meta={
@@ -3417,6 +3432,156 @@ def cmd_test(args: argparse.Namespace) -> None:
     for idx, t in enumerate(declared_tests):
         if isinstance(t, dict) and t.get("name"):
             tests_by_name[str(t["name"])] = t
+
+    def run_bgp_neighbor_test(*, test_name: str, src: str, dst: str, t: dict, record_fn=record_test) -> str:
+        """
+        v1.x: binary control-plane health invariant.
+        - src: node name (runs vtysh here)
+        - dst: neighbor IPv4 literal (string)
+        - expect: pass|fail (also accepts up|down synonyms)
+        """
+
+        raw_expect = (t.get("expect") or "pass")
+        exp_s = str(raw_expect).strip().lower()
+
+        # Normalize expected -> "up" or "down"
+        if exp_s in ("pass", "up", "established", "true", "ok", "allow"):
+            expected = "up"
+        elif exp_s in ("fail", "down", "false", "drop", "deny"):
+            expected = "down"
+        else:
+            expected = "up"
+
+        neighbor = str(dst or "").strip()
+        try:
+            ip = ipaddress.ip_address(neighbor)
+            if ip.version != 4:
+                raise ValueError("neighbor must be IPv4")
+        except Exception:
+            record_fn(
+                name=test_name,
+                kind="bgp_neighbor",
+                src=src,
+                dst=dst,
+                expected=expected,
+                observed="down",
+                verdict="fail",
+                duration_ms=0,
+                error="dst must be an IPv4 neighbor address",
+                meta={"neighbor": neighbor},
+                evidence={"reason": "invalid_neighbor_ip"},
+            )
+            return "fail"
+
+        timeout_s = int(t.get("timeout_s") or (15 if expected == "up" else 0))
+        interval_s = float(t.get("retry_interval_s") or 1.0)
+
+        def attempt():
+            # Prefer JSON for deterministic parsing
+            cp = rt.exec(lab, src, ["vtysh", "-c", "show bgp summary json"], check=False)
+            ok = (getattr(cp, "returncode", 1) == 0)
+            out = (cp.stdout or "") if hasattr(cp, "stdout") else ""
+            return ok, cp, out
+
+        start = time.time()
+
+        # Only retry when we expect "up" (deterministic + aligns with readiness semantics)
+        if expected == "up" and timeout_s > 0:
+            def try_once():
+                ok, cp, out = attempt()
+                return ok, (cp, out)
+
+            ok, last_payload, attempts, dur_ms = retry_until(timeout_s, interval_s, try_once)
+            last_cp, last_out = last_payload
+        else:
+            ok, last_cp, last_out = attempt()
+            attempts = 1
+            dur_ms = int((time.time() - start) * 1000)
+
+        observed = "down"
+        state = None
+        parse_error = ""
+
+        if ok:
+            try:
+                data = json.loads(last_out or "{}")
+
+                def _extract_peers(obj: dict) -> dict | None:
+                    # 1) Some FRR builds: peers at top-level
+                    peers = obj.get("peers")
+                    if isinstance(peers, dict):
+                        return peers
+
+                    # 2) Common FRR: peers under address-family key, e.g. ipv4Unicast.peers
+                    v4u = obj.get("ipv4Unicast")
+                    if isinstance(v4u, dict):
+                        peers = v4u.get("peers")
+                        if isinstance(peers, dict):
+                            return peers
+
+                    # 3) Defensive: scan 1 level deep for any dict that contains a peers dict
+                    for _, v in obj.items():
+                        if isinstance(v, dict):
+                            peers = v.get("peers")
+                            if isinstance(peers, dict):
+                                return peers
+
+                    return None
+
+                peers = _extract_peers(data)
+                if not isinstance(peers, dict):
+                    peers = {}
+                    parse_error = "peers not found in summary"
+
+                p = peers.get(neighbor)
+
+                if isinstance(p, dict):
+                    # FRR fields vary; prefer "state" when present
+                    state = p.get("state") or p.get("bgpState") or p.get("peerState")
+                    st = (state or "").strip().lower()
+                    observed = "up" if st == "established" else "down"
+                else:
+                    observed = "down"
+                    if not parse_error:
+                        parse_error = "neighbor not present in summary"
+
+            except Exception as e:
+                observed = "down"
+                parse_error = f"json parse error: {e.__class__.__name__}"
+        else:
+            parse_error = "vtysh command failed"
+
+        verdict = "pass" if observed == expected else "fail"
+
+        meta = {
+            "neighbor": neighbor,
+            "state": state,
+            "attempts": attempts,
+            "timeout_s": timeout_s,
+            "retry_interval_s": interval_s,
+            "last_rc": getattr(last_cp, "returncode", None),
+        }
+
+        evidence = {
+            "cmd": "vtysh -c 'show bgp summary json'",
+            "parse_error": parse_error,
+        }
+
+        record_fn(
+            name=test_name,
+            kind="bgp_neighbor",
+            src=src,
+            dst=dst,
+            expected=expected,
+            observed=observed,
+            verdict=verdict,
+            duration_ms=int(dur_ms),
+            error="" if verdict == "pass" else f"bgp neighbor mismatch (expected {expected}, observed {observed})",
+            meta=meta,
+            evidence=evidence,
+        )
+
+        return verdict
 
     def run_named_test(ref: str, *, scenario_ctx: tuple[str, int] | None = None) -> str:
         """
@@ -3449,10 +3614,43 @@ def cmd_test(args: argparse.Namespace) -> None:
                     expected="pass",
                     observed="fail",
                     verdict="fail",
+                    evidence={"reason": "missing_src_dst"},
                     duration_ms=0,
                     error="missing src + (dst or to/to_ip)",
                 )
                 return "fail"
+
+        elif kind == "bgp_neighbor":
+            if not src or not dst:
+                record_test(
+                    name=ref,
+                    kind=kind,
+                    src=src or "",
+                    dst=dst or "",
+                    expected="up",
+                    observed="fail",
+                    verdict="fail",
+                    evidence={"reason": "missing_src_dst"},
+                    duration_ms=0,
+                    error="missing src/dst (neighbor IPv4 required)",
+                )
+                return "fail"
+
+            if not isinstance(dst, str) or not is_ip_literal(dst.strip()):
+                record_test(
+                    name=ref,
+                    kind=kind,
+                    src=src or "",
+                    dst=str(dst) if dst is not None else "",
+                    expected="up",
+                    observed="fail",
+                    verdict="fail",
+                    evidence={"reason": "invalid_neighbor_ip"},
+                    duration_ms=0,
+                    error="dst must be an IPv4 neighbor address",
+                )
+                return "fail"
+
         else:
             if not src or not dst:
                 record_test(
@@ -3463,6 +3661,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     expected="pass",
                     observed="fail",
                     verdict="fail",
+                    evidence={"reason": "missing_src_dst"},
                     duration_ms=0,
                     error="missing src/dst",
                 )
@@ -3483,6 +3682,11 @@ def cmd_test(args: argparse.Namespace) -> None:
             if record_fn:
                 return run_tcp_test(test_name=ref, src=src, dst=dst, t=t, record_fn=record_fn)
             return run_tcp_test(test_name=ref, src=src, dst=dst, t=t)
+        
+        if kind == "bgp_neighbor":
+            if record_fn:
+                return run_bgp_neighbor_test(test_name=ref, src=src, dst=dst, t=t, record_fn=record_fn)
+            return run_bgp_neighbor_test(test_name=ref, src=src, dst=dst, t=t)
 
         record_test(
             name=ref,
@@ -3493,7 +3697,8 @@ def cmd_test(args: argparse.Namespace) -> None:
             observed="fail",
             verdict="fail",
             duration_ms=0,
-            error=f"unsupported kind '{kind}' (supported: ping, tcp)",
+            error=f"unsupported kind '{kind}' (supported: ping, tcp, bgp_neighbor)",
+
         )
         return "fail"
     
@@ -4416,7 +4621,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 src = t.get("src")
                 dst = t.get("dst")
 
-                if kind not in ("ping", "tcp"):
+                if kind not in ("ping", "tcp", "bgp_neighbor"):
                     record_test(
                         name=test_name,
                         kind=str(kind),
@@ -4428,7 +4633,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                         duration_ms=0,
                         error=f"unsupported kind '{kind}'",
                     )
-                    fail_or_continue(f"tests[{i}]: unsupported kind '{kind}' (supported: ping, tcp)")
+                    fail_or_continue(f"tests[{i}]: unsupported kind '{kind}' (supported: ping, tcp, bgp_neighbor)")
                     continue
 
                 if filter_kind and kind != filter_kind:
@@ -4455,6 +4660,39 @@ def cmd_test(args: argparse.Namespace) -> None:
                         )
                         fail_or_continue(f"tests[{i}]: missing src + (dst or to/to_ip)")
                         continue
+
+                elif kind == "bgp_neighbor":
+                    # v1.x: bgp_neighbor requires src node + dst neighbor IPv4 literal
+                    if not src or not dst:
+                        record_test(
+                            name=test_name,
+                            kind=kind,
+                            src=src or "",
+                            dst=dst or "",
+                            expected="up",
+                            observed="fail",
+                            verdict="fail",
+                            duration_ms=0,
+                            error="missing src/dst (neighbor IPv4 required)",
+                        )
+                        fail_or_continue(f"tests[{i}]: missing src/dst (neighbor IPv4 required)")
+                        continue
+
+                    if not isinstance(dst, str) or not is_ip_literal(dst.strip()):
+                        record_test(
+                            name=test_name,
+                            kind=kind,
+                            src=src or "",
+                            dst=str(dst) if dst is not None else "",
+                            expected="up",
+                            observed="fail",
+                            verdict="fail",
+                            duration_ms=0,
+                            error="dst must be an IPv4 neighbor address",
+                        )
+                        fail_or_continue(f"tests[{i}]: bgp_neighbor dst must be an IPv4 literal")
+                        continue
+
                 else:
                     # tcp (and future kinds) keep legacy requirement
                     if not src or not dst:
@@ -4496,6 +4734,13 @@ def cmd_test(args: argparse.Namespace) -> None:
                         )
                     continue
 
+                if kind == "bgp_neighbor":
+                    verdict = run_bgp_neighbor_test(test_name=test_name, src=src, dst=dst, t=t)
+                    if verdict != "pass":
+                        fail_or_continue(
+                            f"tests[{i}] bgp_neighbor mismatch: {src} -> {dst} expected {t.get('expect','pass')}"
+                        )
+                    continue
 
                 verdict = run_tcp_test(test_name=test_name, src=src, dst=dst, t=t)
                 if verdict != "pass":

@@ -29,6 +29,24 @@ links:
     ipv4: ["10.10.2.1/24", "10.10.2.2/24"]
 
 tests:
+  # Control-plane invariant (preconfigured BGP must be Established)
+  - name: bgp_r1_to_r2_up
+    kind: bgp_neighbor
+    src: r1
+    dst: 10.0.12.1
+    expect: pass
+    timeout_s: 20
+    retry_interval_s: 1.0
+
+  - name: bgp_r2_to_r1_up
+    kind: bgp_neighbor
+    src: r2
+    dst: 10.0.12.0
+    expect: pass
+    timeout_s: 20
+    retry_interval_s: 1.0
+
+  # Data-plane proof
   - name: tcp_h1_to_h2_should_pass
     type: tcp
     src: h1
@@ -37,3 +55,9 @@ tests:
     listener: true
     expect: pass
 
+scenarios:
+  - id: bgp_neighbor_smoke
+    description: "BGP neighbor Established on both sides"
+    steps:
+      - run: bgp_r1_to_r2_up
+      - run: bgp_r2_to_r1_up
