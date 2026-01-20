@@ -2506,7 +2506,15 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                 if missing:
                     die(f"{sctx}.wait_for: missing keys {sorted(missing)}")
 
-                allowed_wf = required | {"timeout", "interval_s", "count", "per_attempt_timeout_s"}
+                # v1.x: allow ping tuning + optional deterministic source selector
+                allowed_wf = required | {
+                    "timeout",
+                    "interval_s",
+                    "count",
+                    "per_attempt_timeout_s",
+                    "src_ip",
+                    "src_if",
+                }
                 unknown = set(wf) - allowed_wf
                 if unknown:
                     die(f"{sctx}.wait_for: unknown keys {sorted(unknown)}")
@@ -2514,6 +2522,24 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                 t = wf.get("type")
                 if t != "ping":
                     die(f"{sctx}.wait_for.type: must be ping (v1)")
+
+                # v1.x optional ping source selector (Tier-1 validation only)
+                src_ip = wf.get("src_ip")
+                src_if = wf.get("src_if")
+
+                if src_ip is not None and src_if is not None:
+                    die(f"{sctx}.wait_for: specify only one of src_ip or src_if")
+
+                if src_ip is not None:
+                    if not isinstance(src_ip, str) or not src_ip.strip():
+                        die(f"{sctx}.wait_for.src_ip: must be a non-empty string")
+                    validate_ip_literal(src_ip.strip(), f"{sctx}.wait_for.src_ip")
+
+                if src_if is not None:
+                    if not isinstance(src_if, str) or not src_if.strip():
+                        die(f"{sctx}.wait_for.src_if: must be a non-empty string")
+                    if any(ch.isspace() for ch in src_if):
+                        die(f"{sctx}.wait_for.src_if: must not contain whitespace")
 
                 if "count" in wf:
                     c = wf.get("count")
@@ -2544,7 +2570,6 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                     nodes = topo.get("nodes", []) or []
                     if not any(isinstance(n, dict) and n.get("name") == to_raw for n in nodes):
                         die(f"{sctx}.wait_for.to: must be a valid node name or IPv4/IPv6 literal")
-
 
                 if "timeout" in wf:
                     to = wf.get("timeout")
@@ -3093,6 +3118,55 @@ def cmd_test(args: argparse.Namespace) -> None:
     import time
 
     lab = args.lab
+    # ------------------------------------------------------------
+    # v1.x UX: list scenarios from resolved topology (no execution)
+    # ------------------------------------------------------------
+    if bool(getattr(args, "list_scenarios", False)):
+        adir = lab_dir(lab)
+        if not adir.exists():
+            die(
+                f"ERROR: lab artifacts not found: {adir}\n"
+                f"Expected: labs/clab-{lab}/\n"
+                f"Tip: run 'netsim test {lab}' (or 'netsim up <topology.yaml>') to create artifacts."
+            )
+
+        rpath = adir / "topology.resolved.yaml"
+        if not rpath.exists():
+            die(
+                f"ERROR: resolved topology missing: {rpath}\n"
+                "Lab not provisioned / missing artifacts."
+            )
+
+        topo = load_yaml(rpath)
+        scenarios = topo.get("scenarios") or []
+        if not scenarios:
+            print(f"No scenarios declared for lab '{lab}'.")
+            return
+
+        rows: list[tuple[str, str, int]] = []
+        for s in scenarios:
+            if not isinstance(s, dict):
+                continue
+            sid = s.get("id")
+            if not isinstance(sid, str) or not sid.strip():
+                continue
+            desc = s.get("description") or ""
+            if not isinstance(desc, str):
+                desc = str(desc)
+            steps = s.get("steps") or []
+            steps_n = len(steps) if isinstance(steps, list) else 0
+            rows.append((sid.strip(), desc.strip(), steps_n))
+
+        rows.sort(key=lambda x: x[0])
+
+        print(f"Scenarios for lab '{lab}':")
+        print("Note: step counts are from the resolved topology (post-Resolve). Scenarios using 'run: { include: all }' will show expanded steps.")
+        for sid, desc, steps_n in rows:
+            if desc:
+                print(f"- {sid}: {desc} (steps: {steps_n})")
+            else:
+                print(f"- {sid}: (steps: {steps_n})")
+        return
     # v1.x UX hardening: users commonly try `netsim test topologies/foo.yaml`
     # `netsim test` is lab-driven by design, so fail early with an actionable message.
     if isinstance(lab, str):
@@ -3353,11 +3427,36 @@ def cmd_test(args: argparse.Namespace) -> None:
         retry_timeout_s = int(t.get("timeout_s") or 15)
         retry_interval_s = float(t.get("retry_interval_s") or 1.0)
 
+                # v1.x optional ping source selector (Tier-1 validation only)
+        src_ip = t.get("src_ip")
+        src_if = t.get("src_if")
+
+        if src_ip is not None and src_if is not None:
+            die(f"ERROR: ping test '{test_name}': specify only one of src_ip or src_if")
+
+        if src_ip is not None:
+            if not isinstance(src_ip, str) or not src_ip.strip():
+                die(f"ERROR: ping test '{test_name}': src_ip must be a non-empty string")
+            validate_ip_literal(src_ip.strip(), f"ping test '{test_name}' src_ip")
+
+        if src_if is not None:
+            if not isinstance(src_if, str) or not src_if.strip():
+                die(f"ERROR: ping test '{test_name}': src_if must be a non-empty string")
+            if any(ch.isspace() for ch in src_if):
+                die(f"ERROR: ping test '{test_name}': src_if must not contain whitespace")
+
         def attempt():
+            ping_cmd = ["ping", "-c", str(count), "-W", str(per_attempt_timeout_s)]
+            if src_ip:
+                ping_cmd += ["-I", str(src_ip).strip()]
+            elif src_if:
+                ping_cmd += ["-I", str(src_if).strip()]
+            ping_cmd += [dst_ip]
+
             cp = rt.exec(
                 lab,
                 src,
-                ["ping", "-c", str(count), "-W", str(per_attempt_timeout_s), dst_ip],
+                ping_cmd,
                 check=False,
             )
             return (cp.returncode == 0), cp
@@ -3392,6 +3491,8 @@ def cmd_test(args: argparse.Namespace) -> None:
                 "retry_timeout_s": (retry_timeout_s if expected == "pass" else 0),
                 "retry_interval_s": (retry_interval_s if expected == "pass" else 0),
                 "last_rc": getattr(last_cp, "returncode", None),
+                "src_ip": (str(src_ip).strip() if src_ip else ""),
+                "src_if": (str(src_if).strip() if src_if else ""),
             },
         }
 
@@ -3404,7 +3505,12 @@ def cmd_test(args: argparse.Namespace) -> None:
             expected=rec["expected"],
             observed=rec["observed"],
             verdict=rec["verdict"],
-            evidence={"cmd": "ping"},
+            evidence={
+                "cmd": "ping",
+                "src_ip": (str(src_ip).strip() if src_ip else ""),
+                "src_if": (str(src_if).strip() if src_if else ""),
+                "dst_ip": str(dst_ip),
+            },
             duration_ms=rec["duration_ms"],
             error=rec["error"],
             meta=rec["meta"],
@@ -3731,7 +3837,12 @@ def cmd_test(args: argparse.Namespace) -> None:
         if kind == "ping":
             if record_fn:
                 dst_label = dst or t.get("to") or t.get("to_ip") or ""
-                return run_ping_test(test_name=ref, src=src, dst=dst_label, t=t, record_fn=record_fn)
+                rec = run_ping_test(test_name=ref, src=src, dst=dst_label, t=t, record_fn=record_fn)
+                # In scenario mode, run_named_test must return a verdict string.
+                if isinstance(rec, dict):
+                    return str(rec.get("verdict") or "fail")
+                return str(rec)
+            # Non-scenario path preserves existing behavior (dict record)
             return run_ping_test(test_name=ref, src=src, dst=dst, t=t)
 
         if kind == "tcp":
@@ -4062,6 +4173,24 @@ def cmd_test(args: argparse.Namespace) -> None:
         count = int(wait_for.get("count") or 1)
         per_attempt_timeout_s = int(wait_for.get("per_attempt_timeout_s") or 1)
 
+        # v1.x optional ping source selector (Tier-1 validation only)
+        src_ip = wait_for.get("src_ip")
+        src_if = wait_for.get("src_if")
+
+        if src_ip is not None and src_if is not None:
+            raise ValueError("wait_for ping: specify only one of src_ip or src_if")
+
+        if src_ip is not None:
+            if not isinstance(src_ip, str) or not src_ip.strip():
+                raise ValueError("wait_for ping: src_ip must be a non-empty string")
+            validate_ip_literal(src_ip.strip(), "wait_for ping src_ip")
+
+        if src_if is not None:
+            if not isinstance(src_if, str) or not src_if.strip():
+                raise ValueError("wait_for ping: src_if must be a non-empty string")
+            if any(ch.isspace() for ch in src_if):
+                raise ValueError("wait_for ping: src_if must not contain whitespace")
+
         if count < 1:
             raise ValueError("wait_for ping: count must be >= 1")
         if per_attempt_timeout_s < 1:
@@ -4082,10 +4211,17 @@ def cmd_test(args: argparse.Namespace) -> None:
         should_succeed = (expected == "pass")
 
         def attempt():
+            ping_cmd = ["ping", "-c", str(count), "-W", str(per_attempt_timeout_s)]
+            if src_ip:
+                ping_cmd += ["-I", str(src_ip).strip()]
+            elif src_if:
+                ping_cmd += ["-I", str(src_if).strip()]
+            ping_cmd += [str(dst_ip)]
+
             cp = rt.exec(
                 lab,
                 str(src),
-                ["ping", "-c", str(count), "-W", str(per_attempt_timeout_s), str(dst_ip)],
+                ping_cmd,
                 check=False,
             )
             ping_ok = (cp.returncode == 0)
@@ -4104,6 +4240,8 @@ def cmd_test(args: argparse.Namespace) -> None:
             "from": str(src),
             "to": str(to),
             "dst_ip": str(dst_ip),
+            "src_ip": (str(src_ip).strip() if src_ip else ""),
+            "src_if": (str(src_if).strip() if src_if else ""),
             "attempts": attempts,
             "timeout_s": timeout_s,
             "interval_s": interval_s,
@@ -7675,6 +7813,11 @@ def main() -> None:
     action="store_true",
     help="Run global control-plane prechecks (e.g., BGP wait) before executing scenarios. "
          "Default: off when --scenario/--all-scenarios is used.",
+    )
+    p_test.add_argument(
+    "--list-scenarios",
+    action="store_true",
+    help="List scenarios from labs/clab-<lab>/topology.resolved.yaml (no deploy/execute).",
     )
     # run
     p_run = sub.add_parser("run", help="Ephemeral workflow: up -> test -> collect -> down (CI-friendly)")

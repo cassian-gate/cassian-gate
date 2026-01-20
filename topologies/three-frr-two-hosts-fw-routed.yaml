@@ -181,6 +181,7 @@ scenarios:
 
       - wait_for:
           type: ping
+          src_if: eth1
           from: h1
           to: 192.168.2.10
           expect: fail
