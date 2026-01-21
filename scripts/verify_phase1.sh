@@ -130,14 +130,85 @@ echo "=== 6) Run authoritative tests ==="
 echo "exit=0"
 echo
 
+echo "=== 6b) UX guardrail: netsim test rejects topology paths (friendly fail-fast) ==="
+set +e
+out="$(./src/netsim.py test "topologies/foo.yaml" 2>&1)"
+rc=$?
+set -e
+
+if [ $rc -ne 2 ]; then
+  echo "FAIL: expected exit code 2 for topology-path misuse, got rc=$rc"
+  echo "$out"
+  exit 1
+fi
+
+echo "$out" | grep -Fq "expects a LAB NAME, not a topology file path" || {
+  echo "FAIL: expected friendly topology-path error message not found"
+  echo "$out"
+  exit 1
+}
+
+echo "OK: topology-path misuse rejected with friendly message (rc=2)"
+echo
+
 echo "=== 7) Validate artifacts ==="
 test -s "$LABDIR/results.json"
 test -s "$LABDIR/results.summary.txt"
 
 cat "$LABDIR/results.summary.txt"
 grep -q '^result: pass' "$LABDIR/results.summary.txt"
-grep -q '^tests: total=[1-9]' "$LABDIR/results.summary.txt"
+# tests total can be 0 in scenario-only mode; accept either:
+#  - steady-state run: tests total >= 1
+#  - scenario-only run: tests total == 0 and scenarios present
+if grep -qE '^tests: total=[1-9]' "$LABDIR/results.summary.txt"; then
+  echo "OK: summary shows steady-state tests executed"
+elif grep -q '^tests: total=0 ' "$LABDIR/results.summary.txt" && grep -q '^scenarios: total=[1-9]' "$LABDIR/results.summary.txt"; then
+  echo "OK: summary shows scenario-only mode (tests=0, scenarios present)"
+else
+  echo "FAIL: unexpected summary mode (neither steady-state tests nor scenario-only scenarios detected)"
+  cat "$LABDIR/results.summary.txt"
+  exit 1
+fi
 echo "OK: artifacts present and summary indicates pass"
+
+echo
+echo "=== 7b) Scenario summary rendering (results.summary.txt) ==="
+# Run a deterministic scenario if available, then assert summary contains the scenario section.
+# (This does not change authority; it is a human-only artifact check.)
+
+scen_id="ping_test"
+
+set +e
+list_out="$(./src/netsim.py test --list-scenarios "$LAB" 2>&1)"
+rc=$?
+set -e
+
+if [ $rc -ne 0 ]; then
+  echo "FAIL: --list-scenarios failed (rc=$rc)"
+  echo "$list_out"
+  exit 1
+fi
+
+if echo "$list_out" | grep -Fq -- "- ${scen_id}:"; then
+  ./src/netsim.py test --scenario "$scen_id" "$LAB" >/dev/null
+  test -s "$LABDIR/results.summary.txt"
+
+  grep -q '^=== Scenarios ===' "$LABDIR/results.summary.txt" || {
+    echo "FAIL: expected scenario section header not found in results.summary.txt"
+    cat "$LABDIR/results.summary.txt"
+    exit 1
+  }
+
+  grep -qE "^scenario ${scen_id}:" "$LABDIR/results.summary.txt" || {
+    echo "FAIL: expected scenario id '${scen_id}' not found in scenario summary"
+    cat "$LABDIR/results.summary.txt"
+    exit 1
+  }
+
+  echo "OK: scenario summary renders in results.summary.txt"
+else
+  echo "SKIP: lab '$LAB' has no '${scen_id}' scenario; scenario summary rendering not verified here"
+fi
 echo
 
 echo "=== 8) Scenario fault determinism ==="

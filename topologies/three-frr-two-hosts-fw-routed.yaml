@@ -57,6 +57,7 @@ tests:
   - name: h1_to_h2_ping
     kind: ping
     src: h1
+    src_if: eth1
     dst: h2
     expect: fail
     count: 1

@@ -3119,6 +3119,37 @@ def cmd_test(args: argparse.Namespace) -> None:
 
     lab = args.lab
     # ------------------------------------------------------------
+    # v1.x UX hardening: netsim test expects a LAB NAME, not a topology path
+    # Deterministic heuristic only (no filesystem stat).
+    # ------------------------------------------------------------
+    lab_raw = str(lab or "").strip()
+
+    def _looks_like_topology_path(s: str) -> bool:
+        s2 = s.strip()
+        s2_l = s2.lower()
+        return (
+            ("/" in s2)
+            or ("\\" in s2)
+            or s2_l.endswith(".yaml")
+            or s2_l.endswith(".yml")
+            or s2_l.startswith("topologies/")
+            or s2_l.startswith("./")
+        )
+
+    if _looks_like_topology_path(lab_raw):
+        die(
+            "netsim test expects a LAB NAME, not a topology file path.\n\n"
+            "You ran:\n"
+            f"  netsim test {lab_raw}\n\n"
+            "Try:\n"
+            f"  netsim up {lab_raw}\n"
+            "  netsim test <lab-name>\n\n"
+            "Example:\n"
+            "  netsim up topologies/change-context-hard.yaml\n"
+            "  netsim test change-context-hard\n",
+            code=2,
+        )
+    # ------------------------------------------------------------
     # v1.x UX: list scenarios from resolved topology (no execution)
     # ------------------------------------------------------------
     if bool(getattr(args, "list_scenarios", False)):
@@ -5032,6 +5063,111 @@ def cmd_test(args: argparse.Namespace) -> None:
 
     print("✅ TEST PASS: containers running + checks OK")
 
+def _fmt_dur_s(dur_ms: object) -> str:
+    try:
+        ms = int(dur_ms)
+        if ms < 0:
+            return ""
+        return f"{ms/1000.0:.1f}s"
+    except Exception:
+        return ""
+
+def _render_scenarios_summary(results: dict) -> str:
+    scenarios = results.get("scenarios") or []
+    if not isinstance(scenarios, list) or not scenarios:
+        return ""
+
+    # Deterministic ordering by scenario id (string)
+    scenarios_all = [s for s in scenarios if isinstance(s, dict)]
+    scenarios_sorted = sorted(
+        scenarios_all,
+        key=lambda s: str(s.get("id") or "").strip(),
+    )
+
+    out: list[str] = []
+    out.append("=== Scenarios ===")
+
+    for s in scenarios_sorted:
+        sid = str(s.get("id") or "").strip() or "<missing-id>"
+        verdict = str(s.get("verdict") or "").strip().lower() or "unknown"
+        dur_s = _fmt_dur_s(s.get("duration_ms"))
+        dur_part = f" (duration: {dur_s})" if dur_s else ""
+
+        out.append(f"scenario {sid}: {verdict.upper()}{dur_part}")
+
+        steps = s.get("steps") or []
+        if not isinstance(steps, list) or not steps:
+            continue
+
+        for i, st in enumerate(steps, start=1):
+            if not isinstance(st, dict):
+                continue
+
+            stype = str(st.get("type") or "").strip() or "step"
+            line_parts: list[str] = [f"  [{i}] {stype}"]
+
+            # Key identifiers per step type
+            if stype == "run":
+                ref = st.get("ref")
+                if isinstance(ref, str) and ref.strip():
+                    line_parts.append(f"test={ref.strip()}")
+
+            elif stype == "fault":
+                action = st.get("action")
+                if isinstance(action, str) and action.strip():
+                    line_parts.append(action.strip())
+                target = st.get("target")
+                if isinstance(target, str) and target.strip():
+                    line_parts.append(target.strip())
+
+            elif stype == "wait_for":
+                wf = st.get("wait_for") or {}
+                if isinstance(wf, dict):
+                    wtype = wf.get("type")
+                    if isinstance(wtype, str) and wtype.strip():
+                        line_parts.append(wtype.strip())
+
+                    src = wf.get("from")
+                    dst = wf.get("to") or wf.get("to_ip")
+                    src_s = src.strip() if isinstance(src, str) and src.strip() else ""
+                    dst_s = dst.strip() if isinstance(dst, str) and dst.strip() else ""
+                    if src_s and dst_s:
+                        line_parts.append(f"{src_s}->{dst_s}")
+
+                    exp = wf.get("expect")
+                    if isinstance(exp, str) and exp.strip():
+                        line_parts.append(f"expect={exp.strip()}")
+
+                    # Optional selectors
+                    src_if = wf.get("src_if")
+                    if isinstance(src_if, str) and src_if.strip():
+                        line_parts.append(f"src_if={src_if.strip()}")
+
+            elif stype == "wait_for_bgp":
+                node = st.get("node")
+                if isinstance(node, str) and node.strip():
+                    line_parts.append(f"node={node.strip()}")
+
+            # verdict / observed / expected when present
+            v = st.get("verdict")
+            if isinstance(v, str) and v.strip():
+                line_parts.append(f"verdict={v.strip().lower()}")
+
+            expected = st.get("expected")
+            observed = st.get("observed")
+            if expected is not None:
+                line_parts.append(f"expected={expected}")
+            if observed is not None:
+                line_parts.append(f"observed={observed}")
+
+            dur_step = _fmt_dur_s(st.get("duration_ms"))
+            if dur_step:
+                line_parts.append(f"dur={dur_step}")
+
+            out.append("  " + " ".join(line_parts))
+
+    return "\n".join(out) + "\n"
+
 def _format_test_summary(results: dict) -> str:
     lab = results.get("lab", "")
     summ = results.get("summary", {}) or {}
@@ -5123,68 +5259,12 @@ def _format_test_summary(results: dict) -> str:
             lines.append("failed_scenarios: (none)")
 
     # -------------------------------------------------------------------------
-    # Scenario step breakdown (human-only, best-effort, non-authoritative)
+    # Scenario step breakdown (human-only, deterministic, non-authoritative)
     # -------------------------------------------------------------------------
-    if scenarios:
-        lines.append("scenario_steps:")
-        for s in scenarios:
-            sid = s.get("id", "<unnamed>")
-            sverdict = s.get("verdict", "unknown")
-            sdur = s.get("duration_ms")
-            if sdur is None:
-                header = f" - {sid} verdict={sverdict}"
-            else:
-                header = f" - {sid} verdict={sverdict} duration_ms={int(sdur)}"
-            lines.append(header)
+    scen_txt = _render_scenarios_summary(results)
+    if scen_txt:
+        lines.append(scen_txt.rstrip("\n"))
 
-            steps = s.get("steps", []) or []
-            for idx0, st in enumerate(steps, start=1):
-                idx = int(st.get("step") or idx0)
-                stype = st.get("type", "unknown")
-                sdur2 = st.get("duration_ms")
-                sdur_str = f"{int(sdur2)}ms" if sdur2 is not None else "?"
-                sv = st.get("verdict")
-                sv_str = f" verdict={sv}" if sv else ""
-
-                if stype == "run":
-                    ref = st.get("ref", "<missing-ref>")
-                    lines.append(f"   {idx:02d}. run ref={ref}{sv_str} duration={sdur_str}")
-
-                elif stype == "wait_for":
-                    wtype = st.get("wait_type", "<missing-wait_type>")
-                    expected = st.get("expected")
-                    observed = st.get("observed")
-                    eo = ""
-                    if expected is not None or observed is not None:
-                        eo = f" expected={expected} observed={observed}"
-                    lines.append(f"   {idx:02d}. wait_for type={wtype}{eo}{sv_str} duration={sdur_str}")
-
-                elif stype == "fault":
-                    action = st.get("action", "<missing-action>")
-                    target = st.get("target", "")
-                    tgt = f" target={target}" if target else ""
-
-                    note = ""
-                    if action in ("link_up", "interface_up"):
-                        meta = st.get("meta") or {}
-                        rr_raw = meta.get("restored_routes")
-                        try:
-                            rr = int(rr_raw or 0)
-                        except Exception:
-                            rr = 0
-                        note = f" (restored_routes={rr})"
-
-                    lines.append(
-                        f"   {idx:02d}. fault action={action}{tgt}{note}{sv_str} duration={sdur_str}"
-                    )
-
-                elif stype == "wait":
-                    seconds = st.get("seconds")
-                    sec = f" seconds={seconds}" if seconds is not None else ""
-                    lines.append(f"   {idx:02d}. wait{sec}{sv_str} duration={sdur_str}")
-
-                else:
-                    lines.append(f"   {idx:02d}. {stype}{sv_str} duration={sdur_str}")
 
     return "\n".join(lines) + "\n"
 
