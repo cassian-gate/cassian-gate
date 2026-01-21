@@ -1,0 +1,12 @@
+# topologies/neg/bad_ping_fail_has_timeout.yaml
+name: bad_ping_fail_has_timeout
+nodes: [{name: h1, type: host}, {name: h2, type: host}]
+links: [{endpoints: ["h1:eth1","h2:eth1"], ipv4: ["10.0.0.1/24","10.0.0.2/24"]}]
+tests:
+  - name: should_be_rejected
+    kind: ping
+    src: h1
+    dst: h2
+    expect: fail
+    timeout_s: 5
+

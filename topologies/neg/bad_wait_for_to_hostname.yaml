@@ -1,0 +1,22 @@
+name: bad-waitfor-to-hostname
+
+nodes:
+  - name: h1
+    type: host
+    ip: 192.168.1.10/24
+    gw: 192.168.1.1
+
+  - name: r1
+    type: frr
+
+links: []
+
+scenarios:
+  - id: s1
+    description: "wait_for ping: hostname-like destination must be rejected (no DNS)"
+    steps:
+      - wait_for:
+          type: ping
+          from: h1
+          to: vip.dc.local
+          expect: pass

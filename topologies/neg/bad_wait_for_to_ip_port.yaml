@@ -1,0 +1,22 @@
+name: bad-waitfor-to-ip-port
+
+nodes:
+  - name: h1
+    type: host
+    ip: 192.168.1.10/24
+    gw: 192.168.1.1
+
+  - name: r1
+    type: frr
+
+links: []
+
+scenarios:
+  - id: s1
+    description: "wait_for ping: IP:port must be rejected (no port for ping destination)"
+    steps:
+      - wait_for:
+          type: ping
+          from: h1
+          to: 10.0.0.1:443
+          expect: pass
