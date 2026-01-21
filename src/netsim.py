@@ -98,6 +98,44 @@ def validate_ip_literal(value: str, ctx: str) -> None:
     except Exception:
         die(f"{ctx}: invalid IPv4/IPv6 literal: {value!r}")
 
+def classify_invalid_target(token: str) -> str:
+    """
+    Messaging-only helper. Does NOT change acceptance rules.
+    Returns a short reason string for common invalid destination patterns.
+    """
+    t = (token or "").strip()
+    if not t:
+        return "empty destination"
+
+    # IP:port (common copy/paste)
+    if ":" in t:
+        # If it's a pure IPv6 literal, it'll also contain ":".
+        # Detect IP:port by "one colon" + numeric port and left side looks like IPv4.
+        parts = t.rsplit(":", 1)
+        if len(parts) == 2:
+            left, right = parts[0].strip(), parts[1].strip()
+            if right.isdigit() and is_ip_literal(left) and "." in left:
+                return "appears to be IP:port; expected IPv4 literal only (no port)"
+
+    # CIDR
+    if "/" in t:
+        left = t.split("/", 1)[0].strip()
+        if is_ip_literal(left) and "." in left:
+            return "appears to be CIDR; expected single IPv4 address (no /mask)"
+
+    # IPv6 (v1.x: IPv4-only in these target contexts)
+    if ":" in t and not t.count(":") == 1:
+        # Heuristic: multiple colons strongly indicates IPv6
+        return "appears to be IPv6; v1.x supports IPv4 only here"
+
+    # Hostname-like (letters + dots)
+    has_letter = any(ch.isalpha() for ch in t)
+    if has_letter and "." in t:
+        return "appears to be a hostname; DNS/hostnames are not supported (determinism)"
+
+    # Generic fallback
+    return "invalid destination (must be node name or IPv4 literal)"
+
 def ensure_nc(rt: Runtime, lab: str, node: str) -> None:
     cp = rt.exec(
         lab,
@@ -2562,6 +2600,15 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
 
                 # v1: wait_for.to may be a node name OR an IP literal
                 to_raw = str(wf.get("to")).strip()
+                # v1.x: wait_for ping destinations are IPv4-only (no IPv6)
+                if is_ip_literal(to_raw) and ":" in to_raw:
+                    reason = classify_invalid_target(to_raw)  # should say IPv6
+                    die(
+                        f"{sctx}.wait_for.to: invalid destination '{to_raw}'. "
+                        "Allowed: node name declared in topology (e.g. 'h2') OR IPv4 literal (e.g. '192.168.2.10'). "
+                        "Hostnames/DNS are not supported (determinism). "
+                        f"Detail: {reason}"
+                    )
 
                 if is_ip_literal(to_raw):
                     validate_ip_literal(to_raw, f"{sctx}.wait_for.to")
@@ -2569,7 +2616,12 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                     # must be an existing node name
                     nodes = topo.get("nodes", []) or []
                     if not any(isinstance(n, dict) and n.get("name") == to_raw for n in nodes):
-                        die(f"{sctx}.wait_for.to: must be a valid node name or IPv4/IPv6 literal")
+                        reason = classify_invalid_target(to_raw)
+                        die(
+                            f"{sctx}.wait_for.to: invalid destination '{to_raw}'. "
+                            f"Allowed: node name declared in topology (e.g. 'h2') OR IPv4 literal (e.g. '192.168.2.10'). "
+                            f"Hostnames/DNS are not supported (determinism). Detail: {reason}"
+                        )
 
                 if "timeout" in wf:
                     to = wf.get("timeout")
@@ -2637,6 +2689,8 @@ def resolve_dst_to_ip(topo: dict[str, Any], dst: str) -> str:
       - node name in topo.nodes -> resolve via node_first_ipv4
       - an IPv4/IPv6 literal -> return as-is
     Anything else is an error (fail fast).
+
+    NOTE (v1.x determinism): DNS/hostnames are not supported.
     """
     if not isinstance(dst, str) or not dst.strip():
         die("resolve_dst_to_ip: dst must be a non-empty string")
@@ -2644,7 +2698,19 @@ def resolve_dst_to_ip(topo: dict[str, Any], dst: str) -> str:
     dst_s = dst.strip()
 
     # If literal IP, use directly (v1-safe)
+    # If literal IP, use directly (v1-safe)
     if is_ip_literal(dst_s):
+        # v1.x: for wait_for ping destinations, IPv4-only (determinism / scope)
+        if ":" in dst_s:
+            reason = classify_invalid_target(dst_s)  # should report IPv6
+            die(
+                f"wait_for ping: invalid destination '{dst_s}'.\n\n"
+                "Allowed forms:\n"
+                "- node name declared in topology (e.g. 'h2')\n"
+                "- IPv4 literal (e.g. '192.168.2.10')\n\n"
+                "Hostnames / DNS are not supported (determinism).\n"
+                f"Detail: {reason}"
+            )
         validate_ip_literal(dst_s, "wait_for.to")
         return dst_s
 
@@ -2653,7 +2719,15 @@ def resolve_dst_to_ip(topo: dict[str, Any], dst: str) -> str:
     if any(isinstance(n, dict) and n.get("name") == dst_s for n in nodes):
         return node_first_ipv4(topo, dst_s)
 
-    die(f"wait_for.to must be a valid node name or IPv4/IPv6 literal (got {dst_s!r})")
+    reason = classify_invalid_target(dst_s)
+    die(
+        f"wait_for ping: invalid destination '{dst_s}'.\n\n"
+        "Allowed forms:\n"
+        "- node name declared in topology (e.g. 'h2')\n"
+        "- IPv4 literal (e.g. '192.168.2.10')\n\n"
+        "Hostnames / DNS are not supported (determinism).\n"
+        f"Detail: {reason}"
+    )
 
 def wait_for_condition(
     rt: "Runtime",
@@ -3458,7 +3532,7 @@ def cmd_test(args: argparse.Namespace) -> None:
         retry_timeout_s = int(t.get("timeout_s") or 15)
         retry_interval_s = float(t.get("retry_interval_s") or 1.0)
 
-                # v1.x optional ping source selector (Tier-1 validation only)
+        # v1.x optional ping source selector (Tier-1 validation only)
         src_ip = t.get("src_ip")
         src_if = t.get("src_if")
 
@@ -3475,6 +3549,16 @@ def cmd_test(args: argparse.Namespace) -> None:
                 die(f"ERROR: ping test '{test_name}': src_if must be a non-empty string")
             if any(ch.isspace() for ch in src_if):
                 die(f"ERROR: ping test '{test_name}': src_if must not contain whitespace")
+
+        def _format_ping_ctx(*, expected_s: str, observed_s: str) -> str:
+            dst_part = str(dst_ip) if dst_ip else f"<unresolved: {dst_token}>"
+            extras = []
+            if src_if:
+                extras.append(f"src_if={str(src_if).strip()}")
+            if src_ip:
+                extras.append(f"src_ip={str(src_ip).strip()}")
+            extra_s = f" ({', '.join(extras)})" if extras else ""
+            return f"ping mismatch: from={src} dst={dst_part} expected={expected_s} observed={observed_s}{extra_s}"
 
         def attempt():
             ping_cmd = ["ping", "-c", str(count), "-W", str(per_attempt_timeout_s)]
@@ -3504,6 +3588,8 @@ def cmd_test(args: argparse.Namespace) -> None:
         should_succeed = (expected == "pass")
         verdict = "pass" if (ok == should_succeed) else "fail"
 
+        err = "" if verdict == "pass" else _format_ping_ctx(expected_s=expected, observed_s=observed)
+
         rec = {
             "name": test_name,
             "kind": "ping",
@@ -3513,9 +3599,10 @@ def cmd_test(args: argparse.Namespace) -> None:
             "observed": observed,
             "verdict": verdict,
             "duration_ms": int(dur_ms),
-            "error": "" if verdict == "pass" else f"ping mismatch to {dst_ip} (expected {expected}, observed {observed})",
+            "error": err,
             "meta": {
                 "dst_ip": dst_ip,
+                "dst_raw": dst_token,
                 "count": count,
                 "per_attempt_timeout_s": per_attempt_timeout_s,
                 "attempts": attempts,

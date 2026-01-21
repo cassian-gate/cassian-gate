@@ -297,11 +297,15 @@ must_fail_with "topologies/neg/bad_interface_unknown_node.yaml" "unknown node 'n
 must_fail_with "topologies/neg/bad_interface_unknown_iface.yaml" "interface 'eth999' not found on node 'r2'"
 must_fail_with "topologies/neg/bad_interface_missing_key.yaml" "must include exactly one of if/iface/interface"
 must_fail_with "topologies/neg/bad_interface_multi_keys.yaml" "provide only one of if/iface/interface"
-must_fail_with "topologies/neg/bad_wait_for_to_unknown_node.yaml" "wait_for.to: must be a valid node name or IPv4/IPv6 literal"
+must_fail_with "topologies/neg/bad_wait_for_to_unknown_node.yaml" "wait_for.to: invalid destination 'not_a_node'"
 must_fail_with "topologies/neg/bad_wait_for_expect_invalid.yaml" "wait_for.expect: must be pass|fail"
 must_fail_with "topologies/neg/bad_candidate_changes_dup_id.yaml" "duplicate id 'change1'"
 must_fail_with "topologies/neg/bad_candidate_changes_both_sources.yaml" "choose only one of 'file' or 'inline'"
 must_fail_with_re "topologies/neg/bad_static_routes_rejected.yaml" "static_routes|static route|routing.*topology|not supported"
+must_fail_with "topologies/neg/bad_wait_for_to_hostname.yaml" "Hostnames/DNS are not supported"
+must_fail_with "topologies/neg/bad_wait_for_to_cidr.yaml" "CIDR"
+must_fail_with "topologies/neg/bad_wait_for_to_ip_port.yaml" "IP:port"
+must_fail_with "topologies/neg/bad_wait_for_to_ipv6.yaml" "IPv6"
 
 echo
 echo "=== NEG) invalid include:all (unnamed test) ==="
