@@ -1,0 +1,87 @@
+nodes:
+  - name: h1
+    type: host
+
+  - name: h2
+    type: host
+
+  - name: r1
+    type: frr
+    frr_mode: preconfigured
+    image: frr-demo-bgp-r1:v1x
+
+  - name: r2
+    type: frr
+    frr_mode: preconfigured
+    image: frr-demo-bgp-r2:v1x
+
+  - name: fw1
+    type: nft-fw
+
+links:
+  - endpoints: ["h1:eth1", "r1:eth1"]
+  - endpoints: ["r1:eth2", "fw1:eth1"]
+  - endpoints: ["fw1:eth2", "r2:eth1"]
+  - endpoints: ["r2:eth2", "h2:eth1"]
+
+tests:
+  # Positive: must work (multi-hop pass is allowed because both routers are preconfigured)
+  - name: app_to_db_postgres
+    type: tcp
+    from: h1
+    to_ip: 192.168.2.10
+    port: 5432
+    expect: pass
+
+  # Negative: must-not (blocked traffic is success when failure is expected)
+  - name: app_to_db_http_blocked
+    type: tcp
+    from: h1
+    to_ip: 192.168.2.10
+    port: 80
+    expect: fail
+
+  - name: app_to_db_icmp_blocked
+    type: ping
+    from: h1
+    to: h2
+    expect: fail
+
+  # Control-plane check (state only; does not imply reachability)
+  - name: r1_bgp_to_r2_up
+    type: bgp_neighbor
+    node: r1
+    neighbor: 10.0.0.2
+    expect: pass
+
+scenarios:
+  - id: baseline
+    steps:
+      - run:
+          include: all
+
+  - id: fw_interface_down_up
+    steps:
+      - fault:
+          interface_down:
+            node: fw1
+            interface: eth2
+
+      - wait_for_bgp:
+          node: r1
+          timeout: 30
+
+      - run:
+          include: all
+
+      - fault:
+          interface_up:
+            node: fw1
+            interface: eth2
+
+      - wait_for_bgp:
+          node: r1
+          timeout: 30
+
+      - run:
+          include: all

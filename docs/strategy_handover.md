@@ -103,11 +103,17 @@ v1 is complete **only when all three pillars exist**.
 
 ### A) Deterministic Validation Core
 
-- atomic tests (ping, tcp)
+- atomic tests:
+  - `ping`
+  - `tcp`
+  - `bgp_neighbor` (v1.x binary control-plane invariant)
 - negative tests (first-class)
 - strict schema validation
 - fail-fast guardrails
 - artifact-first truth model
+
+> `bgp_neighbor` asserts session state only.  
+> It does **not** validate routing correctness, policy, or best-path selection.
 
 ### B) Scenario-Based Failure Choreography
 
@@ -198,7 +204,7 @@ EVPN may exist in the runtime (e.g. preconfigured images), but ai-netsim **obser
 ## 7) Adoption & Demo Strategy (v1.x)
 
 To reduce first-run friction **without violating v1 authority**, v1.x includes
-**preconfigured demo runtimes**.
+**preconfigured demo runtimes and UX hardening helpers**.
 
 ### Principles
 
@@ -215,7 +221,14 @@ To reduce first-run friction **without violating v1 authority**, v1.x includes
 
 - Multi-hop `expect: pass` is allowed **only** when all relevant nodes are explicitly preconfigured.
 
-This enables fast onboarding while preserving honesty.
+### UX & Ops Helpers (v1.x, non-authoritative)
+
+- `netsim test --list-scenarios`
+- `netsim cleanup --all [--yes]`
+- scenario timelines in `results.summary.txt`
+- fail-fast, educational CLI error messaging
+
+These helpers improve onboarding and CI signal quality without affecting authority.
 
 ---
 
@@ -284,6 +297,7 @@ This enables fast onboarding while preserving honesty.
 ✅ negative regression suite  
 ✅ assistive AI (hardened)  
 ✅ adoption demos & onboarding  
+✅ UX & ops helpers  
 
 **v1 semantics are considered complete and stable.**
 

@@ -28,6 +28,11 @@ set -euo pipefail
 LAB="${1:-three-frr-two-hosts-fw-routed}"
 LABDIR="labs/clab-$LAB"
 TOPO="topologies/${LAB}.yaml"
+# Optional: regenerate golden bundle fixtures (explicit opt-in)
+# Use when you intentionally changed topology/tests/scenarios or bundle fields.
+#   AI_NETSIM_UPDATE_GOLDENS=1 ./scripts/verify_ai.sh
+AI_NETSIM_UPDATE_GOLDENS="${AI_NETSIM_UPDATE_GOLDENS:-0}"
+
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || { echo "FAIL: missing required command: $1"; exit 1; }
@@ -99,6 +104,31 @@ skip_or_fail_invalid_key() {
     exit 0
   fi
 }
+
+if [ "$AI_NETSIM_UPDATE_GOLDENS" = "1" ]; then
+  echo "=== AI) Update golden fixtures (explicit opt-in) ==="
+
+  mkdir -p tests/ai/fixtures
+
+  echo "Updating: tests/ai/fixtures/explain.bundle.json"
+  ./src/netsim.py ai explain "$LAB" --bundle | jq -S . > tests/ai/fixtures/explain.bundle.json
+
+  if [ -f "$TOPO" ]; then
+    echo "Updating: tests/ai/fixtures/review.bundle.json"
+    ./src/netsim.py ai review "$TOPO" --bundle | jq -S . > tests/ai/fixtures/review.bundle.json
+  else
+    echo "WARN: skipping review golden update (missing $TOPO)"
+  fi
+
+  echo "Updating: tests/ai/fixtures/coach.bundle.json"
+  ./src/netsim.py ai coach --bundle | jq -S . > tests/ai/fixtures/coach.bundle.json
+
+  echo "OK: golden fixtures updated"
+  echo "Next:"
+  echo "  git add tests/ai/fixtures/*.bundle.json"
+  echo "  git commit -m \"tests(ai): refresh golden bundles\""
+  exit 0
+fi
 
 echo "=== AI) Guardrails: ai code must not call runtime/deploy primitives ==="
 

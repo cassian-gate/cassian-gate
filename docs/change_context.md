@@ -1,4 +1,3 @@
----
 # ai-netsim — Implementation Handover
 ## Change Context + Advisory Intent Builder (All Versions)
 
@@ -6,7 +5,7 @@
 > This document describes *how* ai-netsim implements a friendly, high-value UX for engineers making production changes — **without violating determinism, authority, or CI safety**.
 
 This document is **implementation guidance**, not authority.  
-If it conflicts with `docs/STRATEGY_HANDOVER.md` or `design-contract.md`, **those documents win**.
+If it conflicts with `docs/STRATEGY_HANDOVER.md` or `docs/design-contract.md`, **those documents win**.
 
 ---
 
@@ -32,7 +31,7 @@ Candidate configs and AI **never** affect verdicts, execution, or exit codes.
 
 ### 2.1 Change Context (Non-Authoritative)
 
-- Users may attach **any candidate config**:
+- Users may attach **any candidate change material**:
   - full config
   - diff
   - snippet
@@ -40,32 +39,29 @@ Candidate configs and AI **never** affect verdicts, execution, or exit codes.
   - plain-text notes
 - Vendor-agnostic (Junos, EOS, IOS-XR, FortiOS, Palo Alto, SONiC, FRR, etc.)
 - Stored in the topology and copied into run artifacts
-- **Never consumed by the deterministic engine**
+- **Never consumed by the deterministic execution engine**
 
 **Purpose:**  
 Human understanding + AI advisory reasoning only.
 
 ---
 
-### 2.2 Candidate Config Storage Convention (All Versions)
+### 2.2 Candidate Change Storage Convention
 
-**Recommended pattern (strongly encouraged):**
+**Strongly recommended pattern (all versions):**
 
 - **Topology**
-  - references + metadata only
+  - contains references + metadata only
   - acts as the *index and intent anchor*
 - **Filesystem**
-  - holds the actual candidate config content
+  - holds the actual candidate content
 
 Example repository layout:
-
-```
 
 topologies/change-bgp-policy.yaml
 changes/2026-01-15-bgp-policy.diff
 changes/fw-acl-snippet.txt
 
-```
 
 **Benefits:**
 
@@ -81,13 +77,13 @@ Inline config text in the topology is allowed **only for small snippets**.
 
 ### 2.3 Advisory Intent Builder (AI)
 
-AI uses:
+AI may use:
 
-- topology model
+- the resolved topology
 - candidate change context
 - (optionally) prior run artifacts
 
-To produce **suggestions**, never decisions:
+To produce **suggestions only**, never decisions:
 
 1. Change interpretation (with explicit uncertainty)
 2. Proposed intent (plain language)
@@ -96,13 +92,13 @@ To produce **suggestions**, never decisions:
 5. Coverage gaps & risk checklist
 6. Blast-radius explanations (descriptive only)
 
-Every AI output must declare:
+Every AI output must explicitly declare:
 
 > **“Advisory only — tests and scenarios are the sole authority.”**
 
 ---
 
-### 2.4 Gate Remains Untouched
+### 2.4 Gate Semantics Are Untouched
 
 - `netsim test`
   - clean-state
@@ -111,22 +107,22 @@ Every AI output must declare:
 - `netsim run`
   - exploratory only
 - AI commands
-  - post-execution
+  - post-execution only
   - exit code always `0`
   - no side effects
   - no runtime mutation
 
 ---
 
-## 3) UX Pillars Engineers Love (All Versions)
+## 3) UX Pillars Engineers Respond To
 
-These principles apply everywhere, regardless of tier.
+These principles apply everywhere, regardless of version or tier.
 
 ### A) “What Changed?” Summary
 
 - First thing shown
 - Grounds the engineer
-- Reduces fear and confusion
+- Reduces fear and ambiguity
 
 ---
 
@@ -137,7 +133,7 @@ These principles apply everywhere, regardless of tier.
 - Missing must-not invariants
 - Missing return-path validation
 
-Feels like senior-engineer review.
+Feels like a senior-engineer review.
 
 ---
 
@@ -160,7 +156,7 @@ Feels like senior-engineer review.
 ### E) Scope-of-Change Warnings
 
 - “You changed routing but only test firewall”
-- “Change touches more than expected”
+- “Change touches more systems than expected”
 
 ---
 
@@ -175,232 +171,106 @@ Feels like senior-engineer review.
 
 ---
 
-## v1 — Open Core (Required, Minimal, Safe)
+## v1 / v1.x — Open Core (Implemented & Locked)
 
 ### Goals
 
-- Make ai-netsim immediately friendly
+- Immediate usability
 - Zero vendor parsing
 - Zero authority risk
 
 ---
 
-### Block 1 — Change Context Declaration
+### Block 1 — Change Context Declaration (v1)
 
-**Implement**
+**Implemented**
 
-- Add `candidate_changes` to topology schema
+- `candidate_changes` in topology schema
 - Each entry supports:
   - `id`
   - `type` (`diff|snippet|full|ticket|note`)
   - exactly one of `path` or `text`
-  - optional `targets` (node names)
+  - optional `targets`
   - optional `vendor`
   - optional `change_id`
 
 **Rules**
 
-- Large configs should be referenced via `path`
-- Inline `text` limited to small snippets
-- Engine must ignore this section completely
-
-**Verification**
-
-- Schema validation
-- Negative tests for invalid combinations
+- Engine ignores this section completely
+- Schema-validated only
 - Deterministic ordering in resolved topology
 
 ---
 
-### Block 2 — Bundle Change Context (Artifact-Only)
+### Block 2 — Change Context Bundling (v1)
 
-**Implement**
+**Implemented**
 
-- Include candidate config content in AI bundles:
+- Candidate content included in AI bundles:
   - size-limited
   - deterministic ordering
-  - basic redaction hooks
-- Large files truncated with metadata
-
-**Verification**
-
-- Golden bundle fixtures
-- Redaction safety checks
-- No runtime or deploy access
+  - truncation metadata for large files
+- No runtime, deploy, or execution access
 
 ---
 
-### Block 3 — `netsim ai review` (Offline-First)
+### Block 3 — `netsim ai review` (v1)
 
-**Implement**
+**Implemented**
 
-- Deterministic advisory output:
+- Offline-first advisory output:
   - “What changed?”
   - risk checklist
-  - minimal proof set
-- No vendor parsing
-- No online dependency required
-
-**Verification**
-
-- Golden fixtures
+  - minimal proof suggestions
 - Exit code always `0`
 
 ---
 
-### Block 4 — `netsim ai explain` (On-Call Friendly)
+### Block 4 — `netsim ai explain` (v1)
 
-**Implement**
+**Implemented**
 
-- Explain failures using:
+- Explains failures using:
   - `results.json`
   - resolved topology
   - candidate change context
-- Plain language, no fixes
-
-**Verification**
-
-- Known failure fixtures
+- No fixes
 - No authority leakage
 
 ---
 
-## v1.5 — Trust & Coverage Upgrade
+## v1.5 — Confidence & Coverage (Deferred)
 
-### Goals
+> See `docs/future/CHANGE_CONTEXT_FUTURE.md`
 
-- Increase confidence
-- Reduce AI uncertainty
-- Improve safety signals
+Planned focus:
+- deterministic change classification
+- coverage awareness
+- richer advisory signals
 
----
-
-### Block 5 — Deterministic Change Classification
-
-**Implement**
-
-- Regex/tag-based classifier (no AI)
-- Categories:
-  - routing
-  - firewall
-  - NAT
-  - VRF
-  - L2/VLAN
-  - interface
-
-**Use**
-
-- warnings only
-- confidence signals only
+No execution or verdict authority added.
 
 ---
 
-### Block 6 — Coverage Awareness (Advisory)
+## Pro — Individual Engineer Accelerator (Deferred)
 
-**Implement**
+> See `docs/future/CHANGE_CONTEXT_FUTURE.md`
 
-- Map tests/scenarios to:
-  - nodes
-  - paths
-  - must / must-not semantics
-- Compare against change categories
-
-**Output**
-
-- “You changed X but did not test Y”
+Focus:
+- intent packs
+- copy-paste test/scenario suggestions
+- zero auto-mutation
 
 ---
 
-## Pro — Individual Engineer Accelerator
+## Enterprise — Governance & Evidence (Deferred)
 
-### Goals
+> See `docs/future/CHANGE_CONTEXT_FUTURE.md`
 
-- Faster iteration
-- Better guidance
-- Zero safety compromise
-
----
-
-### Block 7 — Intent Packs
-
-**Implement**
-
-- Curated test/scenario templates:
-  - add BGP peer
-  - change ACL
-  - modify NAT
-  - VRF change
-- Suggested by AI, never auto-applied
-
----
-
-### Block 8 — Patch-Style Output
-
-**Implement**
-
-- Copy-paste YAML blocks only
-- Explicit “human must apply” warning
-
----
-
-## Enterprise — Governance & Evidence
-
-### Goals
-
-- Organizational adoption
-- Auditability
-- Consistency at scale
-
----
-
-### Block 9 — Policy-Driven Deterministic Guardrails
-
-**Implement**
-
-- Explicit policy rules:
-  - e.g. firewall change → require negative tests
-- Deterministic enforcement
-- Explicit opt-in
-
----
-
-### Block 10 — Artifact Retention & Integrations
-
-**Implement**
-
-- Stable artifact metadata
-- change_id propagation
-- CI + ticketing hooks
-
----
-
-### Block 11 — Vendor Evidence Packs (Non-Authoritative)
-
-**Implement**
-
-- Allowlisted command capture
-- Evidence only
-- AI may summarize, never gate
-
----
-
-## Optional (Any Version ≥ v1.1)
-
-### Block X — Sanitized AI Output Fixtures
-
-**Purpose**
-
-- Validate AI output *structure*, not content
-
-**Implement**
-
-- Sanitize free text → placeholders
-- Assert:
-  - schema validity
-  - allowed keys only
-  - advisory markers present
-  - redaction enforced
-- Behind explicit flag
+Focus:
+- policy-driven deterministic guardrails
+- artifact retention
+- vendor evidence packs (non-authoritative)
 
 ---
 
@@ -414,14 +284,9 @@ Feels like senior-engineer review.
 
 ---
 
-## 6) External Mental Model
+## 6) External Mental Model (Pinned)
 
 > “ai-netsim doesn’t tell you if a config is correct.  
 > It helps you decide **what to prove**, then proves it deterministically.”
 
-This sentence should guide every UX decision.
-
----
-```
-
----
+This sentence should guide every UX and AI decision.

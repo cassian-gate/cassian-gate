@@ -122,10 +122,13 @@ ai-netsim executes strictly in this order:
    - Verify containers exist and are running
 
 4. **Provision**
-   - Apply host addressing & routes
+   - Apply host addressing
    - Apply firewall rules
-   - Apply FRR configuration
-   - Deterministic readiness checks
+   - Apply **runtime configuration owned by the image or backend**
+   - Perform deterministic readiness checks
+
+   > ai-netsim does **not** own routing intent or correctness in v1.  
+   > Routing may exist via preconfigured images or user exploration, but is never inferred or validated here.
 
 5. **Test**
    - Execute atomic tests
@@ -209,6 +212,16 @@ Unknown keys are rejected.
 
 ## 6) Test contract
 
+### Supported atomic test types (v1 / v1.x)
+
+- `ping`
+- `tcp`
+- `bgp_neighbor` (binary control-plane health invariant)
+
+No other atomic test types are permitted unless explicitly added via contract amendment.
+
+---
+
 ### Required test result fields
 
 Each test must record:
@@ -217,6 +230,8 @@ Each test must record:
 - `observed`
 - `verdict`
 - `evidence`
+
+---
 
 ### Negative tests
 
