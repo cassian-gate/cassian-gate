@@ -99,7 +99,7 @@
   "command": "review",
   "counts": {
     "nodes": 6,
-    "scenarios": 5,
+    "scenarios": 4,
     "tests": 6
   },
   "disclaimer": "Assistive AI is advisory-only. Tests & scenarios are authoritative.",
@@ -165,7 +165,6 @@
     "scenario_ids": [
       "bounce_interface_r2_eth1_recover",
       "bounce_link_r2_fw1_recover",
-      "converge_bgp_r2",
       "ping_test",
       "quick_all"
     ],
