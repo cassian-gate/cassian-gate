@@ -658,6 +658,305 @@ def write_file(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 # -------------------------
+# Candidate Config Apply (v1.5) - deterministic helpers
+# -------------------------
+
+_CANDIDATE_STDIO_TRUNC = 8000
+
+def _sha256_file(p: Path) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with p.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+def _truncate(s: str, limit: int = _CANDIDATE_STDIO_TRUNC) -> str:
+    if not s:
+        return ""
+    if len(s) <= limit:
+        return s
+    extra = len(s) - limit
+    return s[:limit] + f"\n...<truncated {extra} chars>"
+
+def _sanitize_text(s: str) -> str:
+    if not s:
+        return ""
+    out_lines: list[str] = []
+    for ln in s.splitlines():
+        l = ln.lower()
+        if ("password" in l) or ("secret" in l) or ("token" in l) or ("api_key" in l) or ("apikey" in l):
+            parts = ln.split()
+            out_lines.append((parts[0] + " <redacted>") if parts else "<redacted>")
+        else:
+            out_lines.append(ln)
+    return "\n".join(out_lines)
+
+def _safe_stdio(s: str) -> str:
+    return _truncate(_sanitize_text(s or ""))
+
+def _candidate_artifacts_dir(lab: str) -> Path:
+    return lab_dir(lab) / "artifacts" / "apply"
+
+def _write_candidate_apply_artifact(lab: str, node: str, rec: dict[str, Any]) -> Path:
+    outdir = _candidate_artifacts_dir(lab)
+    outdir.mkdir(parents=True, exist_ok=True)
+    out = outdir / f"{node}.apply.json"
+    out.write_text(json.dumps(rec, indent=2), encoding="utf-8")
+    return out
+
+def _is_within_dir(child: Path, parent: Path) -> bool:
+    # Deterministic, portable traversal guard.
+    try:
+        child_r = child.resolve()
+        parent_r = parent.resolve()
+    except Exception:
+        return False
+    return os.path.commonpath([str(child_r), str(parent_r)]) == str(parent_r)
+
+def _candidate_parse_dir_or_die(topo: dict[str, Any], cand_dir: Path) -> list[dict[str, Any]]:
+    """
+    v1.5 deterministic candidate dir contract:
+
+      <dir>/frr/<node>.conf
+      <dir>/nft/<node>.nft
+      <dir>/nft/<node>.ruleset
+
+    Rules:
+      - dir must exist
+      - must contain >=1 recognized candidate file
+      - reject unknown subdirs + unknown file types
+      - reject path traversal (candidate files must live inside cand_dir)
+      - node must exist in topology and match node.type:
+          frr/*.conf -> node.type == "frr"
+          nft/*.(nft|ruleset) -> node.type == "nft-fw"
+      - duplicates (same node+type) -> fail fast
+      - file must be non-empty (size > 0)
+      - plan order is stable: sort by node name
+    """
+    if not cand_dir.exists() or not cand_dir.is_dir():
+        die(f"--candidate-config: directory not found or not a directory: {cand_dir}")
+
+    nodes = topo.get("nodes", []) or []
+    nodes_by_name: dict[str, dict[str, Any]] = {}
+    for n in nodes:
+        if isinstance(n, dict) and isinstance(n.get("name"), str):
+            nodes_by_name[n["name"]] = n
+
+    allowed_subdirs = {"frr", "nft"}
+    plan: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    saw_any = False
+
+    # Reject unknown entries at root for determinism
+    for entry in sorted(cand_dir.iterdir(), key=lambda p: p.name):
+        if entry.is_dir():
+            if entry.name not in allowed_subdirs:
+                die(f"--candidate-config: unknown subdir '{entry.name}' (allowed: frr/, nft/)")
+        else:
+            die(f"--candidate-config: unknown file at root '{entry.name}' (place under frr/ or nft/)")
+
+    # frr/
+    frr_dir = cand_dir / "frr"
+    if frr_dir.exists():
+        if not frr_dir.is_dir():
+            die(f"--candidate-config: expected directory: {frr_dir}")
+        for p in sorted(frr_dir.iterdir(), key=lambda x: x.name):
+            if p.is_dir():
+                die(f"--candidate-config: unexpected directory under frr/: {p.name}")
+            if p.suffix != ".conf":
+                die(f"--candidate-config: unsupported file under frr/: {p.name} (only .conf allowed)")
+            if not _is_within_dir(p, cand_dir):
+                die(f"--candidate-config: path traversal detected for file: frr/{p.name}")
+            if p.stat().st_size == 0:
+                die(f"--candidate-config: empty candidate file: frr/{p.name}")
+
+            node = p.stem
+            if node not in nodes_by_name:
+                die(f"--candidate-config: candidate targets unknown node '{node}' (file: frr/{p.name})")
+            if nodes_by_name[node].get("type") != "frr":
+                die(f"--candidate-config: frr/{p.name} targets node '{node}' but node.type is not 'frr'")
+
+            key = (node, "frr")
+            if key in seen:
+                die(f"--candidate-config: duplicate candidate for node '{node}' type 'frr'")
+            seen.add(key)
+            saw_any = True
+            plan.append({"node": node, "node_type": "frr", "source_path": str(p)})
+
+    # nft/
+    nft_dir = cand_dir / "nft"
+    if nft_dir.exists():
+        if not nft_dir.is_dir():
+            die(f"--candidate-config: expected directory: {nft_dir}")
+        for p in sorted(nft_dir.iterdir(), key=lambda x: x.name):
+            if p.is_dir():
+                die(f"--candidate-config: unexpected directory under nft/: {p.name}")
+            if p.suffix not in (".nft", ".ruleset"):
+                die(f"--candidate-config: unsupported file under nft/: {p.name} (only .nft or .ruleset allowed)")
+            if not _is_within_dir(p, cand_dir):
+                die(f"--candidate-config: path traversal detected for file: nft/{p.name}")
+            if p.stat().st_size == 0:
+                die(f"--candidate-config: empty candidate file: nft/{p.name}")
+
+            node = p.stem
+            if node not in nodes_by_name:
+                die(f"--candidate-config: candidate targets unknown node '{node}' (file: nft/{p.name})")
+            if nodes_by_name[node].get("type") != "nft-fw":
+                die(f"--candidate-config: nft/{p.name} targets node '{node}' but node.type is not 'nft-fw'")
+
+            key = (node, "nft-fw")
+            if key in seen:
+                die(f"--candidate-config: duplicate candidate for node '{node}' type 'nft-fw'")
+            seen.add(key)
+            saw_any = True
+            plan.append({"node": node, "node_type": "nft-fw", "source_path": str(p)})
+
+    if not saw_any:
+        die(
+            f"--candidate-config: no recognized candidate inputs found under: {cand_dir} "
+            "(expected frr/*.conf and/or nft/*.nft|*.ruleset)"
+        )
+
+    plan.sort(key=lambda r: r["node"])
+    return plan
+
+def _candidate_apply_frr_generated_only(rt: Runtime, lab: str, topo: dict[str, Any], node: str, src: Path) -> dict[str, Any]:
+    """
+    v1.5 strategy-aligned:
+      - Only supports frr_mode: generated
+      - Apply is host-side overwrite of node_cfg_dir(lab,node)/frr.conf
+      - Apply mechanism is runtime-owned node restart
+      - Readiness evidence uses existing deterministic probe (verify_frr_ready)
+    """
+    started = time.time()
+
+    # Lock: only generated mode
+    topo_nodes = {n.get("name"): n for n in (topo.get("nodes", []) or []) if isinstance(n, dict)}
+    n = topo_nodes.get(node) or {}
+    frr_mode = (n.get("frr_mode") or "generated").strip().lower()
+    if frr_mode != "generated":
+        finished = time.time()
+        return {
+            "node": node,
+            "node_type": "frr",
+            "method": "host-overwrite+runtime-restart",
+            "input": {"source_path": str(src), "sha256": _sha256_file(src)},
+            "attempt": {"started_at_epoch_ms": int(started * 1000), "duration_ms": int((finished - started) * 1000)},
+            "result": {"applied_ok": False, "exit_code": 2},
+            "stdout": "",
+            "stderr": _safe_stdio("candidate apply: frr_mode is preconfigured; v1.5 supports candidate apply only for frr_mode: generated"),
+            "post_checks": [],
+        }
+
+    content = src.read_text(encoding="utf-8")
+    sha = _sha256_file(src)
+
+    # Host-side overwrite (same bind-mount mechanism v1 already uses)
+    cfgdir = node_cfg_dir(lab, node)
+    write_file(cfgdir / "frr.conf", content)
+
+    # Runtime-owned restart (deterministic boundary)
+    rp = rt.restart_node(lab, node)
+
+    # Readiness probe (existing deterministic mechanism)
+    ready_ok = True
+    ready_err = ""
+    try:
+        verify_frr_ready(rt, lab, node)
+    except SystemExit as e:
+        ready_ok = False
+        ready_err = str(e)
+
+    post: list[dict[str, Any]] = []
+
+    # Evidence-only: show bgp summary (bounded)
+    cp = rt.exec(lab, node, ["vtysh", "-c", "show bgp summary"], check=False, capture_output=True)
+    post.append({
+        "name": "show_bgp_summary",
+        "cmd": "vtysh -c \"show bgp summary\"",
+        "exit_code": int(cp.returncode),
+        "stdout": _safe_stdio(cp.stdout or ""),
+        "stderr": _safe_stdio(cp.stderr or ""),
+    })
+
+    finished = time.time()
+    return {
+        "node": node,
+        "node_type": "frr",
+        "method": "host-overwrite+runtime-restart",
+        "input": {"source_path": str(src), "sha256": sha},
+        "attempt": {"started_at_epoch_ms": int(started * 1000), "duration_ms": int((finished - started) * 1000)},
+        "result": {
+            "applied_ok": bool(rp.returncode == 0 and ready_ok),
+            "exit_code": int(rp.returncode if rp.returncode != 0 else (0 if ready_ok else 1)),
+        },
+        "stdout": _safe_stdio((rp.stdout or "") if hasattr(rp, "stdout") else ""),
+        "stderr": _safe_stdio((rp.stderr or "") if hasattr(rp, "stderr") else ready_err),
+        "post_checks": post,
+        "restart": {
+            "cmd": "runtime.restart_node",
+            "exit_code": int(rp.returncode),
+            "stdout": _safe_stdio((rp.stdout or "") if hasattr(rp, "stdout") else ""),
+            "stderr": _safe_stdio((rp.stderr or "") if hasattr(rp, "stderr") else ""),
+        },
+    }
+
+def _candidate_apply_nft(rt: Runtime, lab: str, node: str, src: Path) -> dict[str, Any]:
+    started = time.time()
+    ruleset = src.read_text(encoding="utf-8")
+    sha = _sha256_file(src)
+
+    # Require nft exists (no runtime installs)
+    cp0 = rt.exec(lab, node, ["sh", "-lc", "command -v nft >/dev/null"], check=False, capture_output=True)
+    if cp0.returncode != 0:
+        finished = time.time()
+        return {
+            "node": node,
+            "node_type": "nft-fw",
+            "method": "nft -f",
+            "input": {"source_path": str(src), "sha256": sha},
+            "attempt": {"started_at_epoch_ms": int(started * 1000), "duration_ms": int((finished - started) * 1000)},
+            "result": {"applied_ok": False, "exit_code": int(cp0.returncode)},
+            "stdout": _safe_stdio(cp0.stdout or ""),
+            "stderr": _safe_stdio(cp0.stderr or ""),
+            "post_checks": [],
+        }
+
+    cmd = (
+        "set -e\n"
+        "cat > /tmp/rules.nft <<'EOF'\n"
+        f"{ruleset}\n"
+        "EOF\n"
+        "nft -f /tmp/rules.nft\n"
+    )
+    cp1 = rt.exec(lab, node, ["sh", "-lc", cmd], check=False, capture_output=True)
+    ok = (cp1.returncode == 0)
+
+    post: list[dict[str, Any]] = []
+    cp2 = rt.exec(lab, node, ["sh", "-lc", "nft list ruleset"], check=False, capture_output=True)
+    post.append({
+        "name": "nft_list_ruleset",
+        "cmd": "nft list ruleset",
+        "exit_code": int(cp2.returncode),
+        "stdout": _safe_stdio(cp2.stdout or ""),
+        "stderr": _safe_stdio(cp2.stderr or ""),
+    })
+
+    finished = time.time()
+    return {
+        "node": node,
+        "node_type": "nft-fw",
+        "method": "nft -f",
+        "input": {"source_path": str(src), "sha256": sha},
+        "attempt": {"started_at_epoch_ms": int(started * 1000), "duration_ms": int((finished - started) * 1000)},
+        "result": {"applied_ok": bool(ok), "exit_code": int(cp1.returncode)},
+        "stdout": _safe_stdio(cp1.stdout or ""),
+        "stderr": _safe_stdio(cp1.stderr or ""),
+        "post_checks": post,
+    }
+
+# -------------------------
 # FRR config generation (simple v1)
 # -------------------------
 
@@ -3075,6 +3374,14 @@ class Runtime:
 
     def is_running(self, lab: str, node: str) -> bool:
         raise NotImplementedError
+    
+    def restart_node(self, lab: str, node: str) -> subprocess.CompletedProcess:
+        """
+        Deterministic runtime-owned restart primitive.
+        Must not leak docker/containerlab calls outside Runtime.
+        """
+        raise NotImplementedError
+
 
     def is_running_id(self, node_id: str) -> bool:
         """
@@ -3089,6 +3396,15 @@ class Runtime:
 class ContainerRuntime(Runtime):
     def node_id(self, lab: str, node: str) -> str:
         return f"clab-{lab}-{node}"
+    
+    def restart_node(self, lab: str, node: str) -> subprocess.CompletedProcess:
+        """
+        Runtime-owned node restart.
+        v1 runtime uses docker; callers must not invoke docker directly.
+        """
+        c = self.node_id(lab, node)
+        return run(["docker", "restart", c], check=False, capture_output=True)
+
 
     def exec(
         self,
@@ -3308,6 +3624,12 @@ def cmd_test(args: argparse.Namespace) -> None:
 
     topo = load_yaml(tpath)
     ensure_valid_topology(topo)
+
+    # Candidate config fail-fast validation (no runtime actions required)
+    cand_dir_raw: str | None = getattr(args, "candidate_config", None)
+    if cand_dir_raw:
+        _ = _candidate_parse_dir_or_die(topo, Path(str(cand_dir_raw)).expanduser())
+
 
     # -----------------------------------------------------------------------------
     # Hard guardrail: validate scenario run refs up-front (no partial execution)
@@ -4775,6 +5097,88 @@ def cmd_test(args: argparse.Namespace) -> None:
         results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
         write_results()
         raise
+
+        # =============================================================================
+    # 2.5) Candidate Config Apply (v1.5) - gate-only, atomic, evidenced
+    # =============================================================================
+    cand_dir_raw = getattr(args, "candidate_config", None)
+    if cand_dir_raw:
+        cand_dir = Path(str(cand_dir_raw)).expanduser()
+        cand_plan = _candidate_parse_dir_or_die(topo, cand_dir)
+
+        results["candidate_apply"] = {
+            "enabled": True,
+            "input_dir": str(cand_dir),
+            "plan": [r["node"] for r in cand_plan],
+            "verdict": "unknown",
+            "failed_nodes": [],
+            "duration_ms": None,
+        }
+
+        apply_started = time.time()
+        failed: list[str] = []
+
+        for item in cand_plan:
+            node = item["node"]
+            ntype = item["node_type"]
+            src = Path(item["source_path"])
+
+            # Always emit a per-node artifact for every attempted node.
+            rec: dict[str, Any]
+            try:
+                if ntype == "frr":
+                    rec = _candidate_apply_frr_generated_only(rt, lab, topo, node, src)
+                elif ntype == "nft-fw":
+                    rec = _candidate_apply_nft(rt, lab, node, src)
+                else:
+                    rec = {
+                        "node": node,
+                        "node_type": str(ntype),
+                        "method": "unsupported",
+                        "input": {"source_path": str(src), "sha256": _sha256_file(src) if src.exists() else ""},
+                        "attempt": {"started_at_epoch_ms": int(time.time() * 1000), "duration_ms": 0},
+                        "result": {"applied_ok": False, "exit_code": 3},
+                        "stdout": "",
+                        "stderr": _safe_stdio(f"candidate apply: unsupported node_type '{ntype}'"),
+                        "post_checks": [],
+                    }
+            except SystemExit as e:
+                rec = {
+                    "node": node,
+                    "node_type": str(ntype),
+                    "method": "exception",
+                    "input": {"source_path": str(src), "sha256": _sha256_file(src) if src.exists() else ""},
+                    "attempt": {"started_at_epoch_ms": int(time.time() * 1000), "duration_ms": 0},
+                    "result": {"applied_ok": False, "exit_code": 1},
+                    "stdout": "",
+                    "stderr": _safe_stdio(str(e)),
+                    "post_checks": [],
+                }
+
+            _write_candidate_apply_artifact(lab, node, rec)
+
+            if not bool(((rec.get("result") or {}).get("applied_ok"))):
+                failed.append(node)
+                # Atomic: stop further mutation after first failure.
+                break
+
+        apply_finished = time.time()
+        results["candidate_apply"]["duration_ms"] = int((apply_finished - apply_started) * 1000)
+
+        if failed:
+            results["candidate_apply"]["verdict"] = "fail"
+            results["candidate_apply"]["failed_nodes"] = failed
+
+            # Hard rule: tests/scenarios MUST NOT run on candidate apply failure
+            results["result"] = "fail"
+            finished_at = time.time()
+            results["summary"]["finished_at"] = finished_at
+            results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
+            write_results()
+
+            die("candidate apply failed for node(s): " + ", ".join(failed))
+
+        results["candidate_apply"]["verdict"] = "pass"
 
     # =============================================================================
     # 3) Optional control-plane checks (FRR/BGP)
@@ -7970,6 +8374,12 @@ def main() -> None:
         "--json",
         action="store_true",
         help="Print results.json to stdout in addition to writing the file",
+    )
+    p_test.add_argument(
+        "--candidate-config",
+        dest="candidate_config",
+        help="Apply candidate operational configs from a directory before running tests (gate-only, atomic). "
+             "Directory contract: frr/<node>.conf and/or nft/<node>.nft|.ruleset",
     )
     p_test.set_defaults(func=cmd_test)
     p_test.add_argument("--scenario", help="Run only this scenario id (scenarios[*].id)")
