@@ -3578,6 +3578,24 @@ def cmd_test(args: argparse.Namespace) -> None:
 
     lab = args.lab
     # ------------------------------------------------------------
+    # v1.x UX hardening: lab name is required for normal test runs
+    # (Two-run is the ONLY mode that can run without a lab name.)
+    # ------------------------------------------------------------
+    if not lab:
+        die(
+            "ERROR: missing LAB NAME.\n\n"
+            "Usage:\n"
+            "  netsim test <lab-name> [options]\n\n"
+            "Examples:\n"
+            "  netsim up topologies/foo.yaml --reconfigure\n"
+            "  netsim test foo\n\n"
+            "Note:\n"
+            "  If you want the baseline-vs-change gate, use:\n"
+            "    netsim test --two-run --two-run-topology <topology.yaml> --candidate-config <dir>\n",
+            code=2,
+        )
+
+    # ------------------------------------------------------------
     # v1.x UX hardening: netsim test expects a LAB NAME, not a topology path
     # Deterministic heuristic only (no filesystem stat).
     # ------------------------------------------------------------
@@ -3721,7 +3739,11 @@ def cmd_test(args: argparse.Namespace) -> None:
 
     # Disallow filters when running scenarios: avoids silent "pass" with 0 executed runs
     if want_scenarios and (filter_name or filter_kind):
-        die("ERROR: --name/--kind filters are not supported with --scenario/--all-scenarios (would skip scenario run steps).")
+        die(
+            "ERROR: --name/--kind filters are not supported with --scenario/--all-scenarios "
+            "(would skip scenario run steps).",
+            code=2,
+        )
 
     # Phase-1 runtime abstraction (container today, VM later)
     rt = get_runtime(topo)

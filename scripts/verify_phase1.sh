@@ -142,13 +142,40 @@ if [ $rc -ne 2 ]; then
   exit 1
 fi
 
-echo "$out" | grep -Fq "expects a LAB NAME, not a topology file path" || {
+echo "$out" | grep -Fq -- "expects a LAB NAME, not a topology file path" || {
   echo "FAIL: expected friendly topology-path error message not found"
   echo "$out"
   exit 1
 }
 
 echo "OK: topology-path misuse rejected with friendly message (rc=2)"
+echo
+
+echo "=== 6c) UX guardrail: scenario/all-scenarios rejects --name/--kind filters ==="
+set +e
+out="$(./src/netsim.py test "$LAB" --scenario ping_test --name bar 2>&1)"
+rc=$?
+set -e
+
+# We WANT this to be a usage error (rc=2). If it's rc=1, it means cmd_test is calling die() without code=2.
+if [ $rc -ne 2 ]; then
+  echo "FAIL: expected rc=2 for scenario+filter guardrail, got rc=$rc"
+  echo "$out"
+  echo
+  echo "HINT: in cmd_test(), change:"
+  echo "  die(\"ERROR: --name/--kind filters are not supported ...\")"
+  echo "to:"
+  echo "  die(\"ERROR: --name/--kind filters are not supported ...\", code=2)"
+  exit 1
+fi
+
+needle="ERROR: --name/--kind filters are not supported with --scenario/--all-scenarios"
+echo "$out" | grep -Fq -- "$needle" || {
+  echo "FAIL: expected scenario+filter guardrail message not found"
+  echo "$out"
+  exit 1
+}
+echo "OK: scenario+filter guardrail rejects with rc=2 + message"
 echo
 
 echo "=== 7) Validate artifacts ==="
@@ -173,9 +200,6 @@ echo "OK: artifacts present and summary indicates pass"
 
 echo
 echo "=== 7b) Scenario summary rendering (results.summary.txt) ==="
-# Run a deterministic scenario if available, then assert summary contains the scenario section.
-# (This does not change authority; it is a human-only artifact check.)
-
 scen_id="ping_test"
 
 set +e
@@ -190,7 +214,7 @@ if [ $rc -ne 0 ]; then
 fi
 
 if echo "$list_out" | grep -Fq -- "- ${scen_id}:"; then
-  ./src/netsim.py test --scenario "$scen_id" "$LAB" >/dev/null
+  ./src/netsim.py test "$LAB" --scenario "$scen_id" >/dev/null
   test -s "$LABDIR/results.summary.txt"
 
   grep -q '^=== Scenarios ===' "$LABDIR/results.summary.txt" || {
@@ -246,7 +270,7 @@ must_fail_with() {
     exit 1
   fi
 
-  echo "$out" | grep -Fq "$needle" || {
+  echo "$out" | grep -Fq -- "$needle" || {
     echo "FAIL: expected error message not found"
     echo "  cmd: $cmd"
     echo "  expected substring: $needle"
@@ -274,7 +298,7 @@ must_fail_with_re() {
     exit 1
   fi
 
-  echo "$out" | grep -Eq "$pattern" || {
+  echo "$out" | grep -Eq -- "$pattern" || {
     echo "FAIL: expected error pattern not found"
     echo "  cmd: $cmd"
     echo "  expected regex: $pattern"
@@ -287,8 +311,6 @@ must_fail_with_re() {
   echo "    matched regex: $pattern"
 }
 
-
-# Each negative file tests exactly one invariant (deterministic fail-fast)
 must_fail_with "topologies/neg/bad_steps_not_dict.yaml" "step must be a dict"
 must_fail_with "topologies/neg/bad_wait_for_tcp_type_v1.yaml" "wait_for.type: must be ping (v1)"
 must_fail_with "topologies/neg/bad_wait_for_bgp_unknown_node.yaml" "unknown node 'not_a_real_node'"
@@ -317,15 +339,12 @@ echo
 echo
 echo "=== 10) Optional: examples smoke (quickstart) ==="
 if [ "${AI_NETSIM_VERIFY_EXAMPLES:-0}" = "1" ]; then
-  # ex01 should PASS (connected reachability)
   ./src/netsim.py up examples/01_connected_smoke.yaml --reconfigure >/dev/null
   ./src/netsim.py test ex01-connected-smoke
 
-  # ex03 should PASS (static demo images prove multi-hop)
   ./src/netsim.py up examples/03_static_multihop_ping.yaml --reconfigure >/dev/null
   ./src/netsim.py test ex03-static-multihop
 
-  # ex02 should PASS (BGP demo images prove multi-hop + tcp)
   ./src/netsim.py up examples/02_bgp_multihop_tcp.yaml --reconfigure >/dev/null
   ./src/netsim.py test ex02-bgp-multihop-tcp
 
@@ -334,6 +353,5 @@ else
   echo "SKIP: set AI_NETSIM_VERIFY_EXAMPLES=1 to run examples smoke"
 fi
 echo
-
 
 echo "✅ PHASE1 VERIFIED"
