@@ -155,6 +155,12 @@ echo "=== 7) Validate artifacts ==="
 test -s "$LABDIR/results.json"
 test -s "$LABDIR/results.summary.txt"
 
+# NEW: Coverage artifact must exist and be advisory-only.
+test -s "$LABDIR/artifacts/coverage/coverage.json"
+jq -e '.authority=="advisory"' "$LABDIR/artifacts/coverage/coverage.json" >/dev/null
+jq -e '.schema_version=="coverage.v1"' "$LABDIR/artifacts/coverage/coverage.json" >/dev/null
+echo "OK: coverage artifact present (advisory-only)"
+
 cat "$LABDIR/results.summary.txt"
 grep -q '^result: pass' "$LABDIR/results.summary.txt"
 # tests total can be 0 in scenario-only mode; accept either:
@@ -287,7 +293,6 @@ must_fail_with_re() {
   echo "    matched regex: $pattern"
 }
 
-
 # Each negative file tests exactly one invariant (deterministic fail-fast)
 must_fail_with "topologies/neg/bad_steps_not_dict.yaml" "step must be a dict"
 must_fail_with "topologies/neg/bad_wait_for_tcp_type_v1.yaml" "wait_for.type: must be ping (v1)"
@@ -314,6 +319,11 @@ echo "=== NEG) invalid include:all (unnamed test) ==="
   || echo "OK: include:all unnamed test rejected"
 echo
 
+# NEW: Coverage negative invariants
+must_fail_with "topologies/neg/bad_coverage_unnamed_test.yaml" "coverage: tests[1] is unnamed"
+must_fail_with "topologies/neg/bad_coverage_run_dict.yaml" "unsupported keys ['test']"
+echo
+
 echo
 echo "=== 10) Optional: examples smoke (quickstart) ==="
 if [ "${AI_NETSIM_VERIFY_EXAMPLES:-0}" = "1" ]; then
@@ -334,6 +344,5 @@ else
   echo "SKIP: set AI_NETSIM_VERIFY_EXAMPLES=1 to run examples smoke"
 fi
 echo
-
 
 echo "✅ PHASE1 VERIFIED"
