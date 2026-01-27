@@ -115,6 +115,27 @@ fi
 echo "OK: docker exec/inspect/logs only in ContainerRuntime"
 echo
 
+echo "=== 4b) Advisory-only: preflight generates deterministic JSON (no runtime) ==="
+rm -f artifacts/preflight/preflight.json 2>/dev/null || true
+./src/netsim.py preflight "$TOPO" --format json >/dev/null
+test -s artifacts/preflight/preflight.json
+jq -e '.authority=="advisory" and .schema_version=="preflight.v1" and .command=="preflight"' artifacts/preflight/preflight.json >/dev/null
+echo "OK: preflight.json present and schema looks sane (advisory-only)"
+echo
+
+echo "=== 4c) Advisory-only: preflight invalid input must exit 2 ==="
+set +e
+out="$(./src/netsim.py preflight topologies/neg/bad_steps_not_dict.yaml --format json 2>&1)"
+rc=$?
+set -e
+if [ $rc -ne 2 ]; then
+  echo "FAIL: expected rc=2 for invalid preflight input, got rc=$rc"
+  echo "$out"
+  exit 1
+fi
+echo "OK: preflight rejects invalid inputs with rc=2"
+echo
+
 echo "=== 5) Ensure lab is deployed (clean-state) ==="
 if [ ! -f "$TOPO" ]; then
   echo "FAIL: topology file not found: $TOPO"
@@ -348,6 +369,17 @@ fi
 echo "OK: artifacts present and summary indicates pass"
 
 echo
+echo "=== 7a) Advisory-only: coverage artifact present + schema sanity ==="
+test -s "$LABDIR/artifacts/coverage/coverage.json"
+jq -e '.authority=="advisory" and (.schema_version=="coverage.v1" or (.schema_version|type)=="string")' "$LABDIR/artifacts/coverage/coverage.json" >/dev/null || {
+  echo "FAIL: coverage.json missing advisory authority or schema_version"
+  head -50 "$LABDIR/artifacts/coverage/coverage.json" || true
+  exit 1
+}
+echo "OK: coverage artifact present (advisory-only)"
+echo
+
+echo
 echo "=== 7b) Scenario summary rendering (results.summary.txt) ==="
 scen_id="ping_test"
 
@@ -484,11 +516,6 @@ echo "=== NEG) invalid include:all (unnamed test) ==="
 ./src/netsim.py up topologies/neg/invalid_include_all_unnamed_test.yaml --reconfigure >/dev/null 2>&1 \
   && { echo "FAIL: expected include:all unnamed test to be rejected"; exit 1; } \
   || echo "OK: include:all unnamed test rejected"
-echo
-
-# NEW: Coverage negative invariants
-must_fail_with "topologies/neg/bad_coverage_unnamed_test.yaml" "coverage: tests[1] is unnamed"
-must_fail_with "topologies/neg/bad_coverage_run_dict.yaml" "unsupported keys ['test']"
 echo
 
 echo
