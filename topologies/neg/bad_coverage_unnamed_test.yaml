@@ -1,0 +1,19 @@
+name: bad-coverage-unnamed-test
+
+nodes:
+  - name: r1
+    type: frr
+  - name: h1
+    type: host
+
+links:
+  - endpoints: ["h1:eth1", "r1:eth1"]
+    ipv4: ["192.0.2.10/24", "192.0.2.1/24"]
+
+tests:
+  - kind: ping
+    src: h1
+    dst: r1
+    expect: fail
+    count: 1
+

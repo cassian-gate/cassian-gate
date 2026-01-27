@@ -151,7 +151,6 @@ def ensure_nc(rt: Runtime, lab: str, node: str) -> None:
 def ip_no_mask(cidr: str) -> str:
     return cidr.split("/", 1)[0].strip()
 
-
 def find_nodes_by_type(topo: dict, ntype: str) -> list[dict]:
     return [n for n in topo.get("nodes", []) if n.get("type") == ntype]
 
@@ -4043,7 +4042,6 @@ def cmd_test(args: argparse.Namespace) -> None:
     cand_dir_raw: str | None = getattr(args, "candidate_config", None)
     if cand_dir_raw:
         _ = _candidate_parse_dir_or_die(topo, Path(str(cand_dir_raw)).expanduser())
-
 
     # -----------------------------------------------------------------------------
     # Hard guardrail: validate scenario run refs up-front (no partial execution)
