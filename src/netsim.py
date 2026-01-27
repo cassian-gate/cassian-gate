@@ -1228,6 +1228,417 @@ def resolve_topology(topo: dict) -> dict:
 
     return resolved
 
+# -------------------------
+# Coverage model (advisory-only, declared-only, deterministic)
+# -------------------------
+
+def _coverage_canonical_link_id(a_ep: str, b_ep: str) -> str:
+    a = str(a_ep).strip()
+    b = str(b_ep).strip()
+    if not a or not b:
+        die("coverage: link endpoint is empty")
+    end1, end2 = (a, b) if a <= b else (b, a)
+    return f"{end1}<->{end2}"
+
+def _coverage_inventory_nodes(topo: dict[str, Any]) -> list[str]:
+    nodes = topo.get("nodes", []) or []
+    out: list[str] = []
+    for n in nodes:
+        if not isinstance(n, dict):
+            continue
+        name = n.get("name")
+        if isinstance(name, str) and name.strip():
+            out.append(name.strip())
+    # Stable, unique
+    out = sorted(set(out))
+    return out
+
+def _coverage_inventory_links(topo: dict[str, Any]) -> list[str]:
+    links = topo.get("links", []) or []
+    out: list[str] = []
+    for l in links:
+        if not isinstance(l, dict):
+            continue
+        eps = l.get("endpoints") or []
+        if not (isinstance(eps, list) and len(eps) == 2):
+            continue
+        out.append(_coverage_canonical_link_id(str(eps[0]).strip(), str(eps[1]).strip()))
+    return sorted(set(out))
+
+def _coverage_test_ids(topo: dict[str, Any]) -> list[str]:
+    tests = topo.get("tests", []) or []
+    ids: list[str] = []
+    for i, t in enumerate(tests, start=1):
+        if not isinstance(t, dict):
+            die(f"coverage: tests[{i}] is not a dict")
+        name = t.get("name")
+        if not isinstance(name, str) or not name.strip():
+            die(f"coverage: tests[{i}] is unnamed; coverage requires tests[].name for stable IDs")
+        ids.append(name.strip())
+    # Deterministic: allow duplicates check here (even if validated elsewhere)
+    if len(set(ids)) != len(ids):
+        dups = sorted([x for x in set(ids) if ids.count(x) > 1])
+        die(f"coverage: duplicate test names not allowed: {', '.join(dups)}")
+    return ids
+
+def _coverage_scenario_ids(topo: dict[str, Any]) -> list[str]:
+    scenarios = topo.get("scenarios") or []
+    if not scenarios:
+        return []
+    if not isinstance(scenarios, list):
+        die("coverage: scenarios must be a list")
+    out: list[str] = []
+    for i, s in enumerate(scenarios, start=1):
+        if not isinstance(s, dict):
+            die(f"coverage: scenarios[{i}] is not a dict")
+        sid = s.get("id")
+        if not isinstance(sid, str) or not sid.strip():
+            die(f"coverage: scenarios[{i}] missing non-empty id")
+        out.append(sid.strip())
+    if len(set(out)) != len(out):
+        dups = sorted([x for x in set(out) if out.count(x) > 1])
+        die(f"coverage: duplicate scenario ids not allowed: {', '.join(dups)}")
+    return out
+
+def _coverage_hash_resolved_topology(resolved: dict[str, Any]) -> str:
+    """
+    Deterministic hash: YAML dump with sort_keys=True (stable dict ordering),
+    encoded as UTF-8, SHA-256 hex.
+    """
+    import hashlib
+    blob = yaml.safe_dump(resolved, sort_keys=True)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+def _coverage_touch_nodes_from_test(
+    topo: dict[str, Any],
+    test: dict[str, Any],
+    known_nodes: set[str],
+) -> list[str]:
+    touched: set[str] = set()
+    src = test.get("src")
+    dst = test.get("dst")
+
+    if isinstance(src, str) and src.strip():
+        s = src.strip()
+        if s not in known_nodes:
+            die(f"coverage: test '{test.get('name','<unnamed>')}' references unknown src node '{s}'")
+        touched.add(s)
+
+    # dst may be node name OR IP literal; only mark if it matches a known node name
+    if isinstance(dst, str) and dst.strip():
+        d = dst.strip()
+        if d in known_nodes:
+            touched.add(d)
+
+    return sorted(touched)
+
+def _coverage_resolve_link_between(
+    topo: dict[str, Any],
+    a: str,
+    b: str,
+    a_if: str | None,
+    b_if: str | None,
+) -> str:
+    """
+    Declared-only link resolution to canonical link id.
+    Matches validate_scenarios() rules:
+      - if a_if/b_if omitted: must be exactly ONE link between a and b
+      - if a_if/b_if provided: must match exactly
+    """
+    links = topo.get("links", []) or []
+
+    def parse_ep(ep: str) -> tuple[str, str] | None:
+        if not isinstance(ep, str) or ":" not in ep:
+            return None
+        n, iface = ep.split(":", 1)
+        n = n.strip()
+        iface = iface.strip()
+        if not n or not iface:
+            return None
+        return n, iface
+
+    matches: list[tuple[str, str]] = []  # (a_ep, b_ep) canonical endpoint strings
+    for l in links:
+        if not isinstance(l, dict):
+            continue
+        eps = l.get("endpoints") or []
+        if not (isinstance(eps, list) and len(eps) == 2):
+            continue
+
+        p1 = parse_ep(eps[0])
+        p2 = parse_ep(eps[1])
+        if not p1 or not p2:
+            continue
+        n1, i1 = p1
+        n2, i2 = p2
+
+        # match unordered nodes a/b
+        if not ((n1 == a and n2 == b) or (n1 == b and n2 == a)):
+            continue
+
+        # normalize endpoints as "<node>:<iface>" in a/b direction
+        if n1 == a and n2 == b:
+            a_ep = f"{n1}:{i1}"
+            b_ep = f"{n2}:{i2}"
+        else:
+            a_ep = f"{n2}:{i2}"
+            b_ep = f"{n1}:{i1}"
+
+        # if specific interfaces provided, they must match
+        if a_if is not None and b_if is not None:
+            if a_ep != f"{a}:{a_if}" or b_ep != f"{b}:{b_if}":
+                continue
+
+        matches.append((a_ep, b_ep))
+
+    if a_if is None and b_if is None:
+        if len(matches) != 1:
+            die(f"coverage: link resolution between '{a}' and '{b}' is ambiguous or missing ({len(matches)} matches)")
+        a_ep, b_ep = matches[0]
+        return _coverage_canonical_link_id(a_ep, b_ep)
+
+    # both-or-none must already be validated, but enforce anyway
+    if (a_if is None) != (b_if is None):
+        die("coverage: link fault must specify both a_if and b_if, or neither")
+
+    if len(matches) != 1:
+        die(f"coverage: link resolution for '{a}:{a_if}' <-> '{b}:{b_if}' is missing or ambiguous ({len(matches)} matches)")
+    a_ep, b_ep = matches[0]
+    return _coverage_canonical_link_id(a_ep, b_ep)
+
+def build_coverage_model(resolved: dict[str, Any], topo_path: Path) -> dict[str, Any]:
+    """
+    Pure, declared-only coverage model computed from resolved topology.
+    MUST NOT call runtime/deploy/provision/test.
+    """
+    # Inventory
+    node_list = _coverage_inventory_nodes(resolved)
+    link_list = _coverage_inventory_links(resolved)
+    known_nodes = set(node_list)
+
+    test_ids_declared = _coverage_test_ids(resolved)
+    scenario_ids_declared = _coverage_scenario_ids(resolved)
+
+    tests = resolved.get("tests", []) or []
+    scenarios = resolved.get("scenarios") or []
+
+    # Per-test coverage
+    by_test: dict[str, Any] = {}
+    for t in tests:
+        if not isinstance(t, dict):
+            continue
+        tid = str(t.get("name") or "").strip()
+        if not tid:
+            die("coverage: unnamed test found (should have failed earlier)")
+
+        touched_nodes = _coverage_touch_nodes_from_test(resolved, t, known_nodes)
+
+        by_test[tid] = {
+            "touched_nodes": touched_nodes,
+            "touched_links": [],          # no inference
+            "touched_wait_classes": [],   # atomic tests do not add waits
+            "notes": [],
+        }
+
+    # Scenario coverage
+    by_scenario: dict[str, Any] = {}
+    touched_fault_classes_all: set[str] = set()
+    touched_wait_classes_all: set[str] = set()
+    touched_nodes_all: set[str] = set()
+    touched_links_all: set[str] = set()
+
+    # Build quick test lookup for union behavior
+    test_touch_nodes_map: dict[str, list[str]] = {}
+    for tid in test_ids_declared:
+        test_touch_nodes_map[tid] = list(by_test.get(tid, {}).get("touched_nodes", []))
+
+    if scenarios:
+        if not isinstance(scenarios, list):
+            die("coverage: scenarios must be a list")
+        for s in scenarios:
+            if not isinstance(s, dict):
+                continue
+            sid = str(s.get("id") or "").strip()
+            if not sid:
+                die("coverage: scenario missing id (should have failed earlier)")
+
+            steps = s.get("steps") or []
+            if not isinstance(steps, list):
+                die(f"coverage: scenario '{sid}' steps must be a list")
+
+            scen_nodes: set[str] = set()
+            scen_links: set[str] = set()
+            scen_faults: set[str] = set()
+            scen_waits: set[str] = set()
+            scen_tests: set[str] = set()
+
+            for st in steps:
+                if not isinstance(st, dict):
+                    die(f"coverage: scenario '{sid}' step is not a dict")
+
+                # step is exactly one action (already validated), but we stay explicit here
+                if "fault" in st:
+                    f = st.get("fault")
+                    if not isinstance(f, dict) or len(f) != 1:
+                        die(f"coverage: scenario '{sid}' fault must be a dict with exactly one action")
+
+                    action, spec = next(iter(f.items()))
+                    if action not in ("link_down", "link_up", "interface_down", "interface_up"):
+                        die(f"coverage: scenario '{sid}' has unknown fault action '{action}'")
+
+                    if not isinstance(spec, dict):
+                        die(f"coverage: scenario '{sid}' fault.{action} must be a dict")
+
+                    scen_faults.add(action)
+
+                    if action in ("link_down", "link_up"):
+                        a = str(spec.get("a") or "").strip()
+                        b = str(spec.get("b") or "").strip()
+                        if not a or not b:
+                            die(f"coverage: scenario '{sid}' fault.{action} requires a and b")
+                        if a not in known_nodes:
+                            die(f"coverage: scenario '{sid}' references unknown node '{a}'")
+                        if b not in known_nodes:
+                            die(f"coverage: scenario '{sid}' references unknown node '{b}'")
+                        scen_nodes.add(a)
+                        scen_nodes.add(b)
+
+                        a_if_raw = spec.get("a_if")
+                        b_if_raw = spec.get("b_if")
+
+                        a_if = str(a_if_raw).strip() if isinstance(a_if_raw, str) and a_if_raw.strip() else None
+                        b_if = str(b_if_raw).strip() if isinstance(b_if_raw, str) and b_if_raw.strip() else None
+
+                        link_id = _coverage_resolve_link_between(resolved, a, b, a_if, b_if)
+                        scen_links.add(link_id)
+
+                    else:
+                        node = str(spec.get("node") or "").strip()
+                        if not node:
+                            die(f"coverage: scenario '{sid}' fault.{action} requires node")
+                        if node not in known_nodes:
+                            die(f"coverage: scenario '{sid}' references unknown node '{node}'")
+                        scen_nodes.add(node)
+
+                elif "wait_for_bgp" in st:
+                    scen_waits.add("wait_for_bgp")
+                    wf = st.get("wait_for_bgp") or {}
+                    if not isinstance(wf, dict):
+                        die(f"coverage: scenario '{sid}' wait_for_bgp must be a dict")
+                    node = wf.get("node")
+                    if isinstance(node, str) and node.strip():
+                        n = node.strip()
+                        if n not in known_nodes:
+                            die(f"coverage: scenario '{sid}' references unknown node '{n}'")
+                        scen_nodes.add(n)
+
+                elif "wait_for" in st:
+                    wf = st.get("wait_for") or {}
+                    if not isinstance(wf, dict):
+                        die(f"coverage: scenario '{sid}' wait_for must be a dict")
+
+                    wtype = str(wf.get("type") or "").strip().lower()
+                    if wtype != "ping":
+                        die(f"coverage: scenario '{sid}' wait_for type '{wtype}' is not supported by coverage schema (only ping)")
+                    scen_waits.add("wait_for_ping")
+
+                    frm = wf.get("from")
+                    to = wf.get("to")
+
+                    if isinstance(frm, str) and frm.strip():
+                        fnode = frm.strip()
+                        if fnode not in known_nodes:
+                            die(f"coverage: scenario '{sid}' references unknown from node '{fnode}'")
+                        scen_nodes.add(fnode)
+
+                    if isinstance(to, str) and to.strip():
+                        tval = to.strip()
+                        if tval in known_nodes:
+                            scen_nodes.add(tval)
+
+                elif "run" in st:
+                    ref = st.get("run")
+                    # v17 schema: run is a string test name (after include:all expansion)
+                    if not isinstance(ref, str) or not ref.strip():
+                        die(f"coverage: scenario '{sid}' run must be a non-empty string test name")
+                    tn = ref.strip()
+                    if tn not in test_touch_nodes_map:
+                        die(f"coverage: scenario '{sid}' references unknown test '{tn}'")
+                    scen_tests.add(tn)
+
+                else:
+                    die(f"coverage: scenario '{sid}' step has no recognized action")
+
+            # Union rule: scenario touched_nodes includes nodes from invoked tests (declared-only)
+            for tid in sorted(scen_tests):
+                for n in test_touch_nodes_map.get(tid, []):
+                    scen_nodes.add(n)
+
+            # Finalize per-scenario
+            by_scenario[sid] = {
+                "steps_count": int(len(steps)),
+                "touched_nodes": sorted(scen_nodes),
+                "touched_links": sorted(scen_links),
+                "touched_fault_classes": sorted(scen_faults),
+                "touched_wait_classes": sorted(scen_waits),
+                "referenced_tests": sorted(scen_tests),
+            }
+
+            touched_nodes_all |= scen_nodes
+            touched_links_all |= scen_links
+            touched_fault_classes_all |= scen_faults
+            touched_wait_classes_all |= scen_waits
+
+    # Summary touched from tests as well
+    for tid in test_ids_declared:
+        for n in by_test.get(tid, {}).get("touched_nodes", []) or []:
+            touched_nodes_all.add(n)
+
+    inv_nodes_set = set(node_list)
+    inv_links_set = set(link_list)
+
+    coverage = {
+        "authority": "advisory",
+        "schema_version": "coverage.v1",
+        "generated_from": {
+            "topology_name": str((resolved.get("name") or "").strip()),
+            "topology_hash": _coverage_hash_resolved_topology(resolved),
+            "topology_path": str(topo_path),
+        },
+        "inventory": {
+            "nodes": node_list,
+            "links": link_list,
+        },
+        "tests": {
+            "declared": sorted(test_ids_declared),
+            "by_test": {k: by_test[k] for k in sorted(by_test)},
+        },
+        "scenarios": {
+            "declared": sorted(scenario_ids_declared),
+            "by_scenario": {k: by_scenario[k] for k in sorted(by_scenario)},
+        },
+        "summary": {
+            "touched_nodes": sorted(touched_nodes_all),
+            "untouched_nodes": sorted(inv_nodes_set - touched_nodes_all),
+            "touched_links": sorted(touched_links_all),
+            "untouched_links": sorted(inv_links_set - touched_links_all),
+            "touched_fault_classes": sorted(touched_fault_classes_all),
+            "touched_wait_classes": sorted(touched_wait_classes_all),
+        },
+    }
+    return coverage
+
+def write_coverage_artifact(lab: str, coverage: dict[str, Any]) -> Path:
+    """
+    Advisory-only artifact:
+      labs/clab-<lab>/artifacts/coverage/coverage.json
+    Written during resolve/validate flow (no deploy required).
+    """
+    import json
+    out = lab_dir(lab) / "artifacts" / "coverage" / "coverage.json"
+    write_file(out, json.dumps(coverage, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
+    return out
+
 def write_containerlab_file(topo_path: Path) -> Path:
     topo = load_yaml(topo_path)
     ensure_valid_topology(topo)
@@ -1235,6 +1646,9 @@ def write_containerlab_file(topo_path: Path) -> Path:
     resolved = resolve_topology(topo)
     validate_scenarios(resolved)
 
+    # Advisory-only coverage model (declared-only, resolve-time)
+    cov = build_coverage_model(resolved, topo_path=topo_path)
+    write_coverage_artifact(resolved["name"], cov)
 
     # Store both: original + resolved
     write_file(lab_dir(topo["name"]) / "topology.yaml", yaml.safe_dump(topo, sort_keys=False))
@@ -5360,6 +5774,288 @@ def write_test_summary_artifact(lab: str, results: dict) -> Path:
     out.write_text(_format_test_summary(results), encoding="utf-8")
     return out
 
+# -------------------------
+# Preflight (advisory-only, resolve-time only)
+# -------------------------
+
+def _preflight_default_out() -> Path:
+    # Deterministic, repo-safe default (no labs/, no runtime)
+    return Path("artifacts") / "preflight" / "preflight.json"
+
+def _preflight_write(out_path: Path, report: dict) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+def _preflight_canonical_link_id(endpoints: object) -> str:
+    # endpoints like ["r1:eth1", "r2:eth1"] (resolved, must be deterministic)
+    if not isinstance(endpoints, list) or len(endpoints) != 2:
+        return "unknown<->unknown"
+    a = str(endpoints[0] or "").strip()
+    b = str(endpoints[1] or "").strip()
+    # Canonical ordering by endpoint string (which includes node:iface)
+    x, y = (a, b) if a <= b else (b, a)
+    return f"{x}<->{y}"
+
+def _preflight_contains_key(obj: object, needle: str) -> bool:
+    # Declared-only structural scan (no semantics). Deterministic.
+    if isinstance(obj, dict):
+        if needle in obj:
+            return True
+        for v in obj.values():
+            if _preflight_contains_key(v, needle):
+                return True
+    elif isinstance(obj, list):
+        for it in obj:
+            if _preflight_contains_key(it, needle):
+                return True
+    return False
+
+def _preflight_get_touched_nodes(cov: dict) -> set[str]:
+    # Be tolerant to minor schema evolution; prefer explicit top-level fields if present.
+    v = cov.get("touched_nodes")
+    if isinstance(v, list):
+        return set(str(x) for x in v if isinstance(x, str))
+    v2 = (cov.get("touched") or {}).get("nodes")
+    if isinstance(v2, list):
+        return set(str(x) for x in v2 if isinstance(x, str))
+    return set()
+
+def _preflight_get_touched_links(cov: dict) -> set[str]:
+    v = cov.get("touched_links")
+    if isinstance(v, list):
+        return set(str(x) for x in v if isinstance(x, str))
+    v2 = (cov.get("touched") or {}).get("links")
+    if isinstance(v2, list):
+        return set(str(x) for x in v2 if isinstance(x, str))
+    return set()
+
+def _preflight_findings(resolved: dict, cov: dict) -> list[dict]:
+    nodes = resolved.get("nodes") or []
+    links = resolved.get("links") or []
+    tests = resolved.get("tests") or []
+    scenarios = resolved.get("scenarios") or []
+
+    node_names: list[str] = sorted(
+        [n.get("name") for n in nodes if isinstance(n, dict) and isinstance(n.get("name"), str)]
+    )
+
+    link_ids: list[str] = []
+    for lk in links:
+        if not isinstance(lk, dict):
+            continue
+        link_ids.append(_preflight_canonical_link_id(lk.get("endpoints")))
+    link_ids = sorted(link_ids)
+
+    touched_nodes = set(sorted(_preflight_get_touched_nodes(cov)))
+    touched_links = set(sorted(_preflight_get_touched_links(cov)))
+
+    findings: list[dict] = []
+
+    # 1) Untouched nodes (warn, one finding per node)
+    for n in node_names:
+        if n not in touched_nodes:
+            findings.append(
+                {
+                    "id": f"coverage_gap.untouched_node.{n}",
+                    "severity": "warn",
+                    "category": "coverage_gap",
+                    "message": f"Node '{n}' is never exercised by any declared test or scenario step.",
+                    "refs": {"nodes": [n]},
+                }
+            )
+
+    # 2) Untouched links (warn, one finding per link)
+    for lid in link_ids:
+        if lid not in touched_links:
+            findings.append(
+                {
+                    "id": f"coverage_gap.untouched_link.{lid}",
+                    "severity": "warn",
+                    "category": "coverage_gap",
+                    "message": f"Link '{lid}' is never exercised by any declared test or scenario step.",
+                    "refs": {"links": [lid]},
+                }
+            )
+
+    # Scenario presence / gaps
+    if not scenarios:
+        findings.append(
+            {
+                "id": "scenario_gap.no_scenarios",
+                "severity": "info",
+                "category": "scenario_gap",
+                "message": "No scenarios declared. Resiliency / failure choreography is not validated.",
+                "refs": {},
+            }
+        )
+    else:
+        # 4) Scenarios present but no fault steps
+        has_any_fault = False
+        has_link_down = False
+        has_link_up = False
+        has_if_down = False
+        has_if_up = False
+        has_wait_for_bgp = False
+
+        for sc in scenarios:
+            if not isinstance(sc, dict):
+                continue
+            steps = sc.get("steps") or []
+            for st in steps:
+                if not isinstance(st, dict):
+                    continue
+                if "wait_for_bgp" in st:
+                    has_wait_for_bgp = True
+                f = st.get("fault")
+                if isinstance(f, dict):
+                    has_any_fault = True
+                    action = f.get("action")
+                    if isinstance(action, str):
+                        if action == "link_down":
+                            has_link_down = True
+                        elif action == "link_up":
+                            has_link_up = True
+                        elif action == "interface_down":
+                            has_if_down = True
+                        elif action == "interface_up":
+                            has_if_up = True
+
+        if not has_any_fault:
+            findings.append(
+                {
+                    "id": "scenario_gap.no_fault_steps",
+                    "severity": "warn",
+                    "category": "scenario_gap",
+                    "message": "Scenarios exist but none inject faults (no 'fault' steps). Failover/resiliency is not exercised.",
+                    "refs": {},
+                }
+            )
+
+        # 5) Fault injected but no restore (global presence heuristic; deterministic)
+        if has_link_down and not has_link_up:
+            findings.append(
+                {
+                    "id": "scenario_gap.missing_link_restore",
+                    "severity": "warn",
+                    "category": "scenario_gap",
+                    "message": "At least one scenario injects link_down but no scenario includes link_up (restore missing).",
+                    "refs": {},
+                }
+            )
+        if has_if_down and not has_if_up:
+            findings.append(
+                {
+                    "id": "scenario_gap.missing_interface_restore",
+                    "severity": "warn",
+                    "category": "scenario_gap",
+                    "message": "At least one scenario injects interface_down but no scenario includes interface_up (restore missing).",
+                    "refs": {},
+                }
+            )
+
+        # Allowed advisory note (declared-only): scenarios never use wait_for_bgp
+        if not has_wait_for_bgp:
+            findings.append(
+                {
+                    "id": "scenario_gap.no_wait_for_bgp",
+                    "severity": "info",
+                    "category": "scenario_gap",
+                    "message": "Scenarios never use wait_for_bgp. Control-plane convergence checks may be missing (declared-only note).",
+                    "refs": {},
+                }
+            )
+
+    # Declared allowlist / deny-all gap (ONLY if schema contains allowlist-like keys)
+    has_allowlist = _preflight_contains_key(resolved, "allowlist") or _preflight_contains_key(resolved, "allowlists")
+    if has_allowlist:
+        has_negative = False
+        for t in tests:
+            if not isinstance(t, dict):
+                continue
+            exp = t.get("expected")
+            if isinstance(exp, str) and exp.strip().lower() == "fail":
+                has_negative = True
+                break
+        if not has_negative:
+            findings.append(
+                {
+                    "id": "intent_gap.allowlist_no_negative_tests",
+                    "severity": "warn",
+                    "category": "intent_gap",
+                    "message": "Allowlist-like constructs are declared but no expected-fail (negative) tests exist. You may be missing must-not validation.",
+                    "refs": {},
+                }
+            )
+
+    # Deterministic ordering: warn before info, then category, then id
+    def _sev_rank(s: str) -> int:
+        return 0 if s == "warn" else 1
+
+    for f in findings:
+        refs = f.get("refs")
+        if isinstance(refs, dict):
+            for k in ("nodes", "links", "tests", "scenarios"):
+                if isinstance(refs.get(k), list):
+                    refs[k] = sorted([str(x) for x in refs[k]])
+            f["refs"] = refs
+
+    findings = sorted(findings, key=lambda f: (_sev_rank(str(f.get("severity"))), str(f.get("category")), str(f.get("id"))))
+    return findings
+
+def _preflight_report(input_ref: str, topo_path: Path, resolved: dict, cov: dict) -> dict:
+    findings = _preflight_findings(resolved, cov)
+
+    # summary counts
+    by_sev = {"warn": 0, "info": 0}
+    for f in findings:
+        sev = str(f.get("severity") or "")
+        if sev in by_sev:
+            by_sev[sev] += 1
+
+    cov_summary = cov.get("summary") if isinstance(cov.get("summary"), dict) else {}
+    coverage_obj = {
+        "schema_version": str(cov.get("schema_version") or ""),
+        "summary": cov_summary,
+    }
+
+    return {
+        "schema_version": "preflight.v1",
+        "tool": "ai-netsim",
+        "command": "preflight",
+        "authority": "advisory",
+        "topology": {
+            "input": input_ref,
+            "resolved_name": str(resolved.get("name") or ""),
+        },
+        "coverage": coverage_obj,
+        "findings": findings,
+        "summary": {
+            "finding_counts_by_severity": {"info": int(by_sev["info"]), "warn": int(by_sev["warn"])},
+            "notes": [],
+        },
+    }
+
+def _preflight_format_text(report: dict) -> str:
+    # Deterministic plain-text (CI readable)
+    topo = report.get("topology") or {}
+    counts = (report.get("summary") or {}).get("finding_counts_by_severity") or {}
+    lines: list[str] = []
+    lines.append("=== Preflight (advisory-only) ===")
+    lines.append(f"topology: {topo.get('input')}")
+    lines.append(f"resolved_name: {topo.get('resolved_name')}")
+    lines.append(f"findings: warn={counts.get('warn', 0)} info={counts.get('info', 0)}")
+    lines.append("")
+    for f in report.get("findings") or []:
+        if not isinstance(f, dict):
+            continue
+        sev = str(f.get("severity") or "")
+        cat = str(f.get("category") or "")
+        fid = str(f.get("id") or "")
+        msg = str(f.get("message") or "")
+        lines.append(f"- [{sev}] {cat} {fid}: {msg}")
+    lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
 def cmd_gen(args: argparse.Namespace) -> None:
     topo_path = (TOPO_DIR / args.topology) if not Path(args.topology).is_file() else Path(args.topology)
     out = write_containerlab_file(topo_path)
@@ -5411,6 +6107,10 @@ def cmd_validate(args: argparse.Namespace) -> None:
         resolved = resolve_topology(topo)
         validate_scenarios(resolved)
 
+        # Advisory-only coverage model (declared-only, resolve-time)
+        cov = build_coverage_model(resolved, topo_path=topo_path)
+        write_coverage_artifact(resolved["name"], cov)
+
         emit("pass", "")
         return  # do not fall through
 
@@ -5431,6 +6131,61 @@ def cmd_validate(args: argparse.Namespace) -> None:
 
     finally:
         _QUIET_DIE = prev_quiet
+
+def cmd_preflight(args: argparse.Namespace) -> None:
+    """
+    Advisory-only static preflight:
+      - declared-only (topology + resolve + coverage model)
+      - no deploy/provision/runtime
+      - never gates; exit 0 on success, exit 2 on input/validation error
+    """
+    import json  # ensure available even if earlier code moves
+    import sys
+
+    input_ref = str(getattr(args, "topology", "") or "").strip()
+    if not input_ref:
+        die("preflight: missing topology argument", code=2)
+
+    topo_path = (TOPO_DIR / input_ref) if not Path(input_ref).is_file() else Path(input_ref)
+    if not topo_path.exists():
+        die(f"preflight: topology not found: {topo_path}", code=2)
+
+    out_arg = getattr(args, "out", None)
+    fmt = str(getattr(args, "format", "json") or "json").strip().lower()
+    if fmt not in ("json", "text"):
+        die("preflight: --format must be json or text", code=2)
+
+    out_path = Path(str(out_arg)).expanduser() if out_arg else _preflight_default_out()
+
+    try:
+        topo = load_yaml(topo_path)
+        ensure_valid_topology(topo)
+
+        resolved = resolve_topology(topo)
+        validate_scenarios(resolved)
+
+        # Declared-only coverage model (authoritative dependency; still advisory output)
+        cov = build_coverage_model(resolved, topo_path=topo_path)
+
+        report = _preflight_report(input_ref=input_ref, topo_path=topo_path, resolved=resolved, cov=cov)
+
+        if fmt == "json":
+            _preflight_write(out_path, report)
+        else:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(_preflight_format_text(report), encoding="utf-8")
+
+        # Human hint (non-authoritative, stable path string)
+        print(f"✅ PREFLIGHT OK (advisory): wrote {out_path}")
+        return
+
+    except SystemExit as e:
+        msg = str(e).strip() or "preflight: invalid input"
+        die(msg, code=2)
+
+    except Exception as e:
+        msg = str(e).strip() or "preflight: invalid input"
+        die(msg, code=2)
 
 def cmd_up(args: argparse.Namespace) -> None:
     topo_path = (TOPO_DIR / args.topology) if not Path(args.topology).is_file() else Path(args.topology)
@@ -7891,6 +8646,13 @@ def main() -> None:
     p_val.add_argument("topology", help="Topology YAML filename under ./topologies or a full path")
     p_val.add_argument("--json", action="store_true", help="Emit machine-readable JSON (CI-friendly)")
     p_val.set_defaults(func=cmd_validate)
+
+    # preflight (advisory-only, declared-only, resolve-time)
+    p_pre = sub.add_parser("preflight", help="Advisory static preflight (declared-only; no execution)")
+    p_pre.add_argument("topology", help="Topology YAML filename under ./topologies or a full path")
+    p_pre.add_argument("--format", choices=["json", "text"], default="json", help="Output format")
+    p_pre.add_argument("--out", default=None, help="Output path (default: artifacts/preflight/preflight.json)")
+    p_pre.set_defaults(func=cmd_preflight)
 
     # up
     p_up = sub.add_parser("up", help="Generate + deploy")

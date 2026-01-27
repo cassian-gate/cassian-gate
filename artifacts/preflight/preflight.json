@@ -1,0 +1,192 @@
+{
+  "authority": "advisory",
+  "command": "preflight",
+  "coverage": {
+    "schema_version": "coverage.v1",
+    "summary": {
+      "touched_fault_classes": [
+        "interface_down",
+        "interface_up",
+        "link_down",
+        "link_up"
+      ],
+      "touched_links": [
+        "fw1:eth1<->r2:eth2"
+      ],
+      "touched_nodes": [
+        "fw1",
+        "h1",
+        "h2",
+        "r2"
+      ],
+      "touched_wait_classes": [
+        "wait_for_ping"
+      ],
+      "untouched_links": [
+        "fw1:eth2<->r3:eth1",
+        "fw1:eth3<->r2:eth3",
+        "h1:eth1<->r1:eth2",
+        "h2:eth1<->r3:eth2",
+        "r1:eth1<->r2:eth1"
+      ],
+      "untouched_nodes": [
+        "r1",
+        "r3"
+      ]
+    }
+  },
+  "findings": [
+    {
+      "category": "coverage_gap",
+      "id": "coverage_gap.untouched_link.fw1:eth1<->r2:eth2",
+      "message": "Link 'fw1:eth1<->r2:eth2' is never exercised by any declared test or scenario step.",
+      "refs": {
+        "links": [
+          "fw1:eth1<->r2:eth2"
+        ]
+      },
+      "severity": "warn"
+    },
+    {
+      "category": "coverage_gap",
+      "id": "coverage_gap.untouched_link.fw1:eth2<->r3:eth1",
+      "message": "Link 'fw1:eth2<->r3:eth1' is never exercised by any declared test or scenario step.",
+      "refs": {
+        "links": [
+          "fw1:eth2<->r3:eth1"
+        ]
+      },
+      "severity": "warn"
+    },
+    {
+      "category": "coverage_gap",
+      "id": "coverage_gap.untouched_link.fw1:eth3<->r2:eth3",
+      "message": "Link 'fw1:eth3<->r2:eth3' is never exercised by any declared test or scenario step.",
+      "refs": {
+        "links": [
+          "fw1:eth3<->r2:eth3"
+        ]
+      },
+      "severity": "warn"
+    },
+    {
+      "category": "coverage_gap",
+      "id": "coverage_gap.untouched_link.h1:eth1<->r1:eth2",
+      "message": "Link 'h1:eth1<->r1:eth2' is never exercised by any declared test or scenario step.",
+      "refs": {
+        "links": [
+          "h1:eth1<->r1:eth2"
+        ]
+      },
+      "severity": "warn"
+    },
+    {
+      "category": "coverage_gap",
+      "id": "coverage_gap.untouched_link.h2:eth1<->r3:eth2",
+      "message": "Link 'h2:eth1<->r3:eth2' is never exercised by any declared test or scenario step.",
+      "refs": {
+        "links": [
+          "h2:eth1<->r3:eth2"
+        ]
+      },
+      "severity": "warn"
+    },
+    {
+      "category": "coverage_gap",
+      "id": "coverage_gap.untouched_link.r1:eth1<->r2:eth1",
+      "message": "Link 'r1:eth1<->r2:eth1' is never exercised by any declared test or scenario step.",
+      "refs": {
+        "links": [
+          "r1:eth1<->r2:eth1"
+        ]
+      },
+      "severity": "warn"
+    },
+    {
+      "category": "coverage_gap",
+      "id": "coverage_gap.untouched_node.fw1",
+      "message": "Node 'fw1' is never exercised by any declared test or scenario step.",
+      "refs": {
+        "nodes": [
+          "fw1"
+        ]
+      },
+      "severity": "warn"
+    },
+    {
+      "category": "coverage_gap",
+      "id": "coverage_gap.untouched_node.h1",
+      "message": "Node 'h1' is never exercised by any declared test or scenario step.",
+      "refs": {
+        "nodes": [
+          "h1"
+        ]
+      },
+      "severity": "warn"
+    },
+    {
+      "category": "coverage_gap",
+      "id": "coverage_gap.untouched_node.h2",
+      "message": "Node 'h2' is never exercised by any declared test or scenario step.",
+      "refs": {
+        "nodes": [
+          "h2"
+        ]
+      },
+      "severity": "warn"
+    },
+    {
+      "category": "coverage_gap",
+      "id": "coverage_gap.untouched_node.r1",
+      "message": "Node 'r1' is never exercised by any declared test or scenario step.",
+      "refs": {
+        "nodes": [
+          "r1"
+        ]
+      },
+      "severity": "warn"
+    },
+    {
+      "category": "coverage_gap",
+      "id": "coverage_gap.untouched_node.r2",
+      "message": "Node 'r2' is never exercised by any declared test or scenario step.",
+      "refs": {
+        "nodes": [
+          "r2"
+        ]
+      },
+      "severity": "warn"
+    },
+    {
+      "category": "coverage_gap",
+      "id": "coverage_gap.untouched_node.r3",
+      "message": "Node 'r3' is never exercised by any declared test or scenario step.",
+      "refs": {
+        "nodes": [
+          "r3"
+        ]
+      },
+      "severity": "warn"
+    },
+    {
+      "category": "scenario_gap",
+      "id": "scenario_gap.no_wait_for_bgp",
+      "message": "Scenarios never use wait_for_bgp. Control-plane convergence checks may be missing (declared-only note).",
+      "refs": {},
+      "severity": "info"
+    }
+  ],
+  "schema_version": "preflight.v1",
+  "summary": {
+    "finding_counts_by_severity": {
+      "info": 1,
+      "warn": 12
+    },
+    "notes": []
+  },
+  "tool": "ai-netsim",
+  "topology": {
+    "input": "topologies/three-frr-two-hosts-fw-routed.yaml",
+    "resolved_name": "three-frr-two-hosts-fw-routed"
+  }
+}
