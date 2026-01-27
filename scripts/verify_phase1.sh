@@ -347,6 +347,39 @@ test -s "$LABDIR/results.json"
 test -s "$LABDIR/results.summary.txt"
 
 echo
+echo "=== 7c) Supporting evidence: state capture (non-authoritative) ==="
+
+# Negative: unknown profile must exit 2 (fail-fast config validation)
+set +e
+out="$(./src/netsim.py test "$LAB" --state-capture pre --state-profile does-not-exist 2>&1)"
+rc=$?
+set -e
+if [ $rc -ne 2 ]; then
+  echo "FAIL: expected rc=2 for unknown state profile, got rc=$rc"
+  echo "$out"
+  exit 1
+fi
+echo "OK: unknown state profile rejected with rc=2"
+
+# Positive: run with state capture (both) using built-in profiles
+./src/netsim.py test "$LAB" --state-capture both --state-profile frr-routing-basic --state-profile linux-net-basic --state-profile nft-ruleset-basic >/dev/null
+
+# Artifacts exist
+test -s "$LABDIR/artifacts/state_capture/plan.json" || { echo "FAIL: missing state_capture plan.json"; exit 1; }
+test -d "$LABDIR/artifacts/state_capture/pre" || { echo "FAIL: missing state_capture/pre"; exit 1; }
+test -d "$LABDIR/artifacts/state_capture/post" || { echo "FAIL: missing state_capture/post"; exit 1; }
+
+# results.json additive pointers exist (non-authoritative)
+jq -e '.state_capture.enabled == true and (.state_capture.mode=="both") and (.state_capture.plan_path|type)=="string"' "$LABDIR/results.json" >/dev/null \
+  || { echo "FAIL: results.json missing state_capture block"; exit 1; }
+
+jq -e '.authority.supporting_evidence | any(.type=="state_capture")' "$LABDIR/results.json" >/dev/null \
+  || { echo "FAIL: results.json missing authority.supporting_evidence state_capture pointer"; exit 1; }
+
+echo "OK: state capture artifacts present + results.json pointers (evidence-only)"
+echo
+
+echo
 echo "=== 7) results.json schema guarantee (stable headers + authority boundary) ==="
 jq -e '
   .results_schema=="results.v1"
