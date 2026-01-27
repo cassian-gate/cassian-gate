@@ -460,10 +460,7 @@ must_fail_with_re() {
   echo "    matched regex: $pattern"
 }
 
-<<<<<<< HEAD
 # Each negative file tests exactly one invariant (deterministic fail-fast)
-=======
->>>>>>> develop/v1.5
 must_fail_with "topologies/neg/bad_steps_not_dict.yaml" "step must be a dict"
 must_fail_with "topologies/neg/bad_wait_for_tcp_type_v1.yaml" "wait_for.type: must be ping (v1)"
 must_fail_with "topologies/neg/bad_wait_for_bgp_unknown_node.yaml" "unknown node 'not_a_real_node'"
