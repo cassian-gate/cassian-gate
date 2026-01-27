@@ -197,7 +197,7 @@ echo "$out" | grep -Fq -- "$needle" || {
   exit 1
 }
 echo "OK: scenario+filter guardrail rejects with rc=2 + message"
-echo "=== 6c) Candidate Config Apply (v1.5) verification ==="
+echo "=== 6d) Candidate Config Apply (v1.5) verification ==="
 
 # Candidate fixture locations (kept deterministic + repo-local)
 NEG_UNKNOWN="topologies/neg/candidate-unknown-node"
