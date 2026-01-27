@@ -346,11 +346,32 @@ echo "=== 7) Validate artifacts ==="
 test -s "$LABDIR/results.json"
 test -s "$LABDIR/results.summary.txt"
 
-# NEW: Coverage artifact must exist and be advisory-only.
-test -s "$LABDIR/artifacts/coverage/coverage.json"
-jq -e '.authority=="advisory"' "$LABDIR/artifacts/coverage/coverage.json" >/dev/null
-jq -e '.schema_version=="coverage.v1"' "$LABDIR/artifacts/coverage/coverage.json" >/dev/null
-echo "OK: coverage artifact present (advisory-only)"
+echo
+echo "=== 7) results.json schema guarantee (stable headers + authority boundary) ==="
+jq -e '
+  .results_schema=="results.v1"
+  and .results_schema_version=="1.0.0"
+  and .tool=="ai-netsim"
+  and .command=="test"
+  and (.topology.name|type)=="string"
+  and (.lab_obj.name|type)=="string"
+  and .authority.verdict_source=="tests"
+  and (.authority.supporting_evidence|type)=="array"
+  and (.overall.observed|type)=="string"
+  and (.overall.verdict=="pass" or .overall.verdict=="fail")
+  and (.overall.exit_code|type)=="number"
+  and (.overall.phase|type)=="string"
+  and (has("hard_failure"))
+  and (has("tests"))
+  and (has("scenarios"))
+  and (has("events"))
+' "$LABDIR/results.json" >/dev/null || {
+  echo "FAIL: results.json missing stable schema headers / authority boundary / overall envelope"
+  head -80 "$LABDIR/results.json" || true
+  exit 1
+}
+echo "OK: results.json schema headers + authority boundary present"
+echo
 
 cat "$LABDIR/results.summary.txt"
 grep -q '^result: pass' "$LABDIR/results.summary.txt"
@@ -516,6 +537,20 @@ echo "=== NEG) invalid include:all (unnamed test) ==="
 ./src/netsim.py up topologies/neg/invalid_include_all_unnamed_test.yaml --reconfigure >/dev/null 2>&1 \
   && { echo "FAIL: expected include:all unnamed test to be rejected"; exit 1; } \
   || echo "OK: include:all unnamed test rejected"
+echo
+
+# Coverage model negatives (declared-only, advisory artifact generation is part of validate)
+echo
+echo "=== NEG) coverage model (unnamed tests rejected) ==="
+./src/netsim.py validate topologies/neg/bad_coverage_unnamed_test.yaml >/dev/null 2>&1 \
+  && { echo "FAIL: expected coverage unnamed-test rejection"; exit 1; } \
+  || echo "OK: bad_coverage_unnamed_test rejected"
+echo
+
+echo "=== NEG) coverage model (run dict rejected by schema; keep aligned) ==="
+./src/netsim.py validate topologies/neg/bad_coverage_run_dict.yaml >/dev/null 2>&1 \
+  && { echo "FAIL: expected coverage run-dict topology to be rejected"; exit 1; } \
+  || echo "OK: bad_coverage_run_dict rejected"
 echo
 
 echo
