@@ -151,7 +151,6 @@ echo "$out" | grep -Fq -- "expects a LAB NAME, not a topology file path" || {
 echo "OK: topology-path misuse rejected with friendly message (rc=2)"
 echo
 
-<<<<<<< HEAD
 echo "=== 6c) UX guardrail: scenario/all-scenarios rejects --name/--kind filters ==="
 set +e
 out="$(./src/netsim.py test "$LAB" --scenario ping_test --name bar 2>&1)"
@@ -177,7 +176,6 @@ echo "$out" | grep -Fq -- "$needle" || {
   exit 1
 }
 echo "OK: scenario+filter guardrail rejects with rc=2 + message"
-=======
 echo "=== 6c) Candidate Config Apply (v1.5) verification ==="
 
 # Candidate fixture locations (kept deterministic + repo-local)
@@ -321,7 +319,6 @@ echo
 # We intentionally ran a failing candidate apply above; now reset to a clean passing summary.
 ./src/netsim.py test "$LAB" >/dev/null
 echo "OK: restored PASS run after candidate-apply negative test"
->>>>>>> develop/v1.5
 echo
 
 echo "=== 7) Validate artifacts ==="

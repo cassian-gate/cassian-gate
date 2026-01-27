@@ -4029,7 +4029,6 @@ def cmd_test(args: argparse.Namespace) -> None:
     ensure_valid_topology(topo)
 
     # Candidate config fail-fast validation (no runtime actions required)
-<<<<<<< HEAD
     # Normalize to absolute + resolved (same semantics as two-run)
     cand_dir_raw: str | None = getattr(args, "candidate_config", None)
     cand_dir: Path | None = None
@@ -4041,12 +4040,10 @@ def cmd_test(args: argparse.Namespace) -> None:
             cand_dir = (Path.cwd() / cand_dir)
         cand_dir = cand_dir.resolve()
         cand_plan = _candidate_parse_dir_or_die(topo, cand_dir)
-=======
     cand_dir_raw: str | None = getattr(args, "candidate_config", None)
     if cand_dir_raw:
         _ = _candidate_parse_dir_or_die(topo, Path(str(cand_dir_raw)).expanduser())
 
->>>>>>> develop/v1.5
 
     # -----------------------------------------------------------------------------
     # Hard guardrail: validate scenario run refs up-front (no partial execution)
