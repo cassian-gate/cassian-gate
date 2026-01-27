@@ -3874,6 +3874,20 @@ def cmd_test(args: argparse.Namespace) -> None:
         results["events"].append(rec)
 
     def write_results() -> None:
+        # Collect-time schema stabilization (additive-only; must not change semantics)
+        try:
+            _finalize_results_schema(
+                results=results,
+                command="test",
+                topo_name=str(topo.get("name") or lab),
+                lab_name=str(lab),
+                phase="collect",
+            )
+        except Exception:
+            # Never allow schema labeling to break gate execution.
+            # Drift is caught by verification tooling (verify_phase1.sh), not by runtime gating.
+            pass
+
         out = lab_dir(lab) / "results.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(results, indent=2), encoding="utf-8")
@@ -5563,6 +5577,88 @@ def cmd_test(args: argparse.Namespace) -> None:
         print(f"✅ Declared tests PASS ({results['summary']['passed']} checks)")
 
     print("✅ TEST PASS: containers running + checks OK")
+
+# -----------------------------
+# results.json schema guarantee (v1.5)
+# -----------------------------
+RESULTS_SCHEMA = "results.v1"
+RESULTS_SCHEMA_VERSION = "1.0.0"
+
+def _finalize_results_schema(
+    *,
+    results: dict,
+    command: str,
+    topo_name: str,
+    lab_name: str,
+    phase: str,
+) -> None:
+    """
+    Additive-only schema stabilization for results.json.
+
+    Hard rules:
+      - never remove/rename/repurpose existing keys
+      - never change verdict/exit semantics (this is labeling only)
+      - no AI/heuristic authority fields
+    """
+
+    # 1) Required schema identifiers (additive)
+    results.setdefault("results_schema", RESULTS_SCHEMA)
+    results.setdefault("results_schema_version", RESULTS_SCHEMA_VERSION)
+
+    # 2) Identity (additive)
+    results.setdefault("tool", "ai-netsim")
+    results.setdefault("command", str(command))
+
+    # Keep existing "lab": <string> as-is; add a structured lab object additively.
+    results.setdefault("lab_obj", {"name": str(lab_name)})
+
+    # Keep topology info minimal and non-authoritative.
+    results.setdefault("topology", {"name": str(topo_name)})
+
+    # 3) Authority boundary (explicit, additive)
+    # verdict_source is LOCKED: tests (per design contract / handover).
+    results.setdefault(
+        "authority",
+        {
+            "verdict_source": "tests",
+            "supporting_evidence": [],
+        },
+    )
+
+    # 4) Timing (structure stable; values vary)
+    summ = results.get("summary") if isinstance(results.get("summary"), dict) else {}
+    duration_ms = summ.get("duration_ms")
+    timing = results.setdefault("timing", {})
+    if isinstance(timing, dict):
+        # Preserve existing started_at/finished_at in summary; do NOT invent required wall-clock fields.
+        # Only mirror duration_ms structurally if available.
+        if duration_ms is not None:
+            try:
+                timing.setdefault("duration_ms", int(duration_ms))
+            except Exception:
+                pass
+
+    # 5) Overall envelope (explicit, additive)
+    # Derive from existing fields without changing semantics.
+    result = str(results.get("result") or "").strip().lower() or "unknown"
+    observed = "pass" if result == "pass" else ("fail" if result == "fail" else "error")
+    verdict = "pass" if result == "pass" else "fail"
+
+    # Gate exit code semantics remain in process control flow; here we only label.
+    exit_code = 0 if verdict == "pass" else 1
+
+    results.setdefault(
+        "overall",
+        {
+            "observed": observed,
+            "verdict": verdict,
+            "exit_code": int(exit_code),
+            "phase": str(phase),
+        },
+    )
+
+    # 6) Hard failure block (additive; keep null when not used)
+    results.setdefault("hard_failure", None)
 
 def _fmt_dur_s(dur_ms: object) -> str:
     try:

@@ -176,6 +176,33 @@ echo "=== 7) Validate artifacts ==="
 test -s "$LABDIR/results.json"
 test -s "$LABDIR/results.summary.txt"
 
+echo
+echo "=== 7) results.json schema guarantee (stable headers + authority boundary) ==="
+jq -e '
+  .results_schema=="results.v1"
+  and .results_schema_version=="1.0.0"
+  and .tool=="ai-netsim"
+  and .command=="test"
+  and (.topology.name|type)=="string"
+  and (.lab_obj.name|type)=="string"
+  and .authority.verdict_source=="tests"
+  and (.authority.supporting_evidence|type)=="array"
+  and (.overall.observed|type)=="string"
+  and (.overall.verdict=="pass" or .overall.verdict=="fail")
+  and (.overall.exit_code|type)=="number"
+  and (.overall.phase|type)=="string"
+  and (has("hard_failure"))
+  and (has("tests"))
+  and (has("scenarios"))
+  and (has("events"))
+' "$LABDIR/results.json" >/dev/null || {
+  echo "FAIL: results.json missing stable schema headers / authority boundary / overall envelope"
+  head -80 "$LABDIR/results.json" || true
+  exit 1
+}
+echo "OK: results.json schema headers + authority boundary present"
+echo
+
 cat "$LABDIR/results.summary.txt"
 grep -q '^result: pass' "$LABDIR/results.summary.txt"
 # tests total can be 0 in scenario-only mode; accept either:
