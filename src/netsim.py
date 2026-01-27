@@ -54,11 +54,13 @@ def run(
     capture: bool = False,
     capture_output: bool | None = None,
     text: bool = True,
+    timeout_s: float | None = None,
 ) -> subprocess.CompletedProcess:
     """
     Run a command deterministically.
     - capture=True is the legacy flag (captures stdout/stderr)
     - capture_output overrides capture if explicitly set
+    - timeout_s maps to subprocess.run(timeout=...) (seconds)
     """
     global QUIET_RUN
     if not QUIET_RUN:
@@ -72,6 +74,7 @@ def run(
         check=check,
         capture_output=capture_output,
         text=text,
+        timeout=timeout_s,
     )
 
 LAST_ERROR_MSG: str | None = None
@@ -694,6 +697,435 @@ def _sanitize_text(s: str) -> str:
 
 def _safe_stdio(s: str) -> str:
     return _truncate(_sanitize_text(s or ""))
+
+# -----------------------------
+# State capture (supporting evidence only) - v1.5
+# -----------------------------
+
+STATE_CAPTURE_SCHEMA = "state_capture.v1"
+STATE_CAPTURE_PLAN_VERSION = "1.0.0"
+
+# Deterministic truncation for state outputs (bytes)
+_STATE_CAPTURE_MAX_BYTES = 64 * 1024  # 65536
+
+# Built-in profiles (LOCKED list for v1.5)
+# Each command is argv (no shell). Default deny everywhere else.
+STATE_CAPTURE_PROFILES: dict[str, dict] = {
+    # FRR
+    "frr-routing-basic": {
+        "node_types": ["frr"],
+        "commands": [
+            ["vtysh", "-c", "show ip route"],
+            ["vtysh", "-c", "show ipv6 route"],
+        ],
+    },
+    "frr-bgp-basic": {
+        "node_types": ["frr"],
+        "commands": [
+            ["vtysh", "-c", "show bgp summary"],
+            ["vtysh", "-c", "show bgp ipv6 summary"],
+        ],
+    },
+    "frr-interfaces-basic": {
+        "node_types": ["frr"],
+        "commands": [
+            ["vtysh", "-c", "show interface brief"],
+            ["vtysh", "-c", "show ip interface brief"],
+            ["vtysh", "-c", "show ipv6 interface brief"],
+        ],
+    },
+    # Linux hosts
+    "linux-net-basic": {
+        "node_types": ["host"],
+        "commands": [
+            ["ip", "addr"],
+            ["ip", "link"],
+            ["ip", "route"],
+            ["ip", "neigh"],
+        ],
+    },
+    "linux-sockets-basic": {
+        "node_types": ["host"],
+        "commands": [
+            ["ss", "-tulpn"],
+        ],
+    },
+    # nft firewall + sysctls
+    "nft-ruleset-basic": {
+        "node_types": ["nft-fw"],
+        "commands": [
+            ["nft", "list", "ruleset"],
+        ],
+    },
+    "linux-forwarding-basic": {
+        "node_types": ["nft-fw"],
+        "commands": [
+            ["sysctl", "-n", "net.ipv4.ip_forward"],
+            ["sysctl", "-n", "net.ipv4.conf.all.rp_filter"],
+            ["sysctl", "-n", "net.ipv4.conf.default.rp_filter"],
+        ],
+    },
+}
+
+# Hard global deny tokens (no shell metacharacters / compounds)
+_STATE_CAPTURE_DENY_TOKENS = ["|", ";", "&&", "||", ">", "<", "$(", ")", "`", "\n", "\r"]
+
+def _state_capture_trunc_bytes(s: str, *, max_bytes: int = _STATE_CAPTURE_MAX_BYTES) -> tuple[str, bool, int]:
+    """
+    Deterministic truncation by UTF-8 byte length.
+    Returns (text, truncated?, original_bytes).
+    """
+    if s is None:
+        return ("", False, 0)
+    raw = s.encode("utf-8", errors="replace")
+    orig = len(raw)
+    if orig <= max_bytes:
+        return (s, False, orig)
+    clipped = raw[:max_bytes]
+    return (clipped.decode("utf-8", errors="replace"), True, orig)
+
+def _state_capture_validate_argv_or_die(*, profile: str, node: str, node_type: str, argv: list[str]) -> None:
+    """
+    Allowlist + safety validation (fail-fast; config-time).
+    """
+    if not isinstance(argv, list) or not argv or not all(isinstance(x, str) and x.strip() for x in argv):
+        die(f"state-capture: invalid command argv for profile '{profile}' on node '{node}'")
+
+    # Global deny: no shell-ish metacharacters anywhere in argv
+    joined = " ".join(argv)
+    for tok in _STATE_CAPTURE_DENY_TOKENS:
+        if tok in joined:
+            die(
+                f"state-capture: command denied (token {tok!r}) for profile '{profile}' "
+                f"node '{node}' type '{node_type}': {argv!r}",
+                code=2,
+            )
+
+    # Node-type-specific allowlists
+    if node_type == "frr":
+        # Only: vtysh -c "show ..."
+        if not (len(argv) == 3 and argv[0] == "vtysh" and argv[1] == "-c"):
+            die(
+                f"state-capture: FRR commands must be 'vtysh -c <cmd>' "
+                f"(profile '{profile}' node '{node}'): {argv!r}",
+                code=2,
+            )
+        cmd = argv[2].strip()
+        cmd_l = cmd.lower()
+        # Must start with "show "
+        if not cmd_l.startswith("show "):
+            die(
+                f"state-capture: FRR command must start with 'show ' "
+                f"(profile '{profile}' node '{node}'): {cmd!r}",
+                code=2,
+            )
+        # Deny obvious mutation / risky subcommands
+        deny_words = ["configure", "conf t", "write", "clear", "debug", "terminal", "end", "exit", "|"]
+        for w in deny_words:
+            if w in cmd_l:
+                die(
+                    f"state-capture: FRR command denied by allowlist rule ({w!r}) "
+                    f"(profile '{profile}' node '{node}'): {cmd!r}",
+                    code=2,
+                )
+
+    elif node_type == "host":
+        # Allow only exact commands:
+        allowed = {
+            ("ip", "addr"),
+            ("ip", "link"),
+            ("ip", "route"),
+            ("ip", "neigh"),
+            ("ss", "-tulpn"),
+        }
+        tup = tuple(argv)
+        if tup not in allowed:
+            die(
+                f"state-capture: host command not allowlisted "
+                f"(profile '{profile}' node '{node}'): {argv!r}",
+                code=2,
+            )
+
+    elif node_type == "nft-fw":
+        allowed = {
+            ("nft", "list", "ruleset"),
+            ("sysctl", "-n", "net.ipv4.ip_forward"),
+            ("sysctl", "-n", "net.ipv4.conf.all.rp_filter"),
+            ("sysctl", "-n", "net.ipv4.conf.default.rp_filter"),
+        }
+        tup = tuple(argv)
+        if tup not in allowed:
+            die(
+                f"state-capture: nft-fw command not allowlisted "
+                f"(profile '{profile}' node '{node}'): {argv!r}",
+                code=2,
+            )
+        # extra hard deny for mutation verbs if someone tries to sneak them in
+        joined_l = " ".join(argv).lower()
+        if "flush" in joined_l or "add" in joined_l or "delete" in joined_l or " -w " in joined_l or "sysctl -w" in joined_l:
+            die(
+                f"state-capture: mutation command denied "
+                f"(profile '{profile}' node '{node}'): {argv!r}",
+                code=2,
+            )
+    else:
+        die(
+            f"state-capture: unsupported node type '{node_type}' for profile '{profile}' node '{node}'",
+            code=2,
+        )
+
+def _state_capture_expand_plan_or_die(
+    *,
+    topo: dict,
+    mode: str,
+    profiles: list[str],
+) -> dict:
+    """
+    Expand deterministic capture plan:
+      - nodes sorted lexicographically
+      - profiles in CLI order
+      - commands in profile declared order
+    Fail-fast for unknown profile or type mismatch or disallowed commands.
+    """
+    mode_l = str(mode or "none").strip().lower() or "none"
+    if mode_l not in ("none", "pre", "post", "both"):
+        die(f"state-capture: invalid mode {mode!r} (must be none|pre|post|both)", code=2)
+
+    if mode_l == "none":
+        return {
+            "schema": STATE_CAPTURE_SCHEMA,
+            "plan_version": STATE_CAPTURE_PLAN_VERSION,
+            "enabled": False,
+            "mode": "none",
+            "profiles": [],
+            "tasks": [],
+        }
+
+    # Explicitness guardrail: no implicit default profiles
+    if not profiles:
+        die(
+            "state-capture: capture mode enabled but no profiles selected. "
+            "Use one or more: --state-profile <name>",
+            code=2,
+        )
+
+    # Validate profiles exist and keep order exactly as provided
+    profs: list[str] = []
+    for p in profiles:
+        pn = str(p or "").strip()
+        if not pn:
+            continue
+        if pn not in STATE_CAPTURE_PROFILES:
+            die(
+                f"state-capture: unknown profile '{pn}'. "
+                f"Valid profiles: {', '.join(sorted(STATE_CAPTURE_PROFILES.keys()))}",
+                code=2,
+            )
+        profs.append(pn)
+
+    nodes = topo.get("nodes", []) or []
+    nodes_all = [n for n in nodes if isinstance(n, dict) and isinstance(n.get("name"), str)]
+    nodes_sorted = sorted(nodes_all, key=lambda n: str(n.get("name") or "").strip())
+
+    tasks: list[dict] = []
+    cmd_id = 0
+
+    def add_tasks_for_when(when: str) -> None:
+        for n in nodes_sorted:
+            node = str(n.get("name") or "").strip()
+            ntype = str(n.get("type") or n.get("kind") or "").strip()
+            if not node or not ntype:
+                continue
+
+            # command_id resets per node (per 'when'), deterministic ordering preserved
+            node_cmd_id = 0
+
+            for prof in profs:
+                prof_def = STATE_CAPTURE_PROFILES[prof]
+                allowed_types = prof_def.get("node_types") or []
+                if ntype not in allowed_types:
+                    continue
+
+                for argv in (prof_def.get("commands") or []):
+                    # Validate allowlist & safety at plan time (blocking)
+                    _state_capture_validate_argv_or_die(profile=prof, node=node, node_type=ntype, argv=argv)
+
+                    node_cmd_id += 1
+                    tasks.append(
+                        {
+                            "profile": prof,
+                            "node": node,
+                            "node_type": ntype,
+                            "when": when,
+                            "command_id": f"cmd-{node_cmd_id:03d}",
+                            "argv": argv,
+                        }
+                    )
+
+    if mode_l in ("pre", "both"):
+        add_tasks_for_when("pre")
+    if mode_l in ("post", "both"):
+        add_tasks_for_when("post")
+
+    return {
+        "schema": STATE_CAPTURE_SCHEMA,
+        "plan_version": STATE_CAPTURE_PLAN_VERSION,
+        "enabled": True,
+        "mode": mode_l,
+        "profiles": profs,
+        "tasks": tasks,
+        "ordering": {
+            "nodes": "lexicographic",
+            "profiles": "cli_order",
+            "commands": "profile_declared_order",
+        },
+    }
+
+def _state_capture_artifacts_root(lab: str) -> Path:
+    return lab_dir(lab) / "artifacts" / "state_capture"
+
+def _state_capture_write_plan(lab: str, plan: dict) -> Path:
+    root = _state_capture_artifacts_root(lab)
+    root.mkdir(parents=True, exist_ok=True)
+    out = root / "plan.json"
+    out.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return out
+
+def _state_capture_run_plan(
+    rt: "Runtime",
+    lab: str,
+    plan: dict[str, Any],
+    *,
+    when: str,
+    timeout_s: float = 5.0,
+) -> dict[str, int]:
+    """
+    Execute a resolved state-capture plan for a single capture point (pre|post).
+
+    Non-authoritative:
+      - command failures/timeouts are recorded but never gate
+      - caller decides how/where to surface summaries
+    """
+    root = lab_dir(lab) / "artifacts" / "state_capture" / when
+    root.mkdir(parents=True, exist_ok=True)
+
+    tasks = plan.get("tasks") or []
+    if not isinstance(tasks, list):
+        return {"when": when, "ran": 0, "ok": 0, "error": 0, "timeout": 0, "skipped": 0}
+
+    ran = 0
+    ok = 0
+    err = 0
+    tout = 0
+    skipped = 0
+
+    for t in tasks:
+        if not isinstance(t, dict):
+            continue
+        if str(t.get("when")) != str(when):
+            continue
+
+        node = str(t.get("node") or "")
+        node_type = str(t.get("node_type") or "")
+        profile = str(t.get("profile") or "")
+        cmd_id = str(t.get("command_id") or "")
+        argv = t.get("argv")
+
+        if not node or not profile or not cmd_id or not isinstance(argv, list) or not argv:
+            skipped += 1
+            continue
+
+        ran += 1
+
+        node_dir = root / node
+        node_dir.mkdir(parents=True, exist_ok=True)
+
+        meta_path = node_dir / f"{cmd_id}.json"
+        out_path = node_dir / f"{cmd_id}.out.txt"
+
+        started_ms = int(time.time() * 1000)
+        status = "ok"
+        exit_code = 0
+        stdout = ""
+        stderr = ""
+        duration_ms = 0
+
+        try:
+            t0 = time.time()
+            cp = rt.exec(lab, node, argv, check=False, capture_output=True, timeout_s=float(timeout_s))
+            duration_ms = int((time.time() - t0) * 1000)
+
+            exit_code = int(getattr(cp, "returncode", 0) or 0)
+            stdout = cp.stdout if isinstance(cp.stdout, str) else (cp.stdout.decode("utf-8", "replace") if isinstance(cp.stdout, bytes) else "")
+            stderr = cp.stderr if isinstance(cp.stderr, str) else (cp.stderr.decode("utf-8", "replace") if isinstance(cp.stderr, bytes) else "")
+
+            if exit_code != 0:
+                status = "error"
+
+        except subprocess.TimeoutExpired as e:
+            status = "timeout"
+            exit_code = 1
+            duration_ms = int((int(time.time() * 1000) - started_ms))
+            try:
+                out = e.stdout
+                if isinstance(out, bytes):
+                    stdout = out.decode("utf-8", "replace")
+                elif isinstance(out, str):
+                    stdout = out
+            except Exception:
+                pass
+            try:
+                er = e.stderr
+                if isinstance(er, bytes):
+                    stderr = er.decode("utf-8", "replace")
+                elif isinstance(er, str):
+                    stderr = er
+            except Exception:
+                pass
+
+        except Exception as e:
+            status = "error"
+            exit_code = 1
+            duration_ms = int((int(time.time() * 1000) - started_ms))
+            stderr = _safe_stdio(str(e))
+
+        # Deterministic size policy for outputs
+        out_txt, trunc, orig_bytes = _state_capture_trunc_bytes(_sanitize_text(stdout), max_bytes=_STATE_CAPTURE_MAX_BYTES)
+
+        # Always write text output (even if empty); keeps tooling stable
+        out_path.write_text(out_txt, encoding="utf-8")
+
+        rec = {
+            "authority": "supporting_evidence",
+            "schema": STATE_CAPTURE_SCHEMA,
+            "plan_version": STATE_CAPTURE_PLAN_VERSION,
+            "when": when,
+            "profile": profile,
+            "node": node,
+            "node_type": node_type,
+            "command_id": cmd_id,
+            "argv": argv,
+            "started_at_epoch_ms": started_ms,
+            "duration_ms": int(duration_ms),
+            "result": {
+                "status": status,
+                "exit_code": int(exit_code),
+                "stdout_bytes": int(orig_bytes),
+                "stdout_truncated": bool(trunc),
+                "out_path": str(out_path),
+            },
+            "stderr": _safe_stdio(stderr),
+        }
+        meta_path.write_text(json.dumps(rec, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        if status == "ok":
+            ok += 1
+        elif status == "timeout":
+            tout += 1
+        else:
+            err += 1
+
+    return {"when": when, "ran": ran, "ok": ok, "error": err, "timeout": tout, "skipped": skipped}
 
 def _candidate_artifacts_dir(lab: str) -> Path:
     return lab_dir(lab) / "artifacts" / "apply"
@@ -3764,8 +4196,9 @@ class Runtime:
         cmd: list[str],
         *,
         check: bool = False,
-        capture_output: bool = True,   # <-- IMPORTANT: default True so helpers can parse stdout
+        capture_output: bool = True,
         interactive: bool = False,
+        timeout_s: float | None = None,
     ) -> subprocess.CompletedProcess:
         raise NotImplementedError
 
@@ -3829,6 +4262,7 @@ class ContainerRuntime(Runtime):
         check: bool = False,
         capture_output: bool = True,
         interactive: bool = False,
+        timeout_s: float | None = None,
     ) -> subprocess.CompletedProcess:
         c = self.node_id(lab, node)
 
@@ -3837,15 +4271,13 @@ class ContainerRuntime(Runtime):
             # interactive calls should not capture output (TTY behavior)
             argv += ["-it"]
             argv += [c, *cmd]
-            # Ensure we don't accidentally depend on stdout/stderr for interactive calls
-            return run(argv, check=check, capture_output=False)
+            # Ignore timeout for interactive exec (TTY semantics)
+            return run(argv, check=check, capture_output=False, timeout_s=None)
 
         argv += [c, *cmd]
 
-        # Non-interactive calls: capture output by default so scenario helpers can parse stdout
-        # (e.g., ip route snapshots for deterministic restoration after link up)
-        return run(argv, check=check, capture_output=capture_output)
-
+        # Non-interactive calls: capture output by default so helpers can parse stdout
+        return run(argv, check=check, capture_output=capture_output, timeout_s=timeout_s)
 
     def is_running(self, lab: str, node: str) -> bool:
         return self.is_running_id(self.node_id(lab, node))
@@ -4621,9 +5053,87 @@ def cmd_test(args: argparse.Namespace) -> None:
                 lab_name=str(lab),
                 phase="collect",
             )
-        except Exception:
+        except Exception as e:
             # Never allow schema labeling to break gate execution.
-            # Drift is caught by verification tooling (verify_phase1.sh), not by runtime gating.
+            # Record as supporting evidence only (non-authoritative).
+            try:
+                auth = results.get("authority")
+                if not isinstance(auth, dict):
+                    auth = {}
+                    results["authority"] = auth
+
+                se = auth.get("supporting_evidence")
+                if not isinstance(se, list):
+                    se = []
+                    auth["supporting_evidence"] = se
+
+                se.append(
+                    {
+                        "type": "schema_finalize_error",
+                        "authority": "supporting_evidence",
+                        "error": _safe_stdio(str(e)),
+                    }
+                )
+            except Exception:
+                pass
+
+        # Deterministic schema floor (additive-only):
+        # Ensure stable headers + authority boundary + overall envelope exist,
+        # even if _finalize_results_schema() is a no-op.
+        try:
+            results.setdefault("results_schema", "results.v1")
+            results.setdefault("results_schema_version", "1.0.0")
+            results.setdefault("tool", "ai-netsim")
+            results.setdefault("command", "test")
+
+            topo_obj = results.get("topology")
+            if not isinstance(topo_obj, dict):
+                topo_obj = {}
+                results["topology"] = topo_obj
+            topo_obj.setdefault("name", str(topo.get("name") or lab))
+
+            lab_obj = results.get("lab_obj")
+            if not isinstance(lab_obj, dict):
+                lab_obj = {}
+                results["lab_obj"] = lab_obj
+            lab_obj.setdefault("name", str(lab))
+
+            auth = results.get("authority")
+            if not isinstance(auth, dict):
+                auth = {}
+                results["authority"] = auth
+            auth.setdefault("verdict_source", "tests")
+            se = auth.get("supporting_evidence")
+            if not isinstance(se, list):
+                auth["supporting_evidence"] = []
+
+            if "hard_failure" not in results or not isinstance(results.get("hard_failure"), dict):
+                results["hard_failure"] = {"occurred": False, "phase": "", "error": ""}
+
+            if "tests" not in results or not isinstance(results.get("tests"), list):
+                results["tests"] = results.get("tests") if isinstance(results.get("tests"), list) else []
+
+            if "scenarios" not in results or not isinstance(results.get("scenarios"), list):
+                results["scenarios"] = results.get("scenarios") if isinstance(results.get("scenarios"), list) else []
+
+            if "events" not in results or not isinstance(results.get("events"), list):
+                results["events"] = results.get("events") if isinstance(results.get("events"), list) else []
+
+            legacy_result = str(results.get("result") or "fail").strip().lower()
+            overall_verdict = "pass" if legacy_result == "pass" else "fail"
+            overall_exit = 0 if overall_verdict == "pass" else 1
+
+            overall = results.get("overall")
+            if not isinstance(overall, dict):
+                overall = {}
+                results["overall"] = overall
+            overall.setdefault("expected", "pass")
+            overall["observed"] = overall_verdict
+            overall["verdict"] = overall_verdict
+            overall.setdefault("phase", "collect")
+            overall.setdefault("exit_code", overall_exit)
+        except Exception:
+            # Never allow schema floor enforcement to break the gate
             pass
 
         out = lab_dir(lab) / "results.json"
@@ -5923,6 +6433,49 @@ def cmd_test(args: argparse.Namespace) -> None:
             ]
             die(f"{name} is not running\n\n" + "\n".join(hint_lines))
 
+    # =============================================================================
+    # 1.5) State capture plan (supporting evidence only) - fail-fast config validation
+    # =============================================================================
+    state_mode = str(getattr(args, "state_capture", "none") or "none").strip().lower()
+    state_profiles = getattr(args, "state_profile", None)
+    if state_profiles is None:
+        state_profiles = []
+    if not isinstance(state_profiles, list):
+        state_profiles = [str(state_profiles)]
+
+    # Expand deterministic plan (blocking only for invalid config, never runtime errors)
+    state_plan = _state_capture_expand_plan_or_die(topo=topo, mode=state_mode, profiles=[str(x) for x in state_profiles])
+
+    # Always write plan.json when enabled (audit primitive)
+    state_plan_path = ""
+    if bool(state_plan.get("enabled")):
+        state_plan_path = str(_state_capture_write_plan(lab, state_plan))
+
+    # Additive-only results labeling (never affects verdict)
+    results["state_capture"] = {
+        "enabled": bool(state_plan.get("enabled")),
+        "mode": str(state_plan.get("mode") or "none"),
+        "profiles": list(state_plan.get("profiles") or []),
+        "plan_path": state_plan_path,
+        "pre": {"ran": 0, "ok": 0, "error": 0, "timeout": 0},
+        "post": {"ran": 0, "ok": 0, "error": 0, "timeout": 0},
+    }
+
+    # Link into authority.supporting_evidence (additive pointer only)
+    if bool(state_plan.get("enabled")):
+        try:
+            results.setdefault("authority", {}).setdefault("supporting_evidence", []).append(
+                {
+                    "type": "state_capture",
+                    "authority": "supporting_evidence",
+                    "path": state_plan_path,
+                    "mode": str(state_plan.get("mode") or "none"),
+                    "profiles": list(state_plan.get("profiles") or []),
+                }
+            )
+        except Exception:
+            # Never allow evidence indexing to break execution
+            pass
 
     # =============================================================================
     # 2) Node readiness gate (no control-plane assumptions yet)
@@ -6082,6 +6635,25 @@ def cmd_test(args: argparse.Namespace) -> None:
             results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
             write_results()
             raise
+
+    # =============================================================================
+    # 3.5) Pre-state capture (supporting evidence only; never gates)
+    # =============================================================================
+    if bool(results.get("state_capture", {}).get("enabled")) and str(results["state_capture"].get("mode")) in ("pre", "both"):
+        try:
+            summ = _state_capture_run_plan(rt=rt, lab=lab, plan=state_plan, when="pre", timeout_s=5)
+            results["state_capture"]["pre"] = {k: int(summ.get(k, 0)) for k in ["ran", "ok", "error", "timeout", "skipped"]}
+        except Exception as e:
+            # Non-authoritative: record but do not fail
+            results["state_capture"]["pre"] = {"ran": 0, "ok": 0, "error": 1, "timeout": 0, "skipped": 0}
+            results.setdefault("authority", {}).setdefault("supporting_evidence", []).append(
+                {
+                    "type": "state_capture_error",
+                    "authority": "supporting_evidence",
+                    "when": "pre",
+                    "error": _safe_stdio(str(e)),
+                }
+            )
 
     # =============================================================================
     # 4) Scenarios (opt-in) OR Declared tests (default)
@@ -6351,6 +6923,42 @@ def cmd_test(args: argparse.Namespace) -> None:
         # Always stop any listeners we started (deterministic cleanup)
         for dst_node in listeners_started.keys():
             rt.exec(lab, dst_node, ["sh", "-lc", 'pkill -f "nc.*-p" 2>/dev/null || true'], check=False)
+
+        # ------------------------------------------------------------
+        # Post-state capture (supporting evidence only; never gates)
+        # ------------------------------------------------------------
+        try:
+            if bool(results.get("state_capture", {}).get("enabled")) and str(results["state_capture"].get("mode")) in ("post", "both"):
+                summ = _state_capture_run_plan(rt=rt, lab=lab, plan=state_plan, when="post", timeout_s=5)
+                results["state_capture"]["post"] = {
+                    k: int(summ.get(k, 0)) for k in ["ran", "ok", "error", "timeout", "skipped"]
+                }
+        except Exception as e:
+            # Non-authoritative: record but do not fail
+            results["state_capture"]["post"] = {"ran": 0, "ok": 0, "error": 1, "timeout": 0, "skipped": 0}
+
+            # Type-safe append into authority.supporting_evidence (do not assume shapes)
+            try:
+                auth = results.get("authority")
+                if not isinstance(auth, dict):
+                    auth = {}
+                    results["authority"] = auth
+
+                se = auth.get("supporting_evidence")
+                if not isinstance(se, list):
+                    se = []
+                    auth["supporting_evidence"] = se
+
+                se.append(
+                    {
+                        "type": "state_capture_error",
+                        "authority": "supporting_evidence",
+                        "when": "post",
+                        "error": _safe_stdio(str(e)),
+                    }
+                )
+            except Exception:
+                pass
 
         finished_at = time.time()
         results["summary"]["finished_at"] = finished_at
@@ -9701,6 +10309,22 @@ def main() -> None:
     action="store_true",
     help="Run global control-plane prechecks (e.g., BGP wait) before executing scenarios. "
          "Default: off when --scenario/--all-scenarios is used.",
+    )
+        # State capture (supporting evidence only; never gates)
+    p_test.add_argument(
+        "--state-capture",
+        default="none",
+        choices=["none", "pre", "post", "both"],
+        help="supporting evidence capture timing (none|pre|post|both). Non-authoritative; never affects verdicts.",
+    )
+    p_test.add_argument(
+        "--state-profile",
+        action="append",
+        default=[],
+        help=(
+            "enable supporting evidence capture profile (repeatable). "
+            "No implicit default; required when --state-capture != none."
+        ),
     )
     p_test.add_argument(
     "--list-scenarios",
