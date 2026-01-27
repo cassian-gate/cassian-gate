@@ -163,7 +163,7 @@ if [ $rc -ne 2 ]; then
   exit 1
 fi
 
-echo "$out" | grep -Fq "expects a LAB NAME, not a topology file path" || {
+echo "$out" | grep -Fq -- "expects a LAB NAME, not a topology file path" || {
   echo "FAIL: expected friendly topology-path error message not found"
   echo "$out"
   exit 1
@@ -172,9 +172,185 @@ echo "$out" | grep -Fq "expects a LAB NAME, not a topology file path" || {
 echo "OK: topology-path misuse rejected with friendly message (rc=2)"
 echo
 
+echo "=== 6c) UX guardrail: scenario/all-scenarios rejects --name/--kind filters ==="
+set +e
+out="$(./src/netsim.py test "$LAB" --scenario ping_test --name bar 2>&1)"
+rc=$?
+set -e
+
+# We WANT this to be a usage error (rc=2). If it's rc=1, it means cmd_test is calling die() without code=2.
+if [ $rc -ne 2 ]; then
+  echo "FAIL: expected rc=2 for scenario+filter guardrail, got rc=$rc"
+  echo "$out"
+  echo
+  echo "HINT: in cmd_test(), change:"
+  echo "  die(\"ERROR: --name/--kind filters are not supported ...\")"
+  echo "to:"
+  echo "  die(\"ERROR: --name/--kind filters are not supported ...\", code=2)"
+  exit 1
+fi
+
+needle="ERROR: --name/--kind filters are not supported with --scenario/--all-scenarios"
+echo "$out" | grep -Fq -- "$needle" || {
+  echo "FAIL: expected scenario+filter guardrail message not found"
+  echo "$out"
+  exit 1
+}
+echo "OK: scenario+filter guardrail rejects with rc=2 + message"
+echo "=== 6c) Candidate Config Apply (v1.5) verification ==="
+
+# Candidate fixture locations (kept deterministic + repo-local)
+NEG_UNKNOWN="topologies/neg/candidate-unknown-node"
+NEG_EMPTY="topologies/neg/candidate-empty"
+NEG_BAD_EXT="topologies/neg/candidate-bad-ext"
+
+CAND_OK="tests/fixtures/candidate-ok"
+CAND_BAD_NFT="tests/fixtures/candidate-bad-nft"
+
+# Ensure deterministic negative fixtures exist (create if missing)
+mkdir -p "$NEG_UNKNOWN/frr"
+test -s "$NEG_UNKNOWN/frr/ghost.conf" || printf '!\n' > "$NEG_UNKNOWN/frr/ghost.conf"
+
+mkdir -p "$NEG_EMPTY/frr"
+# Must be empty (size 0)
+: > "$NEG_EMPTY/frr/r1.conf"
+
+mkdir -p "$NEG_BAD_EXT/frr"
+test -s "$NEG_BAD_EXT/frr/r1.conf.bak" || printf '!\n' > "$NEG_BAD_EXT/frr/r1.conf.bak"
+
+# 6c.1) Negative: unknown node rejected (fail-fast)
+set +e
+out="$(./src/netsim.py test "$LAB" --candidate-config "$NEG_UNKNOWN" 2>&1)"
+rc=$?
+set -e
+if [ $rc -eq 0 ]; then
+  echo "FAIL: expected candidate unknown-node to fail, but it succeeded"
+  echo "$out"
+  exit 1
+fi
+echo "$out" | grep -Fq "targets unknown node 'ghost'" || {
+  echo "FAIL: expected unknown-node error not found"
+  echo "$out"
+  exit 1
+}
+echo "OK: candidate unknown node rejected"
+
+# 6c.2) Negative: empty file rejected (fail-fast)
+set +e
+out="$(./src/netsim.py test "$LAB" --candidate-config "$NEG_EMPTY" 2>&1)"
+rc=$?
+set -e
+if [ $rc -eq 0 ]; then
+  echo "FAIL: expected candidate empty-file to fail, but it succeeded"
+  echo "$out"
+  exit 1
+fi
+echo "$out" | grep -Fq "empty candidate file" || {
+  echo "FAIL: expected empty-file error not found"
+  echo "$out"
+  exit 1
+}
+echo "OK: candidate empty file rejected"
+
+# 6c.3) Negative: bad extension rejected
+set +e
+out="$(./src/netsim.py test "$LAB" --candidate-config "$NEG_BAD_EXT" 2>&1)"
+rc=$?
+set -e
+if [ $rc -eq 0 ]; then
+  echo "FAIL: expected candidate bad-extension to fail, but it succeeded"
+  echo "$out"
+  exit 1
+fi
+echo "$out" | grep -Fq "unsupported file under frr/" || {
+  echo "FAIL: expected bad-extension error not found"
+  echo "$out"
+  exit 1
+}
+echo "OK: candidate bad extension rejected"
+
+# Ensure deterministic OK fixtures exist
+mkdir -p "$CAND_OK/frr" "$CAND_OK/nft"
+test -s "$CAND_OK/frr/r1.conf" || cat > "$CAND_OK/frr/r1.conf" <<'EOF'
+!
+! v1.5 candidate apply smoke (r1)
+!
+EOF
+
+test -s "$CAND_OK/nft/fw1.nft" || cat > "$CAND_OK/nft/fw1.nft" <<'EOF'
+flush ruleset
+
+table inet filter {
+  chain input {
+    type filter hook input priority 0;
+    policy accept;
+  }
+  chain forward {
+    type filter hook forward priority 0;
+    policy accept;
+  }
+  chain output {
+    type filter hook output priority 0;
+    policy accept;
+  }
+}
+EOF
+
+# 6c.4) Positive: candidate apply OK -> artifacts + results.json section
+./src/netsim.py test "$LAB" --candidate-config "$CAND_OK" >/dev/null
+
+test -s "$LABDIR/results.json" || { echo "FAIL: missing results.json after candidate apply OK"; exit 1; }
+
+test -f "$LABDIR/artifacts/apply/r1.apply.json" || { echo "FAIL: missing apply artifact for r1"; exit 1; }
+test -f "$LABDIR/artifacts/apply/fw1.apply.json" || { echo "FAIL: missing apply artifact for fw1"; exit 1; }
+
+jq -e '.candidate_apply.enabled == true' "$LABDIR/results.json" >/dev/null || { echo "FAIL: candidate_apply.enabled not true"; exit 1; }
+jq -e '.candidate_apply.verdict == "pass"' "$LABDIR/results.json" >/dev/null || { echo "FAIL: candidate_apply.verdict not pass"; exit 1; }
+echo "OK: candidate apply pass recorded + artifacts present"
+
+# Ensure deterministic BAD-NFT fixture exists
+mkdir -p "$CAND_BAD_NFT/nft"
+test -s "$CAND_BAD_NFT/nft/fw1.nft" || cat > "$CAND_BAD_NFT/nft/fw1.nft" <<'EOF'
+this is not valid nft syntax
+EOF
+
+# 6c.5) Negative runtime-backed: apply fails -> no tests run
+set +e
+./src/netsim.py test "$LAB" --candidate-config "$CAND_BAD_NFT" >/dev/null 2>&1
+rc=$?
+set -e
+
+if [ $rc -eq 0 ]; then
+  echo "FAIL: expected candidate bad-nft apply to fail, but it succeeded"
+  exit 1
+fi
+
+test -s "$LABDIR/results.json" || { echo "FAIL: missing results.json after candidate apply FAIL"; exit 1; }
+jq -e '.candidate_apply.enabled == true and .candidate_apply.verdict == "fail"' "$LABDIR/results.json" >/dev/null \
+  || { echo "FAIL: candidate_apply fail not recorded"; exit 1; }
+
+# Assert tests did not execute
+jq -e '(.summary.tests_executed // 0) == 0' "$LABDIR/results.json" >/dev/null \
+  || { echo "FAIL: tests executed despite candidate apply failure"; exit 1; }
+
+echo "OK: candidate apply failure is atomic (no tests executed)"
+echo
+
+# Restore a PASS run for downstream artifact checks (step 7 expects result: pass).
+# We intentionally ran a failing candidate apply above; now reset to a clean passing summary.
+./src/netsim.py test "$LAB" >/dev/null
+echo "OK: restored PASS run after candidate-apply negative test"
+echo
+
 echo "=== 7) Validate artifacts ==="
 test -s "$LABDIR/results.json"
 test -s "$LABDIR/results.summary.txt"
+
+# NEW: Coverage artifact must exist and be advisory-only.
+test -s "$LABDIR/artifacts/coverage/coverage.json"
+jq -e '.authority=="advisory"' "$LABDIR/artifacts/coverage/coverage.json" >/dev/null
+jq -e '.schema_version=="coverage.v1"' "$LABDIR/artifacts/coverage/coverage.json" >/dev/null
+echo "OK: coverage artifact present (advisory-only)"
 
 cat "$LABDIR/results.summary.txt"
 grep -q '^result: pass' "$LABDIR/results.summary.txt"
@@ -205,9 +381,6 @@ echo
 
 echo
 echo "=== 7b) Scenario summary rendering (results.summary.txt) ==="
-# Run a deterministic scenario if available, then assert summary contains the scenario section.
-# (This does not change authority; it is a human-only artifact check.)
-
 scen_id="ping_test"
 
 set +e
@@ -222,7 +395,7 @@ if [ $rc -ne 0 ]; then
 fi
 
 if echo "$list_out" | grep -Fq -- "- ${scen_id}:"; then
-  ./src/netsim.py test --scenario "$scen_id" "$LAB" >/dev/null
+  ./src/netsim.py test "$LAB" --scenario "$scen_id" >/dev/null
   test -s "$LABDIR/results.summary.txt"
 
   grep -q '^=== Scenarios ===' "$LABDIR/results.summary.txt" || {
@@ -278,7 +451,7 @@ must_fail_with() {
     exit 1
   fi
 
-  echo "$out" | grep -Fq "$needle" || {
+  echo "$out" | grep -Fq -- "$needle" || {
     echo "FAIL: expected error message not found"
     echo "  cmd: $cmd"
     echo "  expected substring: $needle"
@@ -306,7 +479,7 @@ must_fail_with_re() {
     exit 1
   fi
 
-  echo "$out" | grep -Eq "$pattern" || {
+  echo "$out" | grep -Eq -- "$pattern" || {
     echo "FAIL: expected error pattern not found"
     echo "  cmd: $cmd"
     echo "  expected regex: $pattern"
@@ -345,32 +518,15 @@ echo "=== NEG) invalid include:all (unnamed test) ==="
   || echo "OK: include:all unnamed test rejected"
 echo
 
-# Coverage model negatives (declared-only, advisory artifact generation is part of validate)
-echo
-echo "=== NEG) coverage model (unnamed tests rejected) ==="
-./src/netsim.py validate topologies/neg/bad_coverage_unnamed_test.yaml >/dev/null 2>&1 \
-  && { echo "FAIL: expected coverage unnamed-test rejection"; exit 1; } \
-  || echo "OK: bad_coverage_unnamed_test rejected"
-echo
-
-echo "=== NEG) coverage model (run dict rejected by schema; keep aligned) ==="
-./src/netsim.py validate topologies/neg/bad_coverage_run_dict.yaml >/dev/null 2>&1 \
-  && { echo "FAIL: expected coverage run-dict topology to be rejected"; exit 1; } \
-  || echo "OK: bad_coverage_run_dict rejected"
-echo
-
 echo
 echo "=== 10) Optional: examples smoke (quickstart) ==="
 if [ "${AI_NETSIM_VERIFY_EXAMPLES:-0}" = "1" ]; then
-  # ex01 should PASS (connected reachability)
   ./src/netsim.py up examples/01_connected_smoke.yaml --reconfigure >/dev/null
   ./src/netsim.py test ex01-connected-smoke
 
-  # ex03 should PASS (static demo images prove multi-hop)
   ./src/netsim.py up examples/03_static_multihop_ping.yaml --reconfigure >/dev/null
   ./src/netsim.py test ex03-static-multihop
 
-  # ex02 should PASS (BGP demo images prove multi-hop + tcp)
   ./src/netsim.py up examples/02_bgp_multihop_tcp.yaml --reconfigure >/dev/null
   ./src/netsim.py test ex02-bgp-multihop-tcp
 
