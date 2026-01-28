@@ -197,6 +197,26 @@ echo "$out" | grep -Fq -- "$needle" || {
   exit 1
 }
 echo "OK: scenario+filter guardrail rejects with rc=2 + message"
+echo
+echo "=== 6c2) UX guardrail: --capture-config forbidden in netsim test (rc=2 + message) ==="
+set +e
+out="$(./src/netsim.py test "$LAB" --capture-config 2>&1)"
+rc=$?
+set -e
+
+if [ $rc -ne 2 ]; then
+  echo "FAIL: expected rc=2 for --capture-config misuse in test, got rc=$rc"
+  echo "$out"
+  exit 1
+fi
+
+echo "$out" | grep -Fq -- "--capture-config is exploration evidence only and is not allowed in netsim test" || {
+  echo "FAIL: expected capture-config misuse message not found"
+  echo "$out"
+  exit 1
+}
+
+echo "OK: capture-config misuse rejected with rc=2 + message"
 echo "=== 6d) Candidate Config Apply (v1.5) verification ==="
 
 # Candidate fixture locations (kept deterministic + repo-local)

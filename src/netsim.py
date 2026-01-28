@@ -683,20 +683,129 @@ def _truncate(s: str, limit: int = _CANDIDATE_STDIO_TRUNC) -> str:
     return s[:limit] + f"\n...<truncated {extra} chars>"
 
 def _sanitize_text(s: str) -> str:
+    """
+    Deterministic, minimal redaction helper.
+
+    IMPORTANT SEMANTICS:
+    - If no redaction occurs, return the original string EXACTLY (byte-for-byte),
+      so callers can correctly compute redaction_applied = (redacted != raw).
+    - Preserve line endings via splitlines(True) to avoid false "changes".
+    - Only redact when a sensitive keyword is present (case-insensitive).
+      Preferred behavior:
+        * If the line looks like KEY[:=]VALUE, preserve KEY and separator, redact VALUE.
+        * Otherwise, redact the whole line content (keep newline).
+    """
     if not s:
         return ""
+
+    import re
+
+    # Keep this list small + explicit (deterministic + auditable).
+    # Note: allow api-key/api_key, private-key/private_key.
+    key_pat = r"(password|passwd|secret|token|api[_-]?key|apikey|private[_-]?key)"
+    kw_re = re.compile(rf"\b{key_pat}\b", re.IGNORECASE)
+
+    # Preserve KEY + separator; redact value.
+    # Examples:
+    #   "password: test"  -> "password: <REDACTED>"
+    #   "API_KEY=abcd"    -> "API_KEY=<REDACTED>"
+    kv_re = re.compile(rf"(?i)\b({key_pat})\b(\s*[:=]\s*)(.*)$")
+
+    changed = False
     out_lines: list[str] = []
-    for ln in s.splitlines():
-        l = ln.lower()
-        if ("password" in l) or ("secret" in l) or ("token" in l) or ("api_key" in l) or ("apikey" in l):
-            parts = ln.split()
-            out_lines.append((parts[0] + " <redacted>") if parts else "<redacted>")
-        else:
+
+    for ln in s.splitlines(True):  # keep original line endings
+        # Split body vs line ending(s) without normalizing them.
+        body = ln.rstrip("\r\n")
+        ending = ln[len(body):]  # whatever was stripped: "", "\n", "\r\n"
+
+        if not kw_re.search(body):
             out_lines.append(ln)
-    return "\n".join(out_lines)
+            continue
+
+        changed = True
+
+        m = kv_re.search(body)
+        if m:
+            # Preserve the original key spelling and separator; redact the value.
+            redacted_body = f"{m.group(1)}{m.group(2)}<REDACTED>"
+            out_lines.append(redacted_body + ending)
+        else:
+            # Keyword present but not in key/value form → redact the whole line content.
+            out_lines.append("<REDACTED>" + ending)
+
+    if not changed:
+        return s  # exact original (prevents false redaction_applied=true)
+
+    return "".join(out_lines)
 
 def _safe_stdio(s: str) -> str:
     return _truncate(_sanitize_text(s or ""))
+
+# -----------------------------
+# Capture-config (supporting evidence only) - v1.5
+# -----------------------------
+
+_CAPTURE_CONFIG_SCHEMA_VERSION = "1"
+_CAPTURE_CONFIG_MAX_CHARS = 200_000
+_CAPTURE_CONFIG_CMD_TIMEOUT_S = 5.0
+
+
+def _capture_config_artifacts_root(lab: str) -> Path:
+    return lab_dir(lab) / "artifacts" / "capture_config"
+
+
+def _capture_config_redact_and_truncate(s: str, *, limit_chars: int) -> tuple[str, bool, bool]:
+    """
+    Returns (out, redaction_applied, truncated).
+    Redaction is minimal and deterministic (pattern-based), consistent with v1.5 rules.
+    """
+    raw = s or ""
+    redacted = _sanitize_text(raw)
+    redaction_applied = (redacted != raw)
+
+    truncated = False
+    out = redacted
+    if len(out) > int(limit_chars):
+        truncated = True
+        out = _truncate(out, int(limit_chars))
+    return out, redaction_applied, truncated
+
+
+def _capture_config_write_text(path: Path, content: str) -> None:
+    """
+    Write a text artifact deterministically (always UTF-8, newline-terminated).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not content.endswith("\n"):
+        content = content + "\n"
+    path.write_text(content, encoding="utf-8")
+
+def _capture_config_copy_host_file(*, src: Path, dst: Path) -> dict[str, Any]:
+    """
+    Best-effort copy of a host-side generated file into evidence artifacts.
+    """
+    rec: dict[str, Any] = {
+        "relpath": str(src),
+        "bytes": 0,
+        "sha256": "",
+        "captured_ok": False,
+    }
+
+    try:
+        if not src.exists() or not src.is_file():
+            return rec
+
+        data = src.read_bytes()
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(data)
+
+        rec["bytes"] = int(len(data))
+        rec["sha256"] = _sha256_file(src)
+        rec["captured_ok"] = True
+        return rec
+    except Exception:
+        return rec
 
 # -----------------------------
 # State capture (supporting evidence only) - v1.5
@@ -4238,12 +4347,24 @@ class Runtime:
         VMRuntime (future): node_id could be VM name/uuid, etc.
         """
         raise NotImplementedError
+    
+    def exists_id(self, node_id: str) -> bool:
+        """
+        Return True if the runtime instance identified by node_id exists (running or not).
 
+        ContainerRuntime: implemented via container runtime inspect return code.
+        VMRuntime (future): VM exists check.
+        """
+        raise NotImplementedError
 
 class ContainerRuntime(Runtime):
     def node_id(self, lab: str, node: str) -> str:
         return f"clab-{lab}-{node}"
     
+    def exists_id(self, node_id: str) -> bool:
+        cp = run(["docker", "inspect", node_id], check=False, capture_output=True)
+        return cp.returncode == 0
+
     def restart_node(self, lab: str, node: str) -> subprocess.CompletedProcess:
         """
         Runtime-owned node restart.
@@ -4321,7 +4442,10 @@ class VmRuntimeStub(Runtime):
     def is_running_id(self, node_id: str) -> bool:
         die(self._msg)
         return False
-
+    
+    def exists_id(self, node_id: str) -> bool:
+        die(self._msg)
+        return False
 
 def get_runtime(topo: dict[str, Any] | None = None) -> Runtime:
     """
@@ -4719,6 +4843,10 @@ def cmd_test(args: argparse.Namespace) -> None:
       If scenarios are requested, validate ALL scenario run refs up-front and FAIL FAST
       (before any runtime actions) if a referenced atomic test name does not exist.
     """
+    # v1.5 hard guardrail: capture-config is exploration evidence only (never allowed in gate-first test)
+    if bool(getattr(args, "capture_config", False)):
+        die("--capture-config is exploration evidence only and is not allowed in netsim test", code=2)
+
     # -------------------------------------------------------------------------
     # Two-run gate orchestrator (v1.5): baseline vs change (evidence-only)
     # -------------------------------------------------------------------------
@@ -7027,6 +7155,218 @@ def cmd_test(args: argparse.Namespace) -> None:
 
     print("✅ TEST PASS: containers running + checks OK")
 
+def _capture_config_run_exploration(rt: Runtime, *, lab: str) -> Path:
+    """
+    Supporting evidence only (exploration mode).
+    Writes:
+      labs/<lab>/artifacts/capture_config/manifest.json
+      labs/<lab>/artifacts/capture_config/nodes/<node>/{host,live}/*
+    Returns manifest path.
+
+    MUST NOT:
+      - gate outcomes
+      - affect exit codes
+      - mutate runtime state
+    """
+    import json
+    import time
+
+    started = time.time()
+    root = _capture_config_artifacts_root(lab)
+    nodes_root = root / "nodes"
+
+    # Fail-fast only on filesystem issues for the *root* dir (explicit requirement)
+    try:
+        nodes_root.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        die(f"--capture-config: failed to create artifact directory: {nodes_root} ({e})")
+
+    # Resolve nodes/types from resolved topology (best effort; required for stable ordering)
+    topo_resolved = lab_dir(lab) / "topology.resolved.yaml"
+    topo: dict[str, Any] = {}
+    try:
+        topo = load_yaml(topo_resolved) or {}
+    except Exception:
+        topo = {}
+
+    topo_nodes = topo.get("nodes", []) if isinstance(topo.get("nodes", []), list) else []
+    node_types: dict[str, str] = {}
+    for n in topo_nodes:
+        if isinstance(n, dict) and isinstance(n.get("name"), str):
+            node_types[n["name"]] = str(n.get("type") or "")
+
+    # Default selection: all nodes in lab (deterministic lex order by name)
+    selected = sorted(node_types.keys())
+
+    manifest: dict[str, Any] = {
+        "schema_version": _CAPTURE_CONFIG_SCHEMA_VERSION,
+        "authority": "supporting_evidence",
+        "feature": "capture_config",
+        "mode": "exploration",
+        "gating": False,
+        "lab": lab,
+        "started_at": None,
+        "finished_at": None,
+        "duration_ms": None,
+        "nodes": [],
+    }
+
+    # If resolved topology missing, still emit a manifest with no nodes.
+    # This remains supporting evidence only.
+    for node in selected:
+        ntype = node_types.get(node, "")
+        node_dir = nodes_root / node
+        host_dir = node_dir / "host"
+        live_dir = node_dir / "live"
+
+        host_files: list[dict[str, Any]] = []
+        live_cmds: list[dict[str, Any]] = []
+
+        # Create per-node dirs best-effort (root dir creation is already fail-fast).
+        try:
+            host_dir.mkdir(parents=True, exist_ok=True)
+            live_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            # Supporting evidence only: don't gate; writes will record failures if they occur.
+            pass
+
+        any_ok = False
+        any_fail = False
+        any_attempt = False
+
+        # 1) host-generated config files (if present)
+        if ntype == "frr":
+            any_attempt = True
+            src = node_cfg_dir(lab, node) / "frr.conf"
+            dst = host_dir / "frr.conf"
+            rec = _capture_config_copy_host_file(src=src, dst=dst)
+            host_files.append(rec)
+            if rec.get("captured_ok"):
+                any_ok = True
+            else:
+                any_fail = True
+
+        # nft-fw host file is "if present"; current v1.5 may not persist one.
+        # If a file exists under labs/<lab>/nodes/<node>/..., capture it deterministically as nft.ruleset.
+        if ntype == "nft-fw":
+            any_attempt = True
+            # Try a small, deterministic set of common candidates (best-effort, no guessing beyond allowlist)
+            candidates = [
+                node_cfg_dir(lab, node) / "ruleset.nft",
+                node_cfg_dir(lab, node) / "fw.nft",
+                node_cfg_dir(lab, node) / "nft.ruleset",
+            ]
+            picked: Path | None = None
+            for c in candidates:
+                if c.exists() and c.is_file():
+                    picked = c
+                    break
+            if picked is not None:
+                rec = _capture_config_copy_host_file(src=picked, dst=(host_dir / "nft.ruleset"))
+                host_files.append(rec)
+                if rec.get("captured_ok"):
+                    any_ok = True
+                else:
+                    any_fail = True
+
+        # 2) live readbacks (allowlisted argv only; no shell)
+        def _run_live_cmd(cmd_id: str, argv: list[str], out_path: Path) -> None:
+            nonlocal any_ok, any_fail, any_attempt
+            any_attempt = True
+            t0 = time.time()
+            try:
+                cp = rt.exec(lab, node, argv, check=False, capture_output=True, timeout_s=_CAPTURE_CONFIG_CMD_TIMEOUT_S)
+                dt_ms = int((time.time() - t0) * 1000)
+
+                stdout = (cp.stdout or "") if isinstance(cp.stdout, str) else str(cp.stdout or "")
+                stderr = (cp.stderr or "") if isinstance(cp.stderr, str) else str(cp.stderr or "")
+
+                merged = stdout
+                if not merged and stderr:
+                    merged = stderr
+
+                out, redaction_applied, truncated = _capture_config_redact_and_truncate(
+                    merged,
+                    limit_chars=_CAPTURE_CONFIG_MAX_CHARS,
+                )
+                _capture_config_write_text(out_path, out)
+
+                live_cmds.append({
+                    "id": cmd_id,
+                    "command": " ".join(argv),
+                    "exit_code": int(getattr(cp, "returncode", 1)),
+                    "duration_ms": dt_ms,
+                    "bytes": int(len(out.encode("utf-8"))),
+                    "truncated": bool(truncated),
+                    "captured_ok": (int(getattr(cp, "returncode", 1)) == 0),
+                    "error": "",
+                    "redaction_applied": bool(redaction_applied),
+                })
+
+                if int(getattr(cp, "returncode", 1)) == 0:
+                    any_ok = True
+                else:
+                    any_fail = True
+
+            except Exception as e:
+                dt_ms = int((time.time() - t0) * 1000)
+                msg, redaction_applied, truncated = _capture_config_redact_and_truncate(
+                    str(e),
+                    limit_chars=4000,
+                )
+                live_cmds.append({
+                    "id": cmd_id,
+                    "command": " ".join(argv),
+                    "exit_code": 1,
+                    "duration_ms": dt_ms,
+                    "bytes": int(len(msg.encode("utf-8"))),
+                    "truncated": bool(truncated),
+                    "captured_ok": False,
+                    "error": msg,
+                    "redaction_applied": bool(redaction_applied),
+                })
+                any_fail = True
+
+        if ntype == "frr":
+            _run_live_cmd("frr_running_config", ["vtysh", "-c", "show running-config"], live_dir / "running-config.txt")
+            _run_live_cmd("frr_bgp_summary", ["vtysh", "-c", "show bgp summary"], live_dir / "bgp-summary.txt")
+
+        if ntype == "nft-fw":
+            _run_live_cmd("nft_list_ruleset", ["nft", "list", "ruleset"], live_dir / "nft-list-ruleset.txt")
+
+        # hosts: minimal, stable live readbacks (supporting evidence only)
+        if ntype == "host":
+            _run_live_cmd("host_ip_br_a", ["ip", "-br", "a"], live_dir / "ip-br-a.txt")
+            _run_live_cmd("host_ip_route", ["ip", "route"], live_dir / "ip-route.txt")
+
+        # status computation
+        status: str
+        if not any_attempt:
+            status = "skipped"
+        elif any_ok and not any_fail:
+            status = "ok"
+        elif any_ok and any_fail:
+            status = "partial"
+        else:
+            status = "error"
+
+        manifest["nodes"].append({
+            "node": node,
+            "node_type": ntype,
+            "host_files": host_files,
+            "live_commands": live_cmds,
+            "status": status,
+        })
+
+    finished = time.time()
+    manifest["started_at"] = int(started * 1000)
+    manifest["finished_at"] = int(finished * 1000)
+    manifest["duration_ms"] = int((finished - started) * 1000)
+
+    out_manifest = root / "manifest.json"
+    _capture_config_write_text(out_manifest, json.dumps(manifest, indent=2, sort_keys=True))
+    return out_manifest
+
 # -----------------------------
 # results.json schema guarantee (v1.5)
 # -----------------------------
@@ -8535,7 +8875,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
 def cmd_run(args: argparse.Namespace) -> None:
     """
     Ephemeral workflow:
-      up -> test -> collect -> (down)
+      up -> (capture-config) -> (test) -> (collect) -> (down)
 
     Teardown policy:
       - Default: destroy ONLY on full success (so failures keep the lab for debugging)
@@ -8544,6 +8884,8 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     Other:
       - collect runs best-effort even if test fails (unless --no-collect)
+      - capture-config is supporting evidence only; never gates
+      - UX: if --keep and NOT --reconfigure and lab is already up, do NOT redeploy
     """
     topo_path = (TOPO_DIR / args.topology) if not Path(args.topology).is_file() else Path(args.topology)
 
@@ -8557,11 +8899,17 @@ def cmd_run(args: argparse.Namespace) -> None:
     if not lab_name or not isinstance(lab_name, str):
         die(f"Topology '{topo_path}' has no valid 'name' field (required).")
 
+    lab_name = lab_name.strip()
+    if not lab_name:
+        die(f"Topology '{topo_path}' has no valid 'name' field (required).")
+
     # Flags
     keep = bool(getattr(args, "keep", False))
     destroy_always = bool(getattr(args, "destroy_always", False))
     do_collect = not bool(getattr(args, "no_collect", False))
+    do_test = not bool(getattr(args, "no_test", False))  # ok even if flag not yet added
     do_reconfigure = bool(getattr(args, "reconfigure", False))
+    do_capture_config = bool(getattr(args, "capture_config", False))
 
     exit_code: int | None = None   # None means "no failure captured"
     up_ok = False
@@ -8578,11 +8926,99 @@ def cmd_run(args: argparse.Namespace) -> None:
         if exit_code is None:
             exit_code = _as_exit_code(code)
 
+    def _expected_node_names_from_topology(path: Path) -> list[str]:
+        """
+        Deterministic node name extraction from the *authoritative* topology schema.
+        Accept both historical shapes to reduce UX surprises:
+          - nodes: { r1: {...}, r2: {...} }  (dict)
+          - nodes: [ {name: r1, ...}, ... ]  (list)
+        """
+        try:
+            topo_doc = load_yaml(path)
+        except Exception:
+            return []
+
+        if not isinstance(topo_doc, dict):
+            return []
+
+        nodes = topo_doc.get("nodes", None)
+        names: list[str] = []
+
+        if isinstance(nodes, dict):
+            names = [str(k) for k in nodes.keys()]
+        elif isinstance(nodes, list):
+            for item in nodes:
+                if not isinstance(item, dict):
+                    continue
+                n = item.get("name")
+                if isinstance(n, str) and n.strip():
+                    names.append(n.strip())
+
+        return sorted(set(names))
+
+    def _container_running(name: str) -> bool:
+        cp = run(["docker", "inspect", "-f", "{{.State.Running}}", name], check=False, capture=True, text=True)
+        return (cp.returncode == 0 and (cp.stdout or "").strip() == "true")
+
+    def _container_exists(name: str) -> bool:
+        cp = run(["docker", "inspect", name], check=False, capture=True, text=True)
+        return cp.returncode == 0
+
+    def _lab_fully_running(lab: str, node_names: list[str]) -> bool:
+        if not node_names:
+            return False
+        for n in node_names:
+            cname = f"clab-{lab}-{n}"
+            if not _container_running(cname):
+                return False
+        return True
+
+    def _lab_any_exists(lab: str, node_names: list[str]) -> bool:
+        if not node_names:
+            return False
+        for n in node_names:
+            cname = f"clab-{lab}-{n}"
+            if _container_exists(cname):
+                return True
+        return False
+
+    def _load_resolved_topology_or_die(lab: str) -> dict:
+        rp = lab_dir(lab) / "topology.resolved.yaml"
+        if not rp.exists():
+            die(f"Resolved topology not found: {rp} (lab may not be deployed, or artifacts were removed)")
+        topo = load_yaml(rp) or {}
+        if not isinstance(topo, dict):
+            die(f"Resolved topology is invalid (expected dict): {rp}")
+        return topo
+
     try:
         # 1) up
+        #
+        # UX rule for run:
+        # - If --keep and NOT --reconfigure:
+        #     * If the lab is already fully up, do NOT redeploy; proceed to capture/test/collect.
+        #     * If containers exist but the lab is not fully up, fail-fast with a clear message.
+        # - Otherwise: behave as before (call cmd_up).
         try:
-            cmd_up(argparse.Namespace(topology=str(topo_path), reconfigure=do_reconfigure))
-            up_ok = True
+            node_names = _expected_node_names_from_topology(topo_path)
+
+            if keep and (not do_reconfigure):
+                if _lab_fully_running(lab_name, node_names):
+                    up_ok = True
+                elif _lab_any_exists(lab_name, node_names):
+                    print(
+                        f"ERROR: lab '{lab_name}' already exists but is not fully running. "
+                        f"Use '--reconfigure' to rebuild it (or run 'netsim down {lab_name}' first).",
+                        file=sys.stderr,
+                    )
+                    record_failure(1)
+                else:
+                    cmd_up(argparse.Namespace(topology=str(topo_path), reconfigure=do_reconfigure))
+                    up_ok = True
+            else:
+                cmd_up(argparse.Namespace(topology=str(topo_path), reconfigure=do_reconfigure))
+                up_ok = True
+
         except SystemExit as e:
             record_failure(getattr(e, "code", 1))
         except Exception:
@@ -8590,13 +9026,26 @@ def cmd_run(args: argparse.Namespace) -> None:
 
         # If up failed, skip the rest (but still hit finally + final reporting)
         if up_ok:
-            # 2) test
-            try:
-                cmd_test(argparse.Namespace(lab=lab_name))
-            except SystemExit as e:
-                record_failure(getattr(e, "code", 1))
-            except Exception:
-                record_failure(1)
+            # 1b) supporting evidence: capture-config (best-effort; never gates)
+            if do_capture_config:
+                try:
+                    topo_resolved = _load_resolved_topology_or_die(lab_name)
+                    rt = get_runtime(topo_resolved)
+                    _capture_config_run_exploration(rt, lab=lab_name)
+                except SystemExit as e:
+                    # Filesystem root failures are fail-fast by contract; record and continue to finally.
+                    record_failure(getattr(e, "code", 1))
+                except Exception:
+                    record_failure(1)
+
+            # 2) test (optional)
+            if do_test:
+                try:
+                    cmd_test(argparse.Namespace(lab=lab_name))
+                except SystemExit as e:
+                    record_failure(getattr(e, "code", 1))
+                except Exception:
+                    record_failure(1)
 
             # 3) collect (best-effort; very useful for debugging failures)
             if do_collect:
@@ -8641,11 +9090,19 @@ def cmd_run(args: argparse.Namespace) -> None:
             print(f"❌ RUN FAIL: exit={exit_code} (lab kept for debugging): {lab_name}")
         raise SystemExit(int(exit_code))
 
-    # Success
+    # Success messaging (reflect what actually ran)
+    bits: list[str] = ["up"]
+    if do_capture_config:
+        bits.append("capture-config")
+    if do_test:
+        bits.append("test")
+    if do_collect:
+        bits.append("collect")
+
     if keep:
-        print(f"✅ RUN PASS: up + test + collect completed (lab kept): {lab_name}")
+        print(f"✅ RUN PASS: " + " + ".join(bits) + f" completed (lab kept): {lab_name}")
     else:
-        print(f"✅ RUN PASS: up + test + collect completed (lab destroyed): {lab_name}")
+        print(f"✅ RUN PASS: " + " + ".join(bits) + f" completed (lab destroyed): {lab_name}")
 
 # --- Assistive AI (v1: advisory-only, artifact-only, post-exec, BYO-key online optional) ---
 
@@ -10303,6 +10760,13 @@ def main() -> None:
     p_test.set_defaults(func=cmd_test)
     p_test.add_argument("--scenario", help="Run only this scenario id (scenarios[*].id)")
     p_test.add_argument("--all-scenarios", action="store_true", help="Run all scenarios after steady-state tests")
+    # capture-config (supporting evidence only; exploration feature) - explicitly forbidden in gate-first test
+    p_test.add_argument(
+        "--capture-config",
+        action="store_true",
+        help="Exploration evidence only (writes labs/<lab>/artifacts/capture_config/**). "
+             "Forbidden in netsim test; will exit 2 if used.",
+    )
     p_test.add_argument("--scenario-verbose", action="store_true", help="Print each scenario step as it runs (human-only; does not change artifacts)",)
     p_test.add_argument(
     "--precheck-controlplane",
@@ -10354,6 +10818,13 @@ def main() -> None:
         action="store_true",
         help="Skip collect (faster, but no artifacts).",
     )
+    p_run.add_argument(
+        "--capture-config",
+        action="store_true",
+        help="Exploration evidence only: capture host+live configs after provision "
+             "into labs/<lab>/artifacts/capture_config/** (never gates).",
+    )
+    p_run.add_argument("--no-test", action="store_true", help="Skip test phase (still may collect/capture-config).")
     p_run.set_defaults(func=cmd_run)
 
     # ai (group)
