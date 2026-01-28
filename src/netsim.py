@@ -4352,7 +4352,7 @@ class Runtime:
         """
         Return True if the runtime instance identified by node_id exists (running or not).
 
-        ContainerRuntime: implemented via `docker inspect <name>` return code.
+        ContainerRuntime: implemented via container runtime inspect return code.
         VMRuntime (future): VM exists check.
         """
         raise NotImplementedError
