@@ -401,12 +401,91 @@ def load_yaml(path: Path) -> dict:
         die(f"Empty YAML file: {path}")
     return data
 
+def _validate_fabric_evpn_presence_only(topo: dict) -> dict[str, Any] | None:
+    """
+    v1.5 EVPN Awareness (presence-only):
+      - Only allowed declaration location: fabric.evpn
+      - Allowed keys under fabric.evpn: enabled (bool, optional), mode ("evpn", optional)
+      - Everything else is rejected (fail-fast) to prevent scope creep.
+      - EVPN presence MUST NOT be inferred from candidate config, runtime state, or other keys.
+    Returns:
+      - normalized evpn dict if present and enabled
+      - None if not present or explicitly disabled
+    """
+
+    # Guard: reject any "evpn" keys outside fabric.evpn (canonical shape only).
+    # Deterministic: shallow + common nested scans; avoids heuristics and prevents alternate schema.
+    def _scan_for_evpn_keys(obj: Any, path: str) -> list[str]:
+        hits: list[str] = []
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                k_str = str(k)
+                p = f"{path}.{k_str}" if path else k_str
+                # The ONLY allowed path prefix is fabric.evpn.*
+                if "evpn" in k_str.lower():
+                    if not (p == "fabric.evpn" or p.startswith("fabric.evpn.")):
+                        hits.append(p)
+                # Recurse a bit to catch obvious alternates (nodes[*].evpn, etc.)
+                hits.extend(_scan_for_evpn_keys(v, p))
+        elif isinstance(obj, list):
+            for i, it in enumerate(obj, start=0):
+                hits.extend(_scan_for_evpn_keys(it, f"{path}[{i}]"))
+        return hits
+
+    hits = _scan_for_evpn_keys(topo, "")
+    if hits:
+        hits_sorted = sorted(set(hits))
+        die(
+            "Topology invalid: EVPN must be declared only at 'fabric.evpn' (v1.5 presence-only). "
+            f"Found evpn-shaped keys at: {', '.join(hits_sorted)}"
+        )
+
+    fabric = topo.get("fabric")
+    if fabric is None:
+        return None
+    if not isinstance(fabric, dict):
+        die("Topology invalid: 'fabric' must be a dict when provided")
+
+    evpn = fabric.get("evpn")
+    if evpn is None:
+        return None
+    if not isinstance(evpn, dict):
+        die("Topology invalid: 'fabric.evpn' must be a dict when provided")
+
+    # Allowed keys only (presence-only schema)
+    allowed = {"enabled", "mode"}
+    unknown = sorted([k for k in evpn.keys() if str(k) not in allowed])
+    if unknown:
+        die(
+            "Topology invalid: fabric.evpn contains unsupported key(s): "
+            + ", ".join(unknown)
+            + ". v1.5 supports presence-only: allowed keys are {enabled, mode}."
+        )
+
+    enabled = evpn.get("enabled", True)
+    if not isinstance(enabled, bool):
+        die("Topology invalid: fabric.evpn.enabled must be boolean if provided")
+
+    if not enabled:
+        return None
+
+    mode = evpn.get("mode", "evpn")
+    if not isinstance(mode, str) or mode.strip() != "evpn":
+        die("Topology invalid: fabric.evpn.mode must be 'evpn' if provided")
+
+    # Normalized minimal dict
+    return {"enabled": True, "mode": "evpn"}
+
 def ensure_valid_topology(topo: dict) -> None:
     if not isinstance(topo, dict):
         die("Topology YAML must be a mapping.")
     for k in ("name", "nodes", "links"):
         if k not in topo:
             die(f"Missing required key: '{k}'")
+
+    # v1.5 EVPN Awareness (presence-only): validate canonical fabric.evpn shape (fail-fast).
+    # This MUST NOT change execution semantics; it only validates declared intent.
+    _validate_fabric_evpn_presence_only(topo)
 
     if not isinstance(topo["nodes"], list) or not topo["nodes"]:
         die("'nodes' must be a non-empty list.")
@@ -1800,6 +1879,17 @@ def resolve_topology(topo: dict) -> dict:
     - fail fast if both kind and type are present in a test
     """
     resolved = yaml.safe_load(yaml.safe_dump(topo))  # simple deep copy
+
+    # ----------------------------
+    # 0) v1.5 EVPN Awareness (presence-only): normalize fabric.evpn into resolved output
+    # ----------------------------
+    evpn_norm = _validate_fabric_evpn_presence_only(resolved)
+    if evpn_norm is not None:
+        fabric = resolved.get("fabric")
+        if fabric is None or not isinstance(fabric, dict):
+            fabric = {}
+            resolved["fabric"] = fabric
+        fabric["evpn"] = dict(evpn_norm)
 
     # ----------------------------
     # 1) Auto-address point-to-point links (10.0.0.0/16, sequential /31s)
@@ -5067,6 +5157,26 @@ def cmd_test(args: argparse.Namespace) -> None:
         "scenarios": [],
         "events": [],
     }
+
+    # v1.5 EVPN Awareness (presence-only): informational results metadata.
+    # Authority remains tests/scenarios only; this must never affect verdict or exit code.
+    try:
+        fabric = topo.get("fabric")
+        evpn = fabric.get("evpn") if isinstance(fabric, dict) else None
+        if isinstance(evpn, dict) and bool(evpn.get("enabled")) and str(evpn.get("mode") or "evpn") == "evpn":
+            rf = results.get("fabric")
+            if not isinstance(rf, dict):
+                rf = {}
+                results["fabric"] = rf
+            rf["evpn"] = {
+                "present": True,
+                "authority": "outcome-only",
+                "internals_validated": False,
+                "notes": "EVPN declared via fabric.evpn. v1.5 validates outcomes via tests/scenarios only; EVPN internals are not validated.",
+            }
+    except Exception:
+        # Never allow informational metadata to impact gate execution.
+        pass
 
     def record_test(
         *,

@@ -584,6 +584,7 @@ must_fail_with "topologies/neg/bad_wait_for_to_hostname.yaml" "Hostnames/DNS are
 must_fail_with "topologies/neg/bad_wait_for_to_cidr.yaml" "CIDR"
 must_fail_with "topologies/neg/bad_wait_for_to_ip_port.yaml" "IP:port"
 must_fail_with "topologies/neg/bad_wait_for_to_ipv6.yaml" "IPv6"
+must_fail_with "topologies/neg/bad_fabric_evpn_unknown_key.yaml" "fabric.evpn contains unsupported key"
 
 echo
 echo "=== NEG) invalid include:all (unnamed test) ==="
@@ -611,6 +612,15 @@ echo "=== 10) Optional: examples smoke (quickstart) ==="
 if [ "${AI_NETSIM_VERIFY_EXAMPLES:-0}" = "1" ]; then
   ./src/netsim.py up examples/01_connected_smoke.yaml --reconfigure >/dev/null
   ./src/netsim.py test ex01-connected-smoke
+
+  # EVPN awareness (presence-only) smoke:
+  # - outcome-only metadata in results.json
+  # - no EVPN internals validated
+  ./src/netsim.py up topologies/ex-evpn-outcome-only.yaml --reconfigure >/dev/null
+  ./src/netsim.py test ex-evpn-outcome-only
+  jq -e '.fabric.evpn.present==true and .fabric.evpn.authority=="outcome-only" and .fabric.evpn.internals_validated==false' \
+    labs/clab-ex-evpn-outcome-only/results.json >/dev/null
+  echo "OK: EVPN presence-only smoke pass"
 
   ./src/netsim.py up examples/03_static_multihop_ping.yaml --reconfigure >/dev/null
   ./src/netsim.py test ex03-static-multihop
