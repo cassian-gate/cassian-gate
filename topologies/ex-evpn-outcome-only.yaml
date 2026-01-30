@@ -1,0 +1,115 @@
+name: ex-evpn-outcome-only
+
+# v1.5 EVPN Awareness (presence-only):
+# - This declaration is informational only.
+# - ai-netsim will NOT validate EVPN internals (RTs, VNIs, MAC/IP tables, etc.).
+# - This lab is intended for outcome verification when you supply real configs via --candidate-config.
+fabric:
+  evpn:
+    enabled: true
+    mode: evpn
+
+nodes:
+  # Generic FRR nodes. In v1.5, ai-netsim does not assign EVPN roles.
+  - name: spine1
+    type: frr
+  - name: leaf1
+    type: frr
+  - name: leaf2
+    type: frr
+
+  # End hosts behind the leaves.
+  - name: h1
+    type: host
+    ip: 192.168.10.10/24
+    gw: 192.168.10.1
+
+  - name: h2
+    type: host
+    ip: 192.168.20.10/24
+    gw: 192.168.20.1
+
+links:
+  # Underlay-style point-to-point links (addresses are auto-assigned by resolve if omitted)
+  - endpoints: ["spine1:eth1", "leaf1:eth1"]
+  - endpoints: ["spine1:eth2", "leaf2:eth1"]
+
+  # Hosts to leaves
+  - endpoints: ["h1:eth1", "leaf1:eth2"]
+    ipv4: ["192.168.10.10/24", "192.168.10.1/24"]
+
+  - endpoints: ["h2:eth1", "leaf2:eth2"]
+    ipv4: ["192.168.20.10/24", "192.168.20.1/24"]
+
+tests:
+  # Directly-connected checks (v1.5-legal, provable from topology alone)
+  - name: h1_to_leaf1_gw_ping
+    kind: ping
+    src: h1
+    to: 192.168.10.1
+    expect: pass
+    count: 2
+
+  - name: h2_to_leaf2_gw_ping
+    kind: ping
+    src: h2
+    to: 192.168.20.1
+    expect: pass
+    count: 2
+
+  # Multi-hop outcomes (EVPN/routing-dependent) are NOT provable in v1 validate.
+  # Keep these as expect: fail so the example validates cleanly by default.
+  # Engineers running with --candidate-config can still validate PASS outcomes via scenario wait_for steps.
+  - name: h1_to_h2_ping_multihop_default
+    kind: ping
+    src: h1
+    dst: h2
+    expect: fail
+    count: 2
+
+  - name: h1_to_h2_tcp_443_multihop_default
+    kind: tcp
+    src: h1
+    dst: h2
+    port: 443
+    expect: fail
+
+scenarios:
+  # Example resiliency/outcome scenario: bounce a link and ensure outcome still holds.
+  # (Outcome-only; no EVPN internals.)
+  - id: bounce_spine_leaf1_link
+    description: "Outcome-only: bounce spine1<->leaf1 and verify h1->h2 remains reachable after convergence wait"
+    steps:
+      - run: h1_to_leaf1_gw_ping
+
+      - fault:
+          link_down:
+            a: spine1
+            a_if: eth1
+            b: leaf1
+            b_if: eth1
+
+      - wait_for:
+          type: ping
+          from: h1
+          to: h2
+          expect: pass
+          timeout: 20
+          interval_s: 1.0
+
+      - fault:
+          link_up:
+            a: spine1
+            a_if: eth1
+            b: leaf1
+            b_if: eth1
+
+      - wait_for:
+          type: ping
+          from: h1
+          to: h2
+          expect: pass
+          timeout: 30
+          interval_s: 1.0
+
+      - run: h1_to_leaf1_gw_ping

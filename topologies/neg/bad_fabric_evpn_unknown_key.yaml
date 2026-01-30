@@ -1,0 +1,16 @@
+name: bad-fabric-evpn-unknown-key
+
+fabric:
+  evpn:
+    enabled: true
+    mode: evpn
+    vlan_vni: "2031:10031"   # forbidden in v1.5 (unknown key)
+
+nodes:
+  - name: r1
+    type: frr
+  - name: r2
+    type: frr
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
