@@ -1,0 +1,114 @@
+name: rw-bgp-tenant30-baseline
+
+nodes:
+  - name: spine1
+    type: frr
+  - name: leaf1
+    type: frr
+  - name: leaf2
+    type: frr
+
+  - name: h10
+    type: host
+    ip: 192.168.10.10/24
+    gw: 192.168.10.1
+
+  - name: h20
+    type: host
+    ip: 192.168.20.10/24
+    gw: 192.168.20.1
+
+  - name: h30
+    type: host
+    ip: 192.168.30.10/24
+    gw: 192.168.30.1
+
+links:
+  - endpoints: ["spine1:eth1", "leaf1:eth1"]
+    ipv4: ["10.0.0.0/31", "10.0.0.1/31"]
+
+  - endpoints: ["spine1:eth2", "leaf2:eth1"]
+    ipv4: ["10.0.0.2/31", "10.0.0.3/31"]
+
+  - endpoints: ["h10:eth1", "leaf1:eth2"]
+    ipv4: ["192.168.10.10/24", "192.168.10.1/24"]
+
+  - endpoints: ["h20:eth1", "leaf2:eth2"]
+    ipv4: ["192.168.20.10/24", "192.168.20.1/24"]
+
+  - endpoints: ["h30:eth1", "leaf1:eth3"]
+    ipv4: ["192.168.30.10/24", "192.168.30.1/24"]
+
+tests:
+  # Only directly-connected reachability can be declared as PASS in v1
+  - name: h10_to_gw_ping_pass
+    kind: ping
+    src: h10
+    to: 192.168.10.1
+    expect: pass
+    count: 1
+
+  - name: h20_to_gw_ping_pass
+    kind: ping
+    src: h20
+    to: 192.168.20.1
+    expect: pass
+    count: 1
+
+  - name: h30_to_gw_ping_pass
+    kind: ping
+    src: h30
+    to: 192.168.30.1
+    expect: pass
+    count: 1
+
+  # Multi-hop MUST NOT be declared pass in v1 topology.
+  # We declare them fail, and we validate "real pass" using scenario wait_for after candidate apply.
+  - name: h10_to_h20_ping_declared_fail
+    kind: ping
+    src: h10
+    dst: h20
+    expect: fail
+    count: 1
+
+  - name: h20_to_h30_ping_declared_fail
+    kind: ping
+    src: h20
+    dst: h30
+    expect: fail
+    count: 1
+
+scenarios:
+  - id: prove_baseline_end_to_end_after_apply
+    description: "After baseline candidate config is applied, prove h10<->h20 works, and h20->h30 does NOT."
+    steps:
+      - wait_for:
+          type: ping
+          from: h10
+          to: 192.168.20.10
+          expect: pass
+          timeout: 30
+          interval_s: 1.0
+          count: 2
+          per_attempt_timeout_s: 2
+
+      - wait_for:
+          type: ping
+          from: h20
+          to: 192.168.10.10
+          expect: pass
+          timeout: 30
+          interval_s: 1.0
+          count: 2
+          per_attempt_timeout_s: 2
+
+      - wait_for:
+          type: ping
+          from: h20
+          to: 192.168.30.10
+          expect: fail
+          timeout: 10
+          interval_s: 1.0
+          count: 2
+          per_attempt_timeout_s: 2
+

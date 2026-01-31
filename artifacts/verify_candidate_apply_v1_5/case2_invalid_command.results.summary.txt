@@ -1,0 +1,6 @@
+lab: ex-evpn-outcome-only
+result: fail
+duration_ms: 773
+tests: total=1 passed=0 failed=1
+failed_tests:
+ - candidate_apply:verdict (candidate_apply) ->leaf1 : candidate apply failed for node(s): leaf1

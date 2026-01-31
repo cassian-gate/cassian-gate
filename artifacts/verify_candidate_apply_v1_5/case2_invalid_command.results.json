@@ -1,0 +1,118 @@
+{
+  "schema_version": "1",
+  "lab": "ex-evpn-outcome-only",
+  "result": "fail",
+  "summary": {
+    "started_at": 1769848489.32671,
+    "finished_at": 1769848490.1002443,
+    "duration_ms": 773,
+    "total": 1,
+    "passed": 0,
+    "failed": 1,
+    "filtered_by_name": "",
+    "filtered_by_kind": "",
+    "resolved_topology_path": "/home/auser/projects/ai-netsim/labs/clab-ex-evpn-outcome-only/topology.resolved.yaml",
+    "resolved_topology_mtime": 1769848470.8929722,
+    "scenario": "",
+    "all_scenarios": false,
+    "keep_going": false,
+    "tests_executed": 0
+  },
+  "tests": [
+    {
+      "name": "candidate_apply:verdict",
+      "kind": "candidate_apply",
+      "from": "",
+      "to": "leaf1",
+      "expected": "pass",
+      "observed": "fail",
+      "verdict": "fail",
+      "duration_ms": 384,
+      "error": "candidate apply failed for node(s): leaf1",
+      "evidence": {
+        "artifacts_dir": "/home/auser/projects/ai-netsim/labs/clab-ex-evpn-outcome-only/artifacts/apply"
+      },
+      "meta": {
+        "failed_nodes": [
+          "leaf1"
+        ],
+        "input_dir": "/home/auser/projects/ai-netsim/tests/fixtures/evpn-cand-neg-invalid"
+      }
+    }
+  ],
+  "scenarios": [],
+  "events": [],
+  "fabric": {
+    "evpn": {
+      "present": true,
+      "authority": "outcome-only",
+      "internals_validated": false,
+      "notes": "EVPN declared via fabric.evpn. v1.5 validates outcomes via tests/scenarios only; EVPN internals are not validated."
+    }
+  },
+  "state_capture": {
+    "enabled": false,
+    "mode": "none",
+    "profiles": [],
+    "plan_path": "",
+    "pre": {
+      "ran": 0,
+      "ok": 0,
+      "error": 0,
+      "timeout": 0
+    },
+    "post": {
+      "ran": 0,
+      "ok": 0,
+      "error": 0,
+      "timeout": 0
+    }
+  },
+  "candidate_apply": {
+    "enabled": true,
+    "input_dir": "/home/auser/projects/ai-netsim/tests/fixtures/evpn-cand-neg-invalid",
+    "plan": [
+      "leaf1"
+    ],
+    "verdict": "fail",
+    "failed_nodes": [
+      "leaf1"
+    ],
+    "failed": [
+      {
+        "node": "leaf1",
+        "reason": "candidate apply: vtysh -f apply failed (non-zero exit), sanitize failed, or sanitized file empty"
+      }
+    ],
+    "duration_ms": 384
+  },
+  "results_schema": "results.v1",
+  "results_schema_version": "1.0.0",
+  "tool": "ai-netsim",
+  "command": "test",
+  "lab_obj": {
+    "name": "ex-evpn-outcome-only"
+  },
+  "topology": {
+    "name": "ex-evpn-outcome-only"
+  },
+  "authority": {
+    "verdict_source": "tests",
+    "supporting_evidence": []
+  },
+  "timing": {
+    "duration_ms": 773
+  },
+  "overall": {
+    "observed": "fail",
+    "verdict": "fail",
+    "exit_code": 1,
+    "phase": "collect",
+    "expected": "pass"
+  },
+  "hard_failure": {
+    "occurred": false,
+    "phase": "",
+    "error": ""
+  }
+}

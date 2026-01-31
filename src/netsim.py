@@ -1455,6 +1455,7 @@ def _candidate_apply_frr_generated_only(rt: Runtime, lab: str, topo: dict[str, A
       - Deterministically detect if /etc/frr/frr.conf is RO via mount flags
          - If RO: apply via vtysh -f from /tmp (no FRR restart)
            - Sanitize config-mode wrapper lines for vtysh batch mode
+           - GUARDRAIL: if sanitized file becomes empty => FAIL (no-op apply is not allowed)
          - If not RO: write file then restart FRR inside container (never docker restart)
       - Robust fallback: if write fails with "Read-only file system", switch to vtysh -f (with sanitization)
       - Postcheck: vtysh show version (required); show bgp summary (evidence-only)
@@ -1498,6 +1499,8 @@ def _candidate_apply_frr_generated_only(rt: Runtime, lab: str, topo: dict[str, A
     CAND_FRR_PERMS_TIMEOUT_S = 5.0
     CAND_FRR_COPY_TIMEOUT_S = 10.0
     CAND_FRR_RO_PROBE_TIMEOUT_S = 2.0
+    # vtysh -f applies can legitimately take longer than simple postchecks
+    CAND_FRR_VTYSH_APPLY_TIMEOUT_S = 20.0
 
     dst_path = "/etc/frr/frr.conf"
     tmp_path = "/tmp/netsim.candidate.frr.conf"
@@ -1521,8 +1524,6 @@ def _candidate_apply_frr_generated_only(rt: Runtime, lab: str, topo: dict[str, A
 
         Everything else is left unchanged, in the same order.
         """
-        # Keep it explicit and line-anchored.
-        # Using grep -vE is deterministic and simple.
         cmd = (
             r"grep -vE '^[[:space:]]*(conf[[:space:]]+(t|term)|configure[[:space:]]+terminal|end|exit)[[:space:]]*$' "
             + f"{tmp_in} > {tmp_out}"
@@ -1534,6 +1535,17 @@ def _candidate_apply_frr_generated_only(rt: Runtime, lab: str, topo: dict[str, A
             check=False,
             capture_output=True,
             timeout_s=CAND_FRR_COPY_TIMEOUT_S,
+        )
+
+    def _file_nonempty(path: str) -> subprocess.CompletedProcess:
+        # `test -s` returns 0 if exists and size > 0
+        return rt.exec(
+            lab,
+            node,
+            ["sh", "-lc", f"test -s {path}"],
+            check=False,
+            capture_output=True,
+            timeout_s=2.0,
         )
 
     def _cleanup_tmp_files() -> None:
@@ -1581,6 +1593,7 @@ def _candidate_apply_frr_generated_only(rt: Runtime, lab: str, topo: dict[str, A
 
     cp_copy = cp_copy_tmp
     cp_sanitize = None
+    cp_sanitize_nonempty = None
     cp_vty_apply = None
 
     if int(getattr(cp_copy_tmp, "returncode", 1)) == 0:
@@ -1605,14 +1618,23 @@ def _candidate_apply_frr_generated_only(rt: Runtime, lab: str, topo: dict[str, A
 
             cp_sanitize = _sanitize_for_vtysh_file(tmp_path, tmp_vty_path)
             if int(getattr(cp_sanitize, "returncode", 1)) == 0:
-                cp_vty_apply = rt.exec(
-                    lab,
-                    node,
-                    ["vtysh", "-f", tmp_vty_path],
-                    check=False,
-                    capture_output=True,
-                    timeout_s=CAND_FRR_POSTCHECK_TIMEOUT_S,
-                )
+                cp_sanitize_nonempty = _file_nonempty(tmp_vty_path)
+                if int(getattr(cp_sanitize_nonempty, "returncode", 1)) == 0:
+                    cp_vty_apply = rt.exec(
+                        lab,
+                        node,
+                        ["vtysh", "-f", tmp_vty_path],
+                        check=False,
+                        capture_output=True,
+                        timeout_s=CAND_FRR_VTYSH_APPLY_TIMEOUT_S,
+                    )
+                else:
+                    cp_vty_apply = subprocess.CompletedProcess(
+                        args=["vtysh", "-f", tmp_vty_path],
+                        returncode=1,
+                        stdout="",
+                        stderr="sanitized candidate is empty after removing wrapper lines; refusing no-op apply",
+                    )
             else:
                 cp_vty_apply = subprocess.CompletedProcess(
                     args=["vtysh", "-f", tmp_vty_path],
@@ -1643,14 +1665,23 @@ def _candidate_apply_frr_generated_only(rt: Runtime, lab: str, topo: dict[str, A
 
                 cp_sanitize = _sanitize_for_vtysh_file(tmp_path, tmp_vty_path)
                 if int(getattr(cp_sanitize, "returncode", 1)) == 0:
-                    cp_vty_apply = rt.exec(
-                        lab,
-                        node,
-                        ["vtysh", "-f", tmp_vty_path],
-                        check=False,
-                        capture_output=True,
-                        timeout_s=CAND_FRR_POSTCHECK_TIMEOUT_S,
-                    )
+                    cp_sanitize_nonempty = _file_nonempty(tmp_vty_path)
+                    if int(getattr(cp_sanitize_nonempty, "returncode", 1)) == 0:
+                        cp_vty_apply = rt.exec(
+                            lab,
+                            node,
+                            ["vtysh", "-f", tmp_vty_path],
+                            check=False,
+                            capture_output=True,
+                            timeout_s=CAND_FRR_VTYSH_APPLY_TIMEOUT_S,
+                        )
+                    else:
+                        cp_vty_apply = subprocess.CompletedProcess(
+                            args=["vtysh", "-f", tmp_vty_path],
+                            returncode=1,
+                            stdout="",
+                            stderr="sanitized candidate is empty after removing wrapper lines; refusing no-op apply",
+                        )
                 else:
                     cp_vty_apply = subprocess.CompletedProcess(
                         args=["vtysh", "-f", tmp_vty_path],
@@ -1778,8 +1809,11 @@ def _candidate_apply_frr_generated_only(rt: Runtime, lab: str, topo: dict[str, A
     # Success criteria (strict)
     if apply_method == "vtysh":
         sanitize_ok = bool(cp_sanitize is not None and int(getattr(cp_sanitize, "returncode", 1)) == 0)
+        sanitized_nonempty_ok = bool(
+            cp_sanitize_nonempty is not None and int(getattr(cp_sanitize_nonempty, "returncode", 1)) == 0
+        )
         vty_rc_ok = bool(cp_vty_apply is not None and int(getattr(cp_vty_apply, "returncode", 1)) == 0)
-        apply_ok = bool(sanitize_ok and vty_rc_ok and ver_ok)
+        apply_ok = bool(sanitize_ok and sanitized_nonempty_ok and vty_rc_ok and ver_ok)
     elif apply_method == "file+frrinit":
         apply_ok = bool(int(getattr(cp_copy, "returncode", 1)) == 0)
     else:
@@ -1796,7 +1830,7 @@ def _candidate_apply_frr_generated_only(rt: Runtime, lab: str, topo: dict[str, A
         if int(getattr(cp_copy_tmp, "returncode", 1)) != 0:
             stderr_msg = "candidate apply: failed to copy candidate to tmp path inside container"
         elif apply_method == "vtysh":
-            stderr_msg = "candidate apply: vtysh -f apply failed (non-zero exit) or sanitize failed"
+            stderr_msg = "candidate apply: vtysh -f apply failed (non-zero exit), sanitize failed, or sanitized file empty"
         else:
             stderr_msg = f"candidate apply: failed to write candidate to {dst_path}"
     elif int(getattr(cp_reload, "returncode", 1)) != 0:
@@ -1836,6 +1870,15 @@ def _candidate_apply_frr_generated_only(rt: Runtime, lab: str, topo: dict[str, A
             "stderr": _safe_stdio(getattr(cp_sanitize, "stderr", "") or ""),
         }
 
+    sanitize_nonempty_block = None
+    if cp_sanitize_nonempty is not None:
+        sanitize_nonempty_block = {
+            "cmd": f"test -s {tmp_vty_path}",
+            "exit_code": int(getattr(cp_sanitize_nonempty, "returncode", 1)),
+            "stdout": _safe_stdio(getattr(cp_sanitize_nonempty, "stdout", "") or ""),
+            "stderr": _safe_stdio(getattr(cp_sanitize_nonempty, "stderr", "") or ""),
+        }
+
     ro_probe_block = {
         "cmd": f"mount | grep -F 'on {dst_path} ' | grep -q '(ro,'",
         "exit_code": (int(getattr(cp_ro_probe, "returncode", 1)) if cp_ro_probe is not None else None),
@@ -1867,6 +1910,7 @@ def _candidate_apply_frr_generated_only(rt: Runtime, lab: str, topo: dict[str, A
             "stderr": copy_stderr,
         },
         "sanitize": sanitize_block,
+        "sanitize_nonempty": sanitize_nonempty_block,
         "vtysh_apply": vtysh_apply_block,
         "reload": {
             "cmd": "/usr/lib/frr/frrinit.sh restart",
@@ -5485,10 +5529,6 @@ def cmd_test(args: argparse.Namespace) -> None:
             cand_dir = (Path.cwd() / cand_dir)
         cand_dir = cand_dir.resolve()
         cand_plan = _candidate_parse_dir_or_die(topo, cand_dir)
-    cand_dir_raw: str | None = getattr(args, "candidate_config", None)
-    if cand_dir_raw:
-        _ = _candidate_parse_dir_or_die(topo, Path(str(cand_dir_raw)).expanduser())
-
     # -----------------------------------------------------------------------------
     # Hard guardrail: validate scenario run refs up-front (no partial execution)
     # This MUST happen before ANY runtime actions (docker/VM exec, faults, waits, etc.)
@@ -7138,6 +7178,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             "plan": [r["node"] for r in cand_plan],
             "verdict": "unknown",
             "failed_nodes": [],
+            "failed": [],  # additive UX: [{"node": "...", "reason": "..."}]
             "duration_ms": None,
         }
 
@@ -7197,26 +7238,67 @@ def cmd_test(args: argparse.Namespace) -> None:
 
             if not bool(((rec.get("result") or {}).get("applied_ok"))):
                 failed.append(node)
-                # Atomic verdict, but continue attempts to record evidence deterministically.
+
+                # UX: capture a short “reason” for summary (prefer top-level stderr)
+                reason = (rec.get("stderr") or "").strip()
+                if not reason:
+                    # fall back to vtysh stderr if present
+                    v = rec.get("vtysh_apply") or {}
+                    reason = (v.get("stderr") or "").strip()
+
+                results["candidate_apply"]["failed"].append({"node": node, "reason": _safe_stdio(reason)})
                 continue
 
         apply_finished = time.time()
         results["candidate_apply"]["duration_ms"] = int((apply_finished - apply_started) * 1000)
 
-        if failed:
-            results["candidate_apply"]["verdict"] = "fail"
-            results["candidate_apply"]["failed_nodes"] = failed
+        results["candidate_apply"]["failed_nodes"] = list(failed)
+        results["candidate_apply"]["verdict"] = ("fail" if failed else "pass")
 
-            # Hard rule: tests/scenarios MUST NOT run on candidate apply failure
+        # HARD GATE: candidate apply failures are authoritative and MUST fail the run.
+        if failed:
+            # One deterministic failure record is enough to drive the overall verdict/exit code.
+            record_test(
+                name="candidate_apply:verdict",
+                kind="candidate_apply",
+                src="",
+                dst=",".join(sorted(failed)),
+                expected="pass",
+                observed="fail",
+                verdict="fail",
+                duration_ms=int(results["candidate_apply"].get("duration_ms") or 0),
+                error=f"candidate apply failed for node(s): {', '.join(sorted(failed))}",
+                meta={
+                    "failed_nodes": sorted(failed),
+                    "input_dir": str(results["candidate_apply"].get("input_dir") or ""),
+                },
+                evidence={
+                    "artifacts_dir": str(_candidate_artifacts_dir(lab)),
+                },
+            )
+
+            # Enforce HARD GATE semantics: fail-fast after candidate apply concludes.
+            # IMPORTANT: must stop BEFORE any control-plane prechecks, state capture, tests, or scenarios.
             results["result"] = "fail"
+
             finished_at = time.time()
             results["summary"]["finished_at"] = finished_at
             results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
+
+            # Summary counts must be consistent with the authoritative tests recorded so far
+            total = len(results["tests"])
+            failed_count = sum(1 for r in results["tests"] if r.get("verdict") == "fail")
+            passed_count = total - failed_count
+
+            results["summary"]["total"] = total
+            results["summary"]["passed"] = passed_count
+            results["summary"]["failed"] = failed_count
+
+            # Optional/defensive: make explicit that steady-state tests did not run
+            results["summary"]["tests_executed"] = 0
+
             write_results()
-
-            die("candidate apply failed for node(s): " + ", ".join(failed))
-
-        results["candidate_apply"]["verdict"] = "pass"
+            raise SystemExit(1)
 
     # =============================================================================
     # 3) Optional control-plane checks (FRR/BGP)
