@@ -8728,8 +8728,13 @@ def cmd_up(args: argparse.Namespace) -> None:
 
 def cmd_down(args: argparse.Namespace) -> None:
     out = lab_file_from_name(args.name)
+
+    # Idempotent behavior (default):
+    # If the generated containerlab file is missing, treat this as "already down".
     if not out.exists():
-        die(f"Lab file not found: {out} (did you run gen/up first?)")
+        print(f"INFO: no lab to destroy (file not found): {out}")
+        return
+
     run(["sudo", "containerlab", "destroy", "-t", str(out)])
 
 def list_owned_labs_from_artifacts() -> list[tuple[str, Path]]:
