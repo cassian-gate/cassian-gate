@@ -1443,15 +1443,29 @@ def _candidate_parse_dir_or_die(topo: dict[str, Any], cand_dir: Path) -> list[di
 
 def _candidate_apply_frr_generated_only(rt: Runtime, lab: str, topo: dict[str, Any], node: str, src: Path) -> dict[str, Any]:
     """
-    v1.5 strategy-aligned:
-      - Only supports frr_mode: generated
-      - Apply is host-side overwrite of node_cfg_dir(lab,node)/frr.conf
-      - Apply mechanism is runtime-owned node restart
-      - Readiness evidence uses existing deterministic probe (verify_frr_ready)
+    v1.5 invariant (LOCKED):
+      - Candidate apply MUST NOT restart containers.
+      - FRR candidate must be applied without changing the container lifecycle, preserving netns/interfaces.
+
+    Behavior:
+      - Enforce frr_mode: generated only (fail fast otherwise)
+      - Record container ID before/after (must match)
+      - (Evidence) record ip link snapshot before/after
+      - Copy candidate into container WITHOUT docker-cp replace semantics
+      - Deterministically detect if /etc/frr/frr.conf is RO via mount flags
+         - If RO: apply via vtysh -f from /tmp (no FRR restart)
+           - Sanitize config-mode wrapper lines for vtysh batch mode
+           - GUARDRAIL: if sanitized file becomes empty => FAIL (no-op apply is not allowed)
+         - If not RO: write file then restart FRR inside container (never docker restart)
+      - Robust fallback: if write fails with "Read-only file system", switch to vtysh -f (with sanitization)
+      - Postcheck: vtysh show version (required); show bgp summary (evidence-only)
+
+    FIX (gate correctness):
+      - vtysh-mode apply is successful only if vtysh -f returns exit_code == 0.
+        (No heuristics, no “it seems applied anyway”.)
     """
     started = time.time()
 
-    # Lock: only generated mode
     topo_nodes = {n.get("name"): n for n in (topo.get("nodes", []) or []) if isinstance(n, dict)}
     n = topo_nodes.get(node) or {}
     frr_mode = (n.get("frr_mode") or "generated").strip().lower()
@@ -1460,65 +1474,449 @@ def _candidate_apply_frr_generated_only(rt: Runtime, lab: str, topo: dict[str, A
         return {
             "node": node,
             "node_type": "frr",
-            "method": "host-overwrite+runtime-restart",
+            "method": "frr_inplace_reload",
             "input": {"source_path": str(src), "sha256": _sha256_file(src)},
             "attempt": {"started_at_epoch_ms": int(started * 1000), "duration_ms": int((finished - started) * 1000)},
             "result": {"applied_ok": False, "exit_code": 2},
             "stdout": "",
-            "stderr": _safe_stdio("candidate apply: frr_mode is preconfigured; v1.5 supports candidate apply only for frr_mode: generated"),
+            "stderr": _safe_stdio(
+                f"candidate apply: frr_mode='{frr_mode}' is unsupported; v1.5 supports candidate apply only for frr_mode: generated"
+            ),
             "post_checks": [],
         }
 
-    content = src.read_text(encoding="utf-8")
     sha = _sha256_file(src)
 
-    # Host-side overwrite (same bind-mount mechanism v1 already uses)
-    cfgdir = node_cfg_dir(lab, node)
-    write_file(cfgdir / "frr.conf", content)
+    # Evidence snapshots (must not fail apply by themselves)
+    container_id_before = ""
+    container_id_after = ""
+    interfaces_before = ""
+    interfaces_after = ""
 
-    # Runtime-owned restart (deterministic boundary)
-    rp = rt.restart_node(lab, node)
+    # Deterministic timeouts for in-container operations (LOCKED)
+    CAND_FRR_RELOAD_TIMEOUT_S = 60.0
+    CAND_FRR_POSTCHECK_TIMEOUT_S = 10.0
+    CAND_FRR_PERMS_TIMEOUT_S = 5.0
+    CAND_FRR_COPY_TIMEOUT_S = 10.0
+    CAND_FRR_RO_PROBE_TIMEOUT_S = 2.0
+    # vtysh -f applies can legitimately take longer than simple postchecks
+    CAND_FRR_VTYSH_APPLY_TIMEOUT_S = 20.0
 
-    # Readiness probe (existing deterministic mechanism)
-    ready_ok = True
-    ready_err = ""
+    dst_path = "/etc/frr/frr.conf"
+    tmp_path = "/tmp/netsim.candidate.frr.conf"
+    tmp_vty_path = "/tmp/netsim.candidate.frr.vtysh.conf"
+
+    def _sanitize_for_vtysh_file(tmp_in: str, tmp_out: str) -> subprocess.CompletedProcess:
+        """
+        Deterministic sanitization for vtysh -f batch mode.
+
+        Principle:
+          - Do NOT attempt to be clever.
+          - Remove config-mode wrapper lines that are commonly present in "conf t ... end" snippets,
+            because many FRR vtysh batch modes reject them and return non-zero.
+
+        Specifically REMOVE lines that match (ignoring leading/trailing whitespace):
+          - conf t
+          - conf term
+          - configure terminal
+          - end
+          - exit
+
+        Everything else is left unchanged, in the same order.
+        """
+        cmd = (
+            r"grep -vE '^[[:space:]]*(conf[[:space:]]+(t|term)|configure[[:space:]]+terminal|end|exit)[[:space:]]*$' "
+            + f"{tmp_in} > {tmp_out}"
+        )
+        return rt.exec(
+            lab,
+            node,
+            ["sh", "-lc", cmd],
+            check=False,
+            capture_output=True,
+            timeout_s=CAND_FRR_COPY_TIMEOUT_S,
+        )
+
+    def _file_nonempty(path: str) -> subprocess.CompletedProcess:
+        # `test -s` returns 0 if exists and size > 0
+        return rt.exec(
+            lab,
+            node,
+            ["sh", "-lc", f"test -s {path}"],
+            check=False,
+            capture_output=True,
+            timeout_s=2.0,
+        )
+
+    def _cleanup_tmp_files() -> None:
+        rt.exec(
+            lab,
+            node,
+            ["sh", "-lc", f"rm -f {tmp_path} {tmp_vty_path}"],
+            check=False,
+            capture_output=True,
+            timeout_s=2.0,
+        )
+
     try:
-        verify_frr_ready(rt, lab, node)
-    except SystemExit as e:
-        ready_ok = False
-        ready_err = str(e)
+        container_id_before = rt.container_id(lab, node)
+    except Exception as e:
+        finished = time.time()
+        return {
+            "node": node,
+            "node_type": "frr",
+            "method": "frr_inplace_reload",
+            "input": {"source_path": str(src), "sha256": sha},
+            "attempt": {"started_at_epoch_ms": int(started * 1000), "duration_ms": int((finished - started) * 1000)},
+            "result": {"applied_ok": False, "exit_code": 1},
+            "stdout": "",
+            "stderr": _safe_stdio(str(e)),
+            "post_checks": [],
+            "container_id_before": container_id_before,
+            "container_id_after": container_id_after,
+        }
 
+    try:
+        cp_if0 = rt.exec(lab, node, ["ip", "-o", "link", "show"], check=False, capture_output=True, timeout_s=5.0)
+        interfaces_before = _safe_stdio((cp_if0.stdout or "") + (cp_if0.stderr or ""))
+    except Exception:
+        interfaces_before = ""
+
+    # -------------------------------------------------------------------------
+    # Candidate delivery (no container restart).
+    # -------------------------------------------------------------------------
+    cp_copy_tmp = rt.copy_to_node(lab, node, src, tmp_path)
+
+    cp_ro_probe = None
+    dst_is_ro = False
+    apply_method = "unknown"
+
+    cp_copy = cp_copy_tmp
+    cp_sanitize = None
+    cp_sanitize_nonempty = None
+    cp_vty_apply = None
+
+    if int(getattr(cp_copy_tmp, "returncode", 1)) == 0:
+        cp_ro_probe = rt.exec(
+            lab,
+            node,
+            ["sh", "-lc", f"mount | grep -F 'on {dst_path} ' | grep -q '(ro,'"],
+            check=False,
+            capture_output=True,
+            timeout_s=CAND_FRR_RO_PROBE_TIMEOUT_S,
+        )
+        dst_is_ro = (int(getattr(cp_ro_probe, "returncode", 1)) == 0)
+
+        if dst_is_ro:
+            apply_method = "vtysh"
+            cp_copy = subprocess.CompletedProcess(
+                args=["sh", "-lc", f"SKIP write: {dst_path} is RO"],
+                returncode=0,
+                stdout="skipped (dst is RO; applying via vtysh -f)",
+                stderr="",
+            )
+
+            cp_sanitize = _sanitize_for_vtysh_file(tmp_path, tmp_vty_path)
+            if int(getattr(cp_sanitize, "returncode", 1)) == 0:
+                cp_sanitize_nonempty = _file_nonempty(tmp_vty_path)
+                if int(getattr(cp_sanitize_nonempty, "returncode", 1)) == 0:
+                    cp_vty_apply = rt.exec(
+                        lab,
+                        node,
+                        ["vtysh", "-f", tmp_vty_path],
+                        check=False,
+                        capture_output=True,
+                        timeout_s=CAND_FRR_VTYSH_APPLY_TIMEOUT_S,
+                    )
+                else:
+                    cp_vty_apply = subprocess.CompletedProcess(
+                        args=["vtysh", "-f", tmp_vty_path],
+                        returncode=1,
+                        stdout="",
+                        stderr="sanitized candidate is empty after removing wrapper lines; refusing no-op apply",
+                    )
+            else:
+                cp_vty_apply = subprocess.CompletedProcess(
+                    args=["vtysh", "-f", tmp_vty_path],
+                    returncode=1,
+                    stdout="",
+                    stderr="sanitize failed; not running vtysh -f",
+                )
+            _cleanup_tmp_files()
+
+        else:
+            apply_method = "file+frrinit"
+            cp_copy = rt.exec(
+                lab,
+                node,
+                ["sh", "-lc", f"cat {tmp_path} > {dst_path} && rm -f {tmp_path}"],
+                check=False,
+                capture_output=True,
+                timeout_s=CAND_FRR_COPY_TIMEOUT_S,
+            )
+
+            copy_rc = int(getattr(cp_copy, "returncode", 1))
+            copy_err = (getattr(cp_copy, "stderr", "") or "")
+            if (copy_rc != 0) and ("Read-only file system" in copy_err):
+                apply_method = "vtysh"
+
+                # Re-copy to tmp to be deterministic (tmp may have been removed or partial).
+                rt.copy_to_node(lab, node, src, tmp_path)
+
+                cp_sanitize = _sanitize_for_vtysh_file(tmp_path, tmp_vty_path)
+                if int(getattr(cp_sanitize, "returncode", 1)) == 0:
+                    cp_sanitize_nonempty = _file_nonempty(tmp_vty_path)
+                    if int(getattr(cp_sanitize_nonempty, "returncode", 1)) == 0:
+                        cp_vty_apply = rt.exec(
+                            lab,
+                            node,
+                            ["vtysh", "-f", tmp_vty_path],
+                            check=False,
+                            capture_output=True,
+                            timeout_s=CAND_FRR_VTYSH_APPLY_TIMEOUT_S,
+                        )
+                    else:
+                        cp_vty_apply = subprocess.CompletedProcess(
+                            args=["vtysh", "-f", tmp_vty_path],
+                            returncode=1,
+                            stdout="",
+                            stderr="sanitized candidate is empty after removing wrapper lines; refusing no-op apply",
+                        )
+                else:
+                    cp_vty_apply = subprocess.CompletedProcess(
+                        args=["vtysh", "-f", tmp_vty_path],
+                        returncode=1,
+                        stdout="",
+                        stderr="sanitize failed; not running vtysh -f",
+                    )
+                _cleanup_tmp_files()
+
+    # Best-effort perms (safe no-op on RO; do not gate apply)
+    rt.exec(
+        lab,
+        node,
+        [
+            "sh",
+            "-lc",
+            "id -u frr >/dev/null 2>&1 && chown frr:frr /etc/frr/frr.conf || true; chmod 0640 /etc/frr/frr.conf || true",
+        ],
+        check=False,
+        capture_output=True,
+        timeout_s=CAND_FRR_PERMS_TIMEOUT_S,
+    )
+
+    # -------------------------------------------------------------------------
+    # Reload semantics
+    # -------------------------------------------------------------------------
+    if apply_method == "vtysh":
+        cp_reload = subprocess.CompletedProcess(
+            args=["/usr/lib/frr/frrinit.sh", "restart"],
+            returncode=0,
+            stdout="skipped (applied via vtysh -f)",
+            stderr="",
+        )
+    else:
+        # Only reload if file write succeeded; otherwise skip.
+        file_write_ok = bool(apply_method == "file+frrinit" and int(getattr(cp_copy, "returncode", 1)) == 0)
+        if not file_write_ok:
+            cp_reload = subprocess.CompletedProcess(
+                args=["/usr/lib/frr/frrinit.sh", "restart"],
+                returncode=0,
+                stdout="skipped (apply failed)",
+                stderr="",
+            )
+        else:
+            cp_has = rt.exec(
+                lab,
+                node,
+                ["sh", "-lc", "test -x /usr/lib/frr/frrinit.sh"],
+                check=False,
+                capture_output=True,
+                timeout_s=CAND_FRR_PERMS_TIMEOUT_S,
+            )
+            if cp_has.returncode == 0:
+                cp_reload = rt.exec(
+                    lab,
+                    node,
+                    ["/usr/lib/frr/frrinit.sh", "restart"],
+                    check=False,
+                    capture_output=True,
+                    timeout_s=CAND_FRR_RELOAD_TIMEOUT_S,
+                )
+            else:
+                cp_reload = subprocess.CompletedProcess(
+                    args=["/usr/lib/frr/frrinit.sh", "restart"],
+                    returncode=127,
+                    stdout="",
+                    stderr="missing /usr/lib/frr/frrinit.sh",
+                )
+
+    # Postchecks (deterministic)
     post: list[dict[str, Any]] = []
 
-    # Evidence-only: show bgp summary (bounded)
-    cp = rt.exec(lab, node, ["vtysh", "-c", "show bgp summary"], check=False, capture_output=True)
-    post.append({
-        "name": "show_bgp_summary",
-        "cmd": "vtysh -c \"show bgp summary\"",
-        "exit_code": int(cp.returncode),
-        "stdout": _safe_stdio(cp.stdout or ""),
-        "stderr": _safe_stdio(cp.stderr or ""),
-    })
+    cp_ver = rt.exec(
+        lab,
+        node,
+        ["vtysh", "-c", "show version"],
+        check=False,
+        capture_output=True,
+        timeout_s=CAND_FRR_POSTCHECK_TIMEOUT_S,
+    )
+    post.append(
+        {
+            "name": "show_version",
+            "cmd": 'vtysh -c "show version"',
+            "exit_code": int(cp_ver.returncode),
+            "stdout": _safe_stdio(cp_ver.stdout or ""),
+            "stderr": _safe_stdio(cp_ver.stderr or ""),
+        }
+    )
+
+    cp_bgp = rt.exec(
+        lab,
+        node,
+        ["vtysh", "-c", "show bgp summary"],
+        check=False,
+        capture_output=True,
+        timeout_s=CAND_FRR_POSTCHECK_TIMEOUT_S,
+    )
+    post.append(
+        {
+            "name": "show_bgp_summary",
+            "cmd": 'vtysh -c "show bgp summary"',
+            "exit_code": int(cp_bgp.returncode),
+            "stdout": _safe_stdio(cp_bgp.stdout or ""),
+            "stderr": _safe_stdio(cp_bgp.stderr or ""),
+        }
+    )
+
+    try:
+        container_id_after = rt.container_id(lab, node)
+    except Exception:
+        container_id_after = ""
+
+    try:
+        cp_if1 = rt.exec(lab, node, ["ip", "-o", "link", "show"], check=False, capture_output=True, timeout_s=5.0)
+        interfaces_after = _safe_stdio((cp_if1.stdout or "") + (cp_if1.stderr or ""))
+    except Exception:
+        interfaces_after = ""
+
+    restart_detected = bool(container_id_before and container_id_after and (container_id_before != container_id_after))
+
+    reload_ok = int(getattr(cp_reload, "returncode", 1)) == 0
+    ver_ok = int(getattr(cp_ver, "returncode", 1)) == 0
+
+    # Success criteria (strict)
+    if apply_method == "vtysh":
+        sanitize_ok = bool(cp_sanitize is not None and int(getattr(cp_sanitize, "returncode", 1)) == 0)
+        sanitized_nonempty_ok = bool(
+            cp_sanitize_nonempty is not None and int(getattr(cp_sanitize_nonempty, "returncode", 1)) == 0
+        )
+        vty_rc_ok = bool(cp_vty_apply is not None and int(getattr(cp_vty_apply, "returncode", 1)) == 0)
+        apply_ok = bool(sanitize_ok and sanitized_nonempty_ok and vty_rc_ok and ver_ok)
+    elif apply_method == "file+frrinit":
+        apply_ok = bool(int(getattr(cp_copy, "returncode", 1)) == 0)
+    else:
+        apply_ok = False
+
+    applied_ok = bool(apply_ok and reload_ok and ver_ok and (not restart_detected))
+    if restart_detected:
+        applied_ok = False
 
     finished = time.time()
+
+    stderr_msg = ""
+    if not apply_ok:
+        if int(getattr(cp_copy_tmp, "returncode", 1)) != 0:
+            stderr_msg = "candidate apply: failed to copy candidate to tmp path inside container"
+        elif apply_method == "vtysh":
+            stderr_msg = "candidate apply: vtysh -f apply failed (non-zero exit), sanitize failed, or sanitized file empty"
+        else:
+            stderr_msg = f"candidate apply: failed to write candidate to {dst_path}"
+    elif int(getattr(cp_reload, "returncode", 1)) != 0:
+        stderr_msg = "candidate apply: in-container FRR restart failed (/usr/lib/frr/frrinit.sh restart)"
+    elif not ver_ok:
+        stderr_msg = "candidate apply: postcheck failed (vtysh show version)"
+
+    if restart_detected:
+        if stderr_msg:
+            stderr_msg += "; "
+        stderr_msg += "candidate apply invariant violated: container restart detected (container ID changed)"
+
+    if apply_method == "vtysh":
+        copy_cmd = f"copy_to_tmp:{tmp_path}; ro_probe:mount|grep on {dst_path}|grep (ro,; sanitize->vtysh -f {tmp_vty_path}"
+    else:
+        copy_cmd = f"copy_to_tmp:{tmp_path}; ro_probe:mount|grep on {dst_path}|grep (ro,; write(cat >):{dst_path}"
+
+    copy_rc = int(getattr(cp_copy, "returncode", 1))
+    copy_stdout = _safe_stdio(getattr(cp_copy, "stdout", "") or "")
+    copy_stderr = _safe_stdio(getattr(cp_copy, "stderr", "") or "")
+
+    vtysh_apply_block = None
+    if cp_vty_apply is not None:
+        vtysh_apply_block = {
+            "cmd": f"vtysh -f {tmp_vty_path}",
+            "exit_code": int(getattr(cp_vty_apply, "returncode", 1)),
+            "stdout": _safe_stdio(getattr(cp_vty_apply, "stdout", "") or ""),
+            "stderr": _safe_stdio(getattr(cp_vty_apply, "stderr", "") or ""),
+        }
+
+    sanitize_block = None
+    if cp_sanitize is not None:
+        sanitize_block = {
+            "cmd": f"sanitize_for_vtysh: {tmp_path} -> {tmp_vty_path}",
+            "exit_code": int(getattr(cp_sanitize, "returncode", 1)),
+            "stdout": _safe_stdio(getattr(cp_sanitize, "stdout", "") or ""),
+            "stderr": _safe_stdio(getattr(cp_sanitize, "stderr", "") or ""),
+        }
+
+    sanitize_nonempty_block = None
+    if cp_sanitize_nonempty is not None:
+        sanitize_nonempty_block = {
+            "cmd": f"test -s {tmp_vty_path}",
+            "exit_code": int(getattr(cp_sanitize_nonempty, "returncode", 1)),
+            "stdout": _safe_stdio(getattr(cp_sanitize_nonempty, "stdout", "") or ""),
+            "stderr": _safe_stdio(getattr(cp_sanitize_nonempty, "stderr", "") or ""),
+        }
+
+    ro_probe_block = {
+        "cmd": f"mount | grep -F 'on {dst_path} ' | grep -q '(ro,'",
+        "exit_code": (int(getattr(cp_ro_probe, "returncode", 1)) if cp_ro_probe is not None else None),
+        "stdout": (_safe_stdio(getattr(cp_ro_probe, "stdout", "") or "") if cp_ro_probe is not None else ""),
+        "stderr": (_safe_stdio(getattr(cp_ro_probe, "stderr", "") or "") if cp_ro_probe is not None else ""),
+        "dst_is_ro": bool(dst_is_ro),
+    }
+
     return {
         "node": node,
         "node_type": "frr",
-        "method": "host-overwrite+runtime-restart",
+        "method": "frr_inplace_reload",
         "input": {"source_path": str(src), "sha256": sha},
         "attempt": {"started_at_epoch_ms": int(started * 1000), "duration_ms": int((finished - started) * 1000)},
-        "result": {
-            "applied_ok": bool(rp.returncode == 0 and ready_ok),
-            "exit_code": int(rp.returncode if rp.returncode != 0 else (0 if ready_ok else 1)),
-        },
-        "stdout": _safe_stdio((rp.stdout or "") if hasattr(rp, "stdout") else ""),
-        "stderr": _safe_stdio((rp.stderr or "") if hasattr(rp, "stderr") else ready_err),
+        "result": {"applied_ok": applied_ok, "exit_code": (0 if applied_ok else 1)},
+        "stdout": _safe_stdio(""),
+        "stderr": _safe_stdio(stderr_msg),
         "post_checks": post,
-        "restart": {
-            "cmd": "runtime.restart_node",
-            "exit_code": int(rp.returncode),
-            "stdout": _safe_stdio((rp.stdout or "") if hasattr(rp, "stdout") else ""),
-            "stderr": _safe_stdio((rp.stderr or "") if hasattr(rp, "stderr") else ""),
+        "apply_method": apply_method,
+        "container_id_before": str(container_id_before),
+        "container_id_after": str(container_id_after),
+        "interfaces_before": str(interfaces_before),
+        "interfaces_after": str(interfaces_after),
+        "ro_probe": ro_probe_block,
+        "copy": {
+            "cmd": copy_cmd,
+            "exit_code": copy_rc,
+            "stdout": copy_stdout,
+            "stderr": copy_stderr,
+        },
+        "sanitize": sanitize_block,
+        "sanitize_nonempty": sanitize_nonempty_block,
+        "vtysh_apply": vtysh_apply_block,
+        "reload": {
+            "cmd": "/usr/lib/frr/frrinit.sh restart",
+            "exit_code": int(getattr(cp_reload, "returncode", 1)),
+            "stdout": _safe_stdio(getattr(cp_reload, "stdout", "") or ""),
+            "stderr": _safe_stdio(getattr(cp_reload, "stderr", "") or ""),
         },
     }
 
@@ -4427,7 +4825,23 @@ class Runtime:
         Must not leak docker/containerlab calls outside Runtime.
         """
         raise NotImplementedError
+    
+    def container_id(self, lab: str, node: str) -> str:
+        """
+        Deterministically return the runtime-specific immutable identity for the node instance.
 
+        ContainerRuntime: docker container ID (full ID string).
+        VMRuntime (future): VM UUID, etc.
+        """
+        raise NotImplementedError
+
+    def copy_to_node(self, lab: str, node: str, src: Path, dst: str) -> subprocess.CompletedProcess:
+        """
+        Deterministically copy a host file into the node instance.
+
+        ContainerRuntime: implemented via `docker cp` (runtime-owned).
+        """
+        raise NotImplementedError
 
     def is_running_id(self, node_id: str) -> bool:
         """
@@ -4462,7 +4876,19 @@ class ContainerRuntime(Runtime):
         """
         c = self.node_id(lab, node)
         return run(["docker", "restart", c], check=False, capture_output=True)
+    
+    def container_id(self, lab: str, node: str) -> str:
+        c = self.node_id(lab, node)
+        cp = run(["docker", "inspect", "-f", "{{.Id}}", c], check=False, capture_output=True)
+        if cp.returncode != 0:
+            # Keep message deterministic and safe
+            die(f"runtime.container_id failed for node {node} (container={c})", code=cp.returncode)
+        return (cp.stdout or "").strip()
 
+    def copy_to_node(self, lab: str, node: str, src: Path, dst: str) -> subprocess.CompletedProcess:
+        c = self.node_id(lab, node)
+        # docker cp syntax: SRC_PATH CONTAINER:DEST_PATH
+        return run(["docker", "cp", str(src), f"{c}:{dst}"], check=False, capture_output=True)
 
     def exec(
         self,
@@ -5103,10 +5529,6 @@ def cmd_test(args: argparse.Namespace) -> None:
             cand_dir = (Path.cwd() / cand_dir)
         cand_dir = cand_dir.resolve()
         cand_plan = _candidate_parse_dir_or_die(topo, cand_dir)
-    cand_dir_raw: str | None = getattr(args, "candidate_config", None)
-    if cand_dir_raw:
-        _ = _candidate_parse_dir_or_die(topo, Path(str(cand_dir_raw)).expanduser())
-
     # -----------------------------------------------------------------------------
     # Hard guardrail: validate scenario run refs up-front (no partial execution)
     # This MUST happen before ANY runtime actions (docker/VM exec, faults, waits, etc.)
@@ -6756,6 +7178,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             "plan": [r["node"] for r in cand_plan],
             "verdict": "unknown",
             "failed_nodes": [],
+            "failed": [],  # additive UX: [{"node": "...", "reason": "..."}]
             "duration_ms": None,
         }
 
@@ -6815,26 +7238,67 @@ def cmd_test(args: argparse.Namespace) -> None:
 
             if not bool(((rec.get("result") or {}).get("applied_ok"))):
                 failed.append(node)
-                # Atomic: stop further mutation after first failure.
-                break
+
+                # UX: capture a short “reason” for summary (prefer top-level stderr)
+                reason = (rec.get("stderr") or "").strip()
+                if not reason:
+                    # fall back to vtysh stderr if present
+                    v = rec.get("vtysh_apply") or {}
+                    reason = (v.get("stderr") or "").strip()
+
+                results["candidate_apply"]["failed"].append({"node": node, "reason": _safe_stdio(reason)})
+                continue
 
         apply_finished = time.time()
         results["candidate_apply"]["duration_ms"] = int((apply_finished - apply_started) * 1000)
 
-        if failed:
-            results["candidate_apply"]["verdict"] = "fail"
-            results["candidate_apply"]["failed_nodes"] = failed
+        results["candidate_apply"]["failed_nodes"] = list(failed)
+        results["candidate_apply"]["verdict"] = ("fail" if failed else "pass")
 
-            # Hard rule: tests/scenarios MUST NOT run on candidate apply failure
+        # HARD GATE: candidate apply failures are authoritative and MUST fail the run.
+        if failed:
+            # One deterministic failure record is enough to drive the overall verdict/exit code.
+            record_test(
+                name="candidate_apply:verdict",
+                kind="candidate_apply",
+                src="",
+                dst=",".join(sorted(failed)),
+                expected="pass",
+                observed="fail",
+                verdict="fail",
+                duration_ms=int(results["candidate_apply"].get("duration_ms") or 0),
+                error=f"candidate apply failed for node(s): {', '.join(sorted(failed))}",
+                meta={
+                    "failed_nodes": sorted(failed),
+                    "input_dir": str(results["candidate_apply"].get("input_dir") or ""),
+                },
+                evidence={
+                    "artifacts_dir": str(_candidate_artifacts_dir(lab)),
+                },
+            )
+
+            # Enforce HARD GATE semantics: fail-fast after candidate apply concludes.
+            # IMPORTANT: must stop BEFORE any control-plane prechecks, state capture, tests, or scenarios.
             results["result"] = "fail"
+
             finished_at = time.time()
             results["summary"]["finished_at"] = finished_at
             results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
+
+            # Summary counts must be consistent with the authoritative tests recorded so far
+            total = len(results["tests"])
+            failed_count = sum(1 for r in results["tests"] if r.get("verdict") == "fail")
+            passed_count = total - failed_count
+
+            results["summary"]["total"] = total
+            results["summary"]["passed"] = passed_count
+            results["summary"]["failed"] = failed_count
+
+            # Optional/defensive: make explicit that steady-state tests did not run
+            results["summary"]["tests_executed"] = 0
+
             write_results()
-
-            die("candidate apply failed for node(s): " + ", ".join(failed))
-
-        results["candidate_apply"]["verdict"] = "pass"
+            raise SystemExit(1)
 
     # =============================================================================
     # 3) Optional control-plane checks (FRR/BGP)
