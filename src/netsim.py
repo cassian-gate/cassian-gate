@@ -37,9 +37,13 @@ from netsim_common import (
     run, die,
     LAST_ERROR_MSG,
     is_ip_literal, validate_ip_literal, classify_invalid_target,
+    nodes_by_type,
+)
+
+from netsim_artifacts import (
     lab_dir, node_cfg_dir, write_file,
     load_yaml,
-    topo_path_for_lab, nodes_by_type,
+    topo_path_for_lab,
 )
 
 def ensure_nc(rt: Runtime, lab: str, node: str) -> None:
