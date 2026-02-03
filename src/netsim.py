@@ -30,115 +30,17 @@ from typing import Any
 
 import yaml
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-TOPO_DIR = BASE_DIR / "topologies"
-LABS_DIR = BASE_DIR / "labs"
-QUIET_RUN = False
-_QUIET_DIE = False
-
-
-DEFAULT_IMAGES = {
-    "frr": "frrouting/frr:latest",
-    "linux": "alpine:latest",
-    "host": "alpine:latest",
-    "nft-fw": "alpine:latest",
-}
-
-# -------------------------
-# Shell helpers
-# -------------------------
-
-def run(
-    cmd: list[str],
-    check: bool = True,
-    capture: bool = False,
-    capture_output: bool | None = None,
-    text: bool = True,
-    timeout_s: float | None = None,
-) -> subprocess.CompletedProcess:
-    """
-    Run a command deterministically.
-    - capture=True is the legacy flag (captures stdout/stderr)
-    - capture_output overrides capture if explicitly set
-    - timeout_s maps to subprocess.run(timeout=...) (seconds)
-    """
-    global QUIET_RUN
-    if not QUIET_RUN:
-        print("+", " ".join(cmd))
-
-    if capture_output is None:
-        capture_output = capture
-
-    return subprocess.run(
-        cmd,
-        check=check,
-        capture_output=capture_output,
-        text=text,
-        timeout=timeout_s,
-    )
-
-LAST_ERROR_MSG: str | None = None
-
-def die(msg: str, code: int = 1) -> None:
-    global _QUIET_DIE
-    if _QUIET_DIE:
-        # IMPORTANT: raise with the MESSAGE (string), not the int code
-        # so cmd_validate can capture str(e) and put it into JSON.
-        raise SystemExit(str(msg))
-
-    print(f"ERROR: {msg}", file=sys.stderr)
-    raise SystemExit(code)
-
-def is_ip_literal(value: str) -> bool:
-    try:
-        ipaddress.ip_address(value.strip())
-        return True
-    except Exception:
-        return False
-
-def validate_ip_literal(value: str, ctx: str) -> None:
-    try:
-        ipaddress.ip_address(value.strip())
-    except Exception:
-        die(f"{ctx}: invalid IPv4/IPv6 literal: {value!r}")
-
-def classify_invalid_target(token: str) -> str:
-    """
-    Messaging-only helper. Does NOT change acceptance rules.
-    Returns a short reason string for common invalid destination patterns.
-    """
-    t = (token or "").strip()
-    if not t:
-        return "empty destination"
-
-    # IP:port (common copy/paste)
-    if ":" in t:
-        # If it's a pure IPv6 literal, it'll also contain ":".
-        # Detect IP:port by "one colon" + numeric port and left side looks like IPv4.
-        parts = t.rsplit(":", 1)
-        if len(parts) == 2:
-            left, right = parts[0].strip(), parts[1].strip()
-            if right.isdigit() and is_ip_literal(left) and "." in left:
-                return "appears to be IP:port; expected IPv4 literal only (no port)"
-
-    # CIDR
-    if "/" in t:
-        left = t.split("/", 1)[0].strip()
-        if is_ip_literal(left) and "." in left:
-            return "appears to be CIDR; expected single IPv4 address (no /mask)"
-
-    # IPv6 (v1.x: IPv4-only in these target contexts)
-    if ":" in t and not t.count(":") == 1:
-        # Heuristic: multiple colons strongly indicates IPv6
-        return "appears to be IPv6; v1.x supports IPv4 only here"
-
-    # Hostname-like (letters + dots)
-    has_letter = any(ch.isalpha() for ch in t)
-    if has_letter and "." in t:
-        return "appears to be a hostname; DNS/hostnames are not supported (determinism)"
-
-    # Generic fallback
-    return "invalid destination (must be node name or IPv4 literal)"
+import netsim_common
+from netsim_common import (
+    BASE_DIR, TOPO_DIR, LABS_DIR,
+    DEFAULT_IMAGES,
+    run, die,
+    LAST_ERROR_MSG,
+    is_ip_literal, validate_ip_literal, classify_invalid_target,
+    lab_dir, node_cfg_dir, write_file,
+    load_yaml,
+    topo_path_for_lab, nodes_by_type,
+)
 
 def ensure_nc(rt: Runtime, lab: str, node: str) -> None:
     cp = rt.exec(
@@ -393,13 +295,6 @@ def _is_multihop_ping_test(topo: dict, test: dict) -> bool:
         return False
     # If directly linked, it is not multi-hop.
     return not _is_direct_link(topo, src, dst)
-
-def load_yaml(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    if data is None:
-        die(f"Empty YAML file: {path}")
-    return data
 
 def _validate_fabric_evpn_presence_only(topo: dict) -> dict[str, Any] | None:
     """
@@ -719,25 +614,6 @@ def ensure_valid_topology(topo: dict) -> None:
                     "or (c) run with an equivalent pre-configured device image/config outside ai-netsim v1. "
                     f"Affected tests: {', '.join(offenders)}"
                 )
-
-# -------------------------
-# Paths for generated lab artifacts
-# -------------------------
-
-def lab_dir(lab_name: str) -> Path:
-    return LABS_DIR / f"clab-{lab_name}"
-
-def node_cfg_dir(lab_name: str, node: str) -> Path:
-    return lab_dir(lab_name) / "nodes" / node
-
-def write_file(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    # If a previous run created a directory where we expect a file, fix it.
-    if path.exists() and path.is_dir():
-        shutil.rmtree(path)
-
-    path.write_text(content, encoding="utf-8")
 
 # -------------------------
 # Candidate Config Apply (v1.5) - deterministic helpers
@@ -3942,20 +3818,6 @@ def docker_is_running(container: str) -> bool:
 
 def vty(rt: Runtime, lab: str, node: str, cmd: str) -> subprocess.CompletedProcess:
     return rt.exec(lab, node, ["vtysh", "-c", cmd], check=False, capture_output=True)
-
-def topo_path_for_lab(lab_name: str) -> Path:
-    p_resolved = lab_dir(lab_name) / "topology.resolved.yaml"
-    if p_resolved.exists():
-        return p_resolved
-
-    p1 = lab_dir(lab_name) / "topology.yaml"
-    if p1.exists():
-        return p1
-
-    return TOPO_DIR / f"{lab_name}.yaml"
-
-def nodes_by_type(topo: dict, ntype: str) -> list[str]:
-    return [n["name"] for n in topo.get("nodes", []) if n.get("type") == ntype]
 
 def ensure_ip_tools(rt: "Runtime", lab: str, node: str) -> None:
     """
@@ -8536,7 +8398,7 @@ def cmd_validate(args: argparse.Namespace) -> None:
     import json
     import sys  # keep (often used elsewhere)
 
-    global _QUIET_DIE  # module-global flag used by die()
+    # module-global flag used by die() (moved to netsim_common)
 
     topo_path = (TOPO_DIR / args.topology) if not Path(args.topology).is_file() else Path(args.topology)
     want_json: bool = bool(getattr(args, "json", False))
@@ -8557,8 +8419,8 @@ def cmd_validate(args: argparse.Namespace) -> None:
             else:
                 die(error or "validation failed")
 
-    prev_quiet = bool(globals().get("_QUIET_DIE", False))
-    _QUIET_DIE = want_json
+    prev_quiet = bool(getattr(netsim_common, "_QUIET_DIE", False))
+    netsim_common._QUIET_DIE = want_json
     try:
         topo = load_yaml(topo_path)
         ensure_valid_topology(topo)
@@ -8589,7 +8451,7 @@ def cmd_validate(args: argparse.Namespace) -> None:
         die(msg)
 
     finally:
-        _QUIET_DIE = prev_quiet
+        netsim_common._QUIET_DIE = prev_quiet
 
 def cmd_preflight(args: argparse.Namespace) -> None:
     """
@@ -8927,10 +8789,9 @@ def cmd_status(args: argparse.Namespace) -> None:
     routes_verbose = bool(getattr(args, "routes_verbose", False))
 
     # Suppress "+ <cmd>" echoes during JSON mode (so JSON is clean)
-    global QUIET_RUN
-    old_quiet = QUIET_RUN
+    old_quiet = netsim_common.QUIET_RUN
     if as_json:
-        QUIET_RUN = True
+        netsim_common.QUIET_RUN = True
 
     try:
         topo = _load_resolved_topology(lab)
@@ -9275,7 +9136,7 @@ def cmd_status(args: argparse.Namespace) -> None:
             raise SystemExit(2)
 
     finally:
-        QUIET_RUN = old_quiet
+        netsim_common.QUIET_RUN = old_quiet
 
 def cmd_collect(args: argparse.Namespace) -> None:
     import json
