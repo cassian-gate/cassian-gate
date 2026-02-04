@@ -17,6 +17,7 @@ from netsim_common import (
 from netsim_artifacts import (
     lab_dir,
 )
+from netsim_runtime_container import _normalize_prefix
 
 def ensure_nc(rt: Runtime, lab: str, node: str) -> None:
     cp = rt.exec(
