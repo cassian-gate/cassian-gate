@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 import shutil
 import subprocess
 import sys
@@ -67,6 +68,45 @@ def die(msg: str, code: int = 1) -> None:
 
     print(f"ERROR: {msg}", file=sys.stderr)
     raise SystemExit(code)
+
+def is_wsl2() -> bool:
+    """
+    Deterministic environment detection.
+    Used only for gating VM runtime support (fail-fast), not for behavior tweaks.
+    """
+    # Common signals: WSL_INTEROP, WSL_DISTRO_NAME, and /proc/version contains Microsoft.
+    if os.environ.get("WSL_INTEROP") or os.environ.get("WSL_DISTRO_NAME"):
+        return True
+    try:
+        v = Path("/proc/version").read_text(errors="ignore").lower()
+        return "microsoft" in v or "wsl" in v
+    except Exception:
+        return False
+
+def has_kvm() -> bool:
+    """
+    VM runtime requires KVM for determinism.
+    """
+    try:
+        p = Path("/dev/kvm")
+        return p.exists() and os.access(str(p), os.R_OK | os.W_OK)
+    except Exception:
+        return False
+
+def assert_vm_runtime_supported() -> None:
+    """
+    Hard gate (fail-fast) when VM runtime is requested but host cannot support it deterministically.
+    """
+    if is_wsl2():
+        die(
+            "VM runtime is not supported on WSL2. "
+            "Run ai-netsim inside a Linux host/VM with KVM enabled (e.g., Windows Hyper-V + Ubuntu VM)."
+        )
+    if not has_kvm():
+        die(
+            "VM runtime requires KVM (/dev/kvm). "
+            "Run on a Linux host/VM with KVM enabled and accessible."
+        )
 
 def is_ip_literal(value: str) -> bool:
     try:

@@ -8,6 +8,7 @@ import yaml
 
 from netsim_common import (
     DEFAULT_IMAGES,
+    assert_vm_runtime_supported,
     die,
     is_ip_literal,
     validate_ip_literal,
@@ -149,10 +150,40 @@ def ensure_valid_topology(topo: dict) -> None:
             die(f"Duplicate node name: {n['name']}")
         names.add(n["name"])
 
+        # v1.5 VM Runtime Backend (foundational):
+        # - runtime is execution substrate only; must not change authority model.
+        # - runtime must be explicit in resolved topology; defaulting happens in resolve_topology().
+        runtime = (n.get("runtime") or "").strip().lower()
+        if runtime and runtime not in ("container", "vm"):
+            die(
+                f"Topology invalid: node '{n.get('name')}': "
+                f"runtime must be 'container' or 'vm' if provided"
+            )
+
+        if runtime == "vm":
+            # For v1.5 foundation, support SONiC VM via containerlab's 'sonic-vm' kind.
+            # Node image must be explicit (user-provided container image that packages the VM via vrnetlab).
+            if (n.get("type") or "").strip().lower() != "sonic-vm":
+                die(
+                    f"Topology invalid: node '{n.get('name')}': "
+                    f"runtime: vm currently requires type: sonic-vm (v1.5 foundation)"
+                )
+            img = n.get("image")
+            if not isinstance(img, str) or not img.strip():
+                die(
+                    f"Topology invalid: node '{n.get('name')}': "
+                    f"runtime: vm requires an explicit node.image (no implicit download)"
+                )
+
     # v1.x guardrail hardening (clarified):
     # - Topology MUST NOT encode routing mechanics (protocols/metrics/policy).
     # - FRR nodes MAY include metadata like asn/router_id, but these do not imply routing.
     # - If present, validate types deterministically.
+    # VM runtime availability gate (fail-fast before deploy).
+    # If any node requests runtime: vm, enforce deterministic host requirements now.
+    if any((str(n.get("runtime") or "").strip().lower() == "vm") for n in topo.get("nodes", []) if isinstance(n, dict)):
+        assert_vm_runtime_supported()
+
     for i, n in enumerate(topo["nodes"], start=1):
         if not isinstance(n, dict):
             continue
@@ -499,7 +530,16 @@ def topo_to_containerlab(topo: dict) -> dict:
         if not image:
             die(f"No default image for node type '{ntype}'. Set node.image explicitly.")
 
-        node_def = {"kind": "linux", "image": image}
+        # Runtime-aware kind selection (backend mapping; topology remains runtime-agnostic).
+        # v1.5 foundation: runtime: vm is supported for SONiC via containerlab 'sonic-vm' kind.
+        rt = (n.get("runtime") or "container").strip().lower()
+
+        if rt == "vm":
+            if ntype != "sonic-vm":
+                die(f"VM runtime currently supports only type 'sonic-vm' (got {ntype!r})")
+            node_def = {"kind": "sonic-vm", "image": image}
+        else:
+            node_def = {"kind": "linux", "image": image}
 
         binds: list[str] = []
 
@@ -575,6 +615,30 @@ def resolve_topology(topo: dict) -> dict:
     - fail fast if both kind and type are present in a test
     """
     resolved = yaml.safe_load(yaml.safe_dump(topo))  # simple deep copy
+
+    # ----------------------------
+    # 0a) Normalize node runtime (resolved output must be explicit)
+    # ----------------------------
+    for n in resolved.get("nodes", []) or []:
+        if not isinstance(n, dict):
+            continue
+
+        ntype = str(n.get("type") or "").strip().lower()
+
+        # Default runtime stays container (existing behavior).
+        rt = str(n.get("runtime") or "").strip().lower()
+
+        # v1.5 foundation default: sonic-vm implies runtime vm if omitted (visible in resolved output).
+        if not rt and ntype == "sonic-vm":
+            rt = "vm"
+
+        if not rt:
+            rt = "container"
+
+        if rt not in ("container", "vm"):
+            die(f"Topology invalid: node '{n.get('name')}': runtime must be 'container' or 'vm'")
+
+        n["runtime"] = rt
 
     # ----------------------------
     # 0) v1.5 EVPN Awareness (presence-only): normalize fabric.evpn into resolved output
