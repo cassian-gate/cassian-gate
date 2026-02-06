@@ -487,7 +487,7 @@ def topo_to_containerlab(topo: dict) -> dict:
     # node.image always overrides these.
     hard_defaults = {
         "host": "wbitt/network-multitool:latest",
-        "nft-fw": "netsim/nft-fw:latest",
+        "nft-fw": "ghcr.io/andrew-ai-netsim/nft-fw:latest",
         "frr": "frrouting/frr:latest",
     }
 
