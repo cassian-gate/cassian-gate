@@ -149,6 +149,69 @@ echo "OK: preflight.json valid"
 echo
 
 # ------------------------------------------------------------------------------
+echo "=== 4c) VM runtime precondition gate (env-aware) ==="
+# This is a deterministic PRECONDITION gate:
+# - If VM runtime is requested and the host is unsupported, validate must fail fast
+# - Container-only topologies must remain unaffected
+
+# Detect WSL2 deterministically (common signals)
+is_wsl2=0
+if [ -n "${WSL_INTEROP:-}" ] || [ -n "${WSL_DISTRO_NAME:-}" ]; then
+  is_wsl2=1
+else
+  if [ -r /proc/version ] && grep -qiE '(microsoft|wsl)' /proc/version; then
+    is_wsl2=1
+  fi
+fi
+
+# Detect KVM deterministically (must exist + be accessible)
+has_kvm=0
+if [ -e /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+  has_kvm=1
+fi
+
+# Capture validate output *and* true exit code (must not be masked by "|| true")
+set +e
+vm_out="$($NS validate topologies/vm-smoke.yaml 2>&1)"
+vm_rc=$?
+set -e
+
+if [ "$is_wsl2" -eq 1 ]; then
+  if [ "$vm_rc" -eq 0 ]; then
+    echo "FAIL: expected VM validate to fail on WSL2, but it succeeded"
+    exit 1
+  fi
+  echo "$vm_out" | grep -Fq "VM runtime is not supported on WSL2." || {
+    echo "FAIL: expected WSL2 VM runtime gate message"
+    echo "$vm_out"
+    exit 1
+  }
+  echo "OK: VM runtime gate triggers on WSL2"
+elif [ "$has_kvm" -eq 0 ]; then
+  if [ "$vm_rc" -eq 0 ]; then
+    echo "FAIL: expected VM validate to fail without /dev/kvm, but it succeeded"
+    exit 1
+  fi
+  echo "$vm_out" | grep -Fq "VM runtime requires KVM (/dev/kvm)." || {
+    echo "FAIL: expected /dev/kvm VM runtime gate message"
+    echo "$vm_out"
+    exit 1
+  }
+  echo "OK: VM runtime gate triggers without /dev/kvm"
+else
+  if [ "$vm_rc" -ne 0 ]; then
+    echo "FAIL: expected VM validate to pass on supported host, but it failed"
+    echo "$vm_out"
+    exit 1
+  fi
+  $NS gen topologies/vm-smoke.yaml >/dev/null
+  test -f labs/vm-smoke.clab.yaml
+  grep -nE 'kind:[[:space:]]*sonic-vm|image:' labs/vm-smoke.clab.yaml >/dev/null
+  echo "OK: VM validate + gen succeed on supported host"
+fi
+echo
+
+# ------------------------------------------------------------------------------
 echo "=== 5) Deploy lab (clean-state) ==="
 $NS up "$TOPO" --reconfigure >/dev/null
 echo "OK: lab deployed"
