@@ -4,7 +4,7 @@ nodes:
   - name: s1
     type: sonic-vm
     runtime: vm
-    image: YOUR_SONIC_VM_IMAGE_HERE
+    image: /home/ai-netsim/ai-netsim/images/sonic-vs.qcow2
 
 links: []
 

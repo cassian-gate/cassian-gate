@@ -4445,15 +4445,6 @@ def _finalize_results_schema(
     # 6) Hard failure block (additive; keep null when not used)
     results.setdefault("hard_failure", None)
 
-def _fmt_dur_s(dur_ms: object) -> str:
-    try:
-        ms = int(dur_ms)
-        if ms < 0:
-            return ""
-        return f"{ms/1000.0:.1f}s"
-    except Exception:
-        return ""
-
 def cmd_gen(args: argparse.Namespace) -> None:
     topo_path = (TOPO_DIR / args.topology) if not Path(args.topology).is_file() else Path(args.topology)
     out = write_containerlab_file(topo_path)

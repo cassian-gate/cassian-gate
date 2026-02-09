@@ -657,6 +657,30 @@ def verify_frr_ready(rt: Runtime, lab: str, rtr: str) -> None:
     if cp.returncode != 0:
         die(f"{rtr}: vtysh not ready")
 
+def verify_sonic_vm_ready(rt: Runtime, lab: str, node: str) -> None:
+    """
+    VM substrate readiness gate (v1.5).
+
+    This is intentionally minimal and deterministic:
+      - verifies the containerlab node instance is running
+      - verifies a QEMU process exists inside the wrapper container (vrnetlab-style)
+    No NOS CLI parsing. No semantic interpretation.
+    """
+    if not rt.is_running(lab, node):
+        die(f"{node}: VM substrate container is not running")
+
+    # vrnetlab-style containers run QEMU inside the container.
+    # Check once (no retries here; bounded behavior).
+    cp = rt.exec(
+        lab,
+        node,
+        ["sh", "-lc", "ps -eo comm,args | grep -E '[q]emu-system|[q]emu-kvm' >/dev/null"],
+        check=False,
+        capture_output=False,
+    )
+    if cp.returncode != 0:
+        die(f"{node}: VM substrate not ready (qemu process not detected)")
+
 def verify_lab_ready(rt: Runtime, topo: dict, lab: str) -> None:
     nodes = topo.get("nodes", []) or []
     for n in nodes:
@@ -673,6 +697,8 @@ def verify_lab_ready(rt: Runtime, topo: dict, lab: str) -> None:
             verify_fw_routed_ready(rt, lab, name)
         elif t == "frr":
             verify_frr_ready(rt, lab, name)
+        elif t == "sonic-vm":
+            verify_sonic_vm_ready(rt, lab, name)
 
 def fw_next_hops_from_links(topo: dict, fw_name: str) -> list[str]:
     """

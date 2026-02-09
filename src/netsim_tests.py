@@ -1777,6 +1777,15 @@ def validate_scenario_run_refs_or_die(topo: dict, scenario_ids: list[str] | None
             missing_sorted = ", ".join(sorted(missing))
             die(f"ERROR: requested scenario id(s) not found in topology: {missing_sorted}")
 
+def _fmt_dur_s(dur_ms: object) -> str:
+    try:
+        ms = int(dur_ms)
+        if ms < 0:
+            return ""
+        return f"{ms/1000.0:.1f}s"
+    except Exception:
+        return ""
+
 def _render_scenarios_summary(results: dict) -> str:
     scenarios = results.get("scenarios") or []
     if not isinstance(scenarios, list) or not scenarios:
