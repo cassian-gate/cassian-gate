@@ -4665,7 +4665,38 @@ def cmd_up(args: argparse.Namespace) -> None:
     configure_frr_interfaces_from_topology(rt, lab_name, topo)
 
 def cmd_down(args: argparse.Namespace) -> None:
-    out = lab_file_from_name(args.name)
+    """
+    Destroy a lab deterministically.
+
+    UX rule (deterministic, no guessing beyond explicit file existence):
+      - If arg looks like a topology file (*.yaml|*.yml) and exists (either as a path or under topologies/),
+        load it and use its 'name' as the lab name.
+      - Otherwise treat arg as a lab name (and strip a .yaml/.yml suffix if present).
+    """
+    raw = str(getattr(args, "name", "") or "").strip()
+    if not raw:
+        die("down requires a lab name or a topology filename (.yaml)")
+
+    # Mirror cmd_up resolution: accept either a real path or a name under topologies/
+    topo_path = (TOPO_DIR / raw) if not Path(raw).is_file() else Path(raw)
+
+    lab_name: str
+    if topo_path.suffix in (".yaml", ".yml") and topo_path.exists():
+        topo_doc = load_yaml(topo_path) or {}
+        lab_name = str((topo_doc.get("name") or "").strip())
+        if not lab_name:
+            die(f"Topology '{topo_path}' has no valid 'name' field (required).")
+    else:
+        # Treat as lab name; tolerate accidental ".yaml" suffix
+        if raw.endswith(".yaml") or raw.endswith(".yml"):
+            lab_name = Path(raw).stem.strip()
+        else:
+            lab_name = raw
+
+        if not lab_name:
+            die("down requires a non-empty lab name")
+
+    out = lab_file_from_name(lab_name)
 
     # Idempotent behavior (default):
     # If the generated containerlab file is missing, treat this as "already down".
@@ -4673,7 +4704,11 @@ def cmd_down(args: argparse.Namespace) -> None:
         print(f"INFO: no lab to destroy (file not found): {out}")
         return
 
+    # Destroy via containerlab (authoritative destroy mechanism)
     run(["sudo", "containerlab", "destroy", "-t", str(out)])
+
+    # Best-effort cleanup of lab artifact dir (may be root-owned due to containerlab)
+    run(["sudo", "rm", "-rf", str(lab_dir(lab_name))], check=False)
 
 def cmd_cleanup(args: argparse.Namespace) -> None:
     """
