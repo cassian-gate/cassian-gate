@@ -639,6 +639,7 @@ def resolve_topology(topo: dict) -> dict:
             die(f"Topology invalid: node '{n.get('name')}': runtime must be 'container' or 'vm'")
 
         n["runtime"] = rt
+        n["_runtime"] = rt
 
     # ----------------------------
     # 0) v1.5 EVPN Awareness (presence-only): normalize fabric.evpn into resolved output
