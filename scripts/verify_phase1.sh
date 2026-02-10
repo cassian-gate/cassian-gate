@@ -222,5 +222,68 @@ echo "=== 6) Run authoritative tests ==="
 $NS test "$LAB"
 echo "OK: tests passed"
 echo
+# ------------------------------------------------------------------------------
+echo "=== 6b) Optional: PCAP schema sanity (non-gating; schema-only) ==="
+# This is intentionally NON-GATING in terms of tool success/failure:
+# - We only validate schema/shape if evidence exists.
+# - We do NOT require .pcap file presence or tool_status == ok.
+# - If no PCAP evidence exists, we skip cleanly.
+
+pcap_root="${LABDIR}/artifacts/pcap"
+results_json="${LABDIR}/results.json"
+
+if [ -d "$pcap_root" ] || [ -f "$results_json" ]; then
+  # 1) Validate any *.meta.json files under artifacts/pcap (if present)
+  if [ -d "$pcap_root" ]; then
+    meta_count="$(find "$pcap_root" -type f -name '*.meta.json' 2>/dev/null | wc -l | tr -d ' ')"
+    if [ "${meta_count:-0}" -gt 0 ]; then
+      bad_meta=0
+      while IFS= read -r mf; do
+        # Must be valid JSON and contain required keys for supporting-evidence meta
+        jq -e '
+          .authority=="supporting_evidence"
+          and (.scenario_id|type=="string" and length>0)
+          and (.step_seq_start|type=="number")
+          and (.step_seq_stop|type=="number")
+          and (.target|type=="object" and (.node|type=="string" and length>0) and (.iface|type=="string" and length>0))
+          and (.tool|type=="string" and length>0)
+          and (.tool_status|type=="string" and length>0)
+          and (.bytes_written|type=="number")
+          and (.pcap_file|type=="string" and length>0)
+        ' "$mf" >/dev/null || { echo "WARN: invalid pcap meta schema: $mf"; bad_meta=1; }
+      done < <(find "$pcap_root" -type f -name '*.meta.json' 2>/dev/null | sort)
+      if [ "$bad_meta" -ne 0 ]; then
+        echo "FAIL: pcap meta schema sanity failed"
+        exit 1
+      fi
+      echo "OK: pcap meta schema sanity (${meta_count} files)"
+    else
+      echo "OK: pcap meta schema sanity (no meta files present)"
+    fi
+  fi
+
+  # 2) Validate results.json supporting_evidence pcap entries (if present)
+  if [ -f "$results_json" ]; then
+    pcap_ev_count="$(jq -r '.authority.supporting_evidence[]? | select(.type=="pcap") | 1' "$results_json" 2>/dev/null | wc -l | tr -d ' ' || true)"
+    if [ "${pcap_ev_count:-0}" -gt 0 ]; then
+      jq -e '
+        [ .authority.supporting_evidence[]? | select(.type=="pcap") ] as $xs
+        | ($xs | length) > 0
+        and ( all($xs[];
+            (.scenario_id|type=="string" and length>0)
+            and (.step|type=="number")
+            and (.tool_status|type=="string" and length>0)
+            and (.pcap_file|type=="string" and length>0)
+          ))
+      ' "$results_json" >/dev/null || { echo "FAIL: results.json pcap supporting_evidence schema invalid"; exit 1; }
+      echo "OK: results.json pcap supporting_evidence schema sanity (${pcap_ev_count} entries)"
+    else
+      echo "OK: results.json pcap supporting_evidence schema sanity (no pcap entries present)"
+    fi
+  fi
+else
+  echo "OK: PCAP schema sanity skipped (no artifacts/results present)"
+fi
+echo
 
 echo "✅ PHASE1 VERIFIED"

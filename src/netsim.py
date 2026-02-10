@@ -3576,13 +3576,27 @@ def cmd_test(args: argparse.Namespace) -> None:
                     started_at = time.time()
 
                     # Record state (evidence-only)
+                    # NOTE: when rotated (-C/-W) is used, tcpdump writes using the prefix passed to -w.
+                    # Different tcpdump builds may emit either <prefix>0 or <prefix>; we probe deterministically at stop.
+                    tmp_candidates: list[str] = []
+                    if rotated:
+                        try:
+                            tmp_candidates = [f"{tmp_prefix}0", str(tmp_prefix)]
+                        except Exception:
+                            tmp_candidates = []
+                    else:
+                        tmp_candidates = [str(tmp_pcap)]
+
                     st[key] = {
                         "active": True,
                         "node": node,
                         "iface": iface,
                         "pid": pid,
                         "started_at": started_at,
-                        "tmp_pcap": (f"{tmp_pcap}0" if rotated else tmp_pcap),
+                        "tmp_pcap": str(tmp_pcap),
+                        "tmp_prefix": str(tmp_prefix) if rotated else "",
+                        "rotated": bool(rotated),
+                        "tmp_candidates": tmp_candidates,
                         "pcap_path": str(pcap_path),
                         "meta_path": str(meta_path),
                         "step": int(step_idx),
@@ -3617,6 +3631,7 @@ def cmd_test(args: argparse.Namespace) -> None:
 
                     node = str(cur.get("node") or "")
                     pid = str(cur.get("pid") or "").strip()
+
                     tmp_pcap = str(cur.get("tmp_pcap") or "")
                     pcap_path = Path(str(cur.get("pcap_path") or ""))
                     meta_path = Path(str(cur.get("meta_path") or ""))
@@ -3626,9 +3641,45 @@ def cmd_test(args: argparse.Namespace) -> None:
                     tool_status = "ok"
                     err = ""
 
+                    # Deterministically probe candidate tmp filenames (rotated tcpdump may emit prefix or prefix0)
+                    candidates = cur.get("tmp_candidates")
+                    if not isinstance(candidates, list) or not candidates:
+                        candidates = [tmp_pcap]
+                    candidates = [str(x) for x in candidates if isinstance(x, str) and x.strip()]
+
+                    chosen_tmp = ""
+                    try:
+                        for cand in candidates:
+                            cp_exists = rt.exec(
+                                lab,
+                                node,
+                                ["sh", "-lc", f"test -f {cand} && echo OK || true"],
+                                check=False,
+                                capture_output=True,
+                            )
+                            out = ""
+                            if cp_exists.stdout:
+                                out = (
+                                    cp_exists.stdout.decode("utf-8", errors="replace")
+                                    if isinstance(cp_exists.stdout, (bytes, bytearray))
+                                    else str(cp_exists.stdout)
+                                )
+                            if "OK" in (out or ""):
+                                chosen_tmp = cand
+                                break
+                    except Exception as e:
+                        tool_status = "failed"
+                        err = _safe_stdio(str(e))
+
                     try:
                         if pid:
-                            rt.exec(lab, node, ["sh", "-lc", f"kill {pid} >/dev/null 2>&1 || true"], check=False, capture_output=True)
+                            rt.exec(
+                                lab,
+                                node,
+                                ["sh", "-lc", f"kill {pid} >/dev/null 2>&1 || true"],
+                                check=False,
+                                capture_output=True,
+                            )
                         else:
                             # Best effort: kill by filename pattern (still scoped to step id)
                             rt.exec(
@@ -3640,22 +3691,33 @@ def cmd_test(args: argparse.Namespace) -> None:
                             )
                     except Exception as e:
                         tool_status = "failed"
-                        err = _safe_stdio(str(e))
+                        if not err:
+                            err = _safe_stdio(str(e))
 
-                    # Copy out if file exists (runtime helper already present)
+                    # Copy out if a tmp file was found (evidence-only, non-gating)
                     bytes_written = 0
                     try:
-                        rt.exec(lab, node, ["sh", "-lc", f"test -f {tmp_pcap}"], check=False, capture_output=False)
-                        rt.copy_from_node(lab, node, tmp_pcap, str(pcap_path))
-
-                        try:
-                            bytes_written = int(pcap_path.stat().st_size)
-                        except Exception:
-                            bytes_written = 0
+                        if not chosen_tmp:
+                            tool_status = "failed" if tool_status == "ok" else tool_status
+                            if not err:
+                                err = "pcap tmp file not found in node"
+                        else:
+                            rt.copy_from_node(lab, node, chosen_tmp, str(pcap_path))
+                            try:
+                                bytes_written = int(pcap_path.stat().st_size)
+                            except Exception:
+                                bytes_written = 0
                     except Exception as e:
                         tool_status = "failed" if tool_status == "ok" else tool_status
                         if not err:
                             err = _safe_stdio(str(e))
+
+                    # attempt to remove tmp pcaps (never fail)
+                    try:
+                        for cand in candidates:
+                            rt.exec(lab, node, ["sh", "-lc", f"rm -f {cand} 2>/dev/null || true"], check=False, capture_output=False)
+                    except Exception:
+                        pass
 
                     # Write meta json (host side)
                     meta = {
@@ -3683,10 +3745,27 @@ def cmd_test(args: argparse.Namespace) -> None:
 
                     write_file(meta_path, json.dumps(meta, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
 
+                    # Top-level evidence index entry (supporting evidence only; non-gating)
+                    try:
+                        results.setdefault("authority", {}).setdefault("supporting_evidence", []).append(
+                            {
+                                "type": "pcap",
+                                "authority": "supporting_evidence",
+                                "scenario_id": str(scenario_id),
+                                "step": int(step_idx),
+                                "tool_status": str(tool_status),
+                                "error": str(err or ""),
+                                "pcap_file": str(pcap_path.relative_to(lab_dir(str(lab)))),
+                            }
+                        )
+                    except Exception:
+                        pass
+
                     # Clear active capture
                     st[key] = {"active": False}
 
                     continue
+
             # -------------------------
             # unknown step
             # -------------------------

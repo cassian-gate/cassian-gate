@@ -2261,6 +2261,22 @@ def execute_scenario(
             if err:
                 step_rec["pcap"]["error"] = err
 
+            # also emit top-level supporting evidence (non-gating)
+            try:
+                results.setdefault("authority", {}).setdefault("supporting_evidence", []).append(
+                    {
+                        "type": "pcap",
+                        "authority": "supporting_evidence",
+                        "scenario_id": sid,
+                        "step": int(_pcap_step_seq(idx)),
+                        "tool_status": tool_status,
+                        "error": err if err else "",
+                        "pcap_file": str(Path(out_pcap).relative_to(lab_dir(lab))),
+                    }
+                )
+            except Exception:
+                pass
+
             step_rec["duration_ms"] = int((time.time() - started) * 1000)
             scen_rec["steps"].append(step_rec)
 
