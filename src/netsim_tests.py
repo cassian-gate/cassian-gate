@@ -1126,13 +1126,312 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
             if not step:
                 die(f"{sctx}: empty step")
 
-            allowed_step_keys = {"run", "fault", "wait_for", "wait_for_bgp"}
-            keys = set(step)
-            unknown_step = keys - allowed_step_keys
-            if unknown_step:
-                die(f"{sctx}: unknown keys {sorted(unknown_step)}")
-            if len(keys) != 1:
-                die(f"{sctx}: step must contain exactly one of {sorted(allowed_step_keys)}")
+                        # ---- pcap_start ----
+            if "pcap_start" in step:
+                ps = step.get("pcap_start")
+                if not isinstance(ps, dict):
+                    die(f"{sctx}.pcap_start: must be a dict")
+
+                allowed_ps = {"target", "label", "filter", "max_seconds", "max_kb", "snaplen", "mode"}
+                unknown = set(ps) - allowed_ps
+                if unknown:
+                    die(f"{sctx}.pcap_start: unknown keys {sorted(unknown)}")
+
+                if "target" not in ps:
+                    die(f"{sctx}.pcap_start: missing required key 'target'")
+
+                # mode (v1.5): interface only
+                mode = ps.get("mode")
+                if mode is not None:
+                    if not isinstance(mode, str) or not mode.strip():
+                        die(f"{sctx}.pcap_start.mode: must be a non-empty string")
+                    if mode.strip() != "interface":
+                        die(f"{sctx}.pcap_start.mode: only 'interface' is supported (got '{mode.strip()}')")
+
+                # label (sanitized later; validate shape only here)
+                label = ps.get("label")
+                if label is not None:
+                    if not isinstance(label, str) or not label.strip():
+                        die(f"{sctx}.pcap_start.label: must be a non-empty string")
+
+                # filter (validate shape only; NEVER store in filenames/results)
+                flt = ps.get("filter")
+                if flt is not None:
+                    if not isinstance(flt, str) or not flt.strip():
+                        die(f"{sctx}.pcap_start.filter: must be a non-empty string")
+
+                # bounds (explicit if provided; defaults handled elsewhere if added)
+                max_seconds = ps.get("max_seconds")
+                if max_seconds is not None:
+                    if not isinstance(max_seconds, int) or max_seconds < 1:
+                        die(f"{sctx}.pcap_start.max_seconds: must be an int >= 1")
+
+                max_kb = ps.get("max_kb")
+                if max_kb is not None:
+                    if not isinstance(max_kb, int) or max_kb < 1:
+                        die(f"{sctx}.pcap_start.max_kb: must be an int >= 1")
+
+                snaplen = ps.get("snaplen")
+                if snaplen is not None:
+                    if not isinstance(snaplen, int) or snaplen < 1:
+                        die(f"{sctx}.pcap_start.snaplen: must be an int >= 1")
+
+                # target schema (explicit, deterministic)
+                tgt = ps.get("target")
+                if not isinstance(tgt, dict):
+                    die(f"{sctx}.pcap_start.target: must be a dict")
+
+                tgt_keys = set(tgt)
+                is_iface = ("node" in tgt_keys) or ("iface" in tgt_keys)
+                is_link = ("a" in tgt_keys) or ("b" in tgt_keys) or ("a_if" in tgt_keys) or ("b_if" in tgt_keys)
+
+                if is_iface and is_link:
+                    die(f"{sctx}.pcap_start.target: ambiguous target shape (choose interface OR link form)")
+                if not is_iface and not is_link:
+                    die(f"{sctx}.pcap_start.target: must be interface target (node+iface) or link target (a+b with optional a_if/b_if)")
+
+                # Interface target: node + iface
+                if is_iface:
+                    allowed_t = {"node", "iface"}
+                    unknown_t = tgt_keys - allowed_t
+                    if unknown_t:
+                        die(f"{sctx}.pcap_start.target: unknown keys {sorted(unknown_t)}")
+
+                    node = tgt.get("node")
+                    iface = tgt.get("iface")
+                    if not isinstance(node, str) or not node.strip():
+                        die(f"{sctx}.pcap_start.target.node: must be a non-empty string")
+                    if not isinstance(iface, str) or not iface.strip():
+                        die(f"{sctx}.pcap_start.target.iface: must be a non-empty string")
+
+                    node_s = node.strip()
+                    iface_s = iface.strip()
+
+                    # node must exist
+                    nodes = topo.get("nodes") or []
+                    by_name: dict[str, dict] = {
+                        n.get("name"): n
+                        for n in nodes
+                        if isinstance(n, dict) and isinstance(n.get("name"), str)
+                    }
+                    if node_s not in by_name:
+                        die(f"{sctx}.pcap_start.target.node: unknown node '{node_s}'")
+
+                    # iface must exist on that node in topo['links'] endpoints
+                    links = topo.get("links", []) or []
+
+                    def _parse_ep(ep: str) -> tuple[str, str] | None:
+                        if not isinstance(ep, str) or ":" not in ep:
+                            return None
+                        n, ifx = ep.split(":", 1)
+                        n = n.strip()
+                        ifx = ifx.strip()
+                        if not n or not ifx:
+                            return None
+                        return n, ifx
+
+                    node_ifaces: set[str] = set()
+                    for link in links:
+                        eps = link.get("endpoints")
+                        if not isinstance(eps, list) or len(eps) != 2:
+                            continue
+                        for ep in eps:
+                            p = _parse_ep(ep)
+                            if not p:
+                                continue
+                            n, ifx = p
+                            if n == node_s:
+                                node_ifaces.add(ifx)
+
+                    if iface_s not in node_ifaces:
+                        known = ", ".join(sorted(node_ifaces)) if node_ifaces else "(none)"
+                        die(
+                            f"{sctx}.pcap_start.target: interface '{iface_s}' not found on node '{node_s}'. "
+                            f"Known interfaces from links: {known}"
+                        )
+
+                # Link target: a + b, optional a_if/b_if (both-or-none), must be unambiguous if omitted
+                else:
+                    allowed_t = {"a", "b", "a_if", "b_if"}
+                    unknown_t = tgt_keys - allowed_t
+                    if unknown_t:
+                        die(f"{sctx}.pcap_start.target: unknown keys {sorted(unknown_t)}")
+
+                    for k in ("a", "b"):
+                        v = tgt.get(k)
+                        if not isinstance(v, str) or not v.strip():
+                            die(f"{sctx}.pcap_start.target.{k}: must be a non-empty string")
+
+                    a_if = tgt.get("a_if")
+                    b_if = tgt.get("b_if")
+
+                    # both-or-none
+                    if (a_if is None) ^ (b_if is None):
+                        die(f"{sctx}.pcap_start.target: must provide both a_if and b_if (or neither)")
+
+                    if a_if is not None:
+                        if not isinstance(a_if, str) or not a_if.strip():
+                            die(f"{sctx}.pcap_start.target.a_if: must be a non-empty string")
+                        if not isinstance(b_if, str) or not b_if.strip():
+                            die(f"{sctx}.pcap_start.target.b_if: must be a non-empty string")
+
+                    a = str(tgt.get("a") or "").strip()
+                    b = str(tgt.get("b") or "").strip()
+                    matches = _link_matches(a, b)
+
+                    if a_if is None and b_if is None:
+                        if len(matches) == 0:
+                            die(f"{sctx}.pcap_start.target: no declared link found between {a} and {b}")
+                        if len(matches) > 1:
+                            die(
+                                f"{sctx}.pcap_start.target: ambiguous links between {a} and {b} "
+                                f"({len(matches)} found); provide a_if/b_if"
+                            )
+                    else:
+                        a_if_s = str(a_if).strip()
+                        b_if_s = str(b_if).strip()
+                        if (a_if_s, b_if_s) not in matches:
+                            known = ", ".join([f"{a}:{x}<->{b}:{y}" for (x, y) in matches]) or "(none)"
+                            die(
+                                f"{sctx}.pcap_start.target: provided {a}:{a_if_s}<->{b}:{b_if_s} "
+                                f"does not match any declared link between {a} and {b}. "
+                                f"Known links: {known}"
+                            )
+
+            # ---- pcap_stop ----
+            if "pcap_stop" in step:
+                ps = step.get("pcap_stop")
+                if ps is None:
+                    ps = {}
+                if not isinstance(ps, dict):
+                    die(f"{sctx}.pcap_stop: must be a dict")
+
+                allowed_ps = {"target"}
+                unknown = set(ps) - allowed_ps
+                if unknown:
+                    die(f"{sctx}.pcap_stop: unknown keys {sorted(unknown)}")
+
+                tgt = ps.get("target")
+                if tgt is None:
+                    # stop-all is allowed (resolved at runtime)
+                    pass
+                else:
+                    if not isinstance(tgt, dict):
+                        die(f"{sctx}.pcap_stop.target: must be a dict")
+
+                    tgt_keys = set(tgt)
+                    is_iface = ("node" in tgt_keys) or ("iface" in tgt_keys)
+                    is_link = ("a" in tgt_keys) or ("b" in tgt_keys) or ("a_if" in tgt_keys) or ("b_if" in tgt_keys)
+
+                    if is_iface and is_link:
+                        die(f"{sctx}.pcap_stop.target: ambiguous target shape (choose interface OR link form)")
+                    if not is_iface and not is_link:
+                        die(f"{sctx}.pcap_stop.target: must be interface target (node+iface) or link target (a+b with optional a_if/b_if)")
+
+                    # For v1.5: reuse the same validation rules as pcap_start.target.
+                    # We validate resolvability only (does not start capture).
+                    if is_iface:
+                        allowed_t = {"node", "iface"}
+                        unknown_t = tgt_keys - allowed_t
+                        if unknown_t:
+                            die(f"{sctx}.pcap_stop.target: unknown keys {sorted(unknown_t)}")
+
+                        node = tgt.get("node")
+                        iface = tgt.get("iface")
+                        if not isinstance(node, str) or not node.strip():
+                            die(f"{sctx}.pcap_stop.target.node: must be a non-empty string")
+                        if not isinstance(iface, str) or not iface.strip():
+                            die(f"{sctx}.pcap_stop.target.iface: must be a non-empty string")
+
+                        node_s = node.strip()
+                        iface_s = iface.strip()
+
+                        nodes = topo.get("nodes") or []
+                        by_name: dict[str, dict] = {
+                            n.get("name"): n
+                            for n in nodes
+                            if isinstance(n, dict) and isinstance(n.get("name"), str)
+                        }
+                        if node_s not in by_name:
+                            die(f"{sctx}.pcap_stop.target.node: unknown node '{node_s}'")
+
+                        links = topo.get("links", []) or []
+
+                        def _parse_ep(ep: str) -> tuple[str, str] | None:
+                            if not isinstance(ep, str) or ":" not in ep:
+                                return None
+                            n, ifx = ep.split(":", 1)
+                            n = n.strip()
+                            ifx = ifx.strip()
+                            if not n or not ifx:
+                                return None
+                            return n, ifx
+
+                        node_ifaces: set[str] = set()
+                        for link in links:
+                            eps = link.get("endpoints")
+                            if not isinstance(eps, list) or len(eps) != 2:
+                                continue
+                            for ep in eps:
+                                p = _parse_ep(ep)
+                                if not p:
+                                    continue
+                                n, ifx = p
+                                if n == node_s:
+                                    node_ifaces.add(ifx)
+
+                        if iface_s not in node_ifaces:
+                            known = ", ".join(sorted(node_ifaces)) if node_ifaces else "(none)"
+                            die(
+                                f"{sctx}.pcap_stop.target: interface '{iface_s}' not found on node '{node_s}'. "
+                                f"Known interfaces from links: {known}"
+                            )
+
+                    else:
+                        allowed_t = {"a", "b", "a_if", "b_if"}
+                        unknown_t = tgt_keys - allowed_t
+                        if unknown_t:
+                            die(f"{sctx}.pcap_stop.target: unknown keys {sorted(unknown_t)}")
+
+                        for k in ("a", "b"):
+                            v = tgt.get(k)
+                            if not isinstance(v, str) or not v.strip():
+                                die(f"{sctx}.pcap_stop.target.{k}: must be a non-empty string")
+
+                        a_if = tgt.get("a_if")
+                        b_if = tgt.get("b_if")
+
+                        if (a_if is None) ^ (b_if is None):
+                            die(f"{sctx}.pcap_stop.target: must provide both a_if and b_if (or neither)")
+
+                        if a_if is not None:
+                            if not isinstance(a_if, str) or not a_if.strip():
+                                die(f"{sctx}.pcap_stop.target.a_if: must be a non-empty string")
+                            if not isinstance(b_if, str) or not b_if.strip():
+                                die(f"{sctx}.pcap_stop.target.b_if: must be a non-empty string")
+
+                        a = str(tgt.get("a") or "").strip()
+                        b = str(tgt.get("b") or "").strip()
+                        matches = _link_matches(a, b)
+
+                        if a_if is None and b_if is None:
+                            if len(matches) == 0:
+                                die(f"{sctx}.pcap_stop.target: no declared link found between {a} and {b}")
+                            if len(matches) > 1:
+                                die(
+                                    f"{sctx}.pcap_stop.target: ambiguous links between {a} and {b} "
+                                    f"({len(matches)} found); provide a_if/b_if"
+                                )
+                        else:
+                            a_if_s = str(a_if).strip()
+                            b_if_s = str(b_if).strip()
+                            if (a_if_s, b_if_s) not in matches:
+                                known = ", ".join([f"{a}:{x}<->{b}:{y}" for (x, y) in matches]) or "(none)"
+                                die(
+                                    f"{sctx}.pcap_stop.target: provided {a}:{a_if_s}<->{b}:{b_if_s} "
+                                    f"does not match any declared link between {a} and {b}. "
+                                    f"Known links: {known}"
+                                )
 
             # ---- run ----
             if "run" in step:
