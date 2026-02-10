@@ -22,6 +22,7 @@ import json
 import ipaddress
 import re
 import hashlib
+import shlex
 import os, time
 from typing import Any
 
@@ -175,6 +176,13 @@ def _truncate(s: str, limit: int = _CANDIDATE_STDIO_TRUNC) -> str:
         return s
     extra = len(s) - limit
     return s[:limit] + f"\n...<truncated {extra} chars>"
+
+def _shell_quote(x: Any) -> str:
+    """
+    Deterministic shell-arg quoting for building a shell string.
+    Used only for tcpdump invocation string assembly.
+    """
+    return shlex.quote(str(x))
 
 def _sanitize_text(s: str) -> str:
     """
@@ -1801,7 +1809,6 @@ def cmd_test(args: argparse.Namespace) -> None:
         return
     
     import json
-    import time
 
     lab = args.lab
     # ------------------------------------------------------------
@@ -3458,6 +3465,307 @@ def cmd_test(args: argparse.Namespace) -> None:
                         break
 
                 continue
+
+            # -------------------------
+            # PCAP (supporting evidence only)
+            # -------------------------
+            if "pcap_start" in step or "pcap_stop" in step:
+                # NOTE: cmd_test already imports json/time; do not re-import here because it shadows
+                # the outer 'time' and breaks earlier time.time() usage (UnboundLocalError).
+                from netsim_artifacts import pcap_session_paths, write_file
+
+                # Non-gating invariant: any runtime/pcap failure becomes evidence only.
+                # Scenario must continue.
+                try:
+                    results.setdefault("authority", {}).setdefault("supporting_evidence", [])
+                except Exception:
+                    # Never allow evidence indexing to break execution
+                    pass
+
+                # One active capture per scenario (v1.5 rule)
+                if not hasattr(run_scenario, "_pcap_state"):
+                    run_scenario._pcap_state = {}  # type: ignore[attr-defined]
+
+                st = run_scenario._pcap_state  # type: ignore[attr-defined]
+                key = str(scenario_id)
+
+                if "pcap_start" in step:
+                    cfg = step.get("pcap_start") or {}
+                    target = cfg.get("target") or {}
+
+                    # Validation should have enforced shapes; at runtime, treat as non-gating
+                    node = str((target.get("node") or "")).strip()
+                    iface = str((target.get("iface") or "")).strip()
+
+                    label = cfg.get("label")
+                    max_seconds = cfg.get("max_seconds")
+                    max_kb = cfg.get("max_kb")
+                    snaplen = cfg.get("snaplen")
+                    filt = cfg.get("filter")
+
+                    # If already active: evidence-only failure, do not start a second
+                    if st.get(key, {}).get("active"):
+                        try:
+                            results.setdefault("authority", {}).setdefault("supporting_evidence", []).append(
+                                {
+                                    "type": "pcap",
+                                    "authority": "supporting_evidence",
+                                    "scenario_id": str(scenario_id),
+                                    "step": int(step_index),
+                                    "tool_status": "failed",
+                                    "error": "pcap_start while capture active (one per scenario allowed)",
+                                }
+                            )
+                        except Exception:
+                            pass
+                        continue
+
+                    # Determine deterministic artifact paths (host side)
+                    pcap_path, meta_path = pcap_session_paths(
+                        lab_name=str(lab),
+                        scenario_id=str(scenario_id),
+                        step_seq=int(step_idx),
+                        label=str(label) if label is not None else None,
+                        node=node,
+                        iface=iface,
+                    )
+                    pcap_path.parent.mkdir(parents=True, exist_ok=True)
+
+                    # Container temp path (deterministic per step)
+                    tmp_pcap = f"/tmp/netsim_pcap_{int(step_idx):03d}.pcap"
+
+                    # Build tcpdump command (no stdout packet printing)
+                    # NOTE: do not store filter text in filenames/meta by default.
+                    cmd = ["sh", "-lc"]
+                    td = ["tcpdump", "-i", iface, "-U", "-w", tmp_pcap]
+
+                    if snaplen is not None:
+                        td += ["-s", str(int(snaplen))]
+
+                    # Size cap: use -C (MB) + single file (-W 1) with stable prefix;
+                    # tcpdump appends '0' when -C/-W used.
+                    # We keep it simple here: if max_kb set, convert to MB floor(>=1).
+                    rotated = False
+                    if max_kb is not None:
+                        try:
+                            mb = max(1, int(int(max_kb) / 1024))
+                            # use prefix without extension; tcpdump will create <prefix>0
+                            tmp_prefix = f"/tmp/netsim_pcap_{int(step_idx):03d}"
+                            td = ["tcpdump", "-i", iface, "-U", "-C", str(mb), "-W", "1", "-w", tmp_prefix]
+                            rotated = True
+                        except Exception:
+                            pass
+
+                    # Optional filter (BPF): append as final tokens
+                    if filt:
+                        td += [str(filt)]
+
+                    # Duration cap: run under timeout if provided
+                    if max_seconds is not None:
+                        td = ["timeout", str(int(max_seconds))] + td
+
+                    # Background + pid capture
+                    sh = " ".join([_shell_quote(x) for x in td]) + " >/dev/null 2>&1 & echo $!"
+                    cp = rt.exec(lab, node, cmd + [sh], check=False, capture_output=True)
+
+                    pid = ""
+                    if cp.stdout:
+                        out = cp.stdout.decode("utf-8", errors="replace") if isinstance(cp.stdout, (bytes, bytearray)) else str(cp.stdout)
+                        pid = (out or "").strip().splitlines()[-1].strip()
+
+                    started_at = time.time()
+
+                    # Record state (evidence-only)
+                    # NOTE: when rotated (-C/-W) is used, tcpdump writes using the prefix passed to -w.
+                    # Different tcpdump builds may emit either <prefix>0 or <prefix>; we probe deterministically at stop.
+                    tmp_candidates: list[str] = []
+                    if rotated:
+                        try:
+                            tmp_candidates = [f"{tmp_prefix}0", str(tmp_prefix)]
+                        except Exception:
+                            tmp_candidates = []
+                    else:
+                        tmp_candidates = [str(tmp_pcap)]
+
+                    st[key] = {
+                        "active": True,
+                        "node": node,
+                        "iface": iface,
+                        "pid": pid,
+                        "started_at": started_at,
+                        "tmp_pcap": str(tmp_pcap),
+                        "tmp_prefix": str(tmp_prefix) if rotated else "",
+                        "rotated": bool(rotated),
+                        "tmp_candidates": tmp_candidates,
+                        "pcap_path": str(pcap_path),
+                        "meta_path": str(meta_path),
+                        "step": int(step_idx),
+                        "max_seconds": int(max_seconds) if max_seconds is not None else None,
+                        "max_kb": int(max_kb) if max_kb is not None else None,
+                        "snaplen": int(snaplen) if snaplen is not None else None,
+                    }
+
+                    # Non-authoritative index entry
+                    try:
+                        results.setdefault("authority", {}).setdefault("supporting_evidence", []).append(
+                            {
+                                "type": "pcap",
+                                "authority": "supporting_evidence",
+                                "scenario_id": str(scenario_id),
+                                "step": int(step_index),
+                                "tool_status": "ok" if cp.returncode == 0 else "failed",
+                                "error": "" if cp.returncode == 0 else "tcpdump start failed",
+                            }
+                        )
+                    except Exception:
+                        pass
+
+                    continue
+
+                # pcap_stop
+                if "pcap_stop" in step:
+                    cur = st.get(key) or {}
+                    if not cur.get("active"):
+                        # Stop-without-start: evidence-only, ignore
+                        continue
+
+                    node = str(cur.get("node") or "")
+                    pid = str(cur.get("pid") or "").strip()
+
+                    tmp_pcap = str(cur.get("tmp_pcap") or "")
+                    pcap_path = Path(str(cur.get("pcap_path") or ""))
+                    meta_path = Path(str(cur.get("meta_path") or ""))
+
+                    stopped_at = time.time()
+
+                    tool_status = "ok"
+                    err = ""
+
+                    # Deterministically probe candidate tmp filenames (rotated tcpdump may emit prefix or prefix0)
+                    candidates = cur.get("tmp_candidates")
+                    if not isinstance(candidates, list) or not candidates:
+                        candidates = [tmp_pcap]
+                    candidates = [str(x) for x in candidates if isinstance(x, str) and x.strip()]
+
+                    chosen_tmp = ""
+                    try:
+                        for cand in candidates:
+                            cp_exists = rt.exec(
+                                lab,
+                                node,
+                                ["sh", "-lc", f"test -f {cand} && echo OK || true"],
+                                check=False,
+                                capture_output=True,
+                            )
+                            out = ""
+                            if cp_exists.stdout:
+                                out = (
+                                    cp_exists.stdout.decode("utf-8", errors="replace")
+                                    if isinstance(cp_exists.stdout, (bytes, bytearray))
+                                    else str(cp_exists.stdout)
+                                )
+                            if "OK" in (out or ""):
+                                chosen_tmp = cand
+                                break
+                    except Exception as e:
+                        tool_status = "failed"
+                        err = _safe_stdio(str(e))
+
+                    try:
+                        if pid:
+                            rt.exec(
+                                lab,
+                                node,
+                                ["sh", "-lc", f"kill {pid} >/dev/null 2>&1 || true"],
+                                check=False,
+                                capture_output=True,
+                            )
+                        else:
+                            # Best effort: kill by filename pattern (still scoped to step id)
+                            rt.exec(
+                                lab,
+                                node,
+                                ["sh", "-lc", f"pkill -f 'tcpdump.*netsim_pcap_{int(cur.get('step_seq_start')):03d}' >/dev/null 2>&1 || true"],
+                                check=False,
+                                capture_output=True,
+                            )
+                    except Exception as e:
+                        tool_status = "failed"
+                        if not err:
+                            err = _safe_stdio(str(e))
+
+                    # Copy out if a tmp file was found (evidence-only, non-gating)
+                    bytes_written = 0
+                    try:
+                        if not chosen_tmp:
+                            tool_status = "failed" if tool_status == "ok" else tool_status
+                            if not err:
+                                err = "pcap tmp file not found in node"
+                        else:
+                            rt.copy_from_node(lab, node, chosen_tmp, str(pcap_path))
+                            try:
+                                bytes_written = int(pcap_path.stat().st_size)
+                            except Exception:
+                                bytes_written = 0
+                    except Exception as e:
+                        tool_status = "failed" if tool_status == "ok" else tool_status
+                        if not err:
+                            err = _safe_stdio(str(e))
+
+                    # attempt to remove tmp pcaps (never fail)
+                    try:
+                        for cand in candidates:
+                            rt.exec(lab, node, ["sh", "-lc", f"rm -f {cand} 2>/dev/null || true"], check=False, capture_output=False)
+                    except Exception:
+                        pass
+
+                    # Write meta json (host side)
+                    meta = {
+                        "authority": "supporting_evidence",
+                        "scenario_id": str(scenario_id),
+                        "step_seq_start": int(cur.get("step_seq_start") or 0),
+                        "step_seq_stop": int(step_idx),
+                        "target": {"node": str(cur.get("node") or ""), "iface": str(cur.get("iface") or "")},
+                        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(cur.get("started_at") or stopped_at))),
+                        "stopped_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stopped_at)),
+                        "duration_s": float(stopped_at - float(cur.get("started_at") or stopped_at)),
+                        "tool": "tcpdump",
+                        "tool_status": tool_status,
+                        "bytes_written": int(bytes_written),
+                        "pcap_file": str(pcap_path.relative_to(lab_dir(str(lab)))),
+                    }
+                    if cur.get("snaplen") is not None:
+                        meta["snaplen"] = int(cur["snaplen"])
+                    if cur.get("max_seconds") is not None:
+                        meta["max_seconds"] = int(cur["max_seconds"])
+                    if cur.get("max_kb") is not None:
+                        meta["max_kb"] = int(cur["max_kb"])
+                    if err:
+                        meta["error"] = str(err)
+
+                    write_file(meta_path, json.dumps(meta, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
+
+                    # Top-level evidence index entry (supporting evidence only; non-gating)
+                    try:
+                        results.setdefault("authority", {}).setdefault("supporting_evidence", []).append(
+                            {
+                                "type": "pcap",
+                                "authority": "supporting_evidence",
+                                "scenario_id": str(scenario_id),
+                                "step": int(step_idx),
+                                "tool_status": str(tool_status),
+                                "error": str(err or ""),
+                                "pcap_file": str(pcap_path.relative_to(lab_dir(str(lab)))),
+                            }
+                        )
+                    except Exception:
+                        pass
+
+                    # Clear active capture
+                    st[key] = {"active": False}
+
+                    continue
+
             # -------------------------
             # unknown step
             # -------------------------

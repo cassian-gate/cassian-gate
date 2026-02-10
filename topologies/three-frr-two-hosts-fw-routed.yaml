@@ -180,6 +180,16 @@ scenarios:
     steps:
       - run: h1_to_h2_ping
 
+      - pcap_start:
+          target:
+            node: h1
+            iface: eth1
+          label: smoke
+          max_seconds: 10
+          max_kb: 256
+          snaplen: 96
+          mode: interface
+
       - wait_for:
           type: ping
           src_if: eth1
@@ -190,5 +200,7 @@ scenarios:
           interval_s: 1
           count: 3
           per_attempt_timeout_s: 2
+
+      - pcap_stop: {}
 
       - run: h1_to_h2_ping

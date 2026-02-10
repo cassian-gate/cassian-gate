@@ -17,6 +17,52 @@ def lab_dir(lab_name: str) -> Path:
 def node_cfg_dir(lab_name: str, node: str) -> Path:
     return lab_dir(lab_name) / "nodes" / node
 
+def _sanitize_token(s: str) -> str:
+    """
+    Deterministic filename token sanitizer.
+    Allowed: [A-Za-z0-9._-]
+    Others replaced with '_'.
+    """
+    out: list[str] = []
+    for ch in str(s or ""):
+        if ch.isalnum() or ch in "._-":
+            out.append(ch)
+        else:
+            out.append("_")
+    # avoid empty tokens
+    return "".join(out) or "x"
+
+
+def pcap_dir(lab_name: str, scenario_id: str) -> Path:
+    """
+    labs/clab-<lab>/artifacts/pcap/<scenario_id>/
+    """
+    return lab_dir(lab_name) / "artifacts" / "pcap" / _sanitize_token(scenario_id)
+
+
+def pcap_session_paths(
+    *,
+    lab_name: str,
+    scenario_id: str,
+    step_seq: int,
+    label: str | None,
+    node: str,
+    iface: str,
+) -> tuple[Path, Path]:
+    """
+    Returns: (pcap_path, meta_path)
+      <seq>_<label>_<node>_<iface>.pcap
+      <seq>_<label>_<node>_<iface>.meta.json
+    """
+    seq = f"{int(step_seq):03d}"
+    lab = _sanitize_token(label or "capture")
+    n = _sanitize_token(node)
+    i = _sanitize_token(iface)
+
+    base = f"{seq}_{lab}_{n}_{i}"
+    outdir = pcap_dir(lab_name, scenario_id)
+    return (outdir / f"{base}.pcap", outdir / f"{base}.meta.json")
+
 def write_file(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 

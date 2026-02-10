@@ -1126,13 +1126,312 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
             if not step:
                 die(f"{sctx}: empty step")
 
-            allowed_step_keys = {"run", "fault", "wait_for", "wait_for_bgp"}
-            keys = set(step)
-            unknown_step = keys - allowed_step_keys
-            if unknown_step:
-                die(f"{sctx}: unknown keys {sorted(unknown_step)}")
-            if len(keys) != 1:
-                die(f"{sctx}: step must contain exactly one of {sorted(allowed_step_keys)}")
+                        # ---- pcap_start ----
+            if "pcap_start" in step:
+                ps = step.get("pcap_start")
+                if not isinstance(ps, dict):
+                    die(f"{sctx}.pcap_start: must be a dict")
+
+                allowed_ps = {"target", "label", "filter", "max_seconds", "max_kb", "snaplen", "mode"}
+                unknown = set(ps) - allowed_ps
+                if unknown:
+                    die(f"{sctx}.pcap_start: unknown keys {sorted(unknown)}")
+
+                if "target" not in ps:
+                    die(f"{sctx}.pcap_start: missing required key 'target'")
+
+                # mode (v1.5): interface only
+                mode = ps.get("mode")
+                if mode is not None:
+                    if not isinstance(mode, str) or not mode.strip():
+                        die(f"{sctx}.pcap_start.mode: must be a non-empty string")
+                    if mode.strip() != "interface":
+                        die(f"{sctx}.pcap_start.mode: only 'interface' is supported (got '{mode.strip()}')")
+
+                # label (sanitized later; validate shape only here)
+                label = ps.get("label")
+                if label is not None:
+                    if not isinstance(label, str) or not label.strip():
+                        die(f"{sctx}.pcap_start.label: must be a non-empty string")
+
+                # filter (validate shape only; NEVER store in filenames/results)
+                flt = ps.get("filter")
+                if flt is not None:
+                    if not isinstance(flt, str) or not flt.strip():
+                        die(f"{sctx}.pcap_start.filter: must be a non-empty string")
+
+                # bounds (explicit if provided; defaults handled elsewhere if added)
+                max_seconds = ps.get("max_seconds")
+                if max_seconds is not None:
+                    if not isinstance(max_seconds, int) or max_seconds < 1:
+                        die(f"{sctx}.pcap_start.max_seconds: must be an int >= 1")
+
+                max_kb = ps.get("max_kb")
+                if max_kb is not None:
+                    if not isinstance(max_kb, int) or max_kb < 1:
+                        die(f"{sctx}.pcap_start.max_kb: must be an int >= 1")
+
+                snaplen = ps.get("snaplen")
+                if snaplen is not None:
+                    if not isinstance(snaplen, int) or snaplen < 1:
+                        die(f"{sctx}.pcap_start.snaplen: must be an int >= 1")
+
+                # target schema (explicit, deterministic)
+                tgt = ps.get("target")
+                if not isinstance(tgt, dict):
+                    die(f"{sctx}.pcap_start.target: must be a dict")
+
+                tgt_keys = set(tgt)
+                is_iface = ("node" in tgt_keys) or ("iface" in tgt_keys)
+                is_link = ("a" in tgt_keys) or ("b" in tgt_keys) or ("a_if" in tgt_keys) or ("b_if" in tgt_keys)
+
+                if is_iface and is_link:
+                    die(f"{sctx}.pcap_start.target: ambiguous target shape (choose interface OR link form)")
+                if not is_iface and not is_link:
+                    die(f"{sctx}.pcap_start.target: must be interface target (node+iface) or link target (a+b with optional a_if/b_if)")
+
+                # Interface target: node + iface
+                if is_iface:
+                    allowed_t = {"node", "iface"}
+                    unknown_t = tgt_keys - allowed_t
+                    if unknown_t:
+                        die(f"{sctx}.pcap_start.target: unknown keys {sorted(unknown_t)}")
+
+                    node = tgt.get("node")
+                    iface = tgt.get("iface")
+                    if not isinstance(node, str) or not node.strip():
+                        die(f"{sctx}.pcap_start.target.node: must be a non-empty string")
+                    if not isinstance(iface, str) or not iface.strip():
+                        die(f"{sctx}.pcap_start.target.iface: must be a non-empty string")
+
+                    node_s = node.strip()
+                    iface_s = iface.strip()
+
+                    # node must exist
+                    nodes = topo.get("nodes") or []
+                    by_name: dict[str, dict] = {
+                        n.get("name"): n
+                        for n in nodes
+                        if isinstance(n, dict) and isinstance(n.get("name"), str)
+                    }
+                    if node_s not in by_name:
+                        die(f"{sctx}.pcap_start.target.node: unknown node '{node_s}'")
+
+                    # iface must exist on that node in topo['links'] endpoints
+                    links = topo.get("links", []) or []
+
+                    def _parse_ep(ep: str) -> tuple[str, str] | None:
+                        if not isinstance(ep, str) or ":" not in ep:
+                            return None
+                        n, ifx = ep.split(":", 1)
+                        n = n.strip()
+                        ifx = ifx.strip()
+                        if not n or not ifx:
+                            return None
+                        return n, ifx
+
+                    node_ifaces: set[str] = set()
+                    for link in links:
+                        eps = link.get("endpoints")
+                        if not isinstance(eps, list) or len(eps) != 2:
+                            continue
+                        for ep in eps:
+                            p = _parse_ep(ep)
+                            if not p:
+                                continue
+                            n, ifx = p
+                            if n == node_s:
+                                node_ifaces.add(ifx)
+
+                    if iface_s not in node_ifaces:
+                        known = ", ".join(sorted(node_ifaces)) if node_ifaces else "(none)"
+                        die(
+                            f"{sctx}.pcap_start.target: interface '{iface_s}' not found on node '{node_s}'. "
+                            f"Known interfaces from links: {known}"
+                        )
+
+                # Link target: a + b, optional a_if/b_if (both-or-none), must be unambiguous if omitted
+                else:
+                    allowed_t = {"a", "b", "a_if", "b_if"}
+                    unknown_t = tgt_keys - allowed_t
+                    if unknown_t:
+                        die(f"{sctx}.pcap_start.target: unknown keys {sorted(unknown_t)}")
+
+                    for k in ("a", "b"):
+                        v = tgt.get(k)
+                        if not isinstance(v, str) or not v.strip():
+                            die(f"{sctx}.pcap_start.target.{k}: must be a non-empty string")
+
+                    a_if = tgt.get("a_if")
+                    b_if = tgt.get("b_if")
+
+                    # both-or-none
+                    if (a_if is None) ^ (b_if is None):
+                        die(f"{sctx}.pcap_start.target: must provide both a_if and b_if (or neither)")
+
+                    if a_if is not None:
+                        if not isinstance(a_if, str) or not a_if.strip():
+                            die(f"{sctx}.pcap_start.target.a_if: must be a non-empty string")
+                        if not isinstance(b_if, str) or not b_if.strip():
+                            die(f"{sctx}.pcap_start.target.b_if: must be a non-empty string")
+
+                    a = str(tgt.get("a") or "").strip()
+                    b = str(tgt.get("b") or "").strip()
+                    matches = _link_matches(a, b)
+
+                    if a_if is None and b_if is None:
+                        if len(matches) == 0:
+                            die(f"{sctx}.pcap_start.target: no declared link found between {a} and {b}")
+                        if len(matches) > 1:
+                            die(
+                                f"{sctx}.pcap_start.target: ambiguous links between {a} and {b} "
+                                f"({len(matches)} found); provide a_if/b_if"
+                            )
+                    else:
+                        a_if_s = str(a_if).strip()
+                        b_if_s = str(b_if).strip()
+                        if (a_if_s, b_if_s) not in matches:
+                            known = ", ".join([f"{a}:{x}<->{b}:{y}" for (x, y) in matches]) or "(none)"
+                            die(
+                                f"{sctx}.pcap_start.target: provided {a}:{a_if_s}<->{b}:{b_if_s} "
+                                f"does not match any declared link between {a} and {b}. "
+                                f"Known links: {known}"
+                            )
+
+            # ---- pcap_stop ----
+            if "pcap_stop" in step:
+                ps = step.get("pcap_stop")
+                if ps is None:
+                    ps = {}
+                if not isinstance(ps, dict):
+                    die(f"{sctx}.pcap_stop: must be a dict")
+
+                allowed_ps = {"target"}
+                unknown = set(ps) - allowed_ps
+                if unknown:
+                    die(f"{sctx}.pcap_stop: unknown keys {sorted(unknown)}")
+
+                tgt = ps.get("target")
+                if tgt is None:
+                    # stop-all is allowed (resolved at runtime)
+                    pass
+                else:
+                    if not isinstance(tgt, dict):
+                        die(f"{sctx}.pcap_stop.target: must be a dict")
+
+                    tgt_keys = set(tgt)
+                    is_iface = ("node" in tgt_keys) or ("iface" in tgt_keys)
+                    is_link = ("a" in tgt_keys) or ("b" in tgt_keys) or ("a_if" in tgt_keys) or ("b_if" in tgt_keys)
+
+                    if is_iface and is_link:
+                        die(f"{sctx}.pcap_stop.target: ambiguous target shape (choose interface OR link form)")
+                    if not is_iface and not is_link:
+                        die(f"{sctx}.pcap_stop.target: must be interface target (node+iface) or link target (a+b with optional a_if/b_if)")
+
+                    # For v1.5: reuse the same validation rules as pcap_start.target.
+                    # We validate resolvability only (does not start capture).
+                    if is_iface:
+                        allowed_t = {"node", "iface"}
+                        unknown_t = tgt_keys - allowed_t
+                        if unknown_t:
+                            die(f"{sctx}.pcap_stop.target: unknown keys {sorted(unknown_t)}")
+
+                        node = tgt.get("node")
+                        iface = tgt.get("iface")
+                        if not isinstance(node, str) or not node.strip():
+                            die(f"{sctx}.pcap_stop.target.node: must be a non-empty string")
+                        if not isinstance(iface, str) or not iface.strip():
+                            die(f"{sctx}.pcap_stop.target.iface: must be a non-empty string")
+
+                        node_s = node.strip()
+                        iface_s = iface.strip()
+
+                        nodes = topo.get("nodes") or []
+                        by_name: dict[str, dict] = {
+                            n.get("name"): n
+                            for n in nodes
+                            if isinstance(n, dict) and isinstance(n.get("name"), str)
+                        }
+                        if node_s not in by_name:
+                            die(f"{sctx}.pcap_stop.target.node: unknown node '{node_s}'")
+
+                        links = topo.get("links", []) or []
+
+                        def _parse_ep(ep: str) -> tuple[str, str] | None:
+                            if not isinstance(ep, str) or ":" not in ep:
+                                return None
+                            n, ifx = ep.split(":", 1)
+                            n = n.strip()
+                            ifx = ifx.strip()
+                            if not n or not ifx:
+                                return None
+                            return n, ifx
+
+                        node_ifaces: set[str] = set()
+                        for link in links:
+                            eps = link.get("endpoints")
+                            if not isinstance(eps, list) or len(eps) != 2:
+                                continue
+                            for ep in eps:
+                                p = _parse_ep(ep)
+                                if not p:
+                                    continue
+                                n, ifx = p
+                                if n == node_s:
+                                    node_ifaces.add(ifx)
+
+                        if iface_s not in node_ifaces:
+                            known = ", ".join(sorted(node_ifaces)) if node_ifaces else "(none)"
+                            die(
+                                f"{sctx}.pcap_stop.target: interface '{iface_s}' not found on node '{node_s}'. "
+                                f"Known interfaces from links: {known}"
+                            )
+
+                    else:
+                        allowed_t = {"a", "b", "a_if", "b_if"}
+                        unknown_t = tgt_keys - allowed_t
+                        if unknown_t:
+                            die(f"{sctx}.pcap_stop.target: unknown keys {sorted(unknown_t)}")
+
+                        for k in ("a", "b"):
+                            v = tgt.get(k)
+                            if not isinstance(v, str) or not v.strip():
+                                die(f"{sctx}.pcap_stop.target.{k}: must be a non-empty string")
+
+                        a_if = tgt.get("a_if")
+                        b_if = tgt.get("b_if")
+
+                        if (a_if is None) ^ (b_if is None):
+                            die(f"{sctx}.pcap_stop.target: must provide both a_if and b_if (or neither)")
+
+                        if a_if is not None:
+                            if not isinstance(a_if, str) or not a_if.strip():
+                                die(f"{sctx}.pcap_stop.target.a_if: must be a non-empty string")
+                            if not isinstance(b_if, str) or not b_if.strip():
+                                die(f"{sctx}.pcap_stop.target.b_if: must be a non-empty string")
+
+                        a = str(tgt.get("a") or "").strip()
+                        b = str(tgt.get("b") or "").strip()
+                        matches = _link_matches(a, b)
+
+                        if a_if is None and b_if is None:
+                            if len(matches) == 0:
+                                die(f"{sctx}.pcap_stop.target: no declared link found between {a} and {b}")
+                            if len(matches) > 1:
+                                die(
+                                    f"{sctx}.pcap_stop.target: ambiguous links between {a} and {b} "
+                                    f"({len(matches)} found); provide a_if/b_if"
+                                )
+                        else:
+                            a_if_s = str(a_if).strip()
+                            b_if_s = str(b_if).strip()
+                            if (a_if_s, b_if_s) not in matches:
+                                known = ", ".join([f"{a}:{x}<->{b}:{y}" for (x, y) in matches]) or "(none)"
+                                die(
+                                    f"{sctx}.pcap_stop.target: provided {a}:{a_if_s}<->{b}:{b_if_s} "
+                                    f"does not match any declared link between {a} and {b}. "
+                                    f"Known links: {known}"
+                                )
 
             # ---- run ----
             if "run" in step:
@@ -1565,6 +1864,173 @@ def retry_until(timeout_s: int, interval_s: float, fn) -> tuple[bool, object, in
 
         time.sleep(float(interval_s))
 
+_PCAP_LABEL_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
+
+def _pcap_sanitize_label(label: str) -> str:
+    s = (label or "").strip()
+    if not s:
+        return "capture"
+    s = _PCAP_LABEL_SAFE.sub("_", s)
+    return s[:64] or "capture"
+
+def _pcap_sanitize_scenario_id(sid: str) -> str:
+    s = (sid or "").strip()
+    if not s:
+        return "scenario"
+    s = _PCAP_LABEL_SAFE.sub("_", s)
+    return s[:64] or "scenario"
+
+def _pcap_step_seq(idx0: int) -> str:
+    # idx0 is 0-based step index in executor; artifacts use 1-based, zero-padded width=3
+    n = int(idx0) + 1
+    return f"{n:03d}"
+
+def _pcap_artifact_paths(lab: str, scenario_id: str, seq: str, label: str, node: str, iface: str) -> tuple[Path, Path]:
+    scen = _pcap_sanitize_scenario_id(scenario_id)
+    lbl = _pcap_sanitize_label(label)
+    fname = f"{seq}_{lbl}_{node}_{iface}"
+    root = lab_dir(lab) / "artifacts" / "pcap" / scen
+    pcap = root / f"{fname}.pcap"
+    meta = root / f"{fname}.meta.json"
+    return pcap, meta
+
+def _pcap_resolve_target_to_node_iface(topo: dict[str, Any], target: dict[str, Any]) -> tuple[str, str]:
+    """
+    Resolve validated target -> concrete (node, iface) capture point.
+    v1.5 rule: for link targets, capture on a deterministic container-side interface:
+      - choose the lexicographically smaller endpoint string among the matched link endpoints.
+    """
+    # Interface target
+    if "node" in target and "iface" in target:
+        return str(target["node"]).strip(), str(target["iface"]).strip()
+
+    # Link target
+    a = str(target.get("a") or "").strip()
+    b = str(target.get("b") or "").strip()
+    a_if = target.get("a_if")
+    b_if = target.get("b_if")
+
+    links = topo.get("links", []) or []
+
+    def parse_ep(ep: str) -> tuple[str, str] | None:
+        if not isinstance(ep, str) or ":" not in ep:
+            return None
+        n, ifx = ep.split(":", 1)
+        n, ifx = n.strip(), ifx.strip()
+        if not n or not ifx:
+            return None
+        return n, ifx
+
+    matches: list[tuple[str, str]] = []
+    for link in links:
+        eps = link.get("endpoints")
+        if not isinstance(eps, list) or len(eps) != 2:
+            continue
+        p0 = parse_ep(eps[0])
+        p1 = parse_ep(eps[1])
+        if not p0 or not p1:
+            continue
+        (n0, if0), (n1, if1) = p0, p1
+
+        # normalize to (a_side_iface, b_side_iface)
+        if n0 == a and n1 == b:
+            matches.append((if0, if1))
+        elif n0 == b and n1 == a:
+            matches.append((if1, if0))
+
+    # At this point, validation already enforced unambiguous match rules.
+    if a_if is None and b_if is None:
+        if not matches:
+            # safety fallback; should not happen if validated
+            return a, "eth0"
+        # only one
+        (ai, bi) = matches[0]
+    else:
+        ai = str(a_if).strip()
+        bi = str(b_if).strip()
+
+    # Choose deterministic capture point: smaller endpoint string
+    ep_a = f"{a}:{ai}"
+    ep_b = f"{b}:{bi}"
+    chosen = ep_a if ep_a <= ep_b else ep_b
+    node, iface = chosen.split(":", 1)
+    return node, iface
+
+def _pcap_tool_precheck(rt: "Runtime", lab: str, node: str) -> tuple[bool, str]:
+    cp = rt.exec(lab, node, ["sh", "-lc", "command -v tcpdump >/dev/null"], check=False, capture_output=True)
+    if cp.returncode != 0:
+        return False, "tcpdump not found"
+    return True, "ok"
+
+def _pcap_start(
+    rt: "Runtime",
+    lab: str,
+    node: str,
+    iface: str,
+    tmp_pcap: str,
+    pidfile: str,
+    *,
+    snaplen: int | None,
+    max_seconds: int | None,
+    max_kb: int | None,
+    bpf_filter: str | None,
+) -> tuple[bool, str]:
+    """
+    Start tcpdump in background inside node.
+    Returns (ok, status_reason). Never raises.
+    """
+    # Build tcpdump args (NO host-wide 'any' allowed; validated elsewhere, but enforce here too)
+    if iface.strip() == "any":
+        return False, "forbidden interface 'any'"
+
+    # size cap: tcpdump -C is in MB (decimal-ish). Convert KB -> MB ceiling, min 1.
+    c_mb = None
+    if isinstance(max_kb, int) and max_kb > 0:
+        c_mb = max(1, int((max_kb + 1023) / 1024))
+
+    parts: list[str] = []
+    parts.append("set -e")
+    parts.append(f"rm -f {pidfile} {tmp_pcap} 2>/dev/null || true")
+
+    # tcpdump command
+    cmd = ["tcpdump", "-i", iface, "-w", tmp_pcap]
+    if isinstance(snaplen, int) and snaplen > 0:
+        cmd += ["-s", str(snaplen)]
+    if isinstance(max_seconds, int) and max_seconds > 0:
+        cmd += ["-G", str(max_seconds), "-W", "1"]
+    if c_mb is not None:
+        cmd += ["-C", str(c_mb)]
+    if isinstance(bpf_filter, str) and bpf_filter.strip():
+        cmd += [bpf_filter.strip()]
+
+    # Run in background + pidfile
+    sh_cmd = " ".join([json.dumps(x) for x in cmd])
+    parts.append(f"nohup sh -lc {json.dumps(sh_cmd)} >/dev/null 2>&1 & echo $! > {pidfile}")
+
+    script = " ; ".join(parts)
+    cp = rt.exec(lab, node, ["sh", "-lc", script], check=False, capture_output=True)
+    if cp.returncode != 0:
+        return False, "tcpdump start failed"
+    return True, "ok"
+
+def _pcap_stop(rt: "Runtime", lab: str, node: str, pidfile: str) -> tuple[bool, str]:
+    """
+    Stop background tcpdump if running. Never raises.
+    """
+    script = (
+        "set -e ; "
+        f"if [ -f {pidfile} ]; then "
+        f"  pid=$(cat {pidfile} 2>/dev/null || true) ; "
+        "  if [ -n \"$pid\" ]; then kill \"$pid\" 2>/dev/null || true ; fi ; "
+        f"  rm -f {pidfile} 2>/dev/null || true ; "
+        "fi ; "
+        "true"
+    )
+    cp = rt.exec(lab, node, ["sh", "-lc", script], check=False, capture_output=True)
+    if cp.returncode != 0:
+        return False, "tcpdump stop failed"
+    return True, "ok"
+
 def execute_scenario(
     *,
     rt: "Runtime",
@@ -1594,15 +2060,232 @@ def execute_scenario(
         "verdict": "pass",
     }
 
+    # v1.5: at most one active capture per scenario
+    active_pcap: dict[str, Any] | None = None
+
     for idx, step in enumerate(steps):
+        if not isinstance(step, dict) or not step:
+            # schema should have been validated already; keep executor deterministic
+            scen_rec["steps"].append(
+                {"type": "invalid_step", "verdict": "fail", "error": "invalid scenario step (not a non-empty dict)"}
+            )
+            scen_rec["verdict"] = "fail"
+            break
+
         step_keys = list(step.keys())
         stype = step_keys[0]
         started = time.time()
-
+        
         step_rec: dict[str, Any] = {"type": stype}
+
+        # ---- pcap_start (evidence-only, non-gating) ----
+        if stype == "pcap_start":
+            spec = step.get("pcap_start") or {}
+            step_rec["verdict"] = "pass"
+            step_rec["authority"] = "supporting_evidence"
+
+            if active_pcap is not None:
+                # v1.5 concurrency rule: record warning, do not start another capture
+                step_rec["warning"] = "pcap already active; v1.5 allows at most one active capture per scenario"
+                step_rec["pcap"] = {"tool_status": "failed"}
+                step_rec["duration_ms"] = int((time.time() - started) * 1000)
+                scen_rec["steps"].append(step_rec)
+                continue
+
+            # resolve capture point
+            target = spec.get("target") or {}
+            node, iface = _pcap_resolve_target_to_node_iface(topo, target)
+
+            label = _pcap_sanitize_label(str(spec.get("label") or "capture"))
+            seq = _pcap_step_seq(idx)
+            out_pcap, out_meta = _pcap_artifact_paths(lab, sid, seq, label, node, iface)
+
+            # tool precheck
+            ok_tool, reason = _pcap_tool_precheck(rt, lab, node)
+
+            # paths inside node
+            tmp_dir = "/tmp"
+            tmp_pcap = f"{tmp_dir}/ai-netsim_{_pcap_sanitize_scenario_id(sid)}_{seq}_{label}.pcap"
+            pidfile = f"{tmp_dir}/ai-netsim_{_pcap_sanitize_scenario_id(sid)}_{seq}_{label}.pid"
+
+            tool_status = "ok"
+            err = ""
+
+            if not ok_tool:
+                tool_status = "unavailable"
+                err = reason
+            else:
+                # ensure artifact dir exists deterministically
+                out_pcap.parent.mkdir(parents=True, exist_ok=True)
+
+                snaplen = spec.get("snaplen")
+                max_seconds = spec.get("max_seconds")
+                max_kb = spec.get("max_kb")
+                bpf_filter = spec.get("filter")
+
+                ok_start, start_reason = _pcap_start(
+                    rt,
+                    lab,
+                    node,
+                    iface,
+                    tmp_pcap,
+                    pidfile,
+                    snaplen=snaplen if isinstance(snaplen, int) else None,
+                    max_seconds=max_seconds if isinstance(max_seconds, int) else None,
+                    max_kb=max_kb if isinstance(max_kb, int) else None,
+                    bpf_filter=bpf_filter if isinstance(bpf_filter, str) else None,
+                )
+                if not ok_start:
+                    tool_status = "failed"
+                    err = start_reason
+
+            active_pcap = {
+                "scenario_id": sid,
+                "step_seq_start": int(seq),
+                "step_seq_stop": None,
+                "node": node,
+                "iface": iface,
+                "label": label,
+                "pidfile": pidfile,
+                "tmp_pcap": tmp_pcap,
+                "out_pcap": str(out_pcap),
+                "out_meta": str(out_meta),
+                "started_at": time.time(),
+                "tool_status": tool_status,
+                "error": err,
+                "spec": spec,
+            }
+
+            step_rec["pcap"] = {
+                "tool_status": tool_status,
+                "target": {"node": node, "iface": iface},
+                "pcap_file": str(Path(out_pcap).relative_to(lab_dir(lab))),
+            }
+            if err:
+                step_rec["pcap"]["error"] = err
+
+            step_rec["duration_ms"] = int((time.time() - started) * 1000)
+            scen_rec["steps"].append(step_rec)
+            continue
+
+        # ---- pcap_stop (evidence-only, non-gating) ----
+        if stype == "pcap_stop":
+            step_rec["verdict"] = "pass"
+            step_rec["authority"] = "supporting_evidence"
+
+            if active_pcap is None:
+                step_rec["warning"] = "no active pcap to stop"
+                step_rec["pcap"] = {"tool_status": "ok"}
+                step_rec["duration_ms"] = int((time.time() - started) * 1000)
+                scen_rec["steps"].append(step_rec)
+                continue
+
+            # Stop the capture process (even if it was unavailable/failed, we still finalize meta deterministically)
+            node = active_pcap["node"]
+            iface = active_pcap["iface"]
+            pidfile = active_pcap["pidfile"]
+            tmp_pcap = active_pcap["tmp_pcap"]
+            out_pcap = active_pcap["out_pcap"]
+            out_meta = active_pcap["out_meta"]
+            spec = active_pcap.get("spec") or {}
+
+            tool_status = str(active_pcap.get("tool_status") or "failed")
+            err = str(active_pcap.get("error") or "")
+
+            if tool_status == "ok":
+                _pcap_stop(rt, lab, node, pidfile)
+
+                # copy pcap out (best-effort, non-gating)
+                cp_ok = True
+                try:
+                    rt.copy_from_node(lab, node, tmp_pcap, out_pcap, check=True)
+                except Exception:
+                    cp_ok = False
+                    tool_status = "failed"
+                    if not err:
+                        err = "pcap copy-out failed"
+
+                # attempt to remove tmp pcap (never fail)
+                rt.exec(lab, node, ["sh", "-lc", f"rm -f {tmp_pcap} 2>/dev/null || true"], check=False)
+
+                # bytes written (host-side)
+                bytes_written = 0
+                try:
+                    bytes_written = Path(out_pcap).stat().st_size if cp_ok else 0
+                except Exception:
+                    bytes_written = 0
+
+            else:
+                bytes_written = 0
+
+            stopped_at = time.time()
+            duration_s = float(max(0.0, stopped_at - float(active_pcap.get("started_at") or stopped_at)))
+
+            # write meta json (supporting evidence only)
+            meta_obj: dict[str, Any] = {
+                "authority": "supporting_evidence",
+                "scenario_id": sid,
+                "step_seq_start": int(active_pcap.get("step_seq_start") or 0),
+                "step_seq_stop": int(_pcap_step_seq(idx)),
+                "target": {"node": node, "iface": iface},
+                "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(active_pcap.get("started_at") or stopped_at))),
+                "stopped_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stopped_at)),
+                "duration_s": duration_s,
+                "tool": "tcpdump",
+                "tool_status": tool_status,
+                "bytes_written": int(bytes_written),
+                "pcap_file": str(Path(out_pcap).relative_to(lab_dir(lab))),
+            }
+
+            # only record booleans/limits (never store filter text by default)
+            if "filter" in spec:
+                meta_obj["filter_applied"] = bool(isinstance(spec.get("filter"), str) and spec.get("filter").strip())
+            for k in ("snaplen", "max_seconds", "max_kb"):
+                v = spec.get(k)
+                if isinstance(v, int):
+                    meta_obj[k] = v
+
+            if err:
+                meta_obj["error"] = err[:200]
+
+            Path(out_meta).parent.mkdir(parents=True, exist_ok=True)
+            Path(out_meta).write_text(json.dumps(meta_obj, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+            step_rec["pcap"] = {
+                "tool_status": tool_status,
+                "target": {"node": node, "iface": iface},
+                "pcap_file": str(Path(out_pcap).relative_to(lab_dir(lab))),
+                "meta_file": str(Path(out_meta).relative_to(lab_dir(lab))),
+                "bytes_written": int(bytes_written),
+            }
+            if err:
+                step_rec["pcap"]["error"] = err
+
+            # also emit top-level supporting evidence (non-gating)
+            try:
+                results.setdefault("authority", {}).setdefault("supporting_evidence", []).append(
+                    {
+                        "type": "pcap",
+                        "authority": "supporting_evidence",
+                        "scenario_id": sid,
+                        "step": int(_pcap_step_seq(idx)),
+                        "tool_status": tool_status,
+                        "error": err if err else "",
+                        "pcap_file": str(Path(out_pcap).relative_to(lab_dir(lab))),
+                    }
+                )
+            except Exception:
+                pass
+
+            step_rec["duration_ms"] = int((time.time() - started) * 1000)
+            scen_rec["steps"].append(step_rec)
+
+            active_pcap = None
+            continue
 
         # ---- run ----
         if stype == "run":
+
             ref = step["run"]
             step_rec["ref"] = ref
 
@@ -1666,6 +2349,67 @@ def execute_scenario(
             scen_rec["steps"].append(step_rec)
             scen_rec["verdict"] = "fail"
             break
+
+    # Auto-stop capture at scenario end if still active (non-gating, evidence-only)
+    if active_pcap is not None:
+        node = active_pcap["node"]
+        iface = active_pcap["iface"]
+        pidfile = active_pcap["pidfile"]
+        tmp_pcap = active_pcap["tmp_pcap"]
+        out_pcap = active_pcap["out_pcap"]
+        out_meta = active_pcap["out_meta"]
+        spec = active_pcap.get("spec") or {}
+
+        tool_status = str(active_pcap.get("tool_status") or "failed")
+        err = str(active_pcap.get("error") or "")
+
+        if tool_status == "ok":
+            _pcap_stop(rt, lab, node, pidfile)
+            try:
+                Path(out_pcap).parent.mkdir(parents=True, exist_ok=True)
+                rt.copy_from_node(lab, node, tmp_pcap, out_pcap, check=True)
+            except Exception:
+                tool_status = "failed"
+                if not err:
+                    err = "pcap copy-out failed"
+            rt.exec(lab, node, ["sh", "-lc", f"rm -f {tmp_pcap} 2>/dev/null || true"], check=False)
+
+        bytes_written = 0
+        try:
+            bytes_written = Path(out_pcap).stat().st_size if tool_status != "unavailable" else 0
+        except Exception:
+            bytes_written = 0
+
+        stopped_at = time.time()
+        duration_s = float(max(0.0, stopped_at - float(active_pcap.get("started_at") or stopped_at)))
+
+        meta_obj: dict[str, Any] = {
+            "authority": "supporting_evidence",
+            "scenario_id": sid,
+            "step_seq_start": int(active_pcap.get("step_seq_start") or 0),
+            "step_seq_stop": None,
+            "target": {"node": node, "iface": iface},
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(active_pcap.get("started_at") or stopped_at))),
+            "stopped_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stopped_at)),
+            "duration_s": duration_s,
+            "tool": "tcpdump",
+            "tool_status": "auto_stopped" if tool_status == "ok" else tool_status,
+            "bytes_written": int(bytes_written),
+            "pcap_file": str(Path(out_pcap).relative_to(lab_dir(lab))),
+        }
+
+        if "filter" in spec:
+            meta_obj["filter_applied"] = bool(isinstance(spec.get("filter"), str) and spec.get("filter").strip())
+        for k in ("snaplen", "max_seconds", "max_kb"):
+            v = spec.get(k)
+            if isinstance(v, int):
+                meta_obj[k] = v
+
+        if err:
+            meta_obj["error"] = err[:200]
+
+        Path(out_meta).parent.mkdir(parents=True, exist_ok=True)
+        Path(out_meta).write_text(json.dumps(meta_obj, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     return scen_rec
 

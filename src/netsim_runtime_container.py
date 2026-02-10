@@ -320,6 +320,95 @@ def build_coverage_model(resolved: dict[str, Any], topo_path: Path) -> dict[str,
                         if tval in known_nodes:
                             scen_nodes.add(tval)
 
+                elif "pcap_start" in st:
+                    spec = st.get("pcap_start") or {}
+                    if not isinstance(spec, dict):
+                        die(f"coverage: scenario '{sid}' pcap_start must be a dict")
+
+                    target = spec.get("target")
+                    if not isinstance(target, dict):
+                        die(f"coverage: scenario '{sid}' pcap_start.target must be a dict")
+
+                    # Interface target: {node, iface}
+                    if ("node" in target) or ("iface" in target):
+                        node = str(target.get("node") or "").strip()
+                        iface = str(target.get("iface") or "").strip()
+                        if not node or not iface:
+                            die(f"coverage: scenario '{sid}' pcap_start.target requires node and iface")
+                        if node not in known_nodes:
+                            die(f"coverage: scenario '{sid}' references unknown node '{node}'")
+                        scen_nodes.add(node)
+
+                    # Link target: {a,b,a_if?,b_if?}
+                    elif ("a" in target) or ("b" in target):
+                        a = str(target.get("a") or "").strip()
+                        b = str(target.get("b") or "").strip()
+                        if not a or not b:
+                            die(f"coverage: scenario '{sid}' pcap_start.target requires a and b")
+                        if a not in known_nodes:
+                            die(f"coverage: scenario '{sid}' references unknown node '{a}'")
+                        if b not in known_nodes:
+                            die(f"coverage: scenario '{sid}' references unknown node '{b}'")
+                        scen_nodes.add(a)
+                        scen_nodes.add(b)
+
+                        a_if_raw = target.get("a_if")
+                        b_if_raw = target.get("b_if")
+                        a_if = str(a_if_raw).strip() if isinstance(a_if_raw, str) and a_if_raw.strip() else None
+                        b_if = str(b_if_raw).strip() if isinstance(b_if_raw, str) and b_if_raw.strip() else None
+
+                        link_id = _coverage_resolve_link_between(resolved, a, b, a_if, b_if)
+                        scen_links.add(link_id)
+
+                    else:
+                        die(f"coverage: scenario '{sid}' pcap_start.target must be interface-target or link-target")
+
+                elif "pcap_stop" in st:
+                    spec = st.get("pcap_stop") or {}
+                    if not isinstance(spec, dict):
+                        die(f"coverage: scenario '{sid}' pcap_stop must be a dict")
+
+                    # target is optional (stop-all semantics). If provided, validate shape for coverage consistency.
+                    target = spec.get("target")
+                    if target is None:
+                        pass
+                    elif not isinstance(target, dict):
+                        die(f"coverage: scenario '{sid}' pcap_stop.target must be a dict")
+                    else:
+                        # Interface target: {node, iface}
+                        if ("node" in target) or ("iface" in target):
+                            node = str(target.get("node") or "").strip()
+                            iface = str(target.get("iface") or "").strip()
+                            if not node or not iface:
+                                die(f"coverage: scenario '{sid}' pcap_stop.target requires node and iface")
+                            if node not in known_nodes:
+                                die(f"coverage: scenario '{sid}' references unknown node '{node}'")
+                            scen_nodes.add(node)
+
+                        # Link target: {a,b,a_if?,b_if?}
+                        elif ("a" in target) or ("b" in target):
+                            a = str(target.get("a") or "").strip()
+                            b = str(target.get("b") or "").strip()
+                            if not a or not b:
+                                die(f"coverage: scenario '{sid}' pcap_stop.target requires a and b")
+                            if a not in known_nodes:
+                                die(f"coverage: scenario '{sid}' references unknown node '{a}'")
+                            if b not in known_nodes:
+                                die(f"coverage: scenario '{sid}' references unknown node '{b}'")
+                            scen_nodes.add(a)
+                            scen_nodes.add(b)
+
+                            a_if_raw = target.get("a_if")
+                            b_if_raw = target.get("b_if")
+                            a_if = str(a_if_raw).strip() if isinstance(a_if_raw, str) and a_if_raw.strip() else None
+                            b_if = str(b_if_raw).strip() if isinstance(b_if_raw, str) and b_if_raw.strip() else None
+
+                            link_id = _coverage_resolve_link_between(resolved, a, b, a_if, b_if)
+                            scen_links.add(link_id)
+
+                        else:
+                            die(f"coverage: scenario '{sid}' pcap_stop.target must be interface-target or link-target")
+
                 elif "run" in st:
                     ref = st.get("run")
                     # v17 schema: run is a string test name (after include:all expansion)
@@ -831,6 +920,22 @@ class Runtime:
         timeout_s: float | None = None,
     ) -> subprocess.CompletedProcess:
         raise NotImplementedError
+    
+    def copy_from_node(
+        self,
+        lab: str,
+        node: str,
+        src_path: str,
+        dst_path: str,
+        *,
+        check: bool = True,
+    ):
+        """
+        Copy a file FROM a node/container to the host filesystem (dst_path).
+
+        Evidence-only helper (e.g. PCAP). Must be deterministic and non-interactive.
+        """
+        raise NotImplementedError
 
     def sh(
         self,
@@ -948,6 +1053,35 @@ class ContainerRuntime(Runtime):
 
         # Non-interactive calls: capture output by default so helpers can parse stdout
         return run(argv, check=check, capture_output=capture_output, timeout_s=timeout_s)
+    
+    def copy_from_node(
+        self,
+        lab: str,
+        node: str,
+        src_path: str,
+        dst_path: str,
+        *,
+        check: bool = True,
+    ):
+        if not isinstance(src_path, str) or not src_path.strip():
+            die("copy_from_node: src_path must be a non-empty string")
+        if not isinstance(dst_path, str) or not dst_path.strip():
+            die("copy_from_node: dst_path must be a non-empty string")
+
+        # dst_path is a host path; ensure parent exists deterministically
+        Path(dst_path).parent.mkdir(parents=True, exist_ok=True)
+
+        # containerlab names containers as: clab-<lab>-<node>
+        cname = f"clab-{lab}-{node}"
+
+        # docker cp <container>:<src> <dst>
+        cp = run(
+            ["docker", "cp", f"{cname}:{src_path}", dst_path],
+            check=check,
+            capture_output=True,
+            text=True,
+        )
+        return cp
 
     def is_running(self, lab: str, node: str) -> bool:
         return self.is_running_id(self.node_id(lab, node))
