@@ -208,6 +208,12 @@ else
   test -f labs/vm-smoke.clab.yaml
   grep -nE 'kind:[[:space:]]*sonic-vm|image:' labs/vm-smoke.clab.yaml >/dev/null
   echo "OK: VM validate + gen succeed on supported host"
+
+  echo "=== 4d) VM runtime smoke (deploy+test+cleanup; supported hosts only) ==="
+  $NS up topologies/vm-smoke.yaml --reconfigure >/dev/null
+  $NS test vm-smoke >/dev/null
+  $NS down vm-smoke >/dev/null
+  echo "OK: VM runtime smoke passed (deploy+test+cleanup)"
 fi
 echo
 
