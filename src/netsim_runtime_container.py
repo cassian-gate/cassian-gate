@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -759,16 +760,26 @@ def verify_sonic_vm_ready(rt: Runtime, lab: str, node: str) -> None:
         die(f"{node}: VM substrate container is not running")
 
     # vrnetlab-style containers run QEMU inside the container.
-    # Check once (no retries here; bounded behavior).
-    cp = rt.exec(
-        lab,
-        node,
-        ["sh", "-lc", "ps -eo comm,args | grep -E '[q]emu-system|[q]emu-kvm' >/dev/null"],
-        check=False,
-        capture_output=False,
-    )
-    if cp.returncode != 0:
-        die(f"{node}: VM substrate not ready (qemu process not detected)")
+    # Deterministic bounded wait (explicit timeout + interval; no jitter).
+    boot_timeout_s = 60
+    interval_s = 1.0
+    deadline = time.time() + boot_timeout_s
+
+    while True:
+        cp = rt.exec(
+            lab,
+            node,
+            ["sh", "-lc", "ps -eo comm,args | grep -E '[q]emu-system|[q]emu-kvm' >/dev/null"],
+            check=False,
+            capture_output=False,
+        )
+        if cp.returncode == 0:
+            break
+
+        if time.time() >= deadline:
+            die(f"{node}: VM substrate not ready within {boot_timeout_s}s (qemu process not detected)")
+
+        time.sleep(interval_s)
 
 def verify_lab_ready(rt: Runtime, topo: dict, lab: str) -> None:
     nodes = topo.get("nodes", []) or []
