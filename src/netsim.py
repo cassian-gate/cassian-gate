@@ -2478,6 +2478,105 @@ def cmd_test(args: argparse.Namespace) -> None:
         if isinstance(t, dict) and t.get("name"):
             tests_by_name[str(t["name"])] = t
 
+    def run_route_prefix_test(*, test_name: str, src: str, t: dict, record_fn=record_test) -> str:
+        """
+        v1.5: per-prefix assertion (execution-backed), minimal deterministic parsing.
+        - src: vantage node name (runs check here)
+        - prefix: CIDR string
+        - expect: pass|fail (negative semantics preserved)
+        Current v1.5 support: frr nodes only (vtysh).
+        """
+        prefix = str(t.get("prefix") or "").strip()
+
+        expected = str(t.get("expect") or "pass").strip().lower()
+        if expected not in ("pass", "fail"):
+            expected = "pass"
+
+        # Resolve node type deterministically from resolved topology
+        node_type = ""
+        for n in (topo.get("nodes") or []):
+            if isinstance(n, dict) and n.get("name") == src:
+                node_type = str(n.get("type") or "").strip().lower()
+                break
+
+        start = time.time()
+
+        if node_type != "frr":
+            dur_ms = int((time.time() - start) * 1000)
+            observed = "fail"
+            verdict = "fail" if expected == "pass" else "pass"
+            record_fn(
+                name=test_name,
+                kind="route_prefix",
+                src=src,
+                dst="",
+                expected=expected,
+                observed=observed,
+                verdict=verdict,
+                duration_ms=dur_ms,
+                error=f"route_prefix unsupported on node type '{node_type}' (supported: frr only)",
+                evidence={"reason": "unsupported_node_type"},
+                meta={"prefix": prefix, "node_type": node_type},
+            )
+            return verdict
+
+        # Deterministic route presence check (kernel FIB)
+        # Rationale: connected routes + installed routes are observable here even if FRR daemons/vtysh view differs.
+        try:
+            nw = ipaddress.ip_network(prefix, strict=False)
+            ipver = nw.version
+        except Exception:
+            # Should have been caught in resolve-time validation; keep deterministic failure here.
+            ipver = 4
+
+        ip_cmd = ["ip", f"-{ipver}", "route", "show", prefix]
+        cp = rt.exec(lab, src, ip_cmd, check=False, capture_output=True)
+
+        # rt.exec() may return a CompletedProcess-like object OR a raw string.
+        if isinstance(cp, str):
+            out = cp
+            rc = None
+        else:
+            out = ""
+            if hasattr(cp, "stdout") and cp.stdout is not None:
+                out = cp.stdout
+            elif hasattr(cp, "output") and cp.output is not None:
+                out = cp.output
+
+            # Normalize bytes -> str (defensive)
+            if isinstance(out, (bytes, bytearray)):
+                try:
+                    out = out.decode("utf-8", errors="replace")
+                except Exception:
+                    out = str(out)
+
+            rc = getattr(cp, "returncode", None)
+
+        out = str(out or "")
+        # Deterministic presence rule for `ip route show <prefix>`:
+        # - present => prints one or more lines
+        # - absent  => prints nothing
+        present = bool(out.strip())
+
+        observed = "pass" if present else "fail"
+        verdict = "pass" if observed == expected else "fail"
+
+        dur_ms = int((time.time() - start) * 1000)
+        record_fn(
+            name=test_name,
+            kind="route_prefix",
+            src=src,
+            dst="",
+            expected=expected,
+            observed=observed,
+            verdict=verdict,
+            duration_ms=dur_ms,
+            error="" if verdict == "pass" else f"route_prefix mismatch (expected {expected}, observed {observed})",
+            evidence={"cmd": " ".join(ip_cmd), "rc": rc},
+            meta={"prefix": prefix, "present": bool(present)},
+        )
+        return verdict
+
     def run_bgp_neighbor_test(*, test_name: str, src: str, dst: str, t: dict, record_fn=record_test) -> str:
         """
         v1.x: binary control-plane health invariant.
@@ -4206,7 +4305,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 src = t.get("src")
                 dst = t.get("dst")
 
-                if kind not in ("ping", "tcp", "bgp_neighbor"):
+                if kind not in ("ping", "tcp", "bgp_neighbor", "route_prefix"):
                     record_test(
                         name=test_name,
                         kind=str(kind),
@@ -4228,6 +4327,23 @@ def cmd_test(args: argparse.Namespace) -> None:
 
                 src = t.get("src")
                 dst = t.get("dst")
+
+                if kind == "route_prefix":
+                    prefix = t.get("prefix")
+                    if not isinstance(src, str) or not src.strip() or not isinstance(prefix, str) or not prefix.strip():
+                        record_test(
+                            name=test_name,
+                            kind="route_prefix",
+                            src=(src or ""),
+                            dst="",
+                            expected=str(t.get("expect") or "pass"),
+                            observed="fail",
+                            verdict="fail",
+                            duration_ms=0,
+                            error="missing src(on)/prefix",
+                        )
+                        fail_or_continue(f"tests[{i}]: route_prefix requires src(on) + prefix")
+                        continue
 
                 if kind == "ping":
                     # v1: ping supports dst (node) OR to/to_ip (ip literal)
@@ -4278,8 +4394,8 @@ def cmd_test(args: argparse.Namespace) -> None:
                         fail_or_continue(f"tests[{i}]: bgp_neighbor dst must be an IPv4 literal")
                         continue
 
-                else:
-                    # tcp (and future kinds) keep legacy requirement
+                elif kind == "tcp":
+                    # tcp keeps legacy requirement
                     if not src or not dst:
                         record_test(
                             name=test_name,
@@ -4316,6 +4432,14 @@ def cmd_test(args: argparse.Namespace) -> None:
                         extra = f" ({dst_ip})" if dst_ip else ""
                         fail_or_continue(
                             f"tests[{i}] ping mismatch: {src} -> {dst_label}{extra} expected {r.get('expected')}, observed {r.get('observed')}"
+                        )
+                    continue
+
+                if kind == "route_prefix":
+                    verdict = run_route_prefix_test(test_name=test_name, src=src, t=t)
+                    if verdict != "pass":
+                        fail_or_continue(
+                            f"tests[{i}] route_prefix mismatch: on {src} prefix {t.get('prefix')} expected {t.get('expect','pass')}"
                         )
                     continue
 

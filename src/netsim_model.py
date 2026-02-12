@@ -695,6 +695,47 @@ def resolve_topology(topo: dict) -> dict:
             t["kind"] = t.pop("type")
 
         # ----------------------------
+        # v1.5: route_prefix alias normalization
+        # Accept 'on' as an alias for 'src' (vantage node), with strict disagreement checks.
+        # ----------------------------
+        if "on" in t and "src" in t:
+            a = str(t.get("on") or "").strip()
+            b = str(t.get("src") or "").strip()
+            if a and b and a != b:
+                die(f"tests[{i}]: 'on' and 'src' disagree ({a!r} vs {b!r})")
+
+        if "src" not in t and "on" in t:
+            t["src"] = t.get("on")
+
+        # ----------------------------
+        # v1.5: route_prefix schema validation (fail-fast, deterministic)
+        # Required: kind=route_prefix, name, src(vantage), prefix(CIDR), expect(pass|fail optional)
+        # ----------------------------
+        if (t.get("kind") or "").strip() == "route_prefix":
+            ctx = f"tests[{i}] ({t.get('name', '<unnamed>')})"
+
+            src = t.get("src")
+            if not isinstance(src, str) or not src.strip():
+                die(f"{ctx}: route_prefix test requires 'on/src' as a node name")
+
+            pfx = t.get("prefix")
+            if not isinstance(pfx, str) or not pfx.strip():
+                die(f"{ctx}: route_prefix test requires 'prefix' as CIDR (e.g. 10.0.0.0/24)")
+
+            try:
+                _ = ipaddress.ip_network(pfx.strip(), strict=False)
+            except Exception:
+                die(f"{ctx}: route_prefix.prefix must be a valid CIDR (e.g. 10.0.0.0/24)")
+
+            exp = t.get("expect")
+            if exp is None:
+                exp = "pass"
+            exp_s = str(exp).strip().lower()
+            if exp_s not in ("pass", "fail"):
+                die(f"{ctx}: route_prefix.expect must be pass|fail if provided")
+            t["expect"] = exp_s
+
+        # ----------------------------
         # v1: normalize test field aliases
         # Accept 'from'/'to' as aliases for 'src'/'dst' with strict disagreement checks.
         # ----------------------------
