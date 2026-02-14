@@ -1,0 +1,19 @@
+name: route-prefix-waitfor-neg
+
+nodes:
+  - name: r1
+    type: frr
+
+links: []
+
+scenarios:
+  - id: neg_missing_src
+    steps:
+      - wait_for:
+          type: route_prefix
+          from: r1
+          prefix: 192.168.1.0/24
+          expect: pass
+          timeout: 5
+          interval_s: 1.0
+
