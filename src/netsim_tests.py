@@ -1644,6 +1644,12 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
 
                 missing = type_required - set(wf)
                 if missing:
+                    # route_prefix requires clearer, contract-aligned messages
+                    if t == "route_prefix":
+                        if "src" in missing:
+                            die(f"{sctx}.wait_for: route_prefix wait_for requires 'on/src' as a node name")
+                        if "prefix" in missing:
+                            die(f"{sctx}.wait_for: route_prefix wait_for requires 'prefix' as CIDR")
                     die(f"{sctx}.wait_for: missing keys {sorted(missing)}")
 
                 unknown = set(wf) - allowed_wf
