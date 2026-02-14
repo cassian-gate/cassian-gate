@@ -3126,107 +3126,237 @@ def cmd_test(args: argparse.Namespace) -> None:
         return int((time.time() - start) * 1000)
 
     def wait_for_predicate(wait_for: dict) -> tuple[str, str, str, int, dict, str]:
-        """
-        Returns: (type, expected, observed, duration_ms, meta, verdict)
-
-        v1 supports:
-        - type: ping (from/to/expect/timeout)
-
-        Semantics:
-        - expect: pass => succeed when ping succeeds
-        - expect: fail => succeed when ping fails
-        """
-        wtype = wait_for.get("type")
-        if wtype != "ping":
-            raise ValueError(f"wait_for: unsupported type '{wtype}' (v1 supports: ping)")
-
         src = wait_for.get("from")
-        to = wait_for.get("to")
+        wtype = (wait_for.get("type") or "ping").strip().lower()
         expected = (wait_for.get("expect") or "pass").lower()
         timeout_s = int(wait_for.get("timeout") or 30)
         interval_s = float(wait_for.get("interval_s") or 1.0)
 
-        # v1.x ping tuning (deterministic, explicit)
-        count = int(wait_for.get("count") or 1)
+        if expected not in ("pass", "fail"):
+            raise ValueError(f"wait_for {wtype}: expect must be pass|fail")
+        if not isinstance(src, str) or not src.strip():
+            raise ValueError(f"wait_for {wtype}: from must be a non-empty node name")
+
+        # Shared bounded semantics:
+        # - Define "attempt success" as the underlying check returning PASS.
+        # - expect=pass => pass if any attempt succeeds within timeout.
+        # - expect=fail => pass if NO attempt succeeds within timeout.
+        #
+        # IMPORTANT:
+        # retry_until() returns ok=True when the attempt reports "success" (underlying PASS),
+        # and ok=False if no underlying PASS occurred within timeout.
+
+        # Optional per-attempt timeout (recorded; enforced only where explicitly supported)
         per_attempt_timeout_s = int(wait_for.get("per_attempt_timeout_s") or 1)
 
         # v1.x optional ping source selector (Tier-1 validation only)
         src_ip = wait_for.get("src_ip")
         src_if = wait_for.get("src_if")
-
         if src_ip is not None and src_if is not None:
             raise ValueError("wait_for ping: specify only one of src_ip or src_if")
 
-        if src_ip is not None:
-            if not isinstance(src_ip, str) or not src_ip.strip():
-                raise ValueError("wait_for ping: src_ip must be a non-empty string")
-            validate_ip_literal(src_ip.strip(), "wait_for ping src_ip")
+        first_success_ms = None
+        first_success_observed = None  # "pass"|"fail" (underlying)
+        last_cp = None
+        last_obs = "fail"
+        last_evidence: dict = {}
 
-        if src_if is not None:
-            if not isinstance(src_if, str) or not src_if.strip():
-                raise ValueError("wait_for ping: src_if must be a non-empty string")
-            if any(ch.isspace() for ch in src_if):
-                raise ValueError("wait_for ping: src_if must not contain whitespace")
+        start = time.time()
 
-        if count < 1:
-            raise ValueError("wait_for ping: count must be >= 1")
-        if per_attempt_timeout_s < 1:
-            raise ValueError("wait_for ping: per_attempt_timeout_s must be >= 1")
-
-
-        if expected not in ("pass", "fail"):
-            raise ValueError("wait_for ping: expect must be pass|fail")
-        if not src or not to:
-            raise ValueError("wait_for ping: requires from + to")
-
-        # If "to" looks like a node name, resolve to its first IPv4
-        # v1-safe: "to" may be node name OR IP literal (fail-fast otherwise)
-        if not isinstance(to, str) or not to.strip():
-            raise ValueError("wait_for ping: to must be a non-empty string (node name or IP literal)")
-        dst_ip = resolve_dst_to_ip(topo, to.strip())
-
-        should_succeed = (expected == "pass")
+        def _mark_success(obs: str) -> None:
+            nonlocal first_success_ms, first_success_observed
+            if first_success_ms is None:
+                first_success_ms = int((time.time() - start) * 1000)
+                first_success_observed = obs
 
         def attempt():
-            ping_cmd = ["ping", "-c", str(count), "-W", str(per_attempt_timeout_s)]
-            if src_ip:
-                ping_cmd += ["-I", str(src_ip).strip()]
-            elif src_if:
-                ping_cmd += ["-I", str(src_if).strip()]
-            ping_cmd += [str(dst_ip)]
+            nonlocal last_cp, last_obs, last_evidence
 
-            cp = rt.exec(
-                lab,
-                str(src),
-                ping_cmd,
-                check=False,
-            )
-            ping_ok = (cp.returncode == 0)
+            # -------------------------
+            # type: ping
+            # -------------------------
+            if wtype == "ping":
+                to = wait_for.get("to")
+                if not to:
+                    raise ValueError("wait_for ping: requires to")
 
-            # Condition is met when ping_ok matches what we expect
-            condition_met = (ping_ok == should_succeed)
-            return condition_met, (cp, ping_ok)
+                # v1.x ping tuning (deterministic, explicit)
+                count = int(wait_for.get("count") or 1)
+
+                if src_ip is not None:
+                    if not isinstance(src_ip, str) or not str(src_ip).strip():
+                        raise ValueError("wait_for ping: src_ip must be a non-empty string")
+                    validate_ip_literal(str(src_ip).strip(), "wait_for ping src_ip")
+
+                if src_if is not None:
+                    if not isinstance(src_if, str) or not str(src_if).strip():
+                        raise ValueError("wait_for ping: src_if must be a non-empty string")
+                    if any(ch.isspace() for ch in str(src_if)):
+                        raise ValueError("wait_for ping: src_if must not contain whitespace")
+
+                if count < 1:
+                    raise ValueError("wait_for ping: count must be >= 1")
+                if per_attempt_timeout_s < 1:
+                    raise ValueError("wait_for ping: per_attempt_timeout_s must be >= 1")
+
+                if not isinstance(to, str) or not to.strip():
+                    raise ValueError("wait_for ping: to must be a non-empty string (node name or IP literal)")
+                dst_ip = resolve_dst_to_ip(topo, to.strip())
+
+                ping_cmd = ["ping", "-c", str(count), "-W", str(per_attempt_timeout_s)]
+                if src_ip:
+                    ping_cmd += ["-I", str(src_ip).strip()]
+                elif src_if:
+                    ping_cmd += ["-I", str(src_if).strip()]
+                ping_cmd += [str(dst_ip)]
+
+                cp = rt.exec(lab, str(src).strip(), ping_cmd, check=False)
+                last_cp = cp
+                ping_ok = (cp.returncode == 0)
+
+                last_obs = "pass" if ping_ok else "fail"
+                last_evidence = {
+                    "cmd": "ping",
+                    "dst_ip": str(dst_ip),
+                    "last_rc": getattr(cp, "returncode", None),
+                }
+
+                attempt_success = (last_obs == "pass")
+                return attempt_success, (cp, last_obs)
+
+            # -------------------------
+            # type: tcp
+            # -------------------------
+            if wtype == "tcp":
+                to = wait_for.get("to")
+                port = wait_for.get("port")
+
+                if not isinstance(to, str) or not to.strip():
+                    raise ValueError("wait_for tcp: to must be a non-empty string (node name or IP literal)")
+
+                try:
+                    port_i = int(port)
+                except Exception:
+                    raise ValueError("wait_for tcp: port must be an int")
+                if port_i < 1 or port_i > 65535:
+                    raise ValueError("wait_for tcp: port must be in range 1..65535")
+
+                dst_ip = resolve_dst_to_ip(topo, to.strip())
+                ensure_nc(rt, lab, str(src).strip())
+
+                # Deterministic connect check; attempt timeout is explicit via -w
+                cp = rt.exec(
+                    lab,
+                    str(src).strip(),
+                    ["sh", "-lc", f"nc -z -w {per_attempt_timeout_s} {dst_ip} {port_i}"],
+                    check=False,
+                )
+                last_cp = cp
+                tcp_ok = (cp.returncode == 0)
+
+                last_obs = "pass" if tcp_ok else "fail"
+                last_evidence = {
+                    "cmd": "nc -z",
+                    "dst_ip": str(dst_ip),
+                    "port": int(port_i),
+                    "last_rc": getattr(cp, "returncode", None),
+                }
+
+                attempt_success = (last_obs == "pass")
+                return attempt_success, (cp, last_obs)
+
+            # -------------------------
+            # type: route_prefix
+            # -------------------------
+            if wtype == "route_prefix":
+                # Vantage node is wait_for.src (normalized from on->src in resolve)
+                vantage = wait_for.get("src") or wait_for.get("on")
+                if not isinstance(vantage, str) or not vantage.strip():
+                    raise ValueError("wait_for route_prefix: requires src/on as a node name")
+
+                prefix = wait_for.get("prefix")
+                if not isinstance(prefix, str) or not prefix.strip():
+                    raise ValueError("wait_for route_prefix: requires prefix as CIDR")
+
+                # Deterministic: ip route lookup should be fast; per_attempt_timeout_s is recorded.
+                cmd = ["sh", "-lc", f"ip -4 route show {prefix.strip()} 2>/dev/null || true"]
+                cp = rt.exec(lab, str(vantage).strip(), cmd, check=False)
+                last_cp = cp
+
+                out = getattr(cp, "stdout", "") or ""
+                if isinstance(out, (bytes, bytearray)):
+                    try:
+                        out = out.decode("utf-8", errors="replace")
+                    except Exception:
+                        out = str(out)
+
+                present = (prefix.strip() in str(out))
+
+                # Underlying success for route_prefix is: present == True (uniform success definition)
+                last_obs = "pass" if present else "fail"
+                last_evidence = {
+                    "cmd": f"ip -4 route show {prefix.strip()}",
+                    "prefix": prefix.strip(),
+                    "present": bool(present),
+                    "last_rc": getattr(cp, "returncode", None),
+                }
+
+                attempt_success = (last_obs == "pass")
+                return attempt_success, (cp, last_obs)
+
+            raise ValueError(f"wait_for: unsupported type {wtype!r}")
 
         ok, last_val, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
-        cp, ping_ok = last_val  # type: ignore[misc]
+        last_cp, last_obs = last_val  # type: ignore[misc]
 
-        observed = "pass" if ping_ok else "fail"
-        verdict = "pass" if ok else "fail"
+        # First success timing (for bounds)
+        if ok:
+            _mark_success(last_obs)
+
+        succeeded = bool(ok)
+
+        # Observed is always the underlying check result from the last attempt.
+        observed = str(last_obs)
+        verdict = "pass" if succeeded else "fail"
+
+        # Apply expect inversion semantics at verdict level:
+        # - expect=pass => want succeeded==True
+        # - expect=fail => want succeeded==False
+        want = (expected == "pass")
+        final_pass = (succeeded == want)
+        verdict = "pass" if final_pass else "fail"
 
         meta = {
-            "from": str(src),
-            "to": str(to),
-            "dst_ip": str(dst_ip),
-            "src_ip": (str(src_ip).strip() if src_ip else ""),
-            "src_if": (str(src_if).strip() if src_if else ""),
-            "attempts": attempts,
-            "timeout_s": timeout_s,
-            "interval_s": interval_s,
-            "count": count,
-            "per_attempt_timeout_s": per_attempt_timeout_s,
-            "last_rc": getattr(cp, "returncode", None),
+            "type": wtype,
+            "from": str(src).strip(),
+            "attempts": int(attempts),
+            "timeout_s": int(timeout_s),
+            "interval_s": float(interval_s),
+            "per_attempt_timeout_s": int(per_attempt_timeout_s),
+            "succeeded": bool(succeeded),
+            "time_to_success_ms": (int(first_success_ms) if (expected == "pass") else None),
+            "time_to_first_success_ms": (int(first_success_ms) if (expected == "fail" and succeeded) else None),
+            "last_rc": getattr(last_cp, "returncode", None),
         }
-        return "ping", expected, observed, dur_ms, meta, verdict
+
+        # Keep type-specific info inside meta
+        if wtype in ("ping", "tcp"):
+            meta["to"] = str(wait_for.get("to") or "")
+            meta["src_ip"] = (str(src_ip).strip() if src_ip else "")
+            meta["src_if"] = (str(src_if).strip() if src_if else "")
+            if wtype == "ping":
+                meta["count"] = int(wait_for.get("count") or 1)
+            if wtype == "tcp":
+                meta["port"] = int(wait_for.get("port") or 0)
+
+        if wtype == "route_prefix":
+            meta["src"] = str(wait_for.get("src") or wait_for.get("on") or "")
+            meta["prefix"] = str(wait_for.get("prefix") or "")
+
+        # Evidence: bounded and last-attempt only
+        meta["evidence"] = dict(last_evidence)
+
+        return wtype, expected, observed, int(dur_ms), meta, verdict
 
     def run_scenario(s: dict) -> str:
         sid = s.get("id") or ""
@@ -3472,6 +3602,13 @@ def cmd_test(args: argparse.Namespace) -> None:
                         "observed": observed,
                         "verdict": verdict,
                         "duration_ms": dur_ms,
+                        # bounded semantics (additive, step-level)
+                        "attempts": int((meta or {}).get("attempts") or 0),
+                        "timeout_s": int((meta or {}).get("timeout_s") or 0),
+                        "interval_s": float((meta or {}).get("interval_s") or 0.0),
+                        "succeeded": bool((meta or {}).get("succeeded")),
+                        "time_to_success_ms": (meta or {}).get("time_to_success_ms"),
+                        "time_to_first_success_ms": (meta or {}).get("time_to_first_success_ms"),
                         "meta": meta,
                         "step": step_idx,
                     })

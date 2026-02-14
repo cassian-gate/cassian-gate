@@ -1590,29 +1590,109 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                 if not isinstance(wf, dict):
                     die(f"{sctx}.wait_for: must be a dict")
 
-                required = {"type", "from", "to", "expect"}
-                missing = required - set(wf)
+                # Canonical bounded schema (v1.5 extension, validate-time only):
+                # - explicit bounds: timeout + interval_s are REQUIRED
+                # - type supports: ping | tcp | route_prefix
+                if "type" not in wf:
+                    die(f"{sctx}.wait_for: missing keys ['type']")
+
+                t = wf.get("type")
+                if not isinstance(t, str) or not t.strip():
+                    die(f"{sctx}.wait_for.type: must be a non-empty string")
+                t = t.strip()
+
+                if t not in ("ping", "tcp", "route_prefix"):
+                    die(f"{sctx}.wait_for.type: must be ping|tcp|route_prefix")
+
+                # Base required keys (all types)
+                base_required = {"type", "from", "expect", "timeout", "interval_s"}
+                missing = base_required - set(wf)
                 if missing:
                     die(f"{sctx}.wait_for: missing keys {sorted(missing)}")
 
-                # v1.x: allow ping tuning + optional deterministic source selector
-                allowed_wf = required | {
-                    "timeout",
-                    "interval_s",
-                    "count",
-                    "per_attempt_timeout_s",
-                    "src_ip",
-                    "src_if",
-                }
+                # Type-specific required keys + allowed key sets
+                if t == "ping":
+                    type_required = {"to"}
+                    allowed_wf = base_required | type_required | {
+                        "count",
+                        "per_attempt_timeout_s",
+                        "src_ip",
+                        "src_if",
+                    }
+                elif t == "tcp":
+                    type_required = {"to", "port"}
+                    allowed_wf = base_required | type_required | {
+                        "per_attempt_timeout_s",
+                        "src_ip",
+                        "src_if",
+                    }
+                else:
+                    # route_prefix
+                    # Accept 'on' as alias for 'src' (fail-fast if both present and disagree)
+                    on_v = wf.get("on")
+                    src_v = wf.get("src")
+                    if on_v is not None and src_v is not None:
+                        if str(on_v).strip() != str(src_v).strip():
+                            die(f"{sctx}.wait_for: route_prefix on/src mismatch (provide only one or same value)")
+                    if src_v is None and on_v is not None:
+                        wf["src"] = str(on_v).strip()
+                    type_required = {"src", "prefix"}
+                    allowed_wf = base_required | type_required | {
+                        "on",
+                        "per_attempt_timeout_s",
+                    }
+
+                missing = type_required - set(wf)
+                if missing:
+                    die(f"{sctx}.wait_for: missing keys {sorted(missing)}")
+
                 unknown = set(wf) - allowed_wf
                 if unknown:
                     die(f"{sctx}.wait_for: unknown keys {sorted(unknown)}")
 
-                t = wf.get("type")
-                if t != "ping":
-                    die(f"{sctx}.wait_for.type: must be ping (v1)")
+                # expect
+                exp = wf.get("expect")
+                if exp not in ("pass", "fail"):
+                    die(f"{sctx}.wait_for.expect: must be pass|fail")
 
-                # v1.x optional ping source selector (Tier-1 validation only)
+                # bounds
+                to = wf.get("timeout")
+                if not isinstance(to, int) or to <= 0:
+                    die(f"{sctx}.wait_for.timeout: must be a positive int")
+
+                iv = wf.get("interval_s")
+                if not isinstance(iv, (int, float)) or float(iv) <= 0:
+                    die(f"{sctx}.wait_for.interval_s: must be a positive number")
+
+                # optional per-attempt timeout
+                if "per_attempt_timeout_s" in wf:
+                    pat = wf.get("per_attempt_timeout_s")
+                    if not isinstance(pat, int) or pat < 1:
+                        die(f"{sctx}.wait_for.per_attempt_timeout_s: must be an int >= 1")
+
+                # optional ping count (ping only)
+                if t == "ping" and "count" in wf:
+                    c = wf.get("count")
+                    if not isinstance(c, int) or c < 1:
+                        die(f"{sctx}.wait_for.count: must be an int >= 1")
+
+                # node index for deterministic validation
+                nodes = topo.get("nodes") or []
+                by_name: dict[str, dict[str, Any]] = {
+                    n.get("name"): n
+                    for n in nodes
+                    if isinstance(n, dict) and isinstance(n.get("name"), str)
+                }
+
+                # from: must be an existing node name
+                v_from = wf.get("from")
+                if not isinstance(v_from, str) or not v_from.strip():
+                    die(f"{sctx}.wait_for.from: must be a non-empty string")
+                from_s = v_from.strip()
+                if from_s not in by_name:
+                    die(f"{sctx}.wait_for.from: unknown node '{from_s}'")
+
+                # Optional deterministic source selector (shared with ping test semantics)
                 src_ip = wf.get("src_ip")
                 src_if = wf.get("src_if")
 
@@ -1630,59 +1710,62 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                     if any(ch.isspace() for ch in src_if):
                         die(f"{sctx}.wait_for.src_if: must not contain whitespace")
 
-                if "count" in wf:
-                    c = wf.get("count")
-                    if not isinstance(c, int) or c < 1:
-                        die(f"{sctx}.wait_for.count: must be an int >= 1")
+                # per-type target validation
+                if t in ("ping", "tcp"):
+                    v_to = wf.get("to")
+                    if not isinstance(v_to, str) or not v_to.strip():
+                        die(f"{sctx}.wait_for.to: must be a non-empty string")
 
-                if "per_attempt_timeout_s" in wf:
-                    pat = wf.get("per_attempt_timeout_s")
-                    if not isinstance(pat, int) or pat < 1:
-                        die(f"{sctx}.wait_for.per_attempt_timeout_s: must be an int >= 1")
+                    to_raw = v_to.strip()
 
-                exp = wf.get("expect")
-                if exp not in ("pass", "fail"):
-                    die(f"{sctx}.wait_for.expect: must be pass|fail")
-
-                for k in ("from", "to"):
-                    v = wf.get(k)
-                    if not isinstance(v, str) or not v.strip():
-                        die(f"{sctx}.wait_for.{k}: must be a non-empty string")
-
-                # v1: wait_for.to may be a node name OR an IP literal
-                to_raw = str(wf.get("to")).strip()
-                # v1.x: wait_for ping destinations are IPv4-only (no IPv6)
-                if is_ip_literal(to_raw) and ":" in to_raw:
-                    reason = classify_invalid_target(to_raw)  # should say IPv6
-                    die(
-                        f"{sctx}.wait_for.to: invalid destination '{to_raw}'. "
-                        "Allowed: node name declared in topology (e.g. 'h2') OR IPv4 literal (e.g. '192.168.2.10'). "
-                        "Hostnames/DNS are not supported (determinism). "
-                        f"Detail: {reason}"
-                    )
-
-                if is_ip_literal(to_raw):
-                    validate_ip_literal(to_raw, f"{sctx}.wait_for.to")
-                else:
-                    # must be an existing node name
-                    nodes = topo.get("nodes", []) or []
-                    if not any(isinstance(n, dict) and n.get("name") == to_raw for n in nodes):
-                        reason = classify_invalid_target(to_raw)
+                    # v1.x: wait_for ping/tcp destinations accept node name OR IPv4 literal
+                    # (IPv6 and hostnames rejected deterministically)
+                    if is_ip_literal(to_raw) and ":" in to_raw:
+                        reason = classify_invalid_target(to_raw)  # should say IPv6
                         die(
                             f"{sctx}.wait_for.to: invalid destination '{to_raw}'. "
-                            f"Allowed: node name declared in topology (e.g. 'h2') OR IPv4 literal (e.g. '192.168.2.10'). "
-                            f"Hostnames/DNS are not supported (determinism). Detail: {reason}"
+                            "Allowed: node name declared in topology (e.g. 'h2') OR IPv4 literal (e.g. '192.168.2.10'). "
+                            "Hostnames/DNS are not supported (determinism). "
+                            f"Detail: {reason}"
                         )
 
-                if "timeout" in wf:
-                    to = wf.get("timeout")
-                    if not isinstance(to, int) or to <= 0:
-                        die(f"{sctx}.wait_for.timeout: must be a positive int")
+                    if is_ip_literal(to_raw):
+                        validate_ip_literal(to_raw, f"{sctx}.wait_for.to")
+                    else:
+                        if to_raw not in by_name:
+                            reason = classify_invalid_target(to_raw)
+                            die(
+                                f"{sctx}.wait_for.to: invalid destination '{to_raw}'. "
+                                "Allowed: node name declared in topology (e.g. 'h2') OR IPv4 literal (e.g. '192.168.2.10'). "
+                                "Hostnames/DNS are not supported (determinism). "
+                                f"Detail: {reason}"
+                            )
 
-                if "interval_s" in wf:
-                    iv = wf.get("interval_s")
-                    if not isinstance(iv, (int, float)) or float(iv) <= 0:
-                        die(f"{sctx}.wait_for.interval_s: must be a positive number")
+                if t == "tcp":
+                    port = wf.get("port")
+                    try:
+                        port_i = int(port)
+                    except Exception:
+                        die(f"{sctx}.wait_for.port: must be an int")
+                    if port_i < 1 or port_i > 65535:
+                        die(f"{sctx}.wait_for.port: must be in range 1..65535")
+
+                if t == "route_prefix":
+                    v_src = wf.get("src")
+                    if not isinstance(v_src, str) or not v_src.strip():
+                        die(f"{sctx}.wait_for.src: must be a non-empty string")
+                    src_s = v_src.strip()
+                    if src_s not in by_name:
+                        die(f"{sctx}.wait_for.src: unknown node '{src_s}'")
+
+                    pfx = wf.get("prefix")
+                    if not isinstance(pfx, str) or not pfx.strip():
+                        die(f"{sctx}.wait_for.prefix: must be a non-empty string CIDR")
+                    norm = _normalize_prefix(pfx.strip())
+                    if not norm:
+                        die(f"{sctx}.wait_for.prefix: invalid CIDR {pfx!r}")
+                    # Keep normalized form (deterministic) for downstream execution
+                    wf["prefix"] = norm
 
             # ---- wait_for_bgp ----
             if "wait_for_bgp" in step:
@@ -1792,43 +1875,87 @@ def wait_for_condition(
     Explicit convergence wait. Retries only because user declared wait_for + timeout.
     Returns: (ok, attempts)
     """
-    ctype = cond.get("type")
+    ctype = (cond.get("type") or "").strip().lower()
     src = cond.get("from")
-    dst = cond.get("to")
     expect = (cond.get("expect") or "pass").lower()
     timeout = int(cond.get("timeout") or 30)
 
-    if ctype not in ("ping", "tcp"):
+    if ctype not in ("ping", "tcp", "route_prefix"):
         die(f"wait_for: unsupported type {ctype!r}")
 
     if not isinstance(src, str) or not src.strip():
         die("wait_for: invalid from (must be node name)")
-    if not isinstance(dst, str) or not dst.strip():
-        die("wait_for: invalid to (must be node name or IP literal)")
 
     if expect not in ("pass", "fail"):
         die("wait_for: expect must be pass|fail")
 
-    dst_ip = resolve_dst_to_ip(topo, dst.strip())
     should_succeed = (expect == "pass")
 
+    # Optional per-attempt timeout (explicit)
+    per_attempt_timeout_s = int(cond.get("per_attempt_timeout_s") or 1)
+    if per_attempt_timeout_s < 1:
+        die("wait_for: per_attempt_timeout_s must be >= 1")
+
     def attempt() -> tuple[bool, Any]:
+        # -------------------------
+        # ping
+        # -------------------------
         if ctype == "ping":
-            cp = rt.exec(lab, src, ["ping", "-c", "2", "-W", "1", dst_ip], check=False)
+            dst = cond.get("to")
+            if not isinstance(dst, str) or not dst.strip():
+                die("wait_for: invalid to (must be node name or IP literal)")
+
+            count = int(cond.get("count") or 1)
+            if count < 1:
+                die("wait_for ping: count must be >= 1")
+
+            dst_ip = resolve_dst_to_ip(topo, dst.strip())
+            cp = rt.exec(lab, src, ["ping", "-c", str(count), "-W", str(per_attempt_timeout_s), dst_ip], check=False)
             ok = (cp.returncode == 0)
             return (ok == should_succeed), cp
 
-        # tcp wait_for (if you use it)
-        port = cond.get("port")
-        try:
-            port_i = int(port)
-        except Exception:
-            die("wait_for tcp: port must be an int")
+        # -------------------------
+        # tcp
+        # -------------------------
+        if ctype == "tcp":
+            dst = cond.get("to")
+            if not isinstance(dst, str) or not dst.strip():
+                die("wait_for: invalid to (must be node name or IP literal)")
 
-        ensure_nc(rt, lab, src)
-        cp = rt.exec(lab, src, ["sh", "-lc", f"nc -z -w 2 {dst_ip} {port_i}"], check=False)
-        ok = (cp.returncode == 0)
-        return (ok == should_succeed), cp
+            port = cond.get("port")
+            try:
+                port_i = int(port)
+            except Exception:
+                die("wait_for tcp: port must be an int")
+
+            dst_ip = resolve_dst_to_ip(topo, dst.strip())
+            ensure_nc(rt, lab, src)
+            cp = rt.exec(lab, src, ["sh", "-lc", f"nc -z -w {per_attempt_timeout_s} {dst_ip} {port_i}"], check=False)
+            ok = (cp.returncode == 0)
+            return (ok == should_succeed), cp
+
+        # -------------------------
+        # route_prefix
+        # -------------------------
+        vantage = cond.get("src") or cond.get("on")
+        if not isinstance(vantage, str) or not vantage.strip():
+            die("wait_for route_prefix: requires src/on as a node name")
+
+        prefix = cond.get("prefix")
+        if not isinstance(prefix, str) or not prefix.strip():
+            die("wait_for route_prefix: requires prefix as CIDR")
+
+        cp = rt.exec(lab, vantage.strip(), ["sh", "-lc", f"ip -4 route show {prefix.strip()} 2>/dev/null || true"], check=False)
+        out = getattr(cp, "stdout", "") or ""
+        if isinstance(out, (bytes, bytearray)):
+            try:
+                out = out.decode("utf-8", errors="replace")
+            except Exception:
+                out = str(out)
+
+        present = (prefix.strip() in str(out))
+        ok = bool(present)
+        return ((ok == should_succeed)), cp
 
     # retry_until already enforces explicit wait semantics
     ok, _last, attempts, _dur_ms = retry_until(timeout, interval_s, attempt)

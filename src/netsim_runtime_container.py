@@ -4,6 +4,7 @@ import hashlib
 import json
 import subprocess
 import time
+import ipaddress
 from pathlib import Path
 from typing import Any
 
@@ -303,9 +304,19 @@ def build_coverage_model(resolved: dict[str, Any], topo_path: Path) -> dict[str,
                         die(f"coverage: scenario '{sid}' wait_for must be a dict")
 
                     wtype = str(wf.get("type") or "").strip().lower()
-                    if wtype != "ping":
-                        die(f"coverage: scenario '{sid}' wait_for type '{wtype}' is not supported by coverage schema (only ping)")
-                    scen_waits.add("wait_for_ping")
+                    if wtype not in ("ping", "tcp", "route_prefix"):
+                        die(
+                            f"coverage: scenario '{sid}' wait_for type '{wtype}' is not supported by coverage schema "
+                            "(only ping|tcp|route_prefix)"
+                        )
+
+                    # Record wait type for coverage summary
+                    if wtype == "ping":
+                        scen_waits.add("wait_for_ping")
+                    elif wtype == "tcp":
+                        scen_waits.add("wait_for_tcp")
+                    else:
+                        scen_waits.add("wait_for_route_prefix")
 
                     frm = wf.get("from")
                     to = wf.get("to")
@@ -525,7 +536,15 @@ def write_containerlab_file(topo_path: Path) -> Path:
 
 def _normalize_prefix(cidr: str) -> str | None:
     try:
-        n = ipaddress.ip_network(cidr.strip(), strict=False)
+        # Accept inputs that may already be parsed (e.g., IPv4Network) by coercing to str.
+        if not isinstance(cidr, str):
+            cidr = str(cidr)
+
+        cidr = cidr.strip()
+        if not cidr:
+            return None
+
+        n = ipaddress.ip_network(cidr, strict=False)
         if n.version != 4:
             return None
         return str(n)
