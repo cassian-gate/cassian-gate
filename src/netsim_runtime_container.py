@@ -1193,3 +1193,35 @@ def list_owned_labs_from_artifacts() -> list[tuple[str, Path]]:
     out.sort(key=lambda t: t[1].name)
     return out
 
+def list_owned_labs_from_generated_files() -> list[str]:
+    """
+    Ownership marker (generated files, deterministic):
+      - labs/<lab>.clab.yaml (or .clab.yml) created by netsim gen/up
+      - Never scans Docker globally
+      - Deterministic ordering (lexicographic by lab name)
+
+    Returns: ["lab1", "lab2", ...]
+    """
+    if not LABS_DIR.exists():
+        return []
+
+    out: list[str] = []
+    for p in LABS_DIR.iterdir():
+        if not p.is_file():
+            continue
+        if p.suffix not in (".yaml", ".yml"):
+            continue
+
+        name = p.name
+        if not name.endswith(".clab.yaml") and not name.endswith(".clab.yml"):
+            continue
+
+        lab = name.split(".clab.", 1)[0].strip()
+        if not lab:
+            continue
+
+        out.append(lab)
+
+    return sorted(set(out))
+
+

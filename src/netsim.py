@@ -5279,46 +5279,54 @@ def cmd_down(args: argparse.Namespace) -> None:
     # Best-effort cleanup of lab artifact dir (may be root-owned due to containerlab)
     run(["sudo", "rm", "-rf", str(lab_dir(lab_name))], check=False)
 
-def cmd_cleanup(args: argparse.Namespace) -> None:
+def cmd_destroy(args: argparse.Namespace) -> None:
     """
-    v1.x ops helper (non-authoritative):
-      netsim cleanup --all [--yes]
+    Explicit ops command (non-authoritative):
+      netsim destroy <lab> [--purge-artifacts]
 
-    Safety:
-      - ONLY targets ai-netsim labs that have artifacts under labs/clab-*
-      - Dry-run by default; --yes required to destroy
-      - Never touches labs not present in labs/
-      - Does NOT delete artifacts
+    Semantics:
+      - Attempts runtime teardown using containerlab destroy when the generated <lab>.clab.yaml exists.
+      - Does NOT delete disk artifacts by default.
+      - If --purge-artifacts is set: deletes labs/clab-<lab> after runtime teardown attempt.
+      - Idempotent and deterministic: missing runtime/artifacts => "nothing to do" (exit 0).
+      - Returns non-zero if runtime teardown fails OR (if --purge-artifacts) artifact purge fails.
+      - Optional machine-readable report: labs/_cleanup/destroy-<lab>.json (supporting evidence only)
     """
-    if not getattr(args, "all", False):
-        die("cleanup requires --all. This command only targets ai-netsim labs present in labs/ (labs/clab-*).")
+    raw = str(getattr(args, "name", "") or "").strip()
+    if not raw:
+        die("destroy requires a non-empty lab name")
 
-    candidates = list_owned_labs_from_artifacts()
+    # Tolerate accidental ".yaml" suffix (treat as lab name)
+    if raw.endswith(".yaml") or raw.endswith(".yml"):
+        lab_name = Path(raw).stem.strip()
+    else:
+        lab_name = raw
 
-    print("Cleanup plan (dry-run):" if not getattr(args, "yes", False) else "Cleanup plan (execute):")
-    if not candidates:
-        print("- (none)  No ai-netsim lab artifacts found under labs/clab-*")
-        return
+    if not lab_name:
+        die("destroy requires a non-empty lab name")
 
-    for lab, artifact_dir in candidates:
-        print(f"- {lab}   ({artifact_dir})")
+    clab_yaml = lab_file_from_name(lab_name)
+    artifact_dir = lab_dir(lab_name)
 
-    if not getattr(args, "yes", False):
-        print("Run with --yes to destroy these labs. (Artifacts under labs/clab-* are not deleted automatically.)")
-        return
-
-    # Execute: best-effort, deterministic order, never stops on per-lab failure
     failures: list[str] = []
+    report = {
+        "authority": "supporting_evidence",
+        "schema_version": "destroy.v1",
+        "command": "destroy",
+        "lab": lab_name,
+        "clab_yaml": str(clab_yaml),
+        "artifact_dir": str(artifact_dir),
+        "runtime_destroy": {"attempted": False, "status": "skipped", "detail": ""},
+        "artifact_purge": {"attempted": False, "status": "skipped", "detail": ""},
+        "failures": failures,
+    }
 
-    for lab, artifact_dir in candidates:
-        clab_yaml = lab_file_from_name(lab)
+    did_anything = False
 
-        # If the generated containerlab file is missing, we still keep safety:
-        # we DO NOT scan Docker; we treat this as a safe no-op attempt.
-        if not clab_yaml.exists():
-            print(f"OK  {lab}: no {clab_yaml.name} found (treating as already down; artifacts kept)")
-            continue
-
+    # Step 1: runtime teardown (only if we have the generated .clab.yaml; we do NOT scan Docker)
+    if clab_yaml.exists():
+        did_anything = True
+        report["runtime_destroy"]["attempted"] = True
         cp = run(
             ["sudo", "containerlab", "destroy", "-t", str(clab_yaml)],
             check=False,
@@ -5326,27 +5334,190 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
         )
 
         if cp.returncode == 0:
-            print(f"OK  {lab}: destroyed")
-            continue
+            report["runtime_destroy"]["status"] = "succeeded"
+            print(f"OK  {lab_name}: destroyed")
+        else:
+            combined = ((cp.stdout or "") + "\n" + (cp.stderr or "")).strip()
+            low = combined.lower()
+            if "not found" in low or "no such" in low:
+                report["runtime_destroy"]["status"] = "skipped"
+                report["runtime_destroy"]["detail"] = "already down / not found"
+                print(f"OK  {lab_name}: already down / not found")
+            else:
+                summary = combined.splitlines()[-1].strip() if combined else f"exit {cp.returncode}"
+                report["runtime_destroy"]["status"] = "failed"
+                report["runtime_destroy"]["detail"] = summary
+                failures.append(f"runtime destroy failed: {summary}")
+                print(f"WARN {lab_name}: destroy failed: {summary}")
+    else:
+        report["runtime_destroy"]["detail"] = f"missing {clab_yaml.name} (no runtime destroy attempted)"
 
-        # Best-effort classification: containerlab may say "not found" if already down.
-        combined = ((cp.stdout or "") + "\n" + (cp.stderr or "")).strip()
-        low = combined.lower()
-        if "not found" in low or "no such" in low:
-            print(f"OK  {lab}: already down / not found (artifacts kept)")
-            continue
+    # Step 2: optional disk purge
+    do_purge = bool(getattr(args, "purge_artifacts", False))
+    if do_purge:
+        report["artifact_purge"]["attempted"] = True
+        if artifact_dir.exists():
+            did_anything = True
+            cp_rm = run(
+                ["sudo", "rm", "-rf", str(artifact_dir)],
+                check=False,
+                capture_output=True,
+            )
+            if cp_rm.returncode == 0:
+                report["artifact_purge"]["status"] = "succeeded"
+                print(f"OK  {lab_name}: artifacts purged")
+            else:
+                combined_rm = ((cp_rm.stdout or "") + "\n" + (cp_rm.stderr or "")).strip()
+                summary_rm = combined_rm.splitlines()[-1].strip() if combined_rm else f"exit {cp_rm.returncode}"
+                report["artifact_purge"]["status"] = "failed"
+                report["artifact_purge"]["detail"] = summary_rm
+                failures.append(f"artifact purge failed: {summary_rm}")
+                print(f"WARN {lab_name}: artifact purge failed: {summary_rm}")
+        else:
+            report["artifact_purge"]["status"] = "skipped"
+            report["artifact_purge"]["detail"] = "artifacts absent"
+            print(f"OK  {lab_name}: artifacts absent (nothing to purge)")
+    else:
+        report["artifact_purge"]["detail"] = "not requested (default: keep artifacts)"
 
-        # Otherwise warn and continue
-        summary = combined.splitlines()[-1].strip() if combined else f"exit {cp.returncode}"
-        print(f"WARN {lab}: destroy failed: {summary}")
-        failures.append(f"{lab}: {summary}")
+    # Write optional machine-readable report (supporting evidence only)
+    try:
+        report_path = LABS_DIR / "_cleanup" / f"destroy-{lab_name}.json"
+        write_file(report_path, json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
+        print(f"Wrote: {report_path}")
+    except Exception as e:
+        failures.append(f"destroy report write failed: {e}")
+        print(f"WARN: destroy report write failed: {e}")
 
     if failures:
-        print("Cleanup completed with warnings:")
+        print("Destroy completed with failures:")
+        for f in failures:
+            print(f"- {lab_name}: {f}")
+        die("destroy: one or more actions failed", code=1)
+
+    if not did_anything:
+        print(f"INFO: nothing to do for lab '{lab_name}'")
+        return
+
+def cmd_cleanup(args: argparse.Namespace) -> None:
+    """
+    v1.x ops helper (non-authoritative):
+      netsim cleanup --all [--yes]
+
+    Safety:
+      - ONLY targets ai-netsim labs that have artifacts under labs/clab-*
+      - Dry-run by default; --yes required to execute
+      - Never touches labs not present in labs/ (no Docker scans)
+      - On execute: attempts runtime teardown (if .clab.yaml exists) AND purges artifacts under labs/clab-*
+      - Best-effort across labs; final exit non-zero if any intended action failed
+      - Optional machine-readable report: labs/_cleanup/cleanup.json
+    """
+    if not getattr(args, "all", False):
+        die("cleanup requires --all. This command only targets ai-netsim labs present in labs/ (labs/clab-*).")
+
+    candidates = list_owned_labs_from_artifacts()
+
+    do_exec = bool(getattr(args, "yes", False))
+    print("Cleanup plan (execute):" if do_exec else "Cleanup plan (dry-run):")
+
+    if not candidates:
+        print("- (none)  No ai-netsim lab artifacts found under labs/clab-*")
+        return
+
+    for lab, artifact_dir in candidates:
+        print(f"- {lab}   ({artifact_dir})")
+
+    if not do_exec:
+        print("Run with --yes to execute cleanup. (This will destroy runtime state when possible and purge labs/clab-* artifacts.)")
+        return
+
+    # Execute: best-effort, deterministic order, never stops on per-lab failure
+    failures: list[str] = []
+    report_labs: list[dict[str, object]] = []
+
+    for lab, artifact_dir in candidates:
+        lab_entry: dict[str, object] = {
+            "lab": lab,
+            "artifact_dir": str(artifact_dir),
+            "runtime_destroy": {"attempted": False, "status": "skipped", "detail": ""},
+            "artifact_purge": {"attempted": False, "status": "skipped", "detail": ""},
+        }
+
+        # Runtime destroy (only if we have the generated .clab.yaml; we do NOT scan Docker)
+        clab_yaml = lab_file_from_name(lab)
+        if clab_yaml.exists():
+            lab_entry["runtime_destroy"]["attempted"] = True
+            cp = run(
+                ["sudo", "containerlab", "destroy", "-t", str(clab_yaml)],
+                check=False,
+                capture_output=True,
+            )
+
+            if cp.returncode == 0:
+                lab_entry["runtime_destroy"]["status"] = "succeeded"
+                print(f"OK  {lab}: destroyed")
+            else:
+                combined = ((cp.stdout or "") + "\n" + (cp.stderr or "")).strip()
+                low = combined.lower()
+                if "not found" in low or "no such" in low:
+                    lab_entry["runtime_destroy"]["status"] = "skipped"
+                    lab_entry["runtime_destroy"]["detail"] = "already down / not found"
+                    print(f"OK  {lab}: already down / not found")
+                else:
+                    summary = combined.splitlines()[-1].strip() if combined else f"exit {cp.returncode}"
+                    lab_entry["runtime_destroy"]["status"] = "failed"
+                    lab_entry["runtime_destroy"]["detail"] = summary
+                    print(f"WARN {lab}: destroy failed: {summary}")
+                    failures.append(f"{lab}: runtime destroy failed: {summary}")
+        else:
+            lab_entry["runtime_destroy"]["detail"] = f"missing {clab_yaml.name} (no runtime destroy attempted)"
+
+        # Artifact purge (always for cleanup --all)
+        lab_entry["artifact_purge"]["attempted"] = True
+        cp_rm = run(
+            ["sudo", "rm", "-rf", str(artifact_dir)],
+            check=False,
+            capture_output=True,
+        )
+        if cp_rm.returncode == 0:
+            lab_entry["artifact_purge"]["status"] = "succeeded"
+            print(f"OK  {lab}: artifacts purged")
+        else:
+            combined_rm = ((cp_rm.stdout or "") + "\n" + (cp_rm.stderr or "")).strip()
+            summary_rm = combined_rm.splitlines()[-1].strip() if combined_rm else f"exit {cp_rm.returncode}"
+            lab_entry["artifact_purge"]["status"] = "failed"
+            lab_entry["artifact_purge"]["detail"] = summary_rm
+            print(f"WARN {lab}: artifact purge failed: {summary_rm}")
+            failures.append(f"{lab}: artifact purge failed: {summary_rm}")
+
+        report_labs.append(lab_entry)
+
+    # Write optional machine-readable report (supporting evidence only)
+    try:
+        cleanup_report = {
+            "authority": "supporting_evidence",
+            "schema_version": "cleanup.v1",
+            "command": "cleanup --all",
+            "executed": True,
+            "labs_targeted": [lab for lab, _ in candidates],
+            "labs": report_labs,
+            "failures": failures,
+        }
+        report_path = LABS_DIR / "_cleanup" / "cleanup.json"
+        write_file(report_path, json.dumps(cleanup_report, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
+        print(f"Wrote: {report_path}")
+    except Exception as e:
+        # Report writing must never mask cleanup failures; treat as an additional failure signal.
+        failures.append(f"cleanup report write failed: {e}")
+        print(f"WARN: cleanup report write failed: {e}")
+
+    if failures:
+        print("Cleanup completed with failures:")
         for f in failures:
             print(f"- {f}")
-    else:
-        print("Cleanup completed successfully. (Artifacts were not deleted.)")
+        die("cleanup --all: one or more actions failed", code=1)
+
+    print("Cleanup completed successfully.")
 
 def cmd_exec(args: argparse.Namespace) -> None:
     rt = get_runtime()
@@ -7765,6 +7936,17 @@ def main() -> None:
     p_down = sub.add_parser("down", help="Destroy a deployed lab by name")
     p_down.add_argument("name", help="Lab name (topology 'name')")
     p_down.set_defaults(func=cmd_down)
+
+    # destroy (explicit ops; does not delete artifacts by default)
+    p_destroy = sub.add_parser("destroy", help="Destroy a lab runtime; keep artifacts unless --purge-artifacts")
+    p_destroy.add_argument("name", help="Lab name (topology 'name')")
+    p_destroy.add_argument(
+        "--purge-artifacts",
+        dest="purge_artifacts",
+        action="store_true",
+        help="Also delete labs/clab-<lab> artifacts after runtime teardown attempt.",
+    )
+    p_destroy.set_defaults(func=cmd_destroy)
 
     # cleanup
     p_cleanup = sub.add_parser(
