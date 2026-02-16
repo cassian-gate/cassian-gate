@@ -2876,6 +2876,64 @@ def _preflight_write(out_path: Path, report: dict) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
+def _preflight_load_adapters(adapter_paths: list[str]) -> dict:
+    """
+    Read normalized adapters.v1 JSON files as advisory-only context.
+    Deterministic:
+      - stable ordering by (source_type, source_path, path)
+      - no timestamps
+    Failure semantics (authoritative for preflight --adapter):
+      - missing/unreadable/invalid schema -> SystemExit with a deterministic message
+      - parse_errors inside adapter JSON do NOT fail (advisory-only)
+    """
+    if not isinstance(adapter_paths, list):
+        raise SystemExit("preflight: --adapter must be repeatable (list)")
+
+    inputs: list[dict] = []
+    for p in adapter_paths:
+        path = str(p or "").strip()
+        if not path:
+            raise SystemExit("preflight: --adapter path is empty")
+
+        ap = Path(path).expanduser()
+        if not ap.exists() or not ap.is_file():
+            raise SystemExit(f"preflight: adapter not found: {ap}")
+
+        try:
+            payload = json.loads(ap.read_text(encoding="utf-8"))
+        except Exception:
+            raise SystemExit(f"preflight: adapter unreadable/invalid json: {ap}")
+
+        if not isinstance(payload, dict):
+            raise SystemExit(f"preflight: adapter must be a JSON object: {ap}")
+
+        sv = str(payload.get("schema_version") or "")
+        auth = str(payload.get("authority") or "")
+        if sv != "adapters.v1" or auth != "advisory":
+            raise SystemExit(f"preflight: adapter schema mismatch (need adapters.v1 advisory): {ap}")
+
+        source_type = str(payload.get("source_type") or "")
+        source_path = str(payload.get("source_path") or "")
+        summ = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        pe = payload.get("parse_errors") if isinstance(payload.get("parse_errors"), list) else []
+        pw = payload.get("parse_warnings") if isinstance(payload.get("parse_warnings"), list) else []
+
+        inputs.append(
+            {
+                "path": str(ap),
+                "schema_version": sv,
+                "authority": auth,
+                "source_type": source_type,
+                "source_path": source_path,
+                "summary": summ,
+                "parse_errors_count": int(len(pe)),
+                "parse_warnings_count": int(len(pw)),
+            }
+        )
+
+    inputs.sort(key=lambda x: (str(x.get("source_type") or ""), str(x.get("source_path") or ""), str(x.get("path") or "")))
+    return {"count": int(len(inputs)), "inputs": inputs}
+
 def _preflight_canonical_link_id(endpoints: object) -> str:
     # endpoints like ["r1:eth1", "r2:eth1"] (resolved, must be deterministic)
     if not isinstance(endpoints, list) or len(endpoints) != 2:
@@ -3092,7 +3150,7 @@ def _preflight_findings(resolved: dict, cov: dict) -> list[dict]:
     findings = sorted(findings, key=lambda f: (_sev_rank(str(f.get("severity"))), str(f.get("category")), str(f.get("id"))))
     return findings
 
-def _preflight_report(input_ref: str, topo_path: Path, resolved: dict, cov: dict) -> dict:
+def _preflight_report(input_ref: str, topo_path: Path, resolved: dict, cov: dict, adapters: dict | None = None) -> dict:
     findings = _preflight_findings(resolved, cov)
 
     # summary counts
@@ -3117,6 +3175,7 @@ def _preflight_report(input_ref: str, topo_path: Path, resolved: dict, cov: dict
             "input": input_ref,
             "resolved_name": str(resolved.get("name") or ""),
         },
+        "adapters": adapters if isinstance(adapters, dict) else {"count": 0, "inputs": []},
         "coverage": coverage_obj,
         "findings": findings,
         "summary": {
@@ -3134,6 +3193,8 @@ def _preflight_format_text(report: dict) -> str:
     lines.append(f"topology: {topo.get('input')}")
     lines.append(f"resolved_name: {topo.get('resolved_name')}")
     lines.append(f"findings: warn={counts.get('warn', 0)} info={counts.get('info', 0)}")
+    ad = report.get("adapters") if isinstance(report.get("adapters"), dict) else {}
+    lines.append(f"adapters: {int(ad.get('count', 0) or 0)}")
     lines.append("")
     for f in report.get("findings") or []:
         if not isinstance(f, dict):

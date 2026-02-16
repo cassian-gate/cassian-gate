@@ -56,6 +56,8 @@ from netsim_model import (
     gen_frr_conf,
     topo_to_containerlab,
     resolve_topology,
+    adapt_terraform_plan_json,
+    adapt_ansible_rendered_dir,
 )
 
 from netsim_tests import (
@@ -104,6 +106,7 @@ from netsim_tests import (
     _preflight_contains_key,
     _preflight_get_touched_nodes,
     _preflight_get_touched_links,
+    _preflight_load_adapters,
     _preflight_findings,
     _preflight_report,
     _preflight_format_text,
@@ -5125,11 +5128,25 @@ def cmd_preflight(args: argparse.Namespace) -> None:
         # Declared-only coverage model (authoritative dependency; still advisory output)
         cov = build_coverage_model(resolved, topo_path=topo_path)
 
+        adapter_paths = getattr(args, "adapter", None) or []
+        adapters = None
+        if isinstance(adapter_paths, list) and adapter_paths:
+            # Explicit-only; missing/unreadable adapter is a user invocation error for preflight.
+            # Normalize exit code to 1 (deterministic) even if helper raises SystemExit without code.
+            try:
+                adapters = _preflight_load_adapters(adapter_paths)
+            except SystemExit as e:
+                msg = str(e)
+                if not msg:
+                    msg = "preflight: adapter load failed"
+                die(msg, code=1)
+
         report = _preflight_report(
             input_ref=input_ref,
             topo_path=topo_path,
             resolved=resolved,
             cov=cov,
+            adapters=adapters,
         )
 
         if fmt == "json":
@@ -5147,11 +5164,97 @@ def cmd_preflight(args: argparse.Namespace) -> None:
 
     except SystemExit as e:
         msg = str(e).strip() or "preflight: invalid input"
-        die(msg, code=2)
+        # Preserve explicit, deterministic exit codes when sub-helpers raise SystemExit(code).
+        # This is required so preflight --adapter missing/unreadable can exit 1 (user invocation error),
+        # while other preflight input/validation errors remain exit 2 by convention.
+        code = 2
+        try:
+            if isinstance(e.code, int):
+                code = int(e.code)
+        except Exception:
+            code = 2
+        die(msg, code=code)
 
     except Exception as e:
         msg = str(e).strip() or "preflight: invalid input"
         die(msg, code=2)
+
+def cmd_adapt_terraform(args: argparse.Namespace) -> None:
+    """
+    Read-only input adapter: Terraform plan JSON -> normalized advisory JSON.
+    Exit codes (authoritative):
+      - missing/unreadable input plan path: 1
+      - parse errors: 0 by default (writes JSON with parse_errors), 1 if --strict
+    """
+    plan_arg = str(getattr(args, "plan", "") or "").strip()
+    if not plan_arg:
+        die("adapt terraform: missing --plan <path>", code=1)
+
+    plan_path = Path(plan_arg).expanduser()
+    if not plan_path.exists() or not plan_path.is_file():
+        die(f"adapt terraform: plan not found: {plan_path}", code=1)
+
+    out_arg = getattr(args, "out", None)
+    out_dir = Path(str(out_arg)).expanduser() if out_arg else (BASE_DIR / "artifacts" / "adapters")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "terraform.plan.adapter.json"
+
+    strict = bool(getattr(args, "strict", False))
+
+    payload = adapt_terraform_plan_json(plan_path)
+
+    # Deterministic write
+    write_file(out_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+    # strict parsing semantics: only based on parse_errors field
+    pe = payload.get("parse_errors") or []
+    pw = payload.get("parse_warnings") or []
+    pe_n = len(pe) if isinstance(pe, list) else 0
+    pw_n = len(pw) if isinstance(pw, list) else 0
+
+    if pe_n > 0 and strict:
+        die(f"adapt terraform: parse_errors={pe_n} (see {out_path})", code=1)
+
+    # Deterministic, actionable output messaging (advisory-only)
+    suffix = ""
+    if pw_n > 0 or pe_n > 0:
+        suffix = f" (parse_warnings={pw_n}, parse_errors={pe_n})"
+
+    print(f"✅ ADAPT OK (advisory): wrote {out_path}{suffix}")
+
+def cmd_adapt_ansible(args: argparse.Namespace) -> None:
+    """
+    Read-only input adapter: rendered Ansible output dir -> normalized advisory JSON.
+    Exit codes (authoritative):
+      - missing/unreadable input dir path: 1
+      - parse errors: 0 by default (writes JSON with parse_errors), 1 if --strict
+    """
+    dir_arg = str(getattr(args, "dir", "") or "").strip()
+    if not dir_arg:
+        die("adapt ansible: missing --dir <path>", code=1)
+
+    root_dir = Path(dir_arg).expanduser()
+    if not root_dir.exists() or not root_dir.is_dir():
+        die(f"adapt ansible: dir not found: {root_dir}", code=1)
+
+    out_arg = getattr(args, "out", None)
+    out_dir = Path(str(out_arg)).expanduser() if out_arg else (BASE_DIR / "artifacts" / "adapters")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "ansible.rendered.adapter.json"
+
+    strict = bool(getattr(args, "strict", False))
+
+    payload = adapt_ansible_rendered_dir(root_dir)
+
+    # Deterministic write
+    write_file(out_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+    # strict parsing semantics: only based on parse_errors field
+    pe = payload.get("parse_errors") or []
+    if isinstance(pe, list) and len(pe) > 0 and strict:
+        die(f"adapt ansible: parse_errors={len(pe)} (see {out_path})", code=1)
+
+    print(f"✅ ADAPT OK (advisory): wrote {out_path}")
 
 def cmd_up(args: argparse.Namespace) -> None:
     topo_path = (TOPO_DIR / args.topology) if not Path(args.topology).is_file() else Path(args.topology)
@@ -7167,10 +7270,18 @@ def cmd_ai_explain(args) -> None:
         )
         sys.exit(2)
 
+    adapter_paths = list(getattr(args, "adapter", None) or [])
+    adapters = _ai_load_adapters(adapter_paths, command_name="explain") if adapter_paths else {
+        "authority": "advisory",
+        "count": 0,
+        "inputs": [],
+    }
+
     bundle = {
         "schema_version": "1",
         **_ai_advisory_headers(),
         "command": "explain",
+        "adapters": adapters,
         "lab": {"name": lab, "labdir": labdir},
         "artifacts": {
             "results_json": os.path.join(labdir, "results.json"),
@@ -7539,6 +7650,77 @@ def _ai_read_yaml(path: str) -> Any:
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
     
+def _ai_load_adapters(paths: list[str], command_name: str) -> dict[str, Any]:
+    """
+    Load adapters.v1 JSON files for AI context only.
+    Missing/unreadable path is an AI usage error (exit 2) because the user explicitly requested it.
+    Adapter parse_errors inside the JSON are preserved as advisory and do not fail the AI command.
+    """
+    from pathlib import Path
+
+    norm_paths: list[str] = []
+    for p in (paths or []):
+        if isinstance(p, str) and p.strip():
+            norm_paths.append(p.strip())
+
+    # Deterministic order
+    norm_paths = sorted(set(norm_paths))
+
+    out_inputs: list[dict[str, Any]] = []
+    for p in norm_paths:
+        pp = Path(p)
+        if not pp.exists():
+            print(f"AI usage error: adapter not found: {pp}", file=sys.stderr)
+            sys.exit(2)
+        if not pp.is_file():
+            print(f"AI usage error: adapter is not a file: {pp}", file=sys.stderr)
+            sys.exit(2)
+
+        try:
+            with pp.open("r", encoding="utf-8") as f:
+                obj = json.load(f)
+        except Exception as e:
+            print(f"AI usage error: failed to read adapter JSON {pp}: {e!s}", file=sys.stderr)
+            sys.exit(2)
+
+        # Minimal schema sanity (advisory-only)
+        schema_version = str(obj.get("schema_version") or "")
+        authority = str(obj.get("authority") or "")
+        source_type = str(obj.get("source_type") or "")
+        summary = obj.get("summary") if isinstance(obj.get("summary"), dict) else {}
+
+        parse_errors = obj.get("parse_errors") if isinstance(obj.get("parse_errors"), list) else []
+        parse_warnings = obj.get("parse_warnings") if isinstance(obj.get("parse_warnings"), list) else []
+
+        out_inputs.append(
+            {
+                "path": str(pp),
+                "schema_version": schema_version,
+                "authority": authority,
+                "source_type": source_type,
+                "summary": {
+                    "items_total": int(summary.get("items_total") or 0),
+                    "items_changed": int(summary.get("items_changed") or 0),
+                    "items_added": int(summary.get("items_added") or 0),
+                    "items_removed": int(summary.get("items_removed") or 0),
+                },
+                "parse": {
+                    "warnings": int(len(parse_warnings)),
+                    "errors": int(len(parse_errors)),
+                },
+                "notes": [
+                    "Advisory-only adapter context. Does not affect verdicts/exit codes.",
+                    f"Loaded by ai {command_name}.",
+                ],
+            }
+        )
+
+    return {
+        "authority": "advisory",
+        "count": int(len(out_inputs)),
+        "inputs": out_inputs,
+    }
+
 def _ai_review_change_sections(bundle: dict[str, Any]) -> dict[str, Any]:
     """
     Deterministic, vendor-agnostic offline review sections for Change Context.
@@ -7840,10 +8022,18 @@ def cmd_ai_review(args) -> None:
 
     snippets = snippets[:max_items]
 
+    adapter_paths = list(getattr(args, "adapter", None) or [])
+    adapters = _ai_load_adapters(adapter_paths, command_name="review") if adapter_paths else {
+        "authority": "advisory",
+        "count": 0,
+        "inputs": [],
+    }
+
     bundle = {
         "schema_version": "1",
         **_ai_advisory_headers(),
         "command": "review",
+        "adapters": adapters,
         "topology": str(topo_path),
         "counts": {"nodes": len(nodes), "tests": len(tests), "scenarios": len(scenarios)},
         "inventory": {
@@ -7920,7 +8110,24 @@ def main() -> None:
     p_pre.add_argument("topology", help="Topology YAML filename under ./topologies or a full path")
     p_pre.add_argument("--format", choices=["json", "text"], default="json", help="Output format")
     p_pre.add_argument("--out", default=None, help="Output path (default: artifacts/preflight/preflight.json)")
+    p_pre.add_argument("--adapter", action="append", default=[], help="Path to an adapters.v1 JSON (repeatable; advisory-only)")
     p_pre.set_defaults(func=cmd_preflight)
+
+    # adapt (read-only input adapters; advisory-only)
+    p_adapt = sub.add_parser("adapt", help="Read-only input adapters (advisory-only)")
+    sub_adapt = p_adapt.add_subparsers(dest="adapter", required=True)
+
+    p_tf = sub_adapt.add_parser("terraform", help="Adapt Terraform plan JSON (terraform show -json)")
+    p_tf.add_argument("--plan", required=True, help="Path to terraform plan JSON (terraform show -json)")
+    p_tf.add_argument("--out", default=None, help="Output directory (default: artifacts/adapters/)")
+    p_tf.add_argument("--strict", action="store_true", help="Fail (exit 1) if parse_errors are present")
+    p_tf.set_defaults(func=cmd_adapt_terraform)
+
+    p_ans = sub_adapt.add_parser("ansible", help="Adapt rendered Ansible output directory (read-only)")
+    p_ans.add_argument("--dir", required=True, help="Path to rendered Ansible output directory")
+    p_ans.add_argument("--out", default=None, help="Output directory (default: artifacts/adapters/)")
+    p_ans.add_argument("--strict", action="store_true", help="Fail (exit 1) if parse_errors are present")
+    p_ans.set_defaults(func=cmd_adapt_ansible)
 
     # up
     p_up = sub.add_parser("up", help="Generate + deploy")
@@ -8114,6 +8321,12 @@ def main() -> None:
         p.add_argument("--online", action="store_true", help="Attempt online model call (BYO key). Never gates; exit 0 on failure.")
         p.add_argument("--model", help="Override model name (else AI_NETSIM_AI_MODEL)")
         p.add_argument("--format", choices=["json", "text"], default="json", help="Output format (json is CI-safe)")
+        p.add_argument(
+            "--adapter",
+            action="append",
+            default=[],
+            help="Path to adapters.v1 JSON (repeatable). Advisory-only context; never gates.",
+        )
 
     # ai explain
     p_ai_explain = ai_sub.add_parser("explain", help="Explain a prior run using artifacts only")

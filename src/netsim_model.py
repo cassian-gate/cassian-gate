@@ -3,6 +3,10 @@ from __future__ import annotations
 
 from typing import Any
 
+import hashlib
+import json
+from pathlib import Path
+
 import ipaddress
 import yaml
 
@@ -18,6 +22,235 @@ from netsim_artifacts import (
     node_cfg_dir,
     write_file,
 )
+
+# -------------------------
+# Input adapters (read-only, advisory-only)
+# -------------------------
+
+def adapt_terraform_plan_json(plan_path: Path) -> dict[str, Any]:
+    """
+    Read-only adapter: Terraform plan JSON (terraform show -json).
+    Contract:
+      - advisory-only (no authority transfer)
+      - offline-only (no subprocess, no network)
+      - deterministic ordering and IDs
+      - no timestamps in output
+    """
+    out: dict[str, Any] = {
+        "schema_version": "adapters.v1",
+        "authority": "advisory",
+        "source_type": "terraform_plan_json",
+        "source_path": str(plan_path),
+        "summary": {
+            "items_total": 0,
+            "items_changed": 0,
+            "items_added": 0,
+            "items_removed": 0,
+        },
+        "items": [],
+        "parse_warnings": [],
+        "parse_errors": [],
+    }
+
+    try:
+        raw = plan_path.read_text(encoding="utf-8", errors="strict")
+    except Exception as e:
+        out["parse_errors"].append(f"read_error: {e}")
+        return out
+
+    try:
+        doc = json.loads(raw)
+    except Exception as e:
+        out["parse_errors"].append(f"json_error: {e}")
+        return out
+
+    rc = doc.get("resource_changes")
+    if rc is None:
+        out["parse_warnings"].append("missing: resource_changes (no resources discovered)")
+        rc = []
+    if not isinstance(rc, list):
+        out["parse_errors"].append("invalid: resource_changes must be a list")
+        rc = []
+
+    items: list[dict[str, Any]] = []
+
+    for idx, r in enumerate(rc, start=1):
+        if not isinstance(r, dict):
+            out["parse_warnings"].append(f"resource_changes[{idx}]: not a dict (skipped)")
+            continue
+
+        addr = r.get("address")
+        if not isinstance(addr, str) or not addr.strip():
+            out["parse_warnings"].append(f"resource_changes[{idx}]: missing/invalid address (skipped)")
+            continue
+        addr = addr.strip()
+
+        # action
+        action = "unknown"
+        change = r.get("change")
+        actions = None
+        if isinstance(change, dict):
+            actions = change.get("actions")
+        if isinstance(actions, list) and actions and all(isinstance(a, str) for a in actions):
+            # Terraform commonly uses ["create"], ["update"], ["delete"], or ["delete","create"] (replace).
+            # Deterministic mapping: if single action, use it; else unknown (do not infer).
+            if len(actions) == 1:
+                a0 = actions[0].strip().lower()
+                if a0 in ("create", "update", "delete"):
+                    action = a0
+                else:
+                    action = "unknown"
+            else:
+                action = "unknown"
+                out["parse_warnings"].append(f"{addr}: actions={actions} treated as unknown (no inference)")
+        else:
+            out["parse_warnings"].append(f"{addr}: missing/invalid change.actions (unknown)")
+
+        details: dict[str, Any] = {}
+        rtype = r.get("type")
+        if isinstance(rtype, str) and rtype.strip():
+            details["resource_type"] = rtype.strip()
+        mpath = r.get("module_address")
+        if isinstance(mpath, str) and mpath.strip():
+            details["module_path"] = mpath.strip()
+
+        item = {
+            "id": f"terraform:resource:{addr}:{action}",
+            "kind": "resource",
+            "action": action,
+            "address": addr,
+            "provider": "terraform",
+            "details": details,
+        }
+        items.append(item)
+
+    # Stable ordering: kind, address, action
+    items.sort(key=lambda it: (str(it.get("kind")), str(it.get("address")), str(it.get("action"))))
+
+    # Summary counts
+    added = sum(1 for it in items if it.get("action") == "create")
+    removed = sum(1 for it in items if it.get("action") == "delete")
+    changed = sum(1 for it in items if it.get("action") in ("create", "update", "delete"))
+
+    out["items"] = items
+    out["summary"]["items_total"] = len(items)
+    out["summary"]["items_changed"] = changed
+    out["summary"]["items_added"] = added
+    out["summary"]["items_removed"] = removed
+
+    # Deterministic ordering for warnings/errors
+    out["parse_warnings"] = sorted([str(x) for x in out.get("parse_warnings", [])])
+    out["parse_errors"] = sorted([str(x) for x in out.get("parse_errors", [])])
+
+    return out
+
+def adapt_ansible_rendered_dir(root_dir: Path) -> dict[str, Any]:
+    """
+    Read-only adapter: rendered Ansible output directory -> normalized advisory JSON.
+    Contract:
+      - advisory-only (no authority transfer)
+      - offline-only (no subprocess, no network)
+      - deterministic ordering and IDs
+      - no timestamps in output
+      - explicit allowlist (no heuristics)
+    """
+    out: dict[str, Any] = {
+        "schema_version": "adapters.v1",
+        "authority": "advisory",
+        "source_type": "ansible_rendered_dir",
+        "source_path": str(root_dir),
+        "summary": {
+            "items_total": 0,
+            "items_changed": 0,
+            "items_added": 0,
+            "items_removed": 0,
+        },
+        "items": [],
+        "parse_warnings": [],
+        "parse_errors": [],
+    }
+
+    # Explicit allowlist (deterministic; no heuristics)
+    allow_ext = {
+        ".conf", ".cfg", ".ini",
+        ".yaml", ".yml", ".json",
+        ".txt", ".j2",
+    }
+
+    items: list[dict[str, Any]] = []
+
+    try:
+        all_files = [p for p in root_dir.rglob("*") if p.is_file()]
+    except Exception as e:
+        out["parse_errors"].append(f"walk_error: {e}")
+        all_files = []
+
+    # Deterministic traversal order: stable relative POSIX path
+    def relposix(p: Path) -> str:
+        try:
+            return p.relative_to(root_dir).as_posix()
+        except Exception:
+            return p.as_posix()
+
+    all_files.sort(key=lambda p: relposix(p))
+
+    matched = 0
+    for p in all_files:
+        rel = relposix(p)
+        ext = p.suffix.lower()
+
+        if ext not in allow_ext:
+            continue
+
+        matched += 1
+
+        # role inference (deterministic, layout-based only)
+        role: str | None = None
+        parts = [x for x in rel.split("/") if x]
+        if "roles" in parts:
+            i = parts.index("roles")
+            if i + 1 < len(parts):
+                maybe = parts[i + 1].strip()
+                if maybe:
+                    role = maybe
+
+        file_hash = ""
+        try:
+            file_hash = hashlib.sha256(p.read_bytes()).hexdigest()
+        except Exception as e:
+            out["parse_errors"].append(f"{rel}: read_error: {e}")
+            file_hash = ""
+
+        details: dict[str, Any] = {}
+        if role:
+            details["role"] = role
+        if file_hash:
+            details["file_hash"] = file_hash
+
+        item = {
+            "id": f"ansible:file:{rel}:unknown",
+            "kind": "file",
+            "action": "unknown",
+            "address": rel,
+            "provider": "ansible",
+            "details": details,
+        }
+        items.append(item)
+
+    if matched == 0:
+        out["parse_warnings"].append("no matching files found (allowlist filtered everything)")
+
+    # Stable ordering: kind, address, action
+    items.sort(key=lambda it: (str(it.get("kind")), str(it.get("address")), str(it.get("action"))))
+
+    out["items"] = items
+    out["summary"]["items_total"] = len(items)
+
+    # Deterministic ordering for warnings/errors
+    out["parse_warnings"] = sorted([str(x) for x in out.get("parse_warnings", [])])
+    out["parse_errors"] = sorted([str(x) for x in out.get("parse_errors", [])])
+
+    return out
 
 # -------------------------
 # YAML + validation

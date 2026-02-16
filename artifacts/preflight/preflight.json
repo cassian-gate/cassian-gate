@@ -1,4 +1,8 @@
 {
+  "adapters": {
+    "count": 0,
+    "inputs": []
+  },
   "authority": "advisory",
   "command": "preflight",
   "coverage": {
