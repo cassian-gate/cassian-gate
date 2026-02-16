@@ -34,6 +34,7 @@ need_cmd jq
 need_cmd mktemp
 need_cmd wc
 need_cmd tr
+need_cmd docker
 
 # ------------------------------------------------------------------------------
 echo "=== 0) py_compile ==="
@@ -290,6 +291,34 @@ if [ -d "$pcap_root" ] || [ -f "$results_json" ]; then
 else
   echo "OK: PCAP schema sanity skipped (no artifacts/results present)"
 fi
+echo
+echo "=== 7) Cleanup smoke (netsim cleanup --all) ==="
+
+# 7a) Dry-run must show a plan and exit 0
+cleanup_out="$($NS cleanup --all 2>&1)"
+cleanup_rc=$?
+if [ "$cleanup_rc" -ne 0 ]; then
+  echo "FAIL: cleanup --all dry-run exited non-zero: rc=$cleanup_rc"
+  echo "$cleanup_out"
+  exit 1
+fi
+echo "$cleanup_out" | grep -Fq "Cleanup plan (dry-run):" || {
+  echo "FAIL: cleanup --all dry-run did not print expected header"
+  echo "$cleanup_out"
+  exit 1
+}
+echo "OK: cleanup --all dry-run produced a plan"
+
+# 7b) Execute must write cleanup report and leave no clab-* containers running
+$NS cleanup --all --yes >/dev/null
+test -f labs/_cleanup/cleanup.json && echo "OK: cleanup report present" || { echo "FAIL: cleanup report missing"; exit 1; }
+
+if docker ps --format '{{.Names}}' | grep -qE '^clab-'; then
+  echo "FAIL: expected no clab-* containers after cleanup --all --yes"
+  docker ps --format '{{.Names}}' | grep -E '^clab-' || true
+  exit 1
+fi
+echo "OK: cleanup removed all clab-* containers"
 echo
 
 echo "✅ PHASE1 VERIFIED"
