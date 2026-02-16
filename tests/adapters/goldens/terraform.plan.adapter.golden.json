@@ -1,0 +1,47 @@
+{
+  "authority": "advisory",
+  "items": [
+    {
+      "action": "delete",
+      "address": "aws_instance.old",
+      "details": {
+        "resource_type": "aws_instance"
+      },
+      "id": "terraform:resource:aws_instance.old:delete",
+      "kind": "resource",
+      "provider": "terraform"
+    },
+    {
+      "action": "update",
+      "address": "aws_security_group.sg",
+      "details": {
+        "resource_type": "aws_security_group"
+      },
+      "id": "terraform:resource:aws_security_group.sg:update",
+      "kind": "resource",
+      "provider": "terraform"
+    },
+    {
+      "action": "create",
+      "address": "null_resource.example",
+      "details": {
+        "resource_type": "null_resource"
+      },
+      "id": "terraform:resource:null_resource.example:create",
+      "kind": "resource",
+      "provider": "terraform"
+    }
+  ],
+  "parse_errors": [],
+  "parse_warnings": [],
+  "schema_version": "adapters.v1",
+  "source_path": "tests/adapters/fixtures/terraform.plan.json",
+  "source_type": "terraform_plan_json",
+  "summary": {
+    "items_added": 1,
+    "items_changed": 3,
+    "items_removed": 1,
+    "items_total": 3
+  }
+}
+

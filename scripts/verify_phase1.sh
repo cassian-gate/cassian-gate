@@ -33,6 +33,7 @@ need_cmd grep
 need_cmd jq
 need_cmd mktemp
 need_cmd wc
+need_cmd diff
 need_cmd tr
 need_cmd docker
 
@@ -147,6 +148,42 @@ $NS preflight "$TOPO" --format json >/dev/null
 test -s artifacts/preflight/preflight.json
 jq -e '.authority=="advisory" and .schema_version=="preflight.v1"' artifacts/preflight/preflight.json >/dev/null
 echo "OK: preflight.json valid"
+echo
+# ------------------------------------------------------------------------------
+echo "=== 4bb) Advisory-only: adapters (fixtures + golden drift guard) ==="
+
+# Ensure fixtures + goldens exist
+test -s tests/adapters/fixtures/terraform.plan.json || { echo "FAIL: missing terraform fixture"; exit 1; }
+test -d tests/adapters/fixtures/ansible_rendered     || { echo "FAIL: missing ansible rendered fixture dir"; exit 1; }
+test -s tests/adapters/goldens/terraform.plan.adapter.golden.json || { echo "FAIL: missing terraform adapter golden"; exit 1; }
+test -s tests/adapters/goldens/ansible.rendered.adapter.golden.json || { echo "FAIL: missing ansible adapter golden"; exit 1; }
+
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "$tmpdir" >/dev/null 2>&1 || true' EXIT
+
+# 1) Terraform adapter output must match golden (stable ordering + schema)
+$NS adapt terraform --plan tests/adapters/fixtures/terraform.plan.json --out "$tmpdir" >/dev/null
+test -s "$tmpdir/terraform.plan.adapter.json" || { echo "FAIL: missing terraform adapter output"; exit 1; }
+
+jq -S . "$tmpdir/terraform.plan.adapter.json" > "$tmpdir/terraform.now.json"
+jq -S . tests/adapters/goldens/terraform.plan.adapter.golden.json > "$tmpdir/terraform.golden.json"
+
+diff -u "$tmpdir/terraform.golden.json" "$tmpdir/terraform.now.json" \
+  && echo "OK: terraform adapter matches golden" \
+  || { echo "FAIL: terraform adapter drift"; exit 1; }
+
+# 2) Ansible adapter output must match golden (allowlist excludes binary.bin)
+$NS adapt ansible --dir tests/adapters/fixtures/ansible_rendered --out "$tmpdir" >/dev/null
+test -s "$tmpdir/ansible.rendered.adapter.json" || { echo "FAIL: missing ansible adapter output"; exit 1; }
+
+jq -S . "$tmpdir/ansible.rendered.adapter.json" > "$tmpdir/ansible.now.json"
+jq -S . tests/adapters/goldens/ansible.rendered.adapter.golden.json > "$tmpdir/ansible.golden.json"
+
+diff -u "$tmpdir/ansible.golden.json" "$tmpdir/ansible.now.json" \
+  && echo "OK: ansible adapter matches golden" \
+  || { echo "FAIL: ansible adapter drift"; exit 1; }
+
+echo "OK: adapters fixture + golden verification"
 echo
 
 # ------------------------------------------------------------------------------
