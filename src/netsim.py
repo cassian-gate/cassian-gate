@@ -56,6 +56,8 @@ from netsim_model import (
     gen_frr_conf,
     topo_to_containerlab,
     resolve_topology,
+    adapt_terraform_plan_json,
+    adapt_ansible_rendered_dir,
 )
 
 from netsim_tests import (
@@ -5153,6 +5155,83 @@ def cmd_preflight(args: argparse.Namespace) -> None:
         msg = str(e).strip() or "preflight: invalid input"
         die(msg, code=2)
 
+def cmd_adapt_terraform(args: argparse.Namespace) -> None:
+    """
+    Read-only input adapter: Terraform plan JSON -> normalized advisory JSON.
+    Exit codes (authoritative):
+      - missing/unreadable input plan path: 1
+      - parse errors: 0 by default (writes JSON with parse_errors), 1 if --strict
+    """
+    plan_arg = str(getattr(args, "plan", "") or "").strip()
+    if not plan_arg:
+        die("adapt terraform: missing --plan <path>", code=1)
+
+    plan_path = Path(plan_arg).expanduser()
+    if not plan_path.exists() or not plan_path.is_file():
+        die(f"adapt terraform: plan not found: {plan_path}", code=1)
+
+    out_arg = getattr(args, "out", None)
+    out_dir = Path(str(out_arg)).expanduser() if out_arg else (BASE_DIR / "artifacts" / "adapters")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "terraform.plan.adapter.json"
+
+    strict = bool(getattr(args, "strict", False))
+
+    payload = adapt_terraform_plan_json(plan_path)
+
+    # Deterministic write
+    write_file(out_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+    # strict parsing semantics: only based on parse_errors field
+    pe = payload.get("parse_errors") or []
+    pw = payload.get("parse_warnings") or []
+    pe_n = len(pe) if isinstance(pe, list) else 0
+    pw_n = len(pw) if isinstance(pw, list) else 0
+
+    if pe_n > 0 and strict:
+        die(f"adapt terraform: parse_errors={pe_n} (see {out_path})", code=1)
+
+    # Deterministic, actionable output messaging (advisory-only)
+    suffix = ""
+    if pw_n > 0 or pe_n > 0:
+        suffix = f" (parse_warnings={pw_n}, parse_errors={pe_n})"
+
+    print(f"✅ ADAPT OK (advisory): wrote {out_path}{suffix}")
+
+def cmd_adapt_ansible(args: argparse.Namespace) -> None:
+    """
+    Read-only input adapter: rendered Ansible output dir -> normalized advisory JSON.
+    Exit codes (authoritative):
+      - missing/unreadable input dir path: 1
+      - parse errors: 0 by default (writes JSON with parse_errors), 1 if --strict
+    """
+    dir_arg = str(getattr(args, "dir", "") or "").strip()
+    if not dir_arg:
+        die("adapt ansible: missing --dir <path>", code=1)
+
+    root_dir = Path(dir_arg).expanduser()
+    if not root_dir.exists() or not root_dir.is_dir():
+        die(f"adapt ansible: dir not found: {root_dir}", code=1)
+
+    out_arg = getattr(args, "out", None)
+    out_dir = Path(str(out_arg)).expanduser() if out_arg else (BASE_DIR / "artifacts" / "adapters")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "ansible.rendered.adapter.json"
+
+    strict = bool(getattr(args, "strict", False))
+
+    payload = adapt_ansible_rendered_dir(root_dir)
+
+    # Deterministic write
+    write_file(out_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+    # strict parsing semantics: only based on parse_errors field
+    pe = payload.get("parse_errors") or []
+    if isinstance(pe, list) and len(pe) > 0 and strict:
+        die(f"adapt ansible: parse_errors={len(pe)} (see {out_path})", code=1)
+
+    print(f"✅ ADAPT OK (advisory): wrote {out_path}")
+
 def cmd_up(args: argparse.Namespace) -> None:
     topo_path = (TOPO_DIR / args.topology) if not Path(args.topology).is_file() else Path(args.topology)
 
@@ -7921,6 +8000,22 @@ def main() -> None:
     p_pre.add_argument("--format", choices=["json", "text"], default="json", help="Output format")
     p_pre.add_argument("--out", default=None, help="Output path (default: artifacts/preflight/preflight.json)")
     p_pre.set_defaults(func=cmd_preflight)
+
+    # adapt (read-only input adapters; advisory-only)
+    p_adapt = sub.add_parser("adapt", help="Read-only input adapters (advisory-only)")
+    sub_adapt = p_adapt.add_subparsers(dest="adapter", required=True)
+
+    p_tf = sub_adapt.add_parser("terraform", help="Adapt Terraform plan JSON (terraform show -json)")
+    p_tf.add_argument("--plan", required=True, help="Path to terraform plan JSON (terraform show -json)")
+    p_tf.add_argument("--out", default=None, help="Output directory (default: artifacts/adapters/)")
+    p_tf.add_argument("--strict", action="store_true", help="Fail (exit 1) if parse_errors are present")
+    p_tf.set_defaults(func=cmd_adapt_terraform)
+
+    p_ans = sub_adapt.add_parser("ansible", help="Adapt rendered Ansible output directory (read-only)")
+    p_ans.add_argument("--dir", required=True, help="Path to rendered Ansible output directory")
+    p_ans.add_argument("--out", default=None, help="Output directory (default: artifacts/adapters/)")
+    p_ans.add_argument("--strict", action="store_true", help="Fail (exit 1) if parse_errors are present")
+    p_ans.set_defaults(func=cmd_adapt_ansible)
 
     # up
     p_up = sub.add_parser("up", help="Generate + deploy")
