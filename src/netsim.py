@@ -106,6 +106,7 @@ from netsim_tests import (
     _preflight_contains_key,
     _preflight_get_touched_nodes,
     _preflight_get_touched_links,
+    _preflight_load_adapters,
     _preflight_findings,
     _preflight_report,
     _preflight_format_text,
@@ -5127,11 +5128,25 @@ def cmd_preflight(args: argparse.Namespace) -> None:
         # Declared-only coverage model (authoritative dependency; still advisory output)
         cov = build_coverage_model(resolved, topo_path=topo_path)
 
+        adapter_paths = getattr(args, "adapter", None) or []
+        adapters = None
+        if isinstance(adapter_paths, list) and adapter_paths:
+            # Explicit-only; missing/unreadable adapter is a user invocation error for preflight.
+            # Normalize exit code to 1 (deterministic) even if helper raises SystemExit without code.
+            try:
+                adapters = _preflight_load_adapters(adapter_paths)
+            except SystemExit as e:
+                msg = str(e)
+                if not msg:
+                    msg = "preflight: adapter load failed"
+                die(msg, code=1)
+
         report = _preflight_report(
             input_ref=input_ref,
             topo_path=topo_path,
             resolved=resolved,
             cov=cov,
+            adapters=adapters,
         )
 
         if fmt == "json":
@@ -5149,7 +5164,16 @@ def cmd_preflight(args: argparse.Namespace) -> None:
 
     except SystemExit as e:
         msg = str(e).strip() or "preflight: invalid input"
-        die(msg, code=2)
+        # Preserve explicit, deterministic exit codes when sub-helpers raise SystemExit(code).
+        # This is required so preflight --adapter missing/unreadable can exit 1 (user invocation error),
+        # while other preflight input/validation errors remain exit 2 by convention.
+        code = 2
+        try:
+            if isinstance(e.code, int):
+                code = int(e.code)
+        except Exception:
+            code = 2
+        die(msg, code=code)
 
     except Exception as e:
         msg = str(e).strip() or "preflight: invalid input"
@@ -7999,6 +8023,7 @@ def main() -> None:
     p_pre.add_argument("topology", help="Topology YAML filename under ./topologies or a full path")
     p_pre.add_argument("--format", choices=["json", "text"], default="json", help="Output format")
     p_pre.add_argument("--out", default=None, help="Output path (default: artifacts/preflight/preflight.json)")
+    p_pre.add_argument("--adapter", action="append", default=[], help="Path to an adapters.v1 JSON (repeatable; advisory-only)")
     p_pre.set_defaults(func=cmd_preflight)
 
     # adapt (read-only input adapters; advisory-only)
