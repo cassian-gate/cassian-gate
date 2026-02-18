@@ -2961,6 +2961,42 @@ def write_test_summary_artifact(lab: str, results: dict) -> Path:
         if isinstance(scen_id, str) and scen_id.strip():
             scenarios_sel = f"one:{scen_id.strip()}"
 
+    # -----------------------------
+    # CI Summary deterministic header (v1.5)
+    # -----------------------------
+    # Must be line-1 in results.summary.txt, fixed order, stable fields only.
+    failed_test_ids: list[str] = []
+    for t in results.get("tests", []) or []:
+        if t.get("verdict") == "fail":
+            n = str(t.get("name") or "<unnamed>").strip()
+            if n:
+                failed_test_ids.append(n)
+    failed_test_ids = sorted(set(failed_test_ids))
+
+    failed_scenario_ids: list[str] = []
+    for s in results.get("scenarios", []) or []:
+        if s.get("verdict") == "fail":
+            sid = str(s.get("id") or "<unnamed>").strip()
+            if sid:
+                failed_scenario_ids.append(sid)
+    failed_scenario_ids = sorted(set(failed_scenario_ids))
+
+    # JSON-style, single-line arrays, no spaces after commas
+    ci_failed_tests = json.dumps(failed_test_ids, ensure_ascii=False, separators=(",", ":"))
+    ci_failed_scenarios = json.dumps(failed_scenario_ids, ensure_ascii=False, separators=(",", ":"))
+
+    # artifact_root must be relative (frozen): labs/clab-<lab>/
+    artifact_root = f"labs/{lab_dir(lab).name}/"
+
+    ci_header = (
+        "=== CI SUMMARY ===\n"
+        f"verdict: {verdict_s}\n"
+        f"failed_tests: {ci_failed_tests}\n"
+        f"failed_scenarios: {ci_failed_scenarios}\n"
+        f"artifact_root: {artifact_root}\n"
+        "\n"
+    )
+
     header = (
         "=== AUTHORITATIVE TEST VERDICT ===\n"
         f"verdict: {verdict_s}\n"
@@ -2970,7 +3006,7 @@ def write_test_summary_artifact(lab: str, results: dict) -> Path:
 
     # Existing body remains unchanged (shifted down only)
     body = _format_test_summary(results)
-    out.write_text(header + body, encoding="utf-8")
+    out.write_text(ci_header + header + body, encoding="utf-8")
     return out
 
 # -------------------------
