@@ -164,6 +164,33 @@ class ContainerRuntime
 
 _CANDIDATE_STDIO_TRUNC = 8_000  # must match previous value exactly
 
+def _print_artifacts_footer_for_lab(lab: str) -> None:
+    """
+    Deterministic Artifact Footer (v1.5, LOCKED):
+      Artifacts:
+      * labs/<labdir>/results.json (authoritative)
+      * labs/<labdir>/results.summary.txt (human-readable)
+
+    Rules:
+      - Exactly these 3 lines (no extra context).
+      - No filesystem checks.
+      - Relative paths only (must start with "labs/").
+      - Safe to call from finally blocks; must never raise.
+    """
+    try:
+        lab_s = str(lab or "").strip()
+        if not lab_s:
+            return
+
+        # Canonical artifact dir: labs/clab-<lab> (via lab_dir())
+        adir = lab_dir(lab_s)  # Path(".../labs/clab-<lab>")
+        dname = adir.name      # "clab-<lab>"
+        print("Artifacts:")
+        print(f"* labs/{dname}/results.json (authoritative)")
+        print(f"* labs/{dname}/results.summary.txt (human-readable)")
+    except Exception:
+        return
+
 def _sha256_file(p: Path) -> str:
     import hashlib
     h = hashlib.sha256()
@@ -4056,9 +4083,10 @@ def cmd_test(args: argparse.Namespace) -> None:
             hint_lines = [
                 "Lab exists but one or more containers are not running.",
                 "Try:",
+                "  netsim destroy <lab>",
                 "  netsim up <topology.yaml> --reconfigure",
-                "or (advanced):",
-                f"  sudo containerlab deploy -t {tpath}",
+                "or:",
+                "  netsim cleanup --all --yes",
             ]
             die(f"{name} is not running\n\n" + "\n".join(hint_lines))
 
@@ -8354,7 +8382,18 @@ def main() -> None:
     p_ai_coach.set_defaults(func=cmd_ai_coach)
 
     args = parser.parse_args()
-    args.func(args)
+
+    footer_lab = ""
+    try:
+        # Footer (WI-1a): only for single-lab `netsim test <lab>` executions
+        if str(getattr(args, "cmd", "") or "") == "test":
+            if not bool(getattr(args, "two_run", False)) and not bool(getattr(args, "list_scenarios", False)):
+                footer_lab = str(getattr(args, "lab", "") or "").strip()
+
+        args.func(args)
+    finally:
+        if footer_lab:
+            _print_artifacts_footer_for_lab(footer_lab)
 
 
 if __name__ == "__main__":
