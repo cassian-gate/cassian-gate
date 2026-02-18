@@ -2780,6 +2780,48 @@ def _format_test_summary(results: dict) -> str:
     lines.append(f"tests: total={total} passed={passed} failed={failed}")
 
     # -------------------------------------------------------------------------
+    # Hard failure (runtime fault) summary
+    # - MUST surface "ERROR:" in summary for runtime faults
+    # - MUST NOT affect gate semantics (human-only)
+    # -------------------------------------------------------------------------
+    hf = results.get("hard_failure") or {}
+    if isinstance(hf, dict) and bool(hf.get("occurred")):
+        phase = str(hf.get("phase") or "").strip()
+        err = str(hf.get("error") or "").strip()
+
+        # Ensure explicit ERROR: prefix for runtime faults (summary-only).
+        if err and not err.startswith("ERROR:"):
+            err = "ERROR: " + err
+        if not err:
+            err = "ERROR:"
+
+        if phase:
+            lines.append(f"hard_failure: phase={phase} error={err}")
+        else:
+            lines.append(f"hard_failure: error={err}")
+    # Fallback: runtime hard-failures are sometimes represented as failed prereq tests
+    # (e.g., container not running). These MUST surface as ERROR: in the summary.
+    if not (isinstance(hf, dict) and bool(hf.get("occurred"))):
+        tests = results.get("tests", []) or []
+        prereq_err: str | None = None
+        if isinstance(tests, list):
+            for tt in tests:
+                if not isinstance(tt, dict):
+                    continue
+                if str(tt.get("kind") or "") != "prereq":
+                    continue
+                if str(tt.get("verdict") or "") != "fail":
+                    continue
+                e = str(tt.get("error") or "").strip()
+                prereq_err = e or "runtime prereq failed"
+                break
+
+        if prereq_err:
+            if not prereq_err.startswith("ERROR:"):
+                prereq_err = "ERROR: " + prereq_err
+            lines.append(f"hard_failure: error={prereq_err}")
+
+    # -------------------------------------------------------------------------
     # Scenario event runs summary (Option A): scenario_test_run events
     # -------------------------------------------------------------------------
     events = results.get("events", []) or []
@@ -2811,6 +2853,17 @@ def _format_test_summary(results: dict) -> str:
             src = t.get("from", "")
             dst = t.get("to", "")
             err = t.get("error", "")
+
+            # Gate-failure messaging normalization (human-only):
+            # failed_tests are gate failures; they must never surface "ERROR:" prefix.
+            if isinstance(err, str):
+                e = err.strip()
+                if e.startswith("ERROR:"):
+                    tail = e[len("ERROR:"):].lstrip()
+                    err = f"FAIL: {tail}" if tail else "FAIL:"
+                else:
+                    err = err
+
             failed_tests.append((name, kind, src, dst, err))
 
     failed_tests.sort()
