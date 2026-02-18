@@ -272,13 +272,20 @@ summary_txt="${LABDIR}/results.summary.txt"
 test -s "$summary_txt" || { echo "FAIL: missing $summary_txt"; exit 1; }
 
 # PASS path (the run above must be PASS for the default LAB)
-head -n 4 "$summary_txt" | awk '
-  NR==1{ok1=($0=="=== AUTHORITATIVE TEST VERDICT ===")}
+# CI header must be line-1, fixed order, stable fields only, then the authoritative header.
+head -n 10 "$summary_txt" | awk -v LABDIR_EXPECT="${LABDIR}/" '
+  NR==1{ok1=($0=="=== CI SUMMARY ===")}
   NR==2{ok2=($0=="verdict: PASS")}
-  NR==3{ok3=($0 ~ /^scope: topology=[^ ]+ tests=[^ ]+ scenarios=[^ ]+$/)}
-  NR==4{ok4=($0=="")}
-  END{exit !(ok1&&ok2&&ok3&&ok4)}
-' || { echo "FAIL: summary header malformed (PASS)"; head -n 8 "$summary_txt"; exit 1; }
+  NR==3{ok3=($0=="failed_tests: []")}
+  NR==4{ok4=($0=="failed_scenarios: []")}
+  NR==5{ok5=($0==("artifact_root: " LABDIR_EXPECT))}
+  NR==6{ok6=($0=="")}
+  NR==7{ok7=($0=="=== AUTHORITATIVE TEST VERDICT ===")}
+  NR==8{ok8=($0=="verdict: PASS")}
+  NR==9{ok9=($0 ~ /^scope: topology=[^ ]+ tests=[^ ]+ scenarios=[^ ]+$/)}
+  NR==10{ok10=($0=="")}
+  END{exit !(ok1&&ok2&&ok3&&ok4&&ok5&&ok6&&ok7&&ok8&&ok9&&ok10)}
+' || { echo "FAIL: summary header malformed (PASS)"; head -n 16 "$summary_txt"; exit 1; }
 echo "OK: summary header PASS format"
 
 # FAIL path: force a deterministic fail via filter no-match
@@ -293,15 +300,22 @@ if [ "$fail_rc" -eq 0 ]; then
 fi
 
 test -s "$summary_txt" || { echo "FAIL: missing $summary_txt after FAIL run"; exit 1; }
-head -n 4 "$summary_txt" | awk '
-  NR==1{ok1=($0=="=== AUTHORITATIVE TEST VERDICT ===")}
+head -n 10 "$summary_txt" | awk -v LABDIR_EXPECT="${LABDIR}/" '
+  NR==1{ok1=($0=="=== CI SUMMARY ===")}
   NR==2{ok2=($0=="verdict: FAIL")}
-  NR==3{ok3=($0 ~ /^scope: topology=[^ ]+ tests=filtered:name:DOES_NOT_EXIST scenarios=[^ ]+$/)}
-  NR==4{ok4=($0=="")}
-  END{exit !(ok1&&ok2&&ok3&&ok4)}
-' || { echo "FAIL: summary header malformed (FAIL)"; head -n 8 "$summary_txt"; exit 1; }
+  NR==3{ok3=($0=="failed_tests: [\"filter:no-match\"]")}
+  NR==4{ok4=($0=="failed_scenarios: []")}
+  NR==5{ok5=($0==("artifact_root: " LABDIR_EXPECT))}
+  NR==6{ok6=($0=="")}
+  NR==7{ok7=($0=="=== AUTHORITATIVE TEST VERDICT ===")}
+  NR==8{ok8=($0=="verdict: FAIL")}
+  NR==9{ok9=($0 ~ /^scope: topology=[^ ]+ tests=filtered:name:DOES_NOT_EXIST scenarios=[^ ]+$/)}
+  NR==10{ok10=($0=="")}
+  END{exit !(ok1&&ok2&&ok3&&ok4&&ok5&&ok6&&ok7&&ok8&&ok9&&ok10)}
+' || { echo "FAIL: summary header malformed (FAIL)"; head -n 16 "$summary_txt"; exit 1; }
 echo "OK: summary header FAIL format"
 echo
+
 # Gate-failure messaging normalization (summary):
 # Deterministic gate FAIL must not emit any human-facing ERROR: prefix lines.
 if grep -q '^ERROR:' "$summary_txt"; then
