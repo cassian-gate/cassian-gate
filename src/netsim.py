@@ -35,7 +35,7 @@ import netsim_common
 from netsim_common import (
     BASE_DIR, TOPO_DIR, LABS_DIR,
     DEFAULT_IMAGES,
-    run, die,
+    run, die, fail,
     LAST_ERROR_MSG,
     is_ip_literal, validate_ip_literal, classify_invalid_target,
     nodes_by_type,
@@ -4726,7 +4726,7 @@ def cmd_test(args: argparse.Namespace) -> None:
     # 5) Success output (human-friendly)
     # =============================================================================
     if results["result"] == "fail":
-        die(f"TEST FAIL: {results['summary']['failed']} failed / {results['summary']['total']} total")
+        fail(f"{results['summary']['failed']} failed / {results['summary']['total']} total")
 
     if bgp_participants and results["summary"].get("precheck_controlplane"):
         print(f"✅ Control-plane PASS: BGP established ({len(bgp_participants)} participants)")
