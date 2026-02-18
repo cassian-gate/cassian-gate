@@ -2860,8 +2860,64 @@ def _format_test_summary(results: dict) -> str:
     return "\n".join(lines) + "\n"
 
 def write_test_summary_artifact(lab: str, results: dict) -> Path:
+    """
+    Non-authoritative, human-scannable summary.
+    Deterministic header is required (presentation-only; no gate semantics).
+    """
     out = lab_dir(lab) / "results.summary.txt"
-    out.write_text(_format_test_summary(results), encoding="utf-8")
+
+    # -----------------------------
+    # Deterministic header (v1.5)
+    # -----------------------------
+    # verdict: derived from already-computed overall result
+    res = str(results.get("result") or "unknown").strip().lower()
+    verdict_s = "PASS" if res == "pass" else "FAIL"
+
+    # topology identity: prefer structured topology.name, then lab, then unknown
+    topo_name = "unknown"
+    topo_obj = results.get("topology")
+    if isinstance(topo_obj, dict):
+        tname = topo_obj.get("name")
+        if isinstance(tname, str) and tname.strip():
+            topo_name = tname.strip()
+    if topo_name == "unknown":
+        if isinstance(lab, str) and lab.strip():
+            topo_name = lab.strip()
+
+    # tests selection encoding (deterministic; derived from invocation intent already stored in results.summary)
+    summ = results.get("summary", {}) or {}
+    filter_name = summ.get("filtered_by_name") if isinstance(summ, dict) else ""
+    filter_kind = summ.get("filtered_by_kind") if isinstance(summ, dict) else ""
+
+    tests_sel = "all"
+    sel_parts: list[str] = []
+    if isinstance(filter_name, str) and filter_name.strip():
+        sel_parts.append(f"name:{filter_name.strip()}")
+    if isinstance(filter_kind, str) and filter_kind.strip():
+        sel_parts.append(f"kind:{filter_kind.strip()}")
+    if sel_parts:
+        tests_sel = "filtered:" + ",".join(sel_parts)
+
+    # scenarios selection encoding (deterministic; derived from invocation intent already stored in results.summary)
+    scenarios_sel = "none"
+    all_scen = bool(summ.get("all_scenarios")) if isinstance(summ, dict) else False
+    scen_id = summ.get("scenario") if isinstance(summ, dict) else ""
+    if all_scen:
+        scenarios_sel = "all"
+    else:
+        if isinstance(scen_id, str) and scen_id.strip():
+            scenarios_sel = f"one:{scen_id.strip()}"
+
+    header = (
+        "=== AUTHORITATIVE TEST VERDICT ===\n"
+        f"verdict: {verdict_s}\n"
+        f"scope: topology={topo_name} tests={tests_sel} scenarios={scenarios_sel}\n"
+        "\n"
+    )
+
+    # Existing body remains unchanged (shifted down only)
+    body = _format_test_summary(results)
+    out.write_text(header + body, encoding="utf-8")
     return out
 
 # -------------------------
