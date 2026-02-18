@@ -267,6 +267,42 @@ $NS test "$LAB"
 echo "OK: tests passed"
 echo
 # ------------------------------------------------------------------------------
+echo "=== 6a) results.summary.txt header (deterministic, non-authoritative) ==="
+summary_txt="${LABDIR}/results.summary.txt"
+test -s "$summary_txt" || { echo "FAIL: missing $summary_txt"; exit 1; }
+
+# PASS path (the run above must be PASS for the default LAB)
+head -n 4 "$summary_txt" | awk '
+  NR==1{ok1=($0=="=== AUTHORITATIVE TEST VERDICT ===")}
+  NR==2{ok2=($0=="verdict: PASS")}
+  NR==3{ok3=($0 ~ /^scope: topology=[^ ]+ tests=[^ ]+ scenarios=[^ ]+$/)}
+  NR==4{ok4=($0=="")}
+  END{exit !(ok1&&ok2&&ok3&&ok4)}
+' || { echo "FAIL: summary header malformed (PASS)"; head -n 8 "$summary_txt"; exit 1; }
+echo "OK: summary header PASS format"
+
+# FAIL path: force a deterministic fail via filter no-match
+set +e
+fail_out="$($NS test "$LAB" --name DOES_NOT_EXIST 2>&1)"
+fail_rc=$?
+set -e
+if [ "$fail_rc" -eq 0 ]; then
+  echo "FAIL: expected --name DOES_NOT_EXIST run to fail (rc!=0), but rc=0"
+  echo "$fail_out"
+  exit 1
+fi
+
+test -s "$summary_txt" || { echo "FAIL: missing $summary_txt after FAIL run"; exit 1; }
+head -n 4 "$summary_txt" | awk '
+  NR==1{ok1=($0=="=== AUTHORITATIVE TEST VERDICT ===")}
+  NR==2{ok2=($0=="verdict: FAIL")}
+  NR==3{ok3=($0 ~ /^scope: topology=[^ ]+ tests=filtered:name:DOES_NOT_EXIST scenarios=[^ ]+$/)}
+  NR==4{ok4=($0=="")}
+  END{exit !(ok1&&ok2&&ok3&&ok4)}
+' || { echo "FAIL: summary header malformed (FAIL)"; head -n 8 "$summary_txt"; exit 1; }
+echo "OK: summary header FAIL format"
+echo
+# ------------------------------------------------------------------------------
 echo "=== 6b) Optional: PCAP schema sanity (non-gating; schema-only) ==="
 # This is intentionally NON-GATING in terms of tool success/failure:
 # - We only validate schema/shape if evidence exists.
