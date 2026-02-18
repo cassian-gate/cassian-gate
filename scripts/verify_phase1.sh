@@ -302,6 +302,15 @@ head -n 4 "$summary_txt" | awk '
 ' || { echo "FAIL: summary header malformed (FAIL)"; head -n 8 "$summary_txt"; exit 1; }
 echo "OK: summary header FAIL format"
 echo
+# Gate-failure messaging normalization (summary):
+# Deterministic gate FAIL must not emit any human-facing ERROR: prefix lines.
+if grep -q '^ERROR:' "$summary_txt"; then
+  echo "FAIL: found ERROR: prefix in results.summary.txt on gate FAIL run"
+  grep -n '^ERROR:' "$summary_txt" || true
+  exit 1
+fi
+echo "OK: summary contains no ERROR: prefix lines on gate FAIL"
+echo
 # ------------------------------------------------------------------------------
 echo "=== 6b) Optional: PCAP schema sanity (non-gating; schema-only) ==="
 # This is intentionally NON-GATING in terms of tool success/failure:

@@ -69,6 +69,19 @@ def die(msg: str, code: int = 1) -> None:
     print(f"ERROR: {msg}", file=sys.stderr)
     raise SystemExit(code)
 
+def fail(msg: str, code: int = 1) -> None:
+    """
+    Human-facing gate failure (deterministic FAIL verdict), never an engine/runtime fault.
+    Mirrors die() behavior but uses FAIL: prefix.
+    """
+    global _QUIET_DIE
+    if _QUIET_DIE:
+        # Same contract as die(): raise with the MESSAGE so callers can capture it deterministically.
+        raise SystemExit(str(msg))
+
+    print(f"FAIL: {msg}", file=sys.stderr)
+    raise SystemExit(code)
+
 def is_wsl2() -> bool:
     """
     Deterministic environment detection.
