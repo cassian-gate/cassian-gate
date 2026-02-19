@@ -5080,7 +5080,8 @@ def cmd_validate(args: argparse.Namespace) -> None:
             "error": error or "",
         }
         if want_json:
-            print(json.dumps(payload, indent=2))
+            # Canonical JSON to stdout (deterministic, diff-friendly).
+            print(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False))
         else:
             if result == "pass":
                 print(f"✅ VALIDATE PASS: {topo_path}")
@@ -5178,7 +5179,9 @@ def cmd_preflight(args: argparse.Namespace) -> None:
         )
 
         if fmt == "json":
-            _preflight_write(out_path, report)
+            # Canonical JSON serialization for deterministic artifacts (advisory output; stable bytes).
+            from netsim_artifacts import write_json_canonical
+            write_json_canonical(out_path, report)
         else:
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(
