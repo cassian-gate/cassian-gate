@@ -106,18 +106,33 @@ def has_kvm() -> bool:
     except Exception:
         return False
 
-def assert_vm_runtime_supported() -> None:
+def assert_vm_runtime_supported(vm_node: str | None = None) -> None:
     """
     Hard gate (fail-fast) when VM runtime is requested but host cannot support it deterministically.
+
+    Contract (v1.5): Fail-fast before deploy with a stable, grep-friendly error structure.
     """
+    node = (vm_node or "<unknown>").strip() if isinstance(vm_node, str) else "<unknown>"
+
     if is_wsl2():
         die(
-            "VM runtime is not supported on WSL2. "
+            "VM runtime contract violation\n"
+            f"node: {node}\n"
+            "reason: unsupported environment (WSL2)\n"
+            "detail: runtime=vm requires a Linux host/VM with KVM (WSL2 is unsupported)\n"
+            "required: run ai-netsim inside a Linux host/VM with KVM enabled and accessible\n"
+            "notes: VM runtime is not supported on WSL2. "
             "Run ai-netsim inside a Linux host/VM with KVM enabled (e.g., Windows Hyper-V + Ubuntu VM)."
         )
+
     if not has_kvm():
         die(
-            "VM runtime requires KVM (/dev/kvm). "
+            "VM runtime contract violation\n"
+            f"node: {node}\n"
+            "reason: missing or inaccessible /dev/kvm\n"
+            "detail: runtime=vm requires /dev/kvm to exist and be readable+writable\n"
+            "required: enable KVM and ensure /dev/kvm is accessible (read+write) in your Linux host/VM\n"
+            "notes: VM runtime requires KVM (/dev/kvm). "
             "Run on a Linux host/VM with KVM enabled and accessible."
         )
 
