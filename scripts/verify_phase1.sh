@@ -259,62 +259,42 @@ else
   grep -nE 'kind:[[:space:]]*sonic-vm|image:' labs/vm-smoke.clab.yaml >/dev/null
   echo "OK: VM validate + gen succeed on supported host"
 
-  echo "=== 4d) VM runtime smoke (deploy+test+cleanup; supported hosts only) ==="
-  $NS up topologies/vm-smoke.yaml --reconfigure >/dev/null
-  $NS test vm-smoke >/dev/null
-  $NS down vm-smoke >/dev/null
-  echo "OK: VM runtime smoke passed (deploy+test+cleanup)"
-  echo "=== 4e) VM SONiC proof + outcomes scenario smoke (supported hosts only) ==="
+  echo "=== 4d) VM SONiC outcomes scenario smoke (supported hosts only) ==="
 
-  # 1) Bring up vm-smoke again briefly and prove it's the SONiC VM image (not FRR).
-  $NS up topologies/vm-smoke.yaml --reconfigure >/dev/null
-
-  # Confirm container image is the SONiC VM image.
-  if ! docker inspect -f '{{.Config.Image}}' clab-vm-smoke-s1 2>/dev/null | grep -Fq "local/sonic-vm"; then
-    echo "FAIL: vm-smoke s1 is not using local/sonic-vm image"
-    docker inspect -f '{{.Name}} {{.Config.Image}}' clab-vm-smoke-s1 2>/dev/null || true
-    exit 1
-  fi
-
-  # NOTE: /etc/motd and /etc/issue belong to the *container* OS (often Debian),
-  # not the SONiC guest. Prove SONiC VM usage by:
-  #  - image == local/sonic-vm...
-  #  - qemu process is running inside the container
-
-  docker exec clab-vm-smoke-s1 sh -lc 'ps -eo comm,args | grep -E "[q]emu-system|[q]emu-kvm" >/dev/null' \
-    && echo "OK: vm-smoke s1 has a running qemu process (VM runtime active)" \
-    || { echo "FAIL: vm-smoke s1 has no qemu process (expected SONiC VM runtime)"; docker exec clab-vm-smoke-s1 sh -lc 'ps -eo comm,args | head -n 80 || true'; exit 1; }
-
-  $NS down vm-smoke >/dev/null
-
-  # 2) Outcomes VM topology smoke: validate + up + declared tests + scenario list + all scenarios + down.
-  # This also proves scenario plumbing works with a SONiC VM present in the lab.
+  # Single strong proof on supported VM Linux hosts:
+  # - Brings up the outcomes topology (SONiC VM present)
+  # - Proves VM runtime is active (qemu process inside s1 container)
+  # - Proves image is local/sonic-vm (not a FRR/alpine container)
+  # - Runs declared tests + scenario enumeration + all scenarios
   OUT_TOPO="topologies/vm-three-nodes-two-hosts-fw-outcomes.yaml"
   OUT_LAB="vm-three-nodes-two-hosts-fw-outcomes"
 
   $NS validate "$OUT_TOPO" >/dev/null
-
   $NS up "$OUT_TOPO" --reconfigure >/dev/null
+
+  # Prove the s1 node is using the SONiC VM image.
+  if ! docker inspect -f '{{.Config.Image}}' clab-${OUT_LAB}-s1 2>/dev/null | grep -Fq "local/sonic-vm"; then
+    echo "FAIL: outcomes lab s1 is not using local/sonic-vm image"
+    docker inspect -f '{{.Name}} {{.Config.Image}}' clab-${OUT_LAB}-s1 2>/dev/null || true
+    exit 1
+  fi
+
+  # Prove VM runtime is active (qemu running inside the container).
+  docker exec clab-${OUT_LAB}-s1 sh -lc 'ps -eo comm,args | grep -E "[q]emu-system|[q]emu-kvm" >/dev/null' \
+    && echo "OK: outcomes s1 has a running qemu process (VM runtime active)" \
+    || { echo "FAIL: outcomes s1 has no qemu process (expected SONiC VM runtime)"; docker exec clab-${OUT_LAB}-s1 sh -lc 'ps -eo comm,args | head -n 80 || true'; exit 1; }
+
   $NS test "$OUT_LAB" >/dev/null
 
   scen_list="$($NS test "$OUT_LAB" --list-scenarios 2>/dev/null || true)"
   echo "$scen_list" | grep -Fq "vm_bounce_interface_s1_eth1_recover" || { echo "FAIL: missing expected scenario vm_bounce_interface_s1_eth1_recover"; echo "$scen_list"; exit 1; }
   echo "$scen_list" | grep -Fq "vm_bounce_link_fw1_s1_recover"     || { echo "FAIL: missing expected scenario vm_bounce_link_fw1_s1_recover";     echo "$scen_list"; exit 1; }
 
-  # Prove the s1 node in this topology is also the SONiC VM image.
-  if ! docker inspect -f '{{.Config.Image}}' clab-${OUT_LAB}-s1 2>/dev/null | grep -Fq "local/sonic-vm"; then
-    echo "FAIL: outcomes lab s1 is not using local/sonic-vm image"
-    docker inspect -f '{{.Name}} {{.Config.Image}}' clab-${OUT_LAB}-s1 2>/dev/null || true
-    exit 1
-  fi
-  docker exec clab-${OUT_LAB}-s1 sh -lc 'ps -eo comm,args | grep -E "[q]emu-system|[q]emu-kvm" >/dev/null' \
-    && echo "OK: outcomes s1 has a running qemu process (VM runtime active)" \
-    || { echo "FAIL: outcomes s1 has no qemu process (expected SONiC VM runtime)"; docker exec clab-${OUT_LAB}-s1 sh -lc 'ps -eo comm,args | head -n 80 || true'; exit 1; }
-
   $NS test "$OUT_LAB" --all-scenarios >/dev/null
   $NS down "$OUT_LAB" >/dev/null
 
-  echo "OK: VM SONiC proof + outcomes scenario smoke passed"
+  echo "OK: VM SONiC outcomes scenario smoke passed"
+
 fi
 echo
 
