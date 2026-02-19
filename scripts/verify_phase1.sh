@@ -39,7 +39,7 @@ need_cmd docker
 
 # ------------------------------------------------------------------------------
 echo "=== 0) py_compile ==="
-python -m py_compile src/netsim.py src/netsim_tests.py
+python -m py_compile src/netsim.py src/netsim_tests.py src/netsim_artifacts.py
 echo "OK: py_compile"
 echo
 
@@ -148,6 +148,18 @@ $NS preflight "$TOPO" --format json >/dev/null
 test -s artifacts/preflight/preflight.json
 jq -e '.authority=="advisory" and .schema_version=="preflight.v1"' artifacts/preflight/preflight.json >/dev/null
 echo "OK: preflight.json valid"
+# Determinism proof (WI-1):
+# Run the same JSON write twice and require byte-identical output.
+cp -f artifacts/preflight/preflight.json /tmp/preflight.json.run1
+
+rm -f artifacts/preflight/preflight.json 2>/dev/null || true
+$NS preflight "$TOPO" --format json >/dev/null
+test -s artifacts/preflight/preflight.json
+cp -f artifacts/preflight/preflight.json /tmp/preflight.json.run2
+
+diff -u /tmp/preflight.json.run1 /tmp/preflight.json.run2 >/dev/null \
+  && echo "OK: preflight.json deterministic (byte-identical across runs)" \
+  || { echo "FAIL: preflight.json not deterministic across runs"; diff -u /tmp/preflight.json.run1 /tmp/preflight.json.run2 || true; exit 1; }
 echo
 # ------------------------------------------------------------------------------
 echo "=== 4bb) Advisory-only: adapters (fixtures + golden drift guard) ==="
@@ -247,11 +259,42 @@ else
   grep -nE 'kind:[[:space:]]*sonic-vm|image:' labs/vm-smoke.clab.yaml >/dev/null
   echo "OK: VM validate + gen succeed on supported host"
 
-  echo "=== 4d) VM runtime smoke (deploy+test+cleanup; supported hosts only) ==="
-  $NS up topologies/vm-smoke.yaml --reconfigure >/dev/null
-  $NS test vm-smoke >/dev/null
-  $NS down vm-smoke >/dev/null
-  echo "OK: VM runtime smoke passed (deploy+test+cleanup)"
+  echo "=== 4d) VM SONiC outcomes scenario smoke (supported hosts only) ==="
+
+  # Single strong proof on supported VM Linux hosts:
+  # - Brings up the outcomes topology (SONiC VM present)
+  # - Proves VM runtime is active (qemu process inside s1 container)
+  # - Proves image is local/sonic-vm (not a FRR/alpine container)
+  # - Runs declared tests + scenario enumeration + all scenarios
+  OUT_TOPO="topologies/vm-three-nodes-two-hosts-fw-outcomes.yaml"
+  OUT_LAB="vm-three-nodes-two-hosts-fw-outcomes"
+
+  $NS validate "$OUT_TOPO" >/dev/null
+  $NS up "$OUT_TOPO" --reconfigure >/dev/null
+
+  # Prove the s1 node is using the SONiC VM image.
+  if ! docker inspect -f '{{.Config.Image}}' clab-${OUT_LAB}-s1 2>/dev/null | grep -Fq "local/sonic-vm"; then
+    echo "FAIL: outcomes lab s1 is not using local/sonic-vm image"
+    docker inspect -f '{{.Name}} {{.Config.Image}}' clab-${OUT_LAB}-s1 2>/dev/null || true
+    exit 1
+  fi
+
+  # Prove VM runtime is active (qemu running inside the container).
+  docker exec clab-${OUT_LAB}-s1 sh -lc 'ps -eo comm,args | grep -E "[q]emu-system|[q]emu-kvm" >/dev/null' \
+    && echo "OK: outcomes s1 has a running qemu process (VM runtime active)" \
+    || { echo "FAIL: outcomes s1 has no qemu process (expected SONiC VM runtime)"; docker exec clab-${OUT_LAB}-s1 sh -lc 'ps -eo comm,args | head -n 80 || true'; exit 1; }
+
+  $NS test "$OUT_LAB" >/dev/null
+
+  scen_list="$($NS test "$OUT_LAB" --list-scenarios 2>/dev/null || true)"
+  echo "$scen_list" | grep -Fq "vm_bounce_interface_s1_eth1_recover" || { echo "FAIL: missing expected scenario vm_bounce_interface_s1_eth1_recover"; echo "$scen_list"; exit 1; }
+  echo "$scen_list" | grep -Fq "vm_bounce_link_fw1_s1_recover"     || { echo "FAIL: missing expected scenario vm_bounce_link_fw1_s1_recover";     echo "$scen_list"; exit 1; }
+
+  $NS test "$OUT_LAB" --all-scenarios >/dev/null
+  $NS down "$OUT_LAB" >/dev/null
+
+  echo "OK: VM SONiC outcomes scenario smoke passed"
+
 fi
 echo
 
