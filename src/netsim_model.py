@@ -395,18 +395,92 @@ def ensure_valid_topology(topo: dict) -> None:
 
         if runtime == "vm":
             # For v1.5 foundation, support SONiC VM via containerlab's 'sonic-vm' kind.
-            # Node image must be explicit (user-provided container image that packages the VM via vrnetlab).
+            # Contract: node.image MUST be an explicit container image reference (vrnetlab-built or equivalent).
+            # Contract: filesystem paths are forbidden; ai-netsim does not auto-build/convert/import VM images.
+            node_name = str(n.get("name") or "<unnamed>").strip()
+
             if (n.get("type") or "").strip().lower() != "sonic-vm":
                 die(
-                    f"Topology invalid: node '{n.get('name')}': "
-                    f"runtime: vm currently requires type: sonic-vm (v1.5 foundation)"
+                    "VM runtime contract violation\n"
+                    f"node: {node_name}\n"
+                    "reason: unsupported VM node type\n"
+                    f"detail: type={str(n.get('type') or '').strip()!r} (runtime=vm)\n"
+                    "required: set node.type to 'sonic-vm' for runtime: vm (v1.5 foundation)\n"
+                    "notes: VM runtime must use an explicit user-supplied VM container image (vrnetlab-built)."
                 )
+
             img = n.get("image")
-            if not isinstance(img, str) or not img.strip():
+            img_s = str(img).strip() if isinstance(img, str) else ""
+
+            if not img_s:
                 die(
-                    f"Topology invalid: node '{n.get('name')}': "
-                    f"runtime: vm requires an explicit node.image (no implicit download)"
+                    "VM runtime contract violation\n"
+                    f"node: {node_name}\n"
+                    "reason: missing required image reference\n"
+                    "detail: image is missing or empty\n"
+                    "required: set node.image to a container image reference (vrnetlab-built or equivalent)\n"
+                    "notes: Filesystem paths are not supported for VM node.image. ai-netsim will not auto-build or convert VM images."
                 )
+
+            # Reject filesystem paths (absolute/relative/file:///tilde/Windows drive forms) deterministically.
+            is_path = False
+            if img_s.startswith(("/", "./", "../", "~", "file://")):
+                is_path = True
+            if len(img_s) >= 2 and img_s[1] == ":" and img_s[0].isalpha():
+                # Windows drive path (e.g., C:\...)
+                is_path = True
+            if "\\" in img_s:
+                # Common Windows path separator; treat as filesystem path
+                is_path = True
+
+            if is_path:
+                die(
+                    "VM runtime contract violation\n"
+                    f"node: {node_name}\n"
+                    "reason: image must be a container image reference (not a filesystem path)\n"
+                    f"detail: image={img_s!r}\n"
+                    "required: set node.image to a vrnetlab-built container image reference (e.g., ghcr.io/org/sonic-vm:tag)\n"
+                    "notes: Filesystem paths are not supported for VM node.image. ai-netsim will not auto-build or convert VM images."
+                )
+
+            # Plausible container image reference check (format gate only; do NOT probe pull/existence).
+            # Deterministic minimal rule: no whitespace; only common OCI reference characters.
+            if any(ch.isspace() for ch in img_s):
+                die(
+                    "VM runtime contract violation\n"
+                    f"node: {node_name}\n"
+                    "reason: invalid container image reference (whitespace)\n"
+                    f"detail: image={img_s!r}\n"
+                    "required: set node.image to a valid OCI image reference (no whitespace)\n"
+                    "notes: ai-netsim validates format only; image pull/existence is handled by the runtime."
+                )
+
+            allowed_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-/:@")
+            bad = sorted({ch for ch in img_s if ch not in allowed_chars})
+            if bad:
+                die(
+                    "VM runtime contract violation\n"
+                    f"node: {node_name}\n"
+                    "reason: invalid container image reference (unsupported characters)\n"
+                    f"detail: image={img_s!r} bad_chars={bad!r}\n"
+                    "required: set node.image to a valid OCI image reference using only [A-Za-z0-9._-/:@]\n"
+                    "notes: ai-netsim does not auto-fix or rewrite image references."
+                )
+
+            # Reject any fields that would imply auto-build/import/conversion (if present).
+            forbidden_build_keys = {
+                "build", "qcow2", "disk", "disk_path", "image_path", "download", "url", "source",
+            }
+            for k in sorted(forbidden_build_keys):
+                if k in n and n.get(k) not in (None, "", [], {}):
+                    die(
+                        "VM runtime contract violation\n"
+                        f"node: {node_name}\n"
+                        "reason: implicit VM image build/import is not supported\n"
+                        f"detail: forbidden_field={k!r} value={n.get(k)!r}\n"
+                        "required: provide a pre-built VM container image and reference it via node.image\n"
+                        "notes: ai-netsim must never auto-build, download, convert, or import VM images during deploy."
+                    )
 
     # v1.x guardrail hardening (clarified):
     # - Topology MUST NOT encode routing mechanics (protocols/metrics/policy).
@@ -414,8 +488,14 @@ def ensure_valid_topology(topo: dict) -> None:
     # - If present, validate types deterministically.
     # VM runtime availability gate (fail-fast before deploy).
     # If any node requests runtime: vm, enforce deterministic host requirements now.
-    if any((str(n.get("runtime") or "").strip().lower() == "vm") for n in topo.get("nodes", []) if isinstance(n, dict)):
-        assert_vm_runtime_supported()
+    vm_nodes = [
+        n for n in topo.get("nodes", [])
+        if isinstance(n, dict) and (str(n.get("runtime") or "").strip().lower() == "vm")
+    ]
+    if vm_nodes:
+        first_vm = vm_nodes[0]
+        first_name = str(first_vm.get("name") or "<unnamed>").strip()
+        assert_vm_runtime_supported(first_name)
 
     for i, n in enumerate(topo["nodes"], start=1):
         if not isinstance(n, dict):
