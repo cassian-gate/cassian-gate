@@ -21,6 +21,8 @@ import shutil
 import json
 import ipaddress
 import re
+import hashlib
+import shlex
 import os, time
 from typing import Any
 
@@ -29,1984 +31,1369 @@ from typing import Any
 
 import yaml
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-TOPO_DIR = BASE_DIR / "topologies"
-LABS_DIR = BASE_DIR / "labs"
-QUIET_RUN = False
-_QUIET_DIE = False
-
-
-DEFAULT_IMAGES = {
-    "frr": "frrouting/frr:latest",
-    "linux": "alpine:latest",
-    "host": "alpine:latest",
-    "nft-fw": "alpine:latest",
-}
-
-# -------------------------
-# Shell helpers
-# -------------------------
-
-def run(
-    cmd: list[str],
-    check: bool = True,
-    capture: bool = False,
-    capture_output: bool | None = None,
-    text: bool = True,
-) -> subprocess.CompletedProcess:
-    """
-    Run a command deterministically.
-    - capture=True is the legacy flag (captures stdout/stderr)
-    - capture_output overrides capture if explicitly set
-    """
-    global QUIET_RUN
-    if not QUIET_RUN:
-        print("+", " ".join(cmd))
-
-    if capture_output is None:
-        capture_output = capture
-
-    return subprocess.run(
-        cmd,
-        check=check,
-        capture_output=capture_output,
-        text=text,
-    )
-
-LAST_ERROR_MSG: str | None = None
-
-def die(msg: str, code: int = 1) -> None:
-    global _QUIET_DIE
-    if _QUIET_DIE:
-        # IMPORTANT: raise with the MESSAGE (string), not the int code
-        # so cmd_validate can capture str(e) and put it into JSON.
-        raise SystemExit(str(msg))
-
-    print(f"ERROR: {msg}", file=sys.stderr)
-    raise SystemExit(code)
-
-def is_ip_literal(value: str) -> bool:
-    try:
-        ipaddress.ip_address(value.strip())
-        return True
-    except Exception:
-        return False
-
-def validate_ip_literal(value: str, ctx: str) -> None:
-    try:
-        ipaddress.ip_address(value.strip())
-    except Exception:
-        die(f"{ctx}: invalid IPv4/IPv6 literal: {value!r}")
-
-def classify_invalid_target(token: str) -> str:
-    """
-    Messaging-only helper. Does NOT change acceptance rules.
-    Returns a short reason string for common invalid destination patterns.
-    """
-    t = (token or "").strip()
-    if not t:
-        return "empty destination"
-
-    # IP:port (common copy/paste)
-    if ":" in t:
-        # If it's a pure IPv6 literal, it'll also contain ":".
-        # Detect IP:port by "one colon" + numeric port and left side looks like IPv4.
-        parts = t.rsplit(":", 1)
-        if len(parts) == 2:
-            left, right = parts[0].strip(), parts[1].strip()
-            if right.isdigit() and is_ip_literal(left) and "." in left:
-                return "appears to be IP:port; expected IPv4 literal only (no port)"
-
-    # CIDR
-    if "/" in t:
-        left = t.split("/", 1)[0].strip()
-        if is_ip_literal(left) and "." in left:
-            return "appears to be CIDR; expected single IPv4 address (no /mask)"
-
-    # IPv6 (v1.x: IPv4-only in these target contexts)
-    if ":" in t and not t.count(":") == 1:
-        # Heuristic: multiple colons strongly indicates IPv6
-        return "appears to be IPv6; v1.x supports IPv4 only here"
-
-    # Hostname-like (letters + dots)
-    has_letter = any(ch.isalpha() for ch in t)
-    if has_letter and "." in t:
-        return "appears to be a hostname; DNS/hostnames are not supported (determinism)"
-
-    # Generic fallback
-    return "invalid destination (must be node name or IPv4 literal)"
-
-def ensure_nc(rt: Runtime, lab: str, node: str) -> None:
-    cp = rt.exec(
-        lab,
-        node,
-        ["sh", "-lc", "command -v nc >/dev/null"],
-        check=False,
-        capture_output=True,
-    )
-    if cp.returncode != 0:
-        die(f"{node}: nc not found. Use wbitt/network-multitool for host/nft-fw nodes.")
-
-def ip_no_mask(cidr: str) -> str:
-    return cidr.split("/", 1)[0].strip()
-
-
-def find_nodes_by_type(topo: dict, ntype: str) -> list[dict]:
-    return [n for n in topo.get("nodes", []) if n.get("type") == ntype]
-
-def start_tcp_listener(rt: Runtime, lab: str, node: str, port: int) -> None:
-    """
-    Start a TCP listener inside a node using netcat (nc).
-
-    Requirements:
-    - nc must already exist (we do NOT install packages at runtime)
-    - Must not fail if nothing is running yet
-    - Must not fail if pkill exits non-zero
-    """
-    ensure_nc(rt, lab, node)
-
-    # Kill any previous listener on that port (never fail)
-    rt.exec(
-        lab,
-        node,
-        ["sh", "-lc", f'pkill -f "nc.*-p {port}" 2>/dev/null || true'],
-        check=False,
-    )
-
-    # Start listener in background
-    rt.exec(
-        lab,
-        node,
-        ["sh", "-lc", f"nohup nc -lk -p {port} >/dev/null 2>&1 &"],
-        check=False,
-    )
-
-def stop_tcp_listeners(rt: Runtime, lab: str, node: str) -> None:
-    """
-    Stop any nc listeners we started. Never fail the test.
-    """
-    rt.exec(
-        lab,
-        node,
-        ["sh", "-lc", 'pkill -f "nc.*-p" 2>/dev/null || true'],
-        check=False,
-    )
-
-def tcp_connect_test(
-    rt: Runtime,
-    lab: str,
-    src_host: str,
-    dst_ip: str,
-    port: int,
-    should_succeed: bool,
-) -> None:
-    # 'nc -z' = zero-I/O connect test
-    cp = rt.exec(
-        lab,
-        src_host,
-        ["sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"],
-        check=False,
-        capture_output=False,
-    )
-
-    ok = (cp.returncode == 0)
-    if should_succeed and not ok:
-        die(f"TCP connect should have succeeded but failed: {src_host} -> {dst_ip}:{port}")
-    if (not should_succeed) and ok:
-        die(f"TCP connect should have failed but succeeded: {src_host} -> {dst_ip}:{port}")
-
-def node_first_ipv4(topo: dict[str, Any], name: str) -> str:
-    """
-    Resolve a node name to its first IPv4 address from topology links.
-
-    v1-safe enhancement:
-      - If 'name' is already an IPv4/IPv6 literal, return it directly.
-        (This prevents IP literals from being treated as node names in wait_for/scenario paths.)
-    """
-    if not isinstance(name, str) or not name.strip():
-        die("node_first_ipv4: name must be a non-empty string")
-
-    name_s = name.strip()
-
-    # v1: allow IP literal passthrough (explicit, deterministic)
-    if is_ip_literal(name_s):
-        validate_ip_literal(name_s, "node_first_ipv4")
-        return name_s
-
-    # --- existing behavior below (unchanged logic, just copied from your current function) ---
-    for link in topo.get("links", []) or []:
-        eps = link.get("endpoints") or []
-        ipv4s = link.get("ipv4") or []
-        if len(eps) != 2 or len(ipv4s) != 2:
-            continue
-
-        a, b = eps[0], eps[1]
-        a_ip, b_ip = ipv4s[0], ipv4s[1]
-
-        # endpoint format: "node:ifname"
-        if isinstance(a, str) and a.startswith(name_s + ":"):
-            return str(a_ip).split("/")[0]
-        if isinstance(b, str) and b.startswith(name_s + ":"):
-            return str(b_ip).split("/")[0]
-
-    die(f"Could not determine IPv4 for node '{name_s}' from topology links")
-
-def run_ping_once_or_die(
-    rt: Runtime,
-    lab: str,
-    src: str,
-    dst_ip: str,
-    count: int,
-    should_succeed: bool,
-) -> str:
-    cp = rt.exec(
-        lab,
-        src,
-        ["ping", "-c", str(count), dst_ip],
-        check=False,
-        capture_output=False,
-    )
-    ok = (cp.returncode == 0)
-
-    # expected outcome mapping
-    expected = "pass" if should_succeed else "drop"
-    observed = "pass" if ok else "drop"
-
-    # return verdict for the caller to handle (keep-going, results.json, etc.)
-    if observed == expected:
-        return "pass"
-
-    return "fail"
-
-def run_tcp_test(
-    rt: Runtime,
-    lab: str,
-    src: str,
-    dst_ip: str,
-    port: int,
-    should_succeed: bool,
-) -> None:
-    # nc -z checks connect() only
-    cp = rt.exec(
-        lab,
-        src,
-        ["sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"],
-        check=False,
-        capture_output=False,
-    )
-    ok = (cp.returncode == 0)
-    if should_succeed and not ok:
-        die(f"TCP FAIL (expected PASS): {src} -> {dst_ip}:{port}")
-    if (not should_succeed) and ok:
-        die(f"TCP FAIL (expected DROP): {src} -> {dst_ip}:{port}")
-
-def run_declared_tests(rt: Runtime, lab: str, topo: dict) -> None:
-    tests = topo.get("tests") or []
-    if not tests:
-        return
-
-    # We start listeners only if requested by a tcp test
-    listeners_started: list[tuple[str, int]] = []
-
-    try:
-        for t in tests:
-            tname = t.get("name", "<unnamed>")
-            ttype = t.get("kind") or t.get("type")
-            src = t.get("src")
-            dst = t.get("dst")
-
-            if not ttype or not src or not dst:
-                die(f"Invalid test entry (missing type/src/dst): {t}")
-
-            # dst can be a node name or an IP; if it looks like a node name, resolve it
-            # Destination already normalized during validation
-            dst_kind = t.get("_dst_kind")
-            dst_value = t.get("_dst_value")
-
-            if dst_kind == "ip":
-                dst_ip = dst_value
-            elif dst_kind == "node":
-                dst_ip = node_first_ipv4(topo, dst_value)
-            else:
-                die(f"Ping test missing normalized destination: {t}")
-
-            expect = (t.get("expect") or "pass").lower()
-            should_succeed = (expect in ("pass", "allow", "ok", "true"))
-
-            if ttype == "ping":
-                count = int(t.get("count") or 2)
-                run_ping_once_or_die(rt, lab, src, dst_ip, count=count, should_succeed=should_succeed)
-
-            elif ttype == "tcp":
-                port = int(t.get("port"))
-                if t.get("listener"):
-                    # start listener on the *dst node* (must be a node name)
-                    if not isinstance(dst, str) or not any(n.get("name") == dst for n in topo.get("nodes", [])):
-                        die(f"{tname}: listener=true requires dst to be a node name, got '{dst}'")
-                    start_tcp_listener(rt, lab, dst, port)
-                    listeners_started.append((dst, port))
-
-                run_tcp_test(rt, lab, src, dst_ip, port=port, should_succeed=should_succeed)
-
-            else:
-                die(f"Unknown test type '{ttype}' in test '{tname}'")
-
-    finally:
-        # clean up listeners we started
-        for (node, _port) in listeners_started:
-            # easiest: stop all nc listeners on node
-            stop_tcp_listeners(rt, lab, node)
-
-    print(f"✅ Declared tests PASS ({len(tests)} checks)")
-
-# -------------------------
-# YAML + validation
-# -------------------------
-def _is_direct_link(topo: dict, a: str, b: str) -> bool:
-    for link in topo.get("links", []) or []:
-        eps = link.get("endpoints") or []
-        if not isinstance(eps, list) or len(eps) != 2:
-            continue
-        try:
-            n1 = str(eps[0]).split(":", 1)[0]
-            n2 = str(eps[1]).split(":", 1)[0]
-        except Exception:
-            continue
-        if (n1 == a and n2 == b) or (n1 == b and n2 == a):
-            return True
-    return False
-
-def _has_candidate_context(topo: dict) -> bool:
-    cc = topo.get("candidate_changes")
-    return isinstance(cc, list) and len(cc) > 0
-
-def _is_multihop_ping_test(topo: dict, test: dict) -> bool:
-    # v1 scope: only ping kind
-    if test.get("kind") != "ping":
-        return False
-    src = test.get("src")
-    dst = test.get("dst")
-    if not (isinstance(src, str) and isinstance(dst, str) and src and dst):
-        return False
-    # If directly linked, it is not multi-hop.
-    return not _is_direct_link(topo, src, dst)
-
-def load_yaml(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    if data is None:
-        die(f"Empty YAML file: {path}")
-    return data
-
-def ensure_valid_topology(topo: dict) -> None:
-    if not isinstance(topo, dict):
-        die("Topology YAML must be a mapping.")
-    for k in ("name", "nodes", "links"):
-        if k not in topo:
-            die(f"Missing required key: '{k}'")
-
-    if not isinstance(topo["nodes"], list) or not topo["nodes"]:
-        die("'nodes' must be a non-empty list.")
-    if not isinstance(topo["links"], list):
-        die("'links' must be a list.")
-
-    names = set()
-    for n in topo["nodes"]:
-        if "name" not in n or "type" not in n:
-            die("Each node must have 'name' and 'type'.")
-        if n["name"] in names:
-            die(f"Duplicate node name: {n['name']}")
-        names.add(n["name"])
-
-    # v1.x guardrail hardening (clarified):
-    # - Topology MUST NOT encode routing mechanics (protocols/metrics/policy).
-    # - FRR nodes MAY include metadata like asn/router_id, but these do not imply routing.
-    # - If present, validate types deterministically.
-    for i, n in enumerate(topo["nodes"], start=1):
-        if not isinstance(n, dict):
-            continue
-        if n.get("type") != "frr":
-            continue
-
-        name = n.get("name") or f"nodes[{i}]"
-
-        # Reject topology-encoded routing mechanics (locked boundary)
-        if "static_routes" in n and n.get("static_routes") not in (None, [], {}):
-            die(
-                f"Topology invalid: nodes[{i}] '{name}': 'static_routes' is not allowed. "
-                f"v1 boundary: routing mechanics must come from device configuration outside ai-netsim v1 "
-                f"(preconfigured images/config or manual exploration), and must be proven via tests."
-            )
-
-        # asn is optional metadata; if present, must be int-coercible
-        if "asn" in n and n.get("asn") is not None:
-            try:
-                int(n.get("asn"))
-            except Exception:
-                die(
-                    f"Topology invalid: nodes[{i}] '{name}': field 'asn' must be int-coercible if provided "
-                    f"(e.g. 65001)."
-                )
-
-        # router_id is optional metadata; if present, must be IPv4 literal
-        if "router_id" in n and n.get("router_id") is not None:
-            rid = str(n.get("router_id") or "").strip()
-            try:
-                ip = ipaddress.ip_address(rid)
-                if ip.version != 4:
-                    raise ValueError("router_id must be IPv4")
-            except Exception:
-                die(
-                    f"Topology invalid: nodes[{i}] '{name}': field 'router_id' must be an IPv4 literal if provided "
-                    f"(e.g. 1.1.1.1)."
-                )
-
-    for i, link in enumerate(topo["links"], start=1):
-        eps = link.get("endpoints")
-        if not isinstance(eps, list) or len(eps) != 2:
-            die(f"Link #{i} must have exactly 2 endpoints.")
-        for ep in eps:
-            if not isinstance(ep, str) or ":" not in ep:
-                die(f"Invalid endpoint '{ep}' in link #{i}. Use 'node:iface'.")
-            node, _iface = ep.split(":", 1)
-            if node not in names:
-                die(f"Endpoint references unknown node '{node}' in link #{i}.")
-
-    # ----------------------------
-    # v1: Change Context (Step 1) — candidate_changes declaration validation
-    #   - context only; never consumed by runtime
-    #   - no file reads here
-    # ----------------------------
-    if "candidate_changes" in topo and topo["candidate_changes"] is not None:
-        cc = topo["candidate_changes"]
-        if not isinstance(cc, list):
-            die("'candidate_changes' must be a list.")
-
-        allowed_keys = {"id", "description", "scope", "file", "inline", "format"}
-        seen_ids: set[str] = set()
-
-        for idx, item in enumerate(cc, start=1):
-            if not isinstance(item, dict):
-                die(f"candidate_changes[{idx}]: must be a dict")
-
-            extra = sorted(set(item.keys()) - allowed_keys)
-            if extra:
-                die(f"candidate_changes[{idx}]: unknown keys: {extra} (allowed: {sorted(allowed_keys)})")
-
-            cid = item.get("id")
-            if not isinstance(cid, str) or not cid.strip():
-                die(f"candidate_changes[{idx}].id: must be a non-empty string")
-            cid = cid.strip()
-            if cid in seen_ids:
-                die(f"candidate_changes[{idx}].id: duplicate id '{cid}'")
-            seen_ids.add(cid)
-
-            # Exactly one source: file OR inline
-            has_file = "file" in item and item.get("file") is not None
-            has_inline = "inline" in item and item.get("inline") is not None
-            if has_file and has_inline:
-                die(f"candidate_changes[{idx}] ({cid}): choose only one of 'file' or 'inline'")
-            if not has_file and not has_inline:
-                die(f"candidate_changes[{idx}] ({cid}): missing source: provide 'file' or 'inline'")
-
-            if has_file:
-                f = item.get("file")
-                if not isinstance(f, str) or not f.strip():
-                    die(f"candidate_changes[{idx}] ({cid}).file: must be a non-empty string")
-
-            if has_inline:
-                s = item.get("inline")
-                if not isinstance(s, str) or not s.strip():
-                    die(f"candidate_changes[{idx}] ({cid}).inline: must be a non-empty string")
-
-            # Optional description
-            if "description" in item and item.get("description") is not None:
-                d = item.get("description")
-                if not isinstance(d, str) or not d.strip():
-                    die(f"candidate_changes[{idx}] ({cid}).description: must be a non-empty string if provided")
-
-            # Optional format
-            if "format" in item and item.get("format") is not None:
-                fmt = item.get("format")
-                if not isinstance(fmt, str) or not fmt.strip():
-                    die(f"candidate_changes[{idx}] ({cid}).format: must be a non-empty string if provided")
-
-            # Optional scope: list of node names (must exist)
-            if "scope" in item and item.get("scope") is not None:
-                scope = item.get("scope")
-                if not isinstance(scope, list):
-                    die(f"candidate_changes[{idx}] ({cid}).scope: must be a list of node names")
-                for j, nname in enumerate(scope, start=1):
-                    if not isinstance(nname, str) or not nname.strip():
-                        die(f"candidate_changes[{idx}] ({cid}).scope[{j}]: must be a non-empty string")
-                    if nname.strip() not in names:
-                        die(f"candidate_changes[{idx}] ({cid}).scope[{j}]: unknown node '{nname.strip()}'")
-
-    # ----------------------------
-    # v1 gate semantics guardrails (tests)
-    # ----------------------------
-    tests = topo.get("tests") or []
-    if isinstance(tests, list) and tests:
-        for idx, t in enumerate(tests, start=1):
-            if not isinstance(t, dict):
-                continue
-
-            kind = (t.get("kind") or t.get("type") or "").strip().lower()
-            nm = t.get("name")
-            label = nm.strip() if isinstance(nm, str) and nm.strip() else f"tests[{idx}]"
-
-            exp = t.get("expect") or "pass"
-            exp = exp.strip().lower() if isinstance(exp, str) else exp
-            if exp not in ("pass", "fail"):
-                exp = "pass"
-
-            # Ping: count must be int >= 1 if provided
-            if kind == "ping" and "count" in t and t.get("count") is not None:
-                try:
-                    c = int(t.get("count"))
-                    if c < 1:
-                        raise ValueError()
-                except Exception:
-                    die(f"Topology invalid: {label}: ping count must be an integer >= 1")
-
-            # Ping: expected FAIL must be fail-fast (no retries/timeouts)
-            if kind == "ping" and exp == "fail":
-                if "timeout_s" in t and t.get("timeout_s") is not None:
-                    die(
-                        f"Topology invalid: {label}: ping expect: fail must not set timeout_s "
-                        f"(v1 fail-fast semantics)"
-                    )
-                if "retry_interval_s" in t and t.get("retry_interval_s") is not None:
-                    die(
-                        f"Topology invalid: {label}: ping expect: fail must not set retry_interval_s "
-                        f"(v1 fail-fast semantics)"
-                    )
-
-    # v1.x fail-fast educational guardrail (v1-truthful):
-    # - ai-netsim v1 does NOT infer routing intent and does NOT auto-configure routing protocols.
-    # - Therefore, multi-hop reachability cannot be *proven* to pass from topology alone.
-    # - If a multi-hop test expects PASS, it must rely on an equivalent pre-configured device image/config
-    #   outside ai-netsim v1, otherwise the expectation is invalid and should be changed.
-    #
-    # v1.x exception:
-    # - If ALL FRR nodes in the topology are explicitly declared as frr_mode: preconfigured,
-    #   then multi-hop expect: pass is allowed (routing comes from the image/config outside v1).
-    tests = topo.get("tests") or []
-    if isinstance(tests, list) and tests:
-        offenders: list[str] = []
-
-        # Determine whether the topology explicitly declares preconfigured routing on all FRR nodes.
-        nodes = topo.get("nodes") or []
-        all_frr_preconfigured = True
-        saw_frr = False
-
-        if isinstance(nodes, list):
-            for n in nodes:
-                if not isinstance(n, dict):
-                    continue
-                if n.get("type") != "frr":
-                    continue
-                saw_frr = True
-                mode = n.get("frr_mode")
-                mode_norm = str(mode).strip().lower() if mode is not None else "generated"
-                if mode_norm != "preconfigured":
-                    all_frr_preconfigured = False
-                    break
-        else:
-            all_frr_preconfigured = False
-
-        # Only enforce the fail-fast rule when we are NOT explicitly in "preconfigured routing" mode.
-        if not (saw_frr and all_frr_preconfigured):
-            for idx, t in enumerate(tests, start=1):
-                if not isinstance(t, dict):
-                    continue
-                if not _is_multihop_ping_test(topo, t):
-                    continue
-
-                exp = (t.get("expect") or "").strip().lower() if isinstance(t.get("expect"), str) else t.get("expect")
-                if exp == "pass":
-                    nm = t.get("name")
-                    label = nm.strip() if isinstance(nm, str) and nm.strip() else f"tests[{idx}]"
-                    offenders.append(label)
-
-            if offenders:
-                die(
-                    "Topology invalid: multi-hop ping test(s) declare expect: pass, but ai-netsim v1 does not infer routing "
-                    "intent or auto-configure routing protocols, so multi-hop pass cannot be proven from topology alone. "
-                    "Fix: either (a) change these tests to expect: fail, (b) limit tests to directly-connected reachability, "
-                    "or (c) run with an equivalent pre-configured device image/config outside ai-netsim v1. "
-                    f"Affected tests: {', '.join(offenders)}"
-                )
-
-# -------------------------
-# Paths for generated lab artifacts
-# -------------------------
-
-def lab_dir(lab_name: str) -> Path:
-    return LABS_DIR / f"clab-{lab_name}"
-
-def node_cfg_dir(lab_name: str, node: str) -> Path:
-    return lab_dir(lab_name) / "nodes" / node
-
-def write_file(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    # If a previous run created a directory where we expect a file, fix it.
-    if path.exists() and path.is_dir():
-        shutil.rmtree(path)
-
-    path.write_text(content, encoding="utf-8")
-
-# -------------------------
-# FRR config generation (simple v1)
-# -------------------------
-
-def gen_frr_daemons() -> str:
-    return """zebra=yes
-bgpd=yes
-ospfd=no
-ospf6d=no
-ripd=no
-ripngd=no
-isisd=no
-pimd=no
-ldpd=no
-nhrpd=no
-eigrpd=no
-babeld=no
-sharpd=no
-pbrd=no
-bfdd=no
-fabricd=no
-vrrpd=no
+import netsim_common
+from netsim_common import (
+    BASE_DIR, TOPO_DIR, LABS_DIR,
+    DEFAULT_IMAGES,
+    run, die, fail,
+    LAST_ERROR_MSG,
+    is_ip_literal, validate_ip_literal, classify_invalid_target,
+    nodes_by_type,
+)
+
+from netsim_artifacts import (
+    lab_dir, node_cfg_dir, write_file, write_json_canonical,
+    load_yaml,
+    topo_path_for_lab,
+)
+
+from netsim_model import (
+    _validate_fabric_evpn_presence_only,
+    ensure_valid_topology,
+    gen_frr_daemons,
+    gen_vtysh_conf,
+    build_node_links,
+    gen_frr_conf,
+    topo_to_containerlab,
+    resolve_topology,
+    adapt_terraform_plan_json,
+    adapt_ansible_rendered_dir,
+)
+
+from netsim_tests import (
+    ensure_nc,
+    ip_no_mask,
+    find_nodes_by_type,
+    start_tcp_listener,
+    stop_tcp_listeners,
+    tcp_connect_test,
+    node_first_ipv4,
+    run_ping_once_or_die,
+    run_tcp_test,
+    run_declared_tests,
+    connected_prefixes_for_router,
+    _coverage_test_ids,
+    _coverage_scenario_ids,
+    _coverage_touch_nodes_from_test,
+    derive_expected_routes_for_frr,
+    parse_frr_show_ip_route_prefixes,
+    parse_frr_show_ip_route_prefixes_json,
+    parse_frr_bgp_summary_neighbors_json,
+    derive_expected_bgp_neighbors_from_links,
+    parse_frr_bgp_summary_neighbors,
+    compare_expected_vs_observed_bgp,
+    wait_for_bgp,
+    configure_frr_static_routes_from_topology,
+    configure_frr_bgp_from_topology,
+    _parse_route_entry,
+    configure_nftfw_routes_from_topology,
+    verify_fw_routed_ready,
+    _iter_scenarios,
+    validate_scenarios,
+    build_test_index,
+    resolve_dst_to_ip,
+    retry_until,
+    wait_for_condition,
+    execute_scenario,
+    _atomic_test_ids,
+    validate_scenario_run_refs_or_die,
+    _render_scenarios_summary,
+    _format_test_summary,
+    write_test_summary_artifact,
+    _preflight_default_out,
+    _preflight_write,
+    _preflight_canonical_link_id,
+    _preflight_contains_key,
+    _preflight_get_touched_nodes,
+    _preflight_get_touched_links,
+    _preflight_load_adapters,
+    _preflight_findings,
+    _preflight_report,
+    _preflight_format_text,
+)
+
+from netsim_runtime_container import (
+    gen_nft_fw_rules,
+    _coverage_canonical_link_id,
+    _coverage_inventory_nodes,
+    _coverage_inventory_links,
+    _coverage_hash_resolved_topology,
+    _coverage_resolve_link_between,
+    build_coverage_model,
+    write_coverage_artifact,
+    write_containerlab_file,
+    _normalize_prefix,
+    compare_expected_vs_observed_prefixes,
+    container_name,
+    _node_index_by_name,
+    configure_frr_interfaces_from_topology,
+    configure_hosts_from_topology,
+    host_configure,
+    configure_nftfw_from_topology,
+    nft_fw_apply,
+    verify_host_ready,
+    verify_frr_ready,
+    verify_lab_ready,
+    fw_next_hops_from_links,
+    nft_fw_setup_bridge,
+    lab_file_from_name,
+    parse_lab_nodes,
+    docker_is_running,
+    vty,
+    ensure_ip_tools,
+    resolved_topology_path,
+    load_resolved_topology,
+    frr_nodes_from_topology,
+    _container_is_running,
+    Runtime,
+    ContainerRuntime,
+    VmRuntimeStub,
+    get_runtime,
+    list_owned_labs_from_artifacts,
+)
+# Phase-0 split guardrail marker:
+# scripts/verify_phase1.sh currently greps src/netsim.py for '^class ContainerRuntime'.
+# The real implementation lives in src/netsim_runtime_container.py (pure-move).
+_GUARDRAIL_VERIFY_PHASE1 = """
+class ContainerRuntime
 """
 
-def gen_vtysh_conf() -> str:
-    # removes "Can't open /etc/frr/vtysh.conf"
-    return "service integrated-vtysh-config\n"
+# ------------------------------------------------------------------
+# CLI / UX constants
+# ------------------------------------------------------------------
 
-def build_node_links(topo: dict) -> dict:
+_CANDIDATE_STDIO_TRUNC = 8_000  # must match previous value exactly
+
+def _print_artifacts_footer_for_lab(lab: str) -> None:
     """
-    Build per-node link info from topo['links'].
+    Deterministic Artifact Footer (v1.5, LOCKED):
+      Artifacts:
+      * labs/<labdir>/results.json (authoritative)
+      * labs/<labdir>/results.summary.txt (human-readable)
 
-    Returns:
-      {
-        "r1": [
-          {"iface": "eth1", "peer": "r2", "ip": "10.0.0.0/31", "peer_ip": "10.0.0.1"},
-          ...
-        ],
-        ...
-      }
+    Rules:
+      - Exactly these 3 lines (no extra context).
+      - No filesystem checks.
+      - Relative paths only (must start with "labs/").
+      - Safe to call from finally blocks; must never raise.
     """
-    links_by_node: dict[str, list[dict]] = {}
+    try:
+        lab_s = str(lab or "").strip()
+        if not lab_s:
+            return
 
-    for link in topo.get("links", []):
-        eps = link.get("endpoints", [])
-        ips = link.get("ipv4", [])
-        if len(eps) != 2 or len(ips) != 2:
-            die("Each link must have exactly 2 endpoints and 2 IPv4 addresses")
+        # Canonical artifact dir: labs/clab-<lab> (via lab_dir())
+        adir = lab_dir(lab_s)  # Path(".../labs/clab-<lab>")
+        dname = adir.name      # "clab-<lab>"
+        print("Artifacts:")
+        print(f"* labs/{dname}/results.json (authoritative)")
+        print(f"* labs/{dname}/results.summary.txt (human-readable)")
+    except Exception:
+        return
 
-        (n1, if1) = eps[0].split(":", 1)
-        (n2, if2) = eps[1].split(":", 1)
-        ip1, ip2 = ips[0], ips[1]
+def _sha256_file(p: Path) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with p.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
-        links_by_node.setdefault(n1, []).append({
-            "iface": if1,
-            "peer": n2,
-            "ip": ip1,
-            "peer_ip": ip2.split("/")[0],
-        })
-        links_by_node.setdefault(n2, []).append({
-            "iface": if2,
-            "peer": n1,
-            "ip": ip2,
-            "peer_ip": ip1.split("/")[0],
-        })
+def _truncate(s: str, limit: int = _CANDIDATE_STDIO_TRUNC) -> str:
+    if not s:
+        return ""
+    if len(s) <= limit:
+        return s
+    extra = len(s) - limit
+    return s[:limit] + f"\n...<truncated {extra} chars>"
 
-    return links_by_node
-
-def gen_nft_fw_rules(node: dict) -> str:
+def _shell_quote(x: Any) -> str:
     """
-    Generate nftables rules for nft-fw node.
-
-    Supported keys in YAML:
-      allow_icmp: true/false
-      allow_tcp: [443, 22, ...]
-      allow_udp: [53, ...]
-    Default policy is DROP in forward chain.
+    Deterministic shell-arg quoting for building a shell string.
+    Used only for tcpdump invocation string assembly.
     """
-    allow_icmp = bool(node.get("allow_icmp", False))
-    allow_tcp = node.get("allow_tcp", []) or []
-    allow_udp = node.get("allow_udp", []) or []
+    return shlex.quote(str(x))
 
-    def fmt_ports(ports: list[int]) -> str:
-        # nft expects: { 22, 443 }
-        ports = [int(p) for p in ports]
-        return "{ " + ", ".join(str(p) for p in ports) + " }"
-
-    lines: list[str] = []
-    lines.append("flush ruleset")
-    lines.append("table inet filter {")
-    lines.append("  chain forward {")
-    lines.append("    type filter hook forward priority 0; policy drop;")
-    lines.append("    ct state established,related accept")
-
-    if allow_icmp:
-        lines.append("    ip protocol icmp accept")
-
-    if allow_tcp:
-        lines.append(f"    tcp dport {fmt_ports(allow_tcp)} accept")
-
-    if allow_udp:
-        lines.append(f"    udp dport {fmt_ports(allow_udp)} accept")
-
-    lines.append("  }")
-    lines.append("}")
-    lines.append("")
-    return "\n".join(lines)
-
-def connected_prefixes_for_router(topo: dict, router_name: str) -> list[str]:
+def _sanitize_text(s: str) -> str:
     """
-    Returns a list of IPv4 prefixes (e.g. '192.168.1.0/24') that are
-    directly connected to this router and should be advertised into BGP.
+    Deterministic, minimal redaction helper.
 
-    Rule (v1):
-      - If a link connects router<->host and has explicit link['ipv4'],
-        advertise the /24 (or whatever mask) of the router-side IP.
+    IMPORTANT SEMANTICS:
+    - If no redaction occurs, return the original string EXACTLY (byte-for-byte),
+      so callers can correctly compute redaction_applied = (redacted != raw).
+    - Preserve line endings via splitlines(True) to avoid false "changes".
+    - Only redact when a sensitive keyword is present (case-insensitive).
+      Preferred behavior:
+        * If the line looks like KEY[:=]VALUE, preserve KEY and separator, redact VALUE.
+        * Otherwise, redact the whole line content (keep newline).
     """
-    node_type = {n["name"]: n["type"] for n in topo.get("nodes", [])}
-    prefixes: list[str] = []
+    if not s:
+        return ""
 
-    for link in topo.get("links", []):
-        eps = link.get("endpoints", [])
-        ips = link.get("ipv4", [])
+    import re
 
-        if len(eps) != 2 or len(ips) != 2:
+    # Keep this list small + explicit (deterministic + auditable).
+    # Note: allow api-key/api_key, private-key/private_key.
+    key_pat = r"(password|passwd|secret|token|api[_-]?key|apikey|private[_-]?key)"
+    kw_re = re.compile(rf"\b{key_pat}\b", re.IGNORECASE)
+
+    # Preserve KEY + separator; redact value.
+    # Examples:
+    #   "password: test"  -> "password: <REDACTED>"
+    #   "API_KEY=abcd"    -> "API_KEY=<REDACTED>"
+    kv_re = re.compile(rf"(?i)\b({key_pat})\b(\s*[:=]\s*)(.*)$")
+
+    changed = False
+    out_lines: list[str] = []
+
+    for ln in s.splitlines(True):  # keep original line endings
+        # Split body vs line ending(s) without normalizing them.
+        body = ln.rstrip("\r\n")
+        ending = ln[len(body):]  # whatever was stripped: "", "\n", "\r\n"
+
+        if not kw_re.search(body):
+            out_lines.append(ln)
             continue
 
-        (n1, _if1) = eps[0].split(":", 1)
-        (n2, _if2) = eps[1].split(":", 1)
+        changed = True
 
-        t1 = node_type.get(n1)
-        t2 = node_type.get(n2)
+        m = kv_re.search(body)
+        if m:
+            # Preserve the original key spelling and separator; redact the value.
+            redacted_body = f"{m.group(1)}{m.group(2)}<REDACTED>"
+            out_lines.append(redacted_body + ending)
+        else:
+            # Keyword present but not in key/value form → redact the whole line content.
+            out_lines.append("<REDACTED>" + ending)
 
-        # router <-> host
-        if t1 == "frr" and t2 == "host" and n1 == router_name:
-            prefixes.append(ips[0])
-        elif t2 == "frr" and t1 == "host" and n2 == router_name:
-            prefixes.append(ips[1])
+    if not changed:
+        return s  # exact original (prevents false redaction_applied=true)
 
-    # Convert interface IPs (192.168.1.1/24) to network prefixes (192.168.1.0/24)
-    out: list[str] = []
-    for cidr in prefixes:
-        # lightweight network calculation without extra deps
-        ip, mask = cidr.split("/", 1)
-        import ipaddress
-        net = ipaddress.ip_network(f"{ip}/{mask}", strict=False)
-        out.append(str(net))
+    return "".join(out_lines)
 
-    # de-dupe but keep stable order
-    seen = set()
-    result = []
-    for p in out:
-        if p not in seen:
-            seen.add(p)
-            result.append(p)
-    return result
+def _safe_stdio(s: str) -> str:
+    return _truncate(_sanitize_text(s or ""))
 
-def gen_frr_conf(node: dict, topo: dict) -> str:
+# -----------------------------
+# Capture-config (supporting evidence only) - v1.5
+# -----------------------------
+
+_CAPTURE_CONFIG_SCHEMA_VERSION = "1"
+_CAPTURE_CONFIG_MAX_CHARS = 200_000
+_CAPTURE_CONFIG_CMD_TIMEOUT_S = 5.0
+
+
+def _capture_config_artifacts_root(lab: str) -> Path:
+    return lab_dir(lab) / "artifacts" / "capture_config"
+
+
+def _capture_config_redact_and_truncate(s: str, *, limit_chars: int) -> tuple[str, bool, bool]:
     """
-    Generate FRR integrated config (routing-neutral).
-
-    - Configures interface IPs from topology links (only for this node)
-    - Optionally configures loopback /32 if router_id is provided
-    - Does NOT configure routing protocols (BGP/OSPF/etc.)
-    - Does NOT accept topology-encoded routing mechanics (static routes, policy, metrics)
-      Routing behavior must come from device configuration (candidate config or equivalent)
-      and be proven via tests.
+    Returns (out, redaction_applied, truncated).
+    Redaction is minimal and deterministic (pattern-based), consistent with v1.5 rules.
     """
-    name = node["name"]
+    raw = s or ""
+    redacted = _sanitize_text(raw)
+    redaction_applied = (redacted != raw)
 
-    rid = node.get("router_id")
-    rid = str(rid).strip() if rid is not None else ""
+    truncated = False
+    out = redacted
+    if len(out) > int(limit_chars):
+        truncated = True
+        out = _truncate(out, int(limit_chars))
+    return out, redaction_applied, truncated
 
-    # Build node link list from topology
-    links_by_node = build_node_links(topo)
-    node_links = links_by_node.get(name, [])
 
-    cfg: list[str] = []
-    cfg.append("frr version 8")
-    cfg.append("frr defaults traditional")
-    cfg.append(f"hostname {name}")
-    cfg.append("no ipv6 forwarding")
-    cfg.append("service integrated-vtysh-config")
-    cfg.append("!")
+def _capture_config_write_text(path: Path, content: str) -> None:
+    """
+    Write a text artifact deterministically (always UTF-8, newline-terminated).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not content.endswith("\n"):
+        content = content + "\n"
+    path.write_text(content, encoding="utf-8")
 
-    # Optional loopback / router-id (metadata only; does not imply protocols)
-    if rid:
-        cfg.append("interface lo")
-        cfg.append(f" ip address {rid}/32")
-        cfg.append("!")
-
-    # Interfaces from topology endpoints (only this node's endpoints)
-    for l in node_links:
-        cfg.append(f"interface {l['iface']}")
-        cfg.append(f" ip address {l['ip']}")
-        cfg.append("!")
-
-    cfg.append("line vty")
-    cfg.append("!")
-    return "\n".join(cfg) + "\n"
-
-# -------------------------
-# Topology -> containerlab
-# -------------------------
-
-def topo_to_containerlab(topo: dict) -> dict:
-    clab = {
-        "name": topo["name"],
-        "topology": {"nodes": {}, "links": []},
+def _capture_config_copy_host_file(*, src: Path, dst: Path) -> dict[str, Any]:
+    """
+    Best-effort copy of a host-side generated file into evidence artifacts.
+    """
+    rec: dict[str, Any] = {
+        "relpath": str(src),
+        "bytes": 0,
+        "sha256": "",
+        "captured_ok": False,
     }
 
-    # Hard defaults for core node types (deterministic + first-time UX safe).
-    # node.image always overrides these.
-    hard_defaults = {
-        "host": "wbitt/network-multitool:latest",
-        "nft-fw": "netsim/nft-fw:latest",
-        "frr": "frrouting/frr:latest",
-    }
+    try:
+        if not src.exists() or not src.is_file():
+            return rec
 
-    for n in topo["nodes"]:
-        ntype = n["type"]
+        data = src.read_bytes()
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(data)
 
-        # Resolve image once (node.image overrides defaults)
-        image = n.get("image") or hard_defaults.get(ntype) or DEFAULT_IMAGES.get(ntype)
-        if not image:
-            die(f"No default image for node type '{ntype}'. Set node.image explicitly.")
+        rec["bytes"] = int(len(data))
+        rec["sha256"] = _sha256_file(src)
+        rec["captured_ok"] = True
+        return rec
+    except Exception:
+        return rec
 
-        node_def = {"kind": "linux", "image": image}
+# -----------------------------
+# State capture (supporting evidence only) - v1.5
+# -----------------------------
 
-        binds: list[str] = []
+STATE_CAPTURE_SCHEMA = "state_capture.v1"
+STATE_CAPTURE_PLAN_VERSION = "1.0.0"
 
-        if ntype == "frr":
-            # v1.x: allow demo/preconfigured FRR images without any /etc/frr binds
-            # frr_mode:
-            #   - "generated" (default): bind generated /etc/frr/{daemons,vtysh.conf,frr.conf}
-            #   - "preconfigured": do NOT bind /etc/frr/* (image owns routing + daemons)
-            frr_mode = (n.get("frr_mode") or "generated").strip().lower()
-            if frr_mode not in ("generated", "preconfigured"):
+# Deterministic truncation for state outputs (bytes)
+_STATE_CAPTURE_MAX_BYTES = 64 * 1024  # 65536
+
+# Built-in profiles (LOCKED list for v1.5)
+# Each command is argv (no shell). Default deny everywhere else.
+STATE_CAPTURE_PROFILES: dict[str, dict] = {
+    # FRR
+    "frr-routing-basic": {
+        "node_types": ["frr"],
+        "commands": [
+            ["vtysh", "-c", "show ip route"],
+            ["vtysh", "-c", "show ipv6 route"],
+        ],
+    },
+    "frr-bgp-basic": {
+        "node_types": ["frr"],
+        "commands": [
+            ["vtysh", "-c", "show bgp summary"],
+            ["vtysh", "-c", "show bgp ipv6 summary"],
+        ],
+    },
+    "frr-interfaces-basic": {
+        "node_types": ["frr"],
+        "commands": [
+            ["vtysh", "-c", "show interface brief"],
+            ["vtysh", "-c", "show ip interface brief"],
+            ["vtysh", "-c", "show ipv6 interface brief"],
+        ],
+    },
+    # Linux hosts
+    "linux-net-basic": {
+        "node_types": ["host"],
+        "commands": [
+            ["ip", "addr"],
+            ["ip", "link"],
+            ["ip", "route"],
+            ["ip", "neigh"],
+        ],
+    },
+    "linux-sockets-basic": {
+        "node_types": ["host"],
+        "commands": [
+            ["ss", "-tulpn"],
+        ],
+    },
+    # nft firewall + sysctls
+    "nft-ruleset-basic": {
+        "node_types": ["nft-fw"],
+        "commands": [
+            ["nft", "list", "ruleset"],
+        ],
+    },
+    "linux-forwarding-basic": {
+        "node_types": ["nft-fw"],
+        "commands": [
+            ["sysctl", "-n", "net.ipv4.ip_forward"],
+            ["sysctl", "-n", "net.ipv4.conf.all.rp_filter"],
+            ["sysctl", "-n", "net.ipv4.conf.default.rp_filter"],
+        ],
+    },
+}
+
+# Hard global deny tokens (no shell metacharacters / compounds)
+_STATE_CAPTURE_DENY_TOKENS = ["|", ";", "&&", "||", ">", "<", "$(", ")", "`", "\n", "\r"]
+
+def _state_capture_trunc_bytes(s: str, *, max_bytes: int = _STATE_CAPTURE_MAX_BYTES) -> tuple[str, bool, int]:
+    """
+    Deterministic truncation by UTF-8 byte length.
+    Returns (text, truncated?, original_bytes).
+    """
+    if s is None:
+        return ("", False, 0)
+    raw = s.encode("utf-8", errors="replace")
+    orig = len(raw)
+    if orig <= max_bytes:
+        return (s, False, orig)
+    clipped = raw[:max_bytes]
+    return (clipped.decode("utf-8", errors="replace"), True, orig)
+
+def _state_capture_validate_argv_or_die(*, profile: str, node: str, node_type: str, argv: list[str]) -> None:
+    """
+    Allowlist + safety validation (fail-fast; config-time).
+    """
+    if not isinstance(argv, list) or not argv or not all(isinstance(x, str) and x.strip() for x in argv):
+        die(f"state-capture: invalid command argv for profile '{profile}' on node '{node}'")
+
+    # Global deny: no shell-ish metacharacters anywhere in argv
+    joined = " ".join(argv)
+    for tok in _STATE_CAPTURE_DENY_TOKENS:
+        if tok in joined:
+            die(
+                f"state-capture: command denied (token {tok!r}) for profile '{profile}' "
+                f"node '{node}' type '{node_type}': {argv!r}",
+                code=2,
+            )
+
+    # Node-type-specific allowlists
+    if node_type == "frr":
+        # Only: vtysh -c "show ..."
+        if not (len(argv) == 3 and argv[0] == "vtysh" and argv[1] == "-c"):
+            die(
+                f"state-capture: FRR commands must be 'vtysh -c <cmd>' "
+                f"(profile '{profile}' node '{node}'): {argv!r}",
+                code=2,
+            )
+        cmd = argv[2].strip()
+        cmd_l = cmd.lower()
+        # Must start with "show "
+        if not cmd_l.startswith("show "):
+            die(
+                f"state-capture: FRR command must start with 'show ' "
+                f"(profile '{profile}' node '{node}'): {cmd!r}",
+                code=2,
+            )
+        # Deny obvious mutation / risky subcommands
+        deny_words = ["configure", "conf t", "write", "clear", "debug", "terminal", "end", "exit", "|"]
+        for w in deny_words:
+            if w in cmd_l:
                 die(
-                    f"Topology invalid: node '{n.get('name')}': "
-                    f"frr_mode must be 'generated' or 'preconfigured'"
+                    f"state-capture: FRR command denied by allowlist rule ({w!r}) "
+                    f"(profile '{profile}' node '{node}'): {cmd!r}",
+                    code=2,
                 )
 
-            if frr_mode == "generated":
-                cfgdir = node_cfg_dir(topo["name"], n["name"])
-                write_file(cfgdir / "daemons", gen_frr_daemons())
-                write_file(cfgdir / "vtysh.conf", gen_vtysh_conf())
-                write_file(cfgdir / "frr.conf", gen_frr_conf(n, topo))
+    elif node_type == "host":
+        # Allow only exact commands:
+        allowed = {
+            ("ip", "addr"),
+            ("ip", "link"),
+            ("ip", "route"),
+            ("ip", "neigh"),
+            ("ss", "-tulpn"),
+        }
+        tup = tuple(argv)
+        if tup not in allowed:
+            die(
+                f"state-capture: host command not allowlisted "
+                f"(profile '{profile}' node '{node}'): {argv!r}",
+                code=2,
+            )
 
-                binds = [
-                    f"{cfgdir}/daemons:/etc/frr/daemons:ro",
-                    f"{cfgdir}/vtysh.conf:/etc/frr/vtysh.conf:ro",
-                    f"{cfgdir}/frr.conf:/etc/frr/frr.conf:ro",
-                ]
-            else:
-                # preconfigured: image provides /etc/frr/* and starts the right daemons (e.g., bgpd)
-                binds = []
+    elif node_type == "nft-fw":
+        allowed = {
+            ("nft", "list", "ruleset"),
+            ("sysctl", "-n", "net.ipv4.ip_forward"),
+            ("sysctl", "-n", "net.ipv4.conf.all.rp_filter"),
+            ("sysctl", "-n", "net.ipv4.conf.default.rp_filter"),
+        }
+        tup = tuple(argv)
+        if tup not in allowed:
+            die(
+                f"state-capture: nft-fw command not allowlisted "
+                f"(profile '{profile}' node '{node}'): {argv!r}",
+                code=2,
+            )
+        # extra hard deny for mutation verbs if someone tries to sneak them in
+        joined_l = " ".join(argv).lower()
+        if "flush" in joined_l or "add" in joined_l or "delete" in joined_l or " -w " in joined_l or "sysctl -w" in joined_l:
+            die(
+                f"state-capture: mutation command denied "
+                f"(profile '{profile}' node '{node}'): {argv!r}",
+                code=2,
+            )
+    else:
+        die(
+            f"state-capture: unsupported node type '{node_type}' for profile '{profile}' node '{node}'",
+            code=2,
+        )
 
-        # Hosts should stay alive
-        if ntype == "host":
-            node_def["cmd"] = "sleep infinity"
-
-        # nft-fw should stay alive and forward
-        if ntype == "nft-fw":
-            node_def["cmd"] = "sleep infinity"
-            node_def["sysctls"] = {
-                "net.ipv4.ip_forward": "1",
-                "net.ipv4.conf.all.rp_filter": "0",
-                "net.ipv4.conf.default.rp_filter": "0",
-                # Let bridged IPv4/IPv6 traffic hit the inet forward hook (iptables/nft)
-                "net.bridge.bridge-nf-call-iptables": "1",
-                "net.bridge.bridge-nf-call-ip6tables": "1",
-            }
-
-        # FRR nodes should behave like routers
-        if ntype == "frr":
-            node_def["sysctls"] = {
-                "net.ipv4.ip_forward": "1",
-                "net.ipv4.conf.all.rp_filter": "0",
-                "net.ipv4.conf.default.rp_filter": "0",
-            }
-
-        if binds:
-            node_def["binds"] = binds
-
-        clab["topology"]["nodes"][n["name"]] = node_def
-
-    for link in topo["links"]:
-        clab["topology"]["links"].append({"endpoints": link["endpoints"]})
-
-    return clab
-
-def resolve_topology(topo: dict) -> dict:
+def _state_capture_expand_plan_or_die(
+    *,
+    topo: dict,
+    mode: str,
+    profiles: list[str],
+) -> dict:
     """
-    Return a copy of topo with missing link IPv4 addresses allocated.
-    For now: allocate /31s sequentially from 10.0.0.0/16 in link order.
-
-    Also normalizes schema for resolved output:
-    - tests[].kind is canonical
-    - accept legacy tests[].type, rewriting it to kind
-    - fail fast if both kind and type are present in a test
+    Expand deterministic capture plan:
+      - nodes sorted lexicographically
+      - profiles in CLI order
+      - commands in profile declared order
+    Fail-fast for unknown profile or type mismatch or disallowed commands.
     """
-    resolved = yaml.safe_load(yaml.safe_dump(topo))  # simple deep copy
+    mode_l = str(mode or "none").strip().lower() or "none"
+    if mode_l not in ("none", "pre", "post", "both"):
+        die(f"state-capture: invalid mode {mode!r} (must be none|pre|post|both)", code=2)
 
-    # ----------------------------
-    # 1) Auto-address point-to-point links (10.0.0.0/16, sequential /31s)
-    # ----------------------------
-    next_host = 0  # host index inside 10.0.0.0/16
-    for link in resolved.get("links", []):
-        if "ipv4" in link and link["ipv4"]:
-            continue  # user already specified
+    if mode_l == "none":
+        return {
+            "schema": STATE_CAPTURE_SCHEMA,
+            "plan_version": STATE_CAPTURE_PLAN_VERSION,
+            "enabled": False,
+            "mode": "none",
+            "profiles": [],
+            "tasks": [],
+        }
 
-        eps = link["endpoints"]
-        if len(eps) != 2:
-            die("Auto-IP currently supports only point-to-point links with 2 endpoints")
+    # Explicitness guardrail: no implicit default profiles
+    if not profiles:
+        die(
+            "state-capture: capture mode enabled but no profiles selected. "
+            "Use one or more: --state-profile <name>",
+            code=2,
+        )
 
-        # Allocate a /31: two addresses
-        a = next_host
-        b = next_host + 1
-        next_host += 2
+    # Validate profiles exist and keep order exactly as provided
+    profs: list[str] = []
+    for p in profiles:
+        pn = str(p or "").strip()
+        if not pn:
+            continue
+        if pn not in STATE_CAPTURE_PROFILES:
+            die(
+                f"state-capture: unknown profile '{pn}'. "
+                f"Valid profiles: {', '.join(sorted(STATE_CAPTURE_PROFILES.keys()))}",
+                code=2,
+            )
+        profs.append(pn)
 
-        def ip(n: int) -> str:
-            # 10.0.(n//256).(n%256)
-            return f"10.0.{n//256}.{n%256}"
+    nodes = topo.get("nodes", []) or []
+    nodes_all = [n for n in nodes if isinstance(n, dict) and isinstance(n.get("name"), str)]
+    nodes_sorted = sorted(nodes_all, key=lambda n: str(n.get("name") or "").strip())
 
-        link["ipv4"] = [f"{ip(a)}/31", f"{ip(b)}/31"]
+    tasks: list[dict] = []
+    cmd_id = 0
 
-    # ----------------------------
-    # 2) Normalize tests schema (v1)
-    #    - 'kind' is canonical for tests
-    #    - accept legacy 'type' but rewrite to 'kind'
-    #    - fail fast if both are present
-    # ----------------------------
-    tests = resolved.get("tests", []) or []
-    for idx, t in enumerate(tests):
-        i = idx + 1
-
-        if not isinstance(t, dict):
-            die(f"tests[{i}]: must be a dict")
-
-        if "kind" in t and "type" in t:
-            die(f"tests[{i}]: has both 'kind' and 'type' (use only 'kind')")
-
-        if "type" in t and "kind" not in t:
-            t["kind"] = t.pop("type")
-
-        # ----------------------------
-        # v1: normalize test field aliases
-        # Accept 'from'/'to' as aliases for 'src'/'dst' with strict disagreement checks.
-        # ----------------------------
-        if "from" in t and "src" in t:
-            a = str(t.get("from") or "").strip()
-            b = str(t.get("src") or "").strip()
-            if a and b and a != b:
-                die(f"tests[{i}]: 'from' and 'src' disagree ({a!r} vs {b!r})")
-
-        if "to" in t and "dst" in t:
-            a = str(t.get("to") or "").strip()
-            b = str(t.get("dst") or "").strip()
-            if a and b and a != b:
-                die(f"tests[{i}]: 'to' and 'dst' disagree ({a!r} vs {b!r})")
-
-        if "src" not in t and "from" in t:
-            t["src"] = t.get("from")
-
-        if "dst" not in t and "to" in t:
-            # IMPORTANT (v1): for ping tests, do NOT alias 'to' into 'dst'.
-            # Ping normalization below treats 'to'/'to_ip' as IP-literal targets.
-            if t.get("kind") != "ping":
-                t["dst"] = t.get("to")
-
-        # ----------------------------
-        # v1 ping destination normalization
-        # ----------------------------
-        # ----------------------------
-        # v1 ping destination normalization (strict)
-        #   - dst: node name
-        #   - to/to_ip: IP literal
-        #   - fail-fast on ambiguity
-        # ----------------------------
-        if t.get("kind") == "ping":
-            ctx = f"tests[{i}] ({t.get('name', '<unnamed>')})"
-
-            src = t.get("src") or t.get("from")
-            if not src or not isinstance(src, str):
-                die(f"{ctx}: ping test requires 'from/src' as a node name")
-
-            # Target forms
-            has_dst = "dst" in t and t.get("dst") is not None
-            has_to = "to" in t and t.get("to") is not None
-            has_to_ip = "to_ip" in t and t.get("to_ip") is not None
-
-            # Disallow ambiguous targets (v1 contract)
-            #   - dst (node) OR to/to_ip (ip) but not both
-            if has_dst and (has_to or has_to_ip):
-                die(f"{ctx}: ping test target is ambiguous: use 'dst' (node) OR 'to'/'to_ip' (ip literal), not both")
-            if has_to and has_to_ip:
-                die(f"{ctx}: ping test target is ambiguous: use only one of 'to' or 'to_ip'")
-
-            # IP-literal target path
-            if has_to or has_to_ip:
-                ip_val = t.get("to") if has_to else t.get("to_ip")
-                if not isinstance(ip_val, str) or not is_ip_literal(ip_val.strip()):
-                    die(f"{ctx}: ping test: 'to'/'to_ip' must be a valid IPv4/IPv6 literal")
-                ip_val = ip_val.strip()
-                validate_ip_literal(ip_val, ctx)
-                t["_dst_kind"] = "ip"
-                t["_dst_value"] = ip_val
+    def add_tasks_for_when(when: str) -> None:
+        for n in nodes_sorted:
+            node = str(n.get("name") or "").strip()
+            ntype = str(n.get("type") or n.get("kind") or "").strip()
+            if not node or not ntype:
                 continue
 
-            # Node-name target path (dst required)
-            dst = t.get("dst")
-            if not dst or not isinstance(dst, str):
-                die(f"{ctx}: ping test requires 'dst' as a node name (or use 'to'/'to_ip' for an IP literal)")
+            # command_id resets per node (per 'when'), deterministic ordering preserved
+            node_cmd_id = 0
 
-            dst = dst.strip()
-            if is_ip_literal(dst):
-                t["_dst_kind"] = "ip"
-                t["_dst_value"] = dst
-                continue
-
-            nodes = {n.get("name") for n in resolved.get("nodes", []) or []}
-            if dst not in nodes:
-                die(f"{ctx}: 'dst' must be a valid node name")
-
-            t["_dst_kind"] = "node"
-            t["_dst_value"] = dst
-
-    # ----------------------------
-    # 3) v1.x ergonomics: scenario run include expansion
-    #    - Supports:  run: { include: all }
-    #    - Expands deterministically at resolve time into multiple run steps
-    #    - Uses declared tests order (as written in topology)
-    # ----------------------------
-    scenarios = resolved.get("scenarios", []) or []
-    if scenarios:
-        # Precompute ordered test names (declared order)
-        ordered_test_names: list[str] = []
-        unnamed_tests: list[str] = []
-        for idx, t in enumerate(tests):
-            if not isinstance(t, dict):
-                # already rejected above, but keep deterministic
-                continue
-            nm = t.get("name")
-            if isinstance(nm, str) and nm.strip():
-                ordered_test_names.append(nm.strip())
-            else:
-                unnamed_tests.append(f"tests[{idx+1}]")
-
-        for sidx, s in enumerate(scenarios):
-            if not isinstance(s, dict):
-                continue
-            sid = s.get("id")
-            sid_label = str(sid) if isinstance(sid, str) and sid.strip() else f"scenarios[{sidx+1}]"
-
-            steps = s.get("steps")
-            if not isinstance(steps, list):
-                continue
-
-            new_steps: list[dict] = []
-            for step_i, step in enumerate(steps, start=1):
-                # Only transform steps shaped like: {run: {include: all}}
-                if isinstance(step, dict) and "run" in step and isinstance(step.get("run"), dict):
-                    run_spec = step.get("run") or {}
-                    extra_keys = sorted(set(run_spec.keys()) - {"include"})
-                    if extra_keys:
-                        die(
-                            f"{sid_label}: steps[{step_i}].run: unsupported keys {extra_keys} "
-                            f"(v1 supports only: include)"
-                        )
-
-                    inc = run_spec.get("include")
-                    if not (isinstance(inc, str) and inc.strip().lower() == "all"):
-                        die(
-                            f"{sid_label}: steps[{step_i}].run.include: only 'all' is supported in v1 "
-                            f"(got {inc!r})"
-                        )
-
-                    # include: all requires every declared test to have a name,
-                    # because scenario run refs are name-based and must be auditable.
-                    if unnamed_tests:
-                        die(
-                            f"{sid_label}: steps[{step_i}]: run include: all requires every test to have a non-empty "
-                            f"'name' (missing for: {', '.join(unnamed_tests)})"
-                        )
-
-                    for tn in ordered_test_names:
-                        new_steps.append({"run": tn})
+            for prof in profs:
+                prof_def = STATE_CAPTURE_PROFILES[prof]
+                allowed_types = prof_def.get("node_types") or []
+                if ntype not in allowed_types:
                     continue
 
-                # default: keep step as-is
-                if isinstance(step, dict):
-                    new_steps.append(step)
-                else:
-                    # keep non-dict as-is; validate_scenarios will reject deterministically
-                    new_steps.append(step)
+                for argv in (prof_def.get("commands") or []):
+                    # Validate allowlist & safety at plan time (blocking)
+                    _state_capture_validate_argv_or_die(profile=prof, node=node, node_type=ntype, argv=argv)
 
-            s["steps"] = new_steps
+                    node_cmd_id += 1
+                    tasks.append(
+                        {
+                            "profile": prof,
+                            "node": node,
+                            "node_type": ntype,
+                            "when": when,
+                            "command_id": f"cmd-{node_cmd_id:03d}",
+                            "argv": argv,
+                        }
+                    )
 
-        # ----------------------------
-    # v1: Change Context (Step 1) — candidate_changes declaration validation
-    #   - context only; never consumed by runtime
-    #   - no file reads here
-    # ----------------------------
-    if "candidate_changes" in topo and topo["candidate_changes"] is not None:
-        cc = topo["candidate_changes"]
-        if not isinstance(cc, list):
-            die("'candidate_changes' must be a list.")
+    if mode_l in ("pre", "both"):
+        add_tasks_for_when("pre")
+    if mode_l in ("post", "both"):
+        add_tasks_for_when("post")
 
-        allowed_keys = {"id", "description", "scope", "file", "inline", "format"}
-        seen_ids: set[str] = set()
+    return {
+        "schema": STATE_CAPTURE_SCHEMA,
+        "plan_version": STATE_CAPTURE_PLAN_VERSION,
+        "enabled": True,
+        "mode": mode_l,
+        "profiles": profs,
+        "tasks": tasks,
+        "ordering": {
+            "nodes": "lexicographic",
+            "profiles": "cli_order",
+            "commands": "profile_declared_order",
+        },
+    }
 
-        for idx, item in enumerate(cc, start=1):
-            if not isinstance(item, dict):
-                die(f"candidate_changes[{idx}]: must be a dict")
+def _state_capture_artifacts_root(lab: str) -> Path:
+    return lab_dir(lab) / "artifacts" / "state_capture"
 
-            extra = sorted(set(item.keys()) - allowed_keys)
-            if extra:
-                die(f"candidate_changes[{idx}]: unknown keys: {extra} (allowed: {sorted(allowed_keys)})")
-
-            cid = item.get("id")
-            if not isinstance(cid, str) or not cid.strip():
-                die(f"candidate_changes[{idx}].id: must be a non-empty string")
-            cid = cid.strip()
-            if cid in seen_ids:
-                die(f"candidate_changes[{idx}].id: duplicate id '{cid}'")
-            seen_ids.add(cid)
-
-            # Exactly one source: file OR inline
-            has_file = "file" in item and item.get("file") is not None
-            has_inline = "inline" in item and item.get("inline") is not None
-            if has_file and has_inline:
-                die(f"candidate_changes[{idx}] ({cid}): choose only one of 'file' or 'inline'")
-            if not has_file and not has_inline:
-                die(f"candidate_changes[{idx}] ({cid}): missing source: provide 'file' or 'inline'")
-
-            if has_file:
-                f = item.get("file")
-                if not isinstance(f, str) or not f.strip():
-                    die(f"candidate_changes[{idx}] ({cid}).file: must be a non-empty string")
-
-            if has_inline:
-                s = item.get("inline")
-                if not isinstance(s, str) or not s.strip():
-                    die(f"candidate_changes[{idx}] ({cid}).inline: must be a non-empty string")
-
-            # Optional description
-            if "description" in item and item.get("description") is not None:
-                d = item.get("description")
-                if not isinstance(d, str) or not d.strip():
-                    die(f"candidate_changes[{idx}] ({cid}).description: must be a non-empty string if provided")
-
-            # Optional format
-            if "format" in item and item.get("format") is not None:
-                fmt = item.get("format")
-                if not isinstance(fmt, str) or not fmt.strip():
-                    die(f"candidate_changes[{idx}] ({cid}).format: must be a non-empty string if provided")
-
-            # Optional scope: list of node names (must exist)
-            if "scope" in item and item.get("scope") is not None:
-                scope = item.get("scope")
-                if not isinstance(scope, list):
-                    die(f"candidate_changes[{idx}] ({cid}).scope: must be a list of node names")
-                for j, nname in enumerate(scope, start=1):
-                    if not isinstance(nname, str) or not nname.strip():
-                        die(f"candidate_changes[{idx}] ({cid}).scope[{j}]: must be a non-empty string")
-                    if nname.strip() not in names:
-                        die(f"candidate_changes[{idx}] ({cid}).scope[{j}]: unknown node '{nname.strip()}'")
-
-    return resolved
-
-def write_containerlab_file(topo_path: Path) -> Path:
-    topo = load_yaml(topo_path)
-    ensure_valid_topology(topo)
-
-    resolved = resolve_topology(topo)
-    validate_scenarios(resolved)
-
-
-    # Store both: original + resolved
-    write_file(lab_dir(topo["name"]) / "topology.yaml", yaml.safe_dump(topo, sort_keys=False))
-    write_file(lab_dir(topo["name"]) / "topology.resolved.yaml", yaml.safe_dump(resolved, sort_keys=False))
-
-    clab = topo_to_containerlab(resolved)
-
-    LABS_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = LABS_DIR / f"{resolved['name']}.clab.yaml"
-    with out_path.open("w", encoding="utf-8") as f:
-        yaml.safe_dump(clab, f, sort_keys=False)
-
-    print(f"Wrote: {out_path}")
-    return out_path
-
-# -------------------------
-# Runtime helpers
-# -------------------------
-
-import re
-import ipaddress
-
-_RE_NEIGH_LINE = re.compile(r"^\s*(\d{1,3}(?:\.\d{1,3}){3})\s+")
-_RE_IPV4_PREFIX = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3}/\d{1,2})\b")
-
-def _normalize_prefix(cidr: str) -> str | None:
-    try:
-        n = ipaddress.ip_network(cidr.strip(), strict=False)
-        if n.version != 4:
-            return None
-        return str(n)
-    except Exception:
-        return None
-
-def derive_expected_routes_for_frr(topo: dict[str, Any]) -> dict[str, set[str]]:
-    """
-    Intent: expected IPv4 prefixes that must appear in each FRR node's routing table.
-
-    v1 rules:
-      - router_id => expect router_id/32
-      - FRR<->host links => expect connected subnet prefix (network of router-side IP)
-      - v1 does NOT infer routing from topology (no static_routes, no auto-BGP)
-    """
-    nodes = topo.get("nodes", []) or []
-    node_type = {n.get("name"): n.get("type") for n in nodes if isinstance(n, dict)}
-    expected: dict[str, set[str]] = {}
-
-    # 1) Loopbacks from router_id
-    for n in nodes:
-        if not isinstance(n, dict):
-            continue
-        if n.get("type") != "frr":
-            continue
-        name = n.get("name")
-        rid = n.get("router_id")
-        if isinstance(name, str) and name:
-            expected.setdefault(name, set())
-            if isinstance(rid, str) and rid:
-                p = _normalize_prefix(f"{rid}/32")
-                if p:
-                    expected[name].add(p)
-
-    # 2) Connected host subnets (FRR<->host links)
-    for link in topo.get("links", []) or []:
-        eps = link.get("endpoints", []) or []
-        ips = link.get("ipv4", []) or []
-        if len(eps) != 2 or len(ips) != 2:
-            continue
-
-        (n1, _if1) = str(eps[0]).split(":", 1)
-        (n2, _if2) = str(eps[1]).split(":", 1)
-
-        t1 = node_type.get(n1)
-        t2 = node_type.get(n2)
-
-        # Only FRR<->host in v1
-        if t1 == "frr" and t2 == "host":
-            router = n1
-            router_ip = ips[0]
-        elif t2 == "frr" and t1 == "host":
-            router = n2
-            router_ip = ips[1]
-        else:
-            continue
-
-        norm = _normalize_prefix(router_ip)
-        if norm:
-            expected.setdefault(router, set()).add(norm)
-
-    return expected
-
-def parse_frr_show_ip_route_prefixes(text: str) -> set[str]:
-    """
-    Parse `vtysh -c "show ip route"` and extract IPv4 prefixes.
-    This avoids fragile column indexes.
-    """
-    out: set[str] = set()
-    if not text:
-        return out
-
-    for line in text.splitlines():
-        m = _RE_IPV4_PREFIX.search(line)
-        if not m:
-            continue
-        p = _normalize_prefix(m.group(1))
-        if p:
-            out.add(p)
+def _state_capture_write_plan(lab: str, plan: dict) -> Path:
+    root = _state_capture_artifacts_root(lab)
+    root.mkdir(parents=True, exist_ok=True)
+    out = root / "plan.json"
+    out.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return out
 
-def compare_expected_vs_observed_prefixes(expected: set[str], observed: set[str]) -> dict[str, Any]:
-    missing = sorted([p for p in expected if p not in observed])
-    return {
-        "expected": sorted(expected),
-        "observed": sorted(observed),
-        "missing": missing,
-        "ok": (len(missing) == 0),
-    }
-
-def parse_frr_show_ip_route_prefixes_json(raw: str) -> set[str]:
+def _state_capture_run_plan(
+    rt: "Runtime",
+    lab: str,
+    plan: dict[str, Any],
+    *,
+    when: str,
+    timeout_s: float = 5.0,
+) -> dict[str, int]:
     """
-    Parse `vtysh -c "show ip route json"` into a set of prefixes like "192.168.1.0/24".
-    Returns empty set if raw isn't valid/expected JSON.
+    Execute a resolved state-capture plan for a single capture point (pre|post).
+
+    Non-authoritative:
+      - command failures/timeouts are recorded but never gate
+      - caller decides how/where to surface summaries
     """
-    raw = (raw or "").strip()
-    if not raw:
-        return set()
+    root = lab_dir(lab) / "artifacts" / "state_capture" / when
+    root.mkdir(parents=True, exist_ok=True)
 
-    try:
-        doc = json.loads(raw)
-    except Exception:
-        return set()
+    tasks = plan.get("tasks") or []
+    if not isinstance(tasks, list):
+        return {"when": when, "ran": 0, "ok": 0, "error": 0, "timeout": 0, "skipped": 0}
 
-    prefixes: set[str] = set()
+    ran = 0
+    ok = 0
+    err = 0
+    tout = 0
+    skipped = 0
 
-    # FRR typically returns keys as prefixes at the top level (e.g. "10.0.0.0/31": {...})
-    # Some versions may wrap under "routes" or "routeTable"; handle a couple common shapes.
-    if isinstance(doc, dict):
-        if "routes" in doc and isinstance(doc["routes"], dict):
-            route_dict = doc["routes"]
-        else:
-            route_dict = doc
+    for t in tasks:
+        if not isinstance(t, dict):
+            continue
+        if str(t.get("when")) != str(when):
+            continue
 
-        for k, v in route_dict.items():
-            if not isinstance(k, str):
-                continue
-            # keep only things that look like prefixes
+        node = str(t.get("node") or "")
+        node_type = str(t.get("node_type") or "")
+        profile = str(t.get("profile") or "")
+        cmd_id = str(t.get("command_id") or "")
+        argv = t.get("argv")
+
+        if not node or not profile or not cmd_id or not isinstance(argv, list) or not argv:
+            skipped += 1
+            continue
+
+        ran += 1
+
+        node_dir = root / node
+        node_dir.mkdir(parents=True, exist_ok=True)
+
+        meta_path = node_dir / f"{cmd_id}.json"
+        out_path = node_dir / f"{cmd_id}.out.txt"
+
+        started_ms = int(time.time() * 1000)
+        status = "ok"
+        exit_code = 0
+        stdout = ""
+        stderr = ""
+        duration_ms = 0
+
+        try:
+            t0 = time.time()
+            cp = rt.exec(lab, node, argv, check=False, capture_output=True, timeout_s=float(timeout_s))
+            duration_ms = int((time.time() - t0) * 1000)
+
+            exit_code = int(getattr(cp, "returncode", 0) or 0)
+            stdout = cp.stdout if isinstance(cp.stdout, str) else (cp.stdout.decode("utf-8", "replace") if isinstance(cp.stdout, bytes) else "")
+            stderr = cp.stderr if isinstance(cp.stderr, str) else (cp.stderr.decode("utf-8", "replace") if isinstance(cp.stderr, bytes) else "")
+
+            if exit_code != 0:
+                status = "error"
+
+        except subprocess.TimeoutExpired as e:
+            status = "timeout"
+            exit_code = 1
+            duration_ms = int((int(time.time() * 1000) - started_ms))
             try:
-                ipaddress.ip_network(k, strict=False)
+                out = e.stdout
+                if isinstance(out, bytes):
+                    stdout = out.decode("utf-8", "replace")
+                elif isinstance(out, str):
+                    stdout = out
             except Exception:
-                continue
-            prefixes.add(k)
+                pass
+            try:
+                er = e.stderr
+                if isinstance(er, bytes):
+                    stderr = er.decode("utf-8", "replace")
+                elif isinstance(er, str):
+                    stderr = er
+            except Exception:
+                pass
 
-    return prefixes
+        except Exception as e:
+            status = "error"
+            exit_code = 1
+            duration_ms = int((int(time.time() * 1000) - started_ms))
+            stderr = _safe_stdio(str(e))
 
-def parse_frr_bgp_summary_neighbors_json(out: str) -> dict[str, dict[str, Any]]:
-    """
-    Parse FRR `show bgp summary json`.
+        # Deterministic size policy for outputs
+        out_txt, trunc, orig_bytes = _state_capture_trunc_bytes(_sanitize_text(stdout), max_bytes=_STATE_CAPTURE_MAX_BYTES)
 
-    Observed schema (FRR):
-      {
-        "ipv4Unicast": {
-          "peers": {
-            "10.0.0.1": { "state": "Established", "pfxRcd": 1, "peerState": "OK", ... },
-            ...
-          }
+        # Always write text output (even if empty); keeps tooling stable
+        out_path.write_text(out_txt, encoding="utf-8")
+
+        rec = {
+            "authority": "supporting_evidence",
+            "schema": STATE_CAPTURE_SCHEMA,
+            "plan_version": STATE_CAPTURE_PLAN_VERSION,
+            "when": when,
+            "profile": profile,
+            "node": node,
+            "node_type": node_type,
+            "command_id": cmd_id,
+            "argv": argv,
+            "started_at_epoch_ms": started_ms,
+            "duration_ms": int(duration_ms),
+            "result": {
+                "status": status,
+                "exit_code": int(exit_code),
+                "stdout_bytes": int(orig_bytes),
+                "stdout_truncated": bool(trunc),
+                "out_path": str(out_path),
+            },
+            "stderr": _safe_stdio(stderr),
         }
-      }
+        meta_path.write_text(json.dumps(rec, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    Returns:
-      { "<neighbor_ip>": {"established": bool, "raw": "<state>"} }
+        if status == "ok":
+            ok += 1
+        elif status == "timeout":
+            tout += 1
+        else:
+            err += 1
 
-    Notes:
-      - We treat `state` as authoritative when present.
-      - We only fall back to `peerState` / `pfxRcd` if `state` is missing, because
-        `pfxRcd` can remain non-zero even after an admin shutdown (stale last-known).
+    return {"when": when, "ran": ran, "ok": ok, "error": err, "timeout": tout, "skipped": skipped}
+
+def _candidate_artifacts_dir(lab: str) -> Path:
+    return lab_dir(lab) / "artifacts" / "apply"
+
+def _write_candidate_apply_artifact(lab: str, node: str, rec: dict[str, Any]) -> Path:
+    outdir = _candidate_artifacts_dir(lab)
+    outdir.mkdir(parents=True, exist_ok=True)
+    out = outdir / f"{node}.apply.json"
+    out.write_text(json.dumps(rec, indent=2), encoding="utf-8")
+    return out
+
+def _is_within_dir(child: Path, parent: Path) -> bool:
+    # Deterministic, portable traversal guard.
+    try:
+        child_r = child.resolve()
+        parent_r = parent.resolve()
+    except Exception:
+        return False
+    return os.path.commonpath([str(child_r), str(parent_r)]) == str(parent_r)
+
+def _candidate_parse_dir_or_die(topo: dict[str, Any], cand_dir: Path) -> list[dict[str, Any]]:
     """
-    import json
+    v1.5 deterministic candidate dir contract:
 
-    if not out:
-        return {}
+      <dir>/frr/<node>.conf
+      <dir>/nft/<node>.nft
+      <dir>/nft/<node>.ruleset
+
+    Rules:
+      - dir must exist
+      - must contain >=1 recognized candidate file
+      - reject unknown subdirs + unknown file types
+      - reject path traversal (candidate files must live inside cand_dir)
+      - node must exist in topology and match node.type:
+          frr/*.conf -> node.type == "frr"
+          nft/*.(nft|ruleset) -> node.type == "nft-fw"
+      - duplicates (same node+type) -> fail fast
+      - file must be non-empty (size > 0)
+      - plan order is stable: sort by node name
+    """
+    if not cand_dir.exists() or not cand_dir.is_dir():
+        die(f"--candidate-config: directory not found or not a directory: {cand_dir}")
+
+    nodes = topo.get("nodes", []) or []
+    nodes_by_name: dict[str, dict[str, Any]] = {}
+    for n in nodes:
+        if isinstance(n, dict) and isinstance(n.get("name"), str):
+            nodes_by_name[n["name"]] = n
+
+    allowed_subdirs = {"frr", "nft"}
+    plan: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    saw_any = False
+
+    # Reject unknown entries at root for determinism
+    for entry in sorted(cand_dir.iterdir(), key=lambda p: p.name):
+        if entry.is_dir():
+            if entry.name not in allowed_subdirs:
+                die(f"--candidate-config: unknown subdir '{entry.name}' (allowed: frr/, nft/)")
+        else:
+            die(f"--candidate-config: unknown file at root '{entry.name}' (place under frr/ or nft/)")
+
+    # frr/
+    frr_dir = cand_dir / "frr"
+    if frr_dir.exists():
+        if not frr_dir.is_dir():
+            die(f"--candidate-config: expected directory: {frr_dir}")
+        for p in sorted(frr_dir.iterdir(), key=lambda x: x.name):
+            if p.is_dir():
+                die(f"--candidate-config: unexpected directory under frr/: {p.name}")
+            if p.suffix != ".conf":
+                die(f"--candidate-config: unsupported file under frr/: {p.name} (only .conf allowed)")
+            if not _is_within_dir(p, cand_dir):
+                die(f"--candidate-config: path traversal detected for file: frr/{p.name}")
+            if p.stat().st_size == 0:
+                die(f"--candidate-config: empty candidate file: frr/{p.name}")
+
+            node = p.stem
+            if node not in nodes_by_name:
+                die(f"--candidate-config: candidate targets unknown node '{node}' (file: frr/{p.name})")
+            if nodes_by_name[node].get("type") != "frr":
+                die(f"--candidate-config: frr/{p.name} targets node '{node}' but node.type is not 'frr'")
+
+            key = (node, "frr")
+            if key in seen:
+                die(f"--candidate-config: duplicate candidate for node '{node}' type 'frr'")
+            seen.add(key)
+            saw_any = True
+            plan.append({"node": node, "node_type": "frr", "source_path": str(p)})
+
+    # nft/
+    nft_dir = cand_dir / "nft"
+    if nft_dir.exists():
+        if not nft_dir.is_dir():
+            die(f"--candidate-config: expected directory: {nft_dir}")
+        for p in sorted(nft_dir.iterdir(), key=lambda x: x.name):
+            if p.is_dir():
+                die(f"--candidate-config: unexpected directory under nft/: {p.name}")
+            if p.suffix not in (".nft", ".ruleset"):
+                die(f"--candidate-config: unsupported file under nft/: {p.name} (only .nft or .ruleset allowed)")
+            if not _is_within_dir(p, cand_dir):
+                die(f"--candidate-config: path traversal detected for file: nft/{p.name}")
+            if p.stat().st_size == 0:
+                die(f"--candidate-config: empty candidate file: nft/{p.name}")
+
+            node = p.stem
+            if node not in nodes_by_name:
+                die(f"--candidate-config: candidate targets unknown node '{node}' (file: nft/{p.name})")
+            if nodes_by_name[node].get("type") != "nft-fw":
+                die(f"--candidate-config: nft/{p.name} targets node '{node}' but node.type is not 'nft-fw'")
+
+            key = (node, "nft-fw")
+            if key in seen:
+                die(f"--candidate-config: duplicate candidate for node '{node}' type 'nft-fw'")
+            seen.add(key)
+            saw_any = True
+            plan.append({"node": node, "node_type": "nft-fw", "source_path": str(p)})
+
+    if not saw_any:
+        die(
+            f"--candidate-config: no recognized candidate inputs found under: {cand_dir} "
+            "(expected frr/*.conf and/or nft/*.nft|*.ruleset)"
+        )
+
+    plan.sort(key=lambda r: r["node"])
+    return plan
+
+def _candidate_apply_frr_generated_only(rt: Runtime, lab: str, topo: dict[str, Any], node: str, src: Path) -> dict[str, Any]:
+    """
+    v1.5 invariant (LOCKED):
+      - Candidate apply MUST NOT restart containers.
+      - FRR candidate must be applied without changing the container lifecycle, preserving netns/interfaces.
+
+    Behavior:
+      - Enforce frr_mode: generated only (fail fast otherwise)
+      - Record container ID before/after (must match)
+      - (Evidence) record ip link snapshot before/after
+      - Copy candidate into container WITHOUT docker-cp replace semantics
+      - Deterministically detect if /etc/frr/frr.conf is RO via mount flags
+         - If RO: apply via vtysh -f from /tmp (no FRR restart)
+           - Sanitize config-mode wrapper lines for vtysh batch mode
+           - GUARDRAIL: if sanitized file becomes empty => FAIL (no-op apply is not allowed)
+         - If not RO: write file then restart FRR inside container (never docker restart)
+      - Robust fallback: if write fails with "Read-only file system", switch to vtysh -f (with sanitization)
+      - Postcheck: vtysh show version (required); show bgp summary (evidence-only)
+
+    FIX (gate correctness):
+      - vtysh-mode apply is successful only if vtysh -f returns exit_code == 0.
+        (No heuristics, no “it seems applied anyway”.)
+    """
+    started = time.time()
+
+    topo_nodes = {n.get("name"): n for n in (topo.get("nodes", []) or []) if isinstance(n, dict)}
+    n = topo_nodes.get(node) or {}
+    frr_mode = (n.get("frr_mode") or "generated").strip().lower()
+    if frr_mode != "generated":
+        finished = time.time()
+        return {
+            "node": node,
+            "node_type": "frr",
+            "method": "frr_inplace_reload",
+            "input": {"source_path": str(src), "sha256": _sha256_file(src)},
+            "attempt": {"started_at_epoch_ms": int(started * 1000), "duration_ms": int((finished - started) * 1000)},
+            "result": {"applied_ok": False, "exit_code": 2},
+            "stdout": "",
+            "stderr": _safe_stdio(
+                f"candidate apply: frr_mode='{frr_mode}' is unsupported; v1.5 supports candidate apply only for frr_mode: generated"
+            ),
+            "post_checks": [],
+        }
+
+    sha = _sha256_file(src)
+
+    # Evidence snapshots (must not fail apply by themselves)
+    container_id_before = ""
+    container_id_after = ""
+    interfaces_before = ""
+    interfaces_after = ""
+
+    # Deterministic timeouts for in-container operations (LOCKED)
+    CAND_FRR_RELOAD_TIMEOUT_S = 60.0
+    CAND_FRR_POSTCHECK_TIMEOUT_S = 10.0
+    CAND_FRR_PERMS_TIMEOUT_S = 5.0
+    CAND_FRR_COPY_TIMEOUT_S = 10.0
+    CAND_FRR_RO_PROBE_TIMEOUT_S = 2.0
+    # vtysh -f applies can legitimately take longer than simple postchecks
+    CAND_FRR_VTYSH_APPLY_TIMEOUT_S = 20.0
+
+    dst_path = "/etc/frr/frr.conf"
+    tmp_path = "/tmp/netsim.candidate.frr.conf"
+    tmp_vty_path = "/tmp/netsim.candidate.frr.vtysh.conf"
+
+    def _sanitize_for_vtysh_file(tmp_in: str, tmp_out: str) -> subprocess.CompletedProcess:
+        """
+        Deterministic sanitization for vtysh -f batch mode.
+
+        Principle:
+          - Do NOT attempt to be clever.
+          - Remove config-mode wrapper lines that are commonly present in "conf t ... end" snippets,
+            because many FRR vtysh batch modes reject them and return non-zero.
+
+        Specifically REMOVE lines that match (ignoring leading/trailing whitespace):
+          - conf t
+          - conf term
+          - configure terminal
+          - end
+          - exit
+
+        Everything else is left unchanged, in the same order.
+        """
+        cmd = (
+            r"grep -vE '^[[:space:]]*(conf[[:space:]]+(t|term)|configure[[:space:]]+terminal|end|exit)[[:space:]]*$' "
+            + f"{tmp_in} > {tmp_out}"
+        )
+        return rt.exec(
+            lab,
+            node,
+            ["sh", "-lc", cmd],
+            check=False,
+            capture_output=True,
+            timeout_s=CAND_FRR_COPY_TIMEOUT_S,
+        )
+
+    def _file_nonempty(path: str) -> subprocess.CompletedProcess:
+        # `test -s` returns 0 if exists and size > 0
+        return rt.exec(
+            lab,
+            node,
+            ["sh", "-lc", f"test -s {path}"],
+            check=False,
+            capture_output=True,
+            timeout_s=2.0,
+        )
+
+    def _cleanup_tmp_files() -> None:
+        rt.exec(
+            lab,
+            node,
+            ["sh", "-lc", f"rm -f {tmp_path} {tmp_vty_path}"],
+            check=False,
+            capture_output=True,
+            timeout_s=2.0,
+        )
 
     try:
-        obj = json.loads(out)
+        container_id_before = rt.container_id(lab, node)
+    except Exception as e:
+        finished = time.time()
+        return {
+            "node": node,
+            "node_type": "frr",
+            "method": "frr_inplace_reload",
+            "input": {"source_path": str(src), "sha256": sha},
+            "attempt": {"started_at_epoch_ms": int(started * 1000), "duration_ms": int((finished - started) * 1000)},
+            "result": {"applied_ok": False, "exit_code": 1},
+            "stdout": "",
+            "stderr": _safe_stdio(str(e)),
+            "post_checks": [],
+            "container_id_before": container_id_before,
+            "container_id_after": container_id_after,
+        }
+
+    try:
+        cp_if0 = rt.exec(lab, node, ["ip", "-o", "link", "show"], check=False, capture_output=True, timeout_s=5.0)
+        interfaces_before = _safe_stdio((cp_if0.stdout or "") + (cp_if0.stderr or ""))
     except Exception:
-        return {}
+        interfaces_before = ""
 
-    v4 = obj.get("ipv4Unicast")
-    if not isinstance(v4, dict):
-        return {}
+    # -------------------------------------------------------------------------
+    # Candidate delivery (no container restart).
+    # -------------------------------------------------------------------------
+    cp_copy_tmp = rt.copy_to_node(lab, node, src, tmp_path)
 
-    peers = v4.get("peers")
-    if not isinstance(peers, dict):
-        return {}
+    cp_ro_probe = None
+    dst_is_ro = False
+    apply_method = "unknown"
 
-    res: dict[str, dict[str, Any]] = {}
+    cp_copy = cp_copy_tmp
+    cp_sanitize = None
+    cp_sanitize_nonempty = None
+    cp_vty_apply = None
 
-    for nbr_ip, pdata in peers.items():
-        if not isinstance(nbr_ip, str):
-            continue
-        if not _RE_NEIGH_LINE.match(nbr_ip + " "):
-            continue
+    if int(getattr(cp_copy_tmp, "returncode", 1)) == 0:
+        cp_ro_probe = rt.exec(
+            lab,
+            node,
+            ["sh", "-lc", f"mount | grep -F 'on {dst_path} ' | grep -q '(ro,'"],
+            check=False,
+            capture_output=True,
+            timeout_s=CAND_FRR_RO_PROBE_TIMEOUT_S,
+        )
+        dst_is_ro = (int(getattr(cp_ro_probe, "returncode", 1)) == 0)
 
-        established = False
-        raw_state = ""
+        if dst_is_ro:
+            apply_method = "vtysh"
+            cp_copy = subprocess.CompletedProcess(
+                args=["sh", "-lc", f"SKIP write: {dst_path} is RO"],
+                returncode=0,
+                stdout="skipped (dst is RO; applying via vtysh -f)",
+                stderr="",
+            )
 
-        if isinstance(pdata, dict):
-            state = pdata.get("state")
-            peer_state = pdata.get("peerState")
-            pfx = pdata.get("pfxRcd")
-
-            # Authoritative: `state` if present
-            if isinstance(state, str) and state.strip():
-                raw_state = state.strip()
-                established = raw_state.lower().startswith("estab")
+            cp_sanitize = _sanitize_for_vtysh_file(tmp_path, tmp_vty_path)
+            if int(getattr(cp_sanitize, "returncode", 1)) == 0:
+                cp_sanitize_nonempty = _file_nonempty(tmp_vty_path)
+                if int(getattr(cp_sanitize_nonempty, "returncode", 1)) == 0:
+                    cp_vty_apply = rt.exec(
+                        lab,
+                        node,
+                        ["vtysh", "-f", tmp_vty_path],
+                        check=False,
+                        capture_output=True,
+                        timeout_s=CAND_FRR_VTYSH_APPLY_TIMEOUT_S,
+                    )
+                else:
+                    cp_vty_apply = subprocess.CompletedProcess(
+                        args=["vtysh", "-f", tmp_vty_path],
+                        returncode=1,
+                        stdout="",
+                        stderr="sanitized candidate is empty after removing wrapper lines; refusing no-op apply",
+                    )
             else:
-                # Fallback signals only if `state` is missing
-                if isinstance(peer_state, str) and peer_state.strip().upper() == "OK":
-                    established = True
-                elif isinstance(pfx, int):
-                    established = True
-                elif isinstance(pfx, str) and pfx.isdigit():
-                    established = True
+                cp_vty_apply = subprocess.CompletedProcess(
+                    args=["vtysh", "-f", tmp_vty_path],
+                    returncode=1,
+                    stdout="",
+                    stderr="sanitize failed; not running vtysh -f",
+                )
+            _cleanup_tmp_files()
 
-        res[nbr_ip] = {"established": bool(established), "raw": raw_state}
+        else:
+            apply_method = "file+frrinit"
+            cp_copy = rt.exec(
+                lab,
+                node,
+                ["sh", "-lc", f"cat {tmp_path} > {dst_path} && rm -f {tmp_path}"],
+                check=False,
+                capture_output=True,
+                timeout_s=CAND_FRR_COPY_TIMEOUT_S,
+            )
 
-    return res
+            copy_rc = int(getattr(cp_copy, "returncode", 1))
+            copy_err = (getattr(cp_copy, "stderr", "") or "")
+            if (copy_rc != 0) and ("Read-only file system" in copy_err):
+                apply_method = "vtysh"
 
-def derive_expected_bgp_neighbors_from_links(topo: dict[str, Any]) -> dict[str, set[str]]:
-    """
-    Intent: expected BGP neighbors derived from topology links.
+                # Re-copy to tmp to be deterministic (tmp may have been removed or partial).
+                rt.copy_to_node(lab, node, src, tmp_path)
 
-    Rule:
-      - For each link with 2 endpoints and 2 ipv4 entries
-      - If both endpoints are FRR nodes, then each side expects the other side's IP (no mask)
-    """
-    nodes = _node_index_by_name(topo)
-    expected: dict[str, set[str]] = {}
+                cp_sanitize = _sanitize_for_vtysh_file(tmp_path, tmp_vty_path)
+                if int(getattr(cp_sanitize, "returncode", 1)) == 0:
+                    cp_sanitize_nonempty = _file_nonempty(tmp_vty_path)
+                    if int(getattr(cp_sanitize_nonempty, "returncode", 1)) == 0:
+                        cp_vty_apply = rt.exec(
+                            lab,
+                            node,
+                            ["vtysh", "-f", tmp_vty_path],
+                            check=False,
+                            capture_output=True,
+                            timeout_s=CAND_FRR_VTYSH_APPLY_TIMEOUT_S,
+                        )
+                    else:
+                        cp_vty_apply = subprocess.CompletedProcess(
+                            args=["vtysh", "-f", tmp_vty_path],
+                            returncode=1,
+                            stdout="",
+                            stderr="sanitized candidate is empty after removing wrapper lines; refusing no-op apply",
+                        )
+                else:
+                    cp_vty_apply = subprocess.CompletedProcess(
+                        args=["vtysh", "-f", tmp_vty_path],
+                        returncode=1,
+                        stdout="",
+                        stderr="sanitize failed; not running vtysh -f",
+                    )
+                _cleanup_tmp_files()
 
-    for link in topo.get("links", []) or []:
-        eps = link.get("endpoints") or []
-        ips = link.get("ipv4") or []
-        if not (isinstance(eps, list) and isinstance(ips, list)):
-            continue
-        if len(eps) != 2 or len(ips) != 2:
-            continue
+    # Best-effort perms (safe no-op on RO; do not gate apply)
+    rt.exec(
+        lab,
+        node,
+        [
+            "sh",
+            "-lc",
+            "id -u frr >/dev/null 2>&1 && chown frr:frr /etc/frr/frr.conf || true; chmod 0640 /etc/frr/frr.conf || true",
+        ],
+        check=False,
+        capture_output=True,
+        timeout_s=CAND_FRR_PERMS_TIMEOUT_S,
+    )
 
-        ep1, ep2 = eps
-        ip1, ip2 = ips
-        if not (isinstance(ep1, str) and isinstance(ep2, str) and isinstance(ip1, str) and isinstance(ip2, str)):
-            continue
-        if ":" not in ep1 or ":" not in ep2:
-            continue
-
-        n1, _if1 = ep1.split(":", 1)
-        n2, _if2 = ep2.split(":", 1)
-
-        if nodes.get(n1, {}).get("type") != "frr":
-            continue
-        if nodes.get(n2, {}).get("type") != "frr":
-            continue
-
-        # Neighbor IPs: strip CIDR
-        nbr_for_n1 = ip2.split("/", 1)[0].strip()
-        nbr_for_n2 = ip1.split("/", 1)[0].strip()
-
-        expected.setdefault(n1, set()).add(nbr_for_n1)
-        expected.setdefault(n2, set()).add(nbr_for_n2)
-
-    return expected
-
-
-def parse_frr_bgp_summary_neighbors(out: str) -> dict[str, dict[str, Any]]:
-    """
-    Parse `show bgp summary` and return:
-      { "<neighbor_ip>": {"established": bool, "raw": "<line>"} }
-
-    Robust logic:
-      - Find the table header and locate the 'State/PfxRcd' column index.
-      - Neighbor rows start with an IPv4 address.
-      - Established if State/PfxRcd token is numeric OR equals 'Established' (case-insensitive).
-    """
-    obs: dict[str, dict[str, Any]] = {}
-    if not out:
-        return obs
-    if "No BGP neighbors found" in out:
-        return obs
-
-    lines = out.splitlines()
-
-    # 1) Find header and determine column index for State/PfxRcd
-    state_idx: int | None = None
-    for line in lines:
-        if "Neighbor" in line and "State/PfxRcd" in line:
-            cols = line.split()
-            # Example header tokens:
-            # Neighbor V AS MsgRcvd MsgSent TblVer InQ OutQ Up/Down State/PfxRcd PfxSnt Desc
-            for i, c in enumerate(cols):
-                if c == "State/PfxRcd":
-                    state_idx = i
-                    break
-            break
-
-    # Fallback: if we can't find header, keep a safe heuristic:
-    # treat as established if ANY token is exactly 'Established' OR ANY token is purely numeric
-    fallback = (state_idx is None)
-
-    for line in lines:
-        m = _RE_NEIGH_LINE.match(line)
-        if not m:
-            continue
-
-        ip = m.group(1)
-        cols = line.split()
-
-        established = False
-        if fallback:
-            if any(c.lower() == "established" for c in cols):
-                established = True
+    # -------------------------------------------------------------------------
+    # Reload semantics
+    # -------------------------------------------------------------------------
+    if apply_method == "vtysh":
+        cp_reload = subprocess.CompletedProcess(
+            args=["/usr/lib/frr/frrinit.sh", "restart"],
+            returncode=0,
+            stdout="skipped (applied via vtysh -f)",
+            stderr="",
+        )
+    else:
+        # Only reload if file write succeeded; otherwise skip.
+        file_write_ok = bool(apply_method == "file+frrinit" and int(getattr(cp_copy, "returncode", 1)) == 0)
+        if not file_write_ok:
+            cp_reload = subprocess.CompletedProcess(
+                args=["/usr/lib/frr/frrinit.sh", "restart"],
+                returncode=0,
+                stdout="skipped (apply failed)",
+                stderr="",
+            )
+        else:
+            cp_has = rt.exec(
+                lab,
+                node,
+                ["sh", "-lc", "test -x /usr/lib/frr/frrinit.sh"],
+                check=False,
+                capture_output=True,
+                timeout_s=CAND_FRR_PERMS_TIMEOUT_S,
+            )
+            if cp_has.returncode == 0:
+                cp_reload = rt.exec(
+                    lab,
+                    node,
+                    ["/usr/lib/frr/frrinit.sh", "restart"],
+                    check=False,
+                    capture_output=True,
+                    timeout_s=CAND_FRR_RELOAD_TIMEOUT_S,
+                )
             else:
-                # In established rows there is typically at least one numeric token at State/PfxRcd,
-                # but fallback is less precise; still better than "last token".
-                established = any(c.isdigit() for c in cols)
+                cp_reload = subprocess.CompletedProcess(
+                    args=["/usr/lib/frr/frrinit.sh", "restart"],
+                    returncode=127,
+                    stdout="",
+                    stderr="missing /usr/lib/frr/frrinit.sh",
+                )
+
+    # Postchecks (deterministic)
+    post: list[dict[str, Any]] = []
+
+    cp_ver = rt.exec(
+        lab,
+        node,
+        ["vtysh", "-c", "show version"],
+        check=False,
+        capture_output=True,
+        timeout_s=CAND_FRR_POSTCHECK_TIMEOUT_S,
+    )
+    post.append(
+        {
+            "name": "show_version",
+            "cmd": 'vtysh -c "show version"',
+            "exit_code": int(cp_ver.returncode),
+            "stdout": _safe_stdio(cp_ver.stdout or ""),
+            "stderr": _safe_stdio(cp_ver.stderr or ""),
+        }
+    )
+
+    cp_bgp = rt.exec(
+        lab,
+        node,
+        ["vtysh", "-c", "show bgp summary"],
+        check=False,
+        capture_output=True,
+        timeout_s=CAND_FRR_POSTCHECK_TIMEOUT_S,
+    )
+    post.append(
+        {
+            "name": "show_bgp_summary",
+            "cmd": 'vtysh -c "show bgp summary"',
+            "exit_code": int(cp_bgp.returncode),
+            "stdout": _safe_stdio(cp_bgp.stdout or ""),
+            "stderr": _safe_stdio(cp_bgp.stderr or ""),
+        }
+    )
+
+    try:
+        container_id_after = rt.container_id(lab, node)
+    except Exception:
+        container_id_after = ""
+
+    try:
+        cp_if1 = rt.exec(lab, node, ["ip", "-o", "link", "show"], check=False, capture_output=True, timeout_s=5.0)
+        interfaces_after = _safe_stdio((cp_if1.stdout or "") + (cp_if1.stderr or ""))
+    except Exception:
+        interfaces_after = ""
+
+    restart_detected = bool(container_id_before and container_id_after and (container_id_before != container_id_after))
+
+    reload_ok = int(getattr(cp_reload, "returncode", 1)) == 0
+    ver_ok = int(getattr(cp_ver, "returncode", 1)) == 0
+
+    # Success criteria (strict)
+    if apply_method == "vtysh":
+        sanitize_ok = bool(cp_sanitize is not None and int(getattr(cp_sanitize, "returncode", 1)) == 0)
+        sanitized_nonempty_ok = bool(
+            cp_sanitize_nonempty is not None and int(getattr(cp_sanitize_nonempty, "returncode", 1)) == 0
+        )
+        vty_rc_ok = bool(cp_vty_apply is not None and int(getattr(cp_vty_apply, "returncode", 1)) == 0)
+        apply_ok = bool(sanitize_ok and sanitized_nonempty_ok and vty_rc_ok and ver_ok)
+    elif apply_method == "file+frrinit":
+        apply_ok = bool(int(getattr(cp_copy, "returncode", 1)) == 0)
+    else:
+        apply_ok = False
+
+    applied_ok = bool(apply_ok and reload_ok and ver_ok and (not restart_detected))
+    if restart_detected:
+        applied_ok = False
+
+    finished = time.time()
+
+    stderr_msg = ""
+    if not apply_ok:
+        if int(getattr(cp_copy_tmp, "returncode", 1)) != 0:
+            stderr_msg = "candidate apply: failed to copy candidate to tmp path inside container"
+        elif apply_method == "vtysh":
+            stderr_msg = "candidate apply: vtysh -f apply failed (non-zero exit), sanitize failed, or sanitized file empty"
         else:
-            if len(cols) > state_idx:
-                state = cols[state_idx]
-                if state.isdigit() or state.lower() == "established":
-                    established = True
+            stderr_msg = f"candidate apply: failed to write candidate to {dst_path}"
+    elif int(getattr(cp_reload, "returncode", 1)) != 0:
+        stderr_msg = "candidate apply: in-container FRR restart failed (/usr/lib/frr/frrinit.sh restart)"
+    elif not ver_ok:
+        stderr_msg = "candidate apply: postcheck failed (vtysh show version)"
 
-        obs[ip] = {"established": established, "raw": line.rstrip("\n")}
+    if restart_detected:
+        if stderr_msg:
+            stderr_msg += "; "
+        stderr_msg += "candidate apply invariant violated: container restart detected (container ID changed)"
 
-    return obs
+    if apply_method == "vtysh":
+        copy_cmd = f"copy_to_tmp:{tmp_path}; ro_probe:mount|grep on {dst_path}|grep (ro,; sanitize->vtysh -f {tmp_vty_path}"
+    else:
+        copy_cmd = f"copy_to_tmp:{tmp_path}; ro_probe:mount|grep on {dst_path}|grep (ro,; write(cat >):{dst_path}"
 
-def compare_expected_vs_observed_bgp(expected: set[str], observed: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    obs_set = set(observed.keys())
-    missing = sorted(expected - obs_set)
-    extra = sorted(obs_set - expected)
+    copy_rc = int(getattr(cp_copy, "returncode", 1))
+    copy_stdout = _safe_stdio(getattr(cp_copy, "stdout", "") or "")
+    copy_stderr = _safe_stdio(getattr(cp_copy, "stderr", "") or "")
 
-    established: list[str] = []
-    down: list[str] = []
-    for ip in sorted(expected & obs_set):
-        if observed[ip].get("established"):
-            established.append(ip)
-        else:
-            down.append(ip)
+    vtysh_apply_block = None
+    if cp_vty_apply is not None:
+        vtysh_apply_block = {
+            "cmd": f"vtysh -f {tmp_vty_path}",
+            "exit_code": int(getattr(cp_vty_apply, "returncode", 1)),
+            "stdout": _safe_stdio(getattr(cp_vty_apply, "stdout", "") or ""),
+            "stderr": _safe_stdio(getattr(cp_vty_apply, "stderr", "") or ""),
+        }
 
-    ok = (not missing) and (not down)
+    sanitize_block = None
+    if cp_sanitize is not None:
+        sanitize_block = {
+            "cmd": f"sanitize_for_vtysh: {tmp_path} -> {tmp_vty_path}",
+            "exit_code": int(getattr(cp_sanitize, "returncode", 1)),
+            "stdout": _safe_stdio(getattr(cp_sanitize, "stdout", "") or ""),
+            "stderr": _safe_stdio(getattr(cp_sanitize, "stderr", "") or ""),
+        }
 
-    return {
-        "expected": sorted(expected),
-        "observed": sorted(obs_set),
-        "missing": missing,
-        "extra": extra,
-        "established": established,
-        "down": down,
-        "ok": ok,
+    sanitize_nonempty_block = None
+    if cp_sanitize_nonempty is not None:
+        sanitize_nonempty_block = {
+            "cmd": f"test -s {tmp_vty_path}",
+            "exit_code": int(getattr(cp_sanitize_nonempty, "returncode", 1)),
+            "stdout": _safe_stdio(getattr(cp_sanitize_nonempty, "stdout", "") or ""),
+            "stderr": _safe_stdio(getattr(cp_sanitize_nonempty, "stderr", "") or ""),
+        }
+
+    ro_probe_block = {
+        "cmd": f"mount | grep -F 'on {dst_path} ' | grep -q '(ro,'",
+        "exit_code": (int(getattr(cp_ro_probe, "returncode", 1)) if cp_ro_probe is not None else None),
+        "stdout": (_safe_stdio(getattr(cp_ro_probe, "stdout", "") or "") if cp_ro_probe is not None else ""),
+        "stderr": (_safe_stdio(getattr(cp_ro_probe, "stderr", "") or "") if cp_ro_probe is not None else ""),
+        "dst_is_ro": bool(dst_is_ro),
     }
 
+    return {
+        "node": node,
+        "node_type": "frr",
+        "method": "frr_inplace_reload",
+        "input": {"source_path": str(src), "sha256": sha},
+        "attempt": {"started_at_epoch_ms": int(started * 1000), "duration_ms": int((finished - started) * 1000)},
+        "result": {"applied_ok": applied_ok, "exit_code": (0 if applied_ok else 1)},
+        "stdout": _safe_stdio(""),
+        "stderr": _safe_stdio(stderr_msg),
+        "post_checks": post,
+        "apply_method": apply_method,
+        "container_id_before": str(container_id_before),
+        "container_id_after": str(container_id_after),
+        "interfaces_before": str(interfaces_before),
+        "interfaces_after": str(interfaces_after),
+        "ro_probe": ro_probe_block,
+        "copy": {
+            "cmd": copy_cmd,
+            "exit_code": copy_rc,
+            "stdout": copy_stdout,
+            "stderr": copy_stderr,
+        },
+        "sanitize": sanitize_block,
+        "sanitize_nonempty": sanitize_nonempty_block,
+        "vtysh_apply": vtysh_apply_block,
+        "reload": {
+            "cmd": "/usr/lib/frr/frrinit.sh restart",
+            "exit_code": int(getattr(cp_reload, "returncode", 1)),
+            "stdout": _safe_stdio(getattr(cp_reload, "stdout", "") or ""),
+            "stderr": _safe_stdio(getattr(cp_reload, "stderr", "") or ""),
+        },
+    }
+
+def _candidate_apply_nft(rt: Runtime, lab: str, node: str, src: Path) -> dict[str, Any]:
+    started = time.time()
+    ruleset = src.read_text(encoding="utf-8")
+    sha = _sha256_file(src)
+
+    # Require nft exists (no runtime installs)
+    cp0 = rt.exec(lab, node, ["sh", "-lc", "command -v nft >/dev/null"], check=False, capture_output=True)
+    if cp0.returncode != 0:
+        finished = time.time()
+        return {
+            "node": node,
+            "node_type": "nft-fw",
+            "method": "nft -f",
+            "input": {"source_path": str(src), "sha256": sha},
+            "attempt": {"started_at_epoch_ms": int(started * 1000), "duration_ms": int((finished - started) * 1000)},
+            "result": {"applied_ok": False, "exit_code": int(cp0.returncode)},
+            "stdout": _safe_stdio(cp0.stdout or ""),
+            "stderr": _safe_stdio(cp0.stderr or ""),
+            "post_checks": [],
+        }
 
-def wait_for_bgp(rt: Runtime, lab: str, node: str, timeout: int = 30) -> None:
-    """
-    Wait for BGP to be Established-ish on a node.
-
-    FRR "show bgp summary" neighbor lines look like:
-      Neighbor V AS MsgRcvd MsgSent TblVer InQ OutQ Up/Down State/PfxRcd ...
-
-    We treat a neighbor as "up" if State/PfxRcd is either:
-      - a number (PfxRcd count)  -> Established
-      - the word "Established"   -> also OK
-
-    Anything like Idle/Active/Connect/OpenSent/OpenConfirm is not OK.
-    "(Policy)" is not OK.
-    """
-    import time
-
-    start = time.time()
-    last_summary = ""
-    last_neigh_lines: list[str] = []
-
-    def parse_state_pfxrcd(neigh_line: str) -> str:
-        parts = neigh_line.split()
-        # parts[9] is State/PfxRcd in typical FRR output
-        return parts[9] if len(parts) >= 10 else ""
-
-    while True:
-        cp = rt.exec(lab, node, ["vtysh", "-c", "show bgp summary"], check=False, capture_output=True)
-        last_summary = cp.stdout or ""
-        out = last_summary
-
-        neigh_lines = [ln.strip() for ln in out.splitlines() if ln.strip() and ln.strip()[0].isdigit()]
-        last_neigh_lines = neigh_lines
-
-        # If we expect BGP and we have no neighbor lines yet, keep waiting
-        if neigh_lines:
-            if "(Policy)" in out:
-                pass
-            else:
-                states = [parse_state_pfxrcd(ln) for ln in neigh_lines]
-
-                def is_up(s: str) -> bool:
-                    if not s:
-                        return False
-                    if s.isdigit():
-                        return True
-                    if s.lower() == "established":
-                        return True
-                    return False
-
-                if all(is_up(s) for s in states):
-                    return
-
-        if time.time() - start > timeout:
-            details = "\n".join(last_neigh_lines) if last_neigh_lines else "(no neighbor lines found)"
-            die(f"{node}: BGP did not converge within {timeout}s:\n{details}")
-
-        time.sleep(1)
-
-def container_name(lab_name: str, node: str) -> str:
-    """
-    Back-compat helper.
-    Historically returned the docker container name. Now returns the runtime node id.
-    """
-    rt = get_runtime()
-    return rt.node_id(lab_name, node)
-
-def _node_index_by_name(topo: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    idx: dict[str, dict[str, Any]] = {}
-    for n in topo.get("nodes", []) or []:
-        name = n.get("name")
-        if isinstance(name, str) and name:
-            idx[name] = n
-    return idx
-
-
-def configure_frr_interfaces_from_topology(rt: "Runtime", lab: str, topo: dict[str, Any]) -> None:
-    """
-    For each link with ipv4 addressing, assign the per-endpoint IP to the correct interface,
-    BUT only for endpoints that are FRR nodes.
-
-    Also configures loopback with router_id/32 if present.
-
-    Runtime contract:
-      - No direct docker/container name usage here
-      - All node execution goes through rt.exec()/rt.sh()
-    """
-    nodes = _node_index_by_name(topo)
-
-    # 1) Assign interface IPs from links
-    for link in topo.get("links", []) or []:
-        endpoints = link.get("endpoints") or []
-        ipv4s = link.get("ipv4") or []
-
-        if not (isinstance(endpoints, list) and isinstance(ipv4s, list)):
-            continue
-        if len(endpoints) != len(ipv4s):
-            continue
-
-        for ep, ipcidr in zip(endpoints, ipv4s):
-            if not (isinstance(ep, str) and isinstance(ipcidr, str)):
-                continue
-            if ":" not in ep:
-                continue
-
-            node, iface = ep.split(":", 1)
-            n = nodes.get(node)
-            if not n or n.get("type") != "frr":
-                continue
-
-            # bring up + set address
-            rt.exec(lab, node, ["ip", "link", "set", iface, "up"], check=False, capture_output=False)
-            rt.exec(lab, node, ["ip", "addr", "flush", "dev", iface], check=False, capture_output=False)
-            rt.exec(lab, node, ["ip", "addr", "add", ipcidr, "dev", iface], check=True, capture_output=False)
-
-    # 2) Router-id loopback (router_id/32) if provided
-    for node, n in nodes.items():
-        if n.get("type") != "frr":
-            continue
-        rid = n.get("router_id")
-        if not (isinstance(rid, str) and rid):
-            continue
-
-        rt.exec(lab, node, ["ip", "link", "set", "lo", "up"], check=False, capture_output=False)
-        # Keep it simple: flush + set router_id/32
-        rt.exec(lab, node, ["ip", "addr", "flush", "dev", "lo"], check=False, capture_output=False)
-        rt.exec(lab, node, ["ip", "addr", "add", f"{rid}/32", "dev", "lo"], check=True, capture_output=False)
-
-def configure_frr_static_routes_from_topology(rt: "Runtime", lab: str, topo: dict[str, Any]) -> None:
-    """
-    v1 contract: topology must NOT encode routing mechanics.
-
-    This function is intentionally hard-disabled in v1/v1.x to prevent accidental
-    authority creep (static routing derived from topology).
-    """
-    die("v1 contract: static routing from topology is not supported. Use preconfigured images/config outside ai-netsim v1.")
-
-    # Unreachable: retained only as a historical stub (do not remove without a versioned contract change).
-    nodes = _node_index_by_name(topo)
-
-    for node, n in nodes.items():
-        if n.get("type") != "frr":
-            continue
-        routes = n.get("static_routes") or []
-        if not isinstance(routes, list):
-            continue
-
-        for r in routes:
-            if not isinstance(r, str):
-                continue
-            rt.sh(lab, node, f"ip route replace {r}", check=False, capture_output=False)
-
-def configure_frr_bgp_from_topology(rt: "Runtime", lab: str, topo: dict[str, Any]) -> None:
-    """
-    v1 contract: topology must NOT encode routing mechanics.
-
-    This function is intentionally hard-disabled in v1/v1.x to prevent accidental
-    authority creep (BGP provisioning derived from topology).
-    """
-    die("v1 contract: BGP provisioning from topology is not supported. Use preconfigured images/config outside ai-netsim v1.")
-
-    # Unreachable: retained only as a historical stub (do not remove without a versioned contract change).
-    nodes = _node_index_by_name(topo)
-
-    adj: list[tuple[str, str, str, str]] = []
-
-    for link in topo.get("links", []) or []:
-        endpoints = link.get("endpoints") or []
-        ipv4s = link.get("ipv4") or []
-        if not (isinstance(endpoints, list) and isinstance(ipv4s, list)):
-            continue
-        if len(endpoints) != 2 or len(ipv4s) != 2:
-            continue
-
-        ep1, ep2 = endpoints
-        ip1, ip2 = ipv4s
-        if not (isinstance(ep1, str) and isinstance(ep2, str) and isinstance(ip1, str) and isinstance(ip2, str)):
-            continue
-        if ":" not in ep1 or ":" not in ep2:
-            continue
-
-        n1, _if1 = ep1.split(":", 1)
-        n2, _if2 = ep2.split(":", 1)
-
-        if nodes.get(n1, {}).get("type") != "frr":
-            continue
-        if nodes.get(n2, {}).get("type") != "frr":
-            continue
-
-        nbr1 = ip2.split("/", 1)[0]
-        nbr2 = ip1.split("/", 1)[0]
-        adj.append((n1, nbr1, n2, nbr2))
-
-    for node, n in nodes.items():
-        if n.get("type") != "frr":
-            continue
-
-        asn = n.get("asn")
-        rid = n.get("router_id")
-        if not isinstance(asn, int):
-            if isinstance(asn, str) and asn.isdigit():
-                asn = int(asn)
-            else:
-                continue
-
-        cmds: list[str] = []
-        cmds.append("conf t")
-        cmds.append(f"router bgp {asn}")
-        if isinstance(rid, str) and rid:
-            cmds.append(f"bgp router-id {rid}")
-
-        cmds.append("no bgp ebgp-requires-policy")
-
-        for a, ip_to_b, b, _ip_to_a in adj:
-            if a != node:
-                continue
-            b_asn = nodes.get(b, {}).get("asn")
-            if isinstance(b_asn, str) and b_asn.isdigit():
-                b_asn = int(b_asn)
-            if not isinstance(b_asn, int):
-                continue
-
-            cmds.append(f"neighbor {ip_to_b} remote-as {b_asn}")
-
-        cmds.append("end")
-
-        vty_cmd: list[str] = ["vtysh"]
-        for c in cmds:
-            vty_cmd += ["-c", c]
-
-        rt.exec(lab, node, vty_cmd, check=False, capture_output=False)
-
-def configure_hosts_from_topology(rt: "Runtime", lab_name: str, topo: dict) -> None:
-    """
-    Configure host nodes based on links that include explicit link['ipv4'] entries.
-    For a host<->router link, we:
-      - set host IP on its interface
-      - set host default route via router IP on that same link
-
-    Runtime contract:
-      - No direct docker/container name usage here.
-      - All node execution goes through rt.exec()/rt.sh() via host_configure().
-    """
-    # Quick lookup: node name -> type
-    node_type = {n["name"]: n["type"] for n in topo.get("nodes", [])}
-
-    for link in topo.get("links", []):
-        eps = link.get("endpoints", [])
-        ips = link.get("ipv4", [])
-
-        # Only configure when ipv4 is explicitly defined on the link
-        if len(eps) != 2 or len(ips) != 2:
-            continue
-
-        (n1, if1) = eps[0].split(":", 1)
-        (n2, if2) = eps[1].split(":", 1)
-        ip1 = ips[0]  # e.g. 192.168.1.10/24
-        ip2 = ips[1]  # e.g. 192.168.1.1/24
-
-        # Host on side 1?
-        if node_type.get(n1) == "host" and node_type.get(n2) in ("frr", "linux"):
-            host_configure(rt, lab_name, n1, if1, ip1, ip2.split("/")[0])
-
-        # Host on side 2?
-        if node_type.get(n2) == "host" and node_type.get(n1) in ("frr", "linux"):
-            host_configure(rt, lab_name, n2, if2, ip2, ip1.split("/")[0])
-
-def _parse_route_entry(fw_name: str, r: object) -> tuple[str, str]:
-    """
-    Parse a route entry into (prefix, via) strings.
-    Supports:
-      - "192.168.1.0/24 via 10.0.0.2"
-      - {"prefix": "192.168.1.0/24", "via": "10.0.0.2"}
-    """
-    if isinstance(r, str):
-        if " via " not in r:
-            die(f"{fw_name}: route string must look like 'PREFIX via NEXT_HOP' (got: {r!r})")
-        prefix, via = r.split(" via ", 1)
-        prefix, via = prefix.strip(), via.strip()
-
-    elif isinstance(r, dict):
-        prefix = str(r.get("prefix") or "").strip()
-        via = str(r.get("via") or "").strip()
-        if not prefix or not via:
-            die(f"{fw_name}: route dict must include 'prefix' and 'via' (got: {r!r})")
-
-    else:
-        die(f"{fw_name}: routes entries must be strings or dicts (got: {type(r).__name__})")
-
-    if not prefix or not via:
-        die(f"{fw_name}: invalid route (got prefix={prefix!r}, via={via!r})")
-
-    return prefix, via
-
-def configure_nftfw_routes_from_topology(rt: "Runtime", lab: str, topo: dict) -> None:
-    """
-    Configure static routes on nft-fw nodes (Linux) based on topology.
-
-    Supports BOTH formats:
-
-    1) String form (like FRR static_routes):
-        routes:
-          - "192.168.1.0/24 via 10.0.0.2"
-          - "192.168.2.0/24 via 10.0.0.5"
-
-    2) Dict form:
-        routes:
-          - prefix: "192.168.1.0/24"
-            via: "10.0.0.2"
-          - prefix: "192.168.2.0/24"
-            via: "10.0.0.5"
-
-    Uses `ip route replace` to be safe on repeated runs.
-
-    Runtime contract:
-      - No direct docker/container_name usage here.
-      - All node execution goes through rt.exec().
-    """
-    nodes = topo.get("nodes", []) or []
-    if not isinstance(nodes, list):
-        die("topology 'nodes' must be a list")
-
-    for n in nodes:
-        if not isinstance(n, dict):
-            continue
-        if n.get("type") != "nft-fw":
-            continue
-
-        fw_name = n.get("name")
-        if not isinstance(fw_name, str) or not fw_name.strip():
-            die("nft-fw node missing 'name'")
-        fw_name = fw_name.strip()
-
-        routes = n.get("routes") or []
-        if not isinstance(routes, list) or not routes:
-            continue
-
-        for r in routes:
-            prefix: str
-            via: str
-
-            # Format A: string "PREFIX via NEXT_HOP"
-            if isinstance(r, str):
-                if " via " not in r:
-                    die(f"{fw_name}: route string must look like 'PREFIX via NEXT_HOP' (got: {r!r})")
-                p, v = r.split(" via ", 1)
-                prefix = p.strip()
-                via = v.strip()
-
-            # Format B: dict {"prefix": "...", "via": "..."}
-            elif isinstance(r, dict):
-                prefix = str(r.get("prefix") or "").strip()
-                via = str(r.get("via") or "").strip()
-                if not prefix or not via:
-                    die(f"{fw_name}: route dict must include 'prefix' and 'via' (got: {r!r})")
-
-            else:
-                die(f"{fw_name}: routes entries must be strings or dicts (got: {type(r).__name__})")
-
-            if not prefix or not via:
-                die(f"{fw_name}: invalid route (got prefix={prefix!r}, via={via!r})")
-
-            # Apply route inside the firewall node
-            rt.exec(
-                lab,
-                fw_name,
-                ["ip", "route", "replace", prefix, "via", via],
-                check=True,
-                capture_output=False,
-            )
-
-
-def host_configure(rt: "Runtime", lab_name: str, host: str, iface: str, ip_cidr: str, gw: str) -> None:
-    """
-    Inside host node:
-      - flush and set IP on iface
-      - bring iface up
-      - set default route via gw
-    """
-    rt.exec(lab_name, host, ["ip", "link", "set", iface, "up"], check=False, capture_output=False)
-    rt.exec(lab_name, host, ["ip", "addr", "flush", "dev", iface], check=False, capture_output=False)
-    rt.exec(lab_name, host, ["ip", "addr", "add", ip_cidr, "dev", iface], check=True, capture_output=False)
-    rt.exec(lab_name, host, ["ip", "route", "replace", "default", "via", gw], check=True, capture_output=False)
-
-def configure_nftfw_from_topology(rt: "Runtime", lab_name: str, topo: dict) -> None:
-    for link in topo.get("links", []):
-        eps = link.get("endpoints", [])
-        ips = link.get("ipv4", [])
-        if len(eps) != 2 or len(ips) != 2:
-            continue
-
-        for ep, ip in zip(eps, ips):
-            node, iface = ep.split(":", 1)
-            if not ip:
-                continue
-
-            is_fw = (
-                node.startswith("fw")
-                or node == "fw1"
-                or any(n.get("name") == node and n.get("type") == "nft-fw" for n in topo.get("nodes", []))
-            )
-            if not is_fw:
-                continue
-
-            rt.exec(lab_name, node, ["ip", "link", "set", iface, "up"], check=False, capture_output=False)
-            rt.exec(lab_name, node, ["ip", "addr", "flush", "dev", iface], check=False, capture_output=False)
-            rt.exec(lab_name, node, ["ip", "addr", "add", ip, "dev", iface], check=True, capture_output=False)
-
-def nft_fw_apply(rt: "Runtime", lab_name: str, node: str, ruleset: str) -> None:
-    # Require nft exists in the image (NO runtime installs)
-    cp = rt.sh(lab_name, node, "command -v nft >/dev/null", check=False, capture_output=False)
-    if cp.returncode != 0:
-        die(f"{node}: nft not found (use an nftables-capable image, e.g. netsim/nft-fw:latest)")
-
-    # Load ruleset (fail-fast if nft rejects it)
     cmd = (
         "set -e\n"
         "cat > /tmp/rules.nft <<'EOF'\n"
@@ -2014,1160 +1401,404 @@ def nft_fw_apply(rt: "Runtime", lab_name: str, node: str, ruleset: str) -> None:
         "EOF\n"
         "nft -f /tmp/rules.nft\n"
     )
-    rt.sh(lab_name, node, cmd, check=True, capture_output=False)
-
-def verify_fw_routed_ready(rt: Runtime, lab: str, fw_node: str) -> None:
-    """
-    Verify that a routed firewall node is ready to forward traffic.
-
-    Readiness criteria (v1):
-    - nft binary exists
-    - nftables is usable (kernel + permissions OK)
-    - IPv4 forwarding is enabled
-
-    This function must be:
-    - non-interactive (NO -t)
-    - deterministic
-    - fail-fast with clear errors
-    """
-
-    # ---------------------------------------------------------------------
-    # 1) nft must exist in the image
-    # ---------------------------------------------------------------------
-    cp = rt.exec(
-        lab,
-        fw_node,
-        ["sh", "-lc", "command -v nft >/dev/null"],
-        check=False,
-        capture_output=True,
-    )
-    if cp.returncode != 0:
-        die(f"{fw_node}: nft not found (use an image with nftables preinstalled)")
-
-    # ---------------------------------------------------------------------
-    # 2) nft must be usable (kernel support + permissions)
-    #    This catches cases where nft exists but cannot talk to the kernel.
-    # ---------------------------------------------------------------------
-    cp = rt.exec(
-        lab,
-        fw_node,
-        ["sh", "-lc", "nft list ruleset >/dev/null 2>&1"],
-        check=False,
-        capture_output=True,
-    )
-    if cp.returncode != 0:
-        die(f"{fw_node}: nftables ruleset not accessible")
-
-    # ---------------------------------------------------------------------
-    # 3) IPv4 forwarding must be enabled (routed firewall)
-    # ---------------------------------------------------------------------
-    cp = rt.exec(
-        lab,
-        fw_node,
-        ["sh", "-lc", "sysctl -n net.ipv4.ip_forward"],
-        check=False,
-        capture_output=True,
-    )
-    val = (cp.stdout or "").strip()
-    if val != "1":
-        die(f"{fw_node}: ip_forward is not enabled (got '{val}')")
-
-def verify_host_ready(rt: Runtime, lab: str, host: str) -> None:
-    """
-    Host readiness gate (v1).
-
-    We consider a host "ready" if:
-      - `ip` exists
-      - it has at least one global IPv4 address configured on a non-lo interface
-
-    IMPORTANT:
-    - Do not rely on awk/busybox differences across images.
-    - Use `ip -4 -o addr show` which is consistent.
-    """
-
-    # ip command should exist
-    cp = rt.exec(lab, host, ["sh", "-lc", "command -v ip >/dev/null"], check=False)
-    if cp.returncode != 0:
-        die(f"{host}: 'ip' not found")
-
-    # must have at least one global IPv4 (excluding lo)
-    # Example output:
-    #   7: eth1    inet 192.168.1.10/24 brd 192.168.1.255 scope global eth1
-    cp = rt.exec(
-        lab,
-        host,
-        ["sh", "-lc", "ip -4 -o addr show scope global | grep -q 'inet '"],
-        check=False,
-        capture_output=True,
-    )
-    if cp.returncode != 0:
-        # Helpful debug output
-        dbg = rt.exec(
-            lab,
-            host,
-            ["sh", "-lc", "ip -br addr; echo '---'; ip -4 -o addr show scope global || true"],
-            check=False,
-            capture_output=True,
-        )
-        die(f"{host}: no global IPv4 configured (host not ready)\n{(dbg.stdout or '').strip()}")
-
-def verify_frr_ready(rt: Runtime, lab: str, rtr: str) -> None:
-    # vtysh must work
-    cp = rt.exec(
-        lab,
-        rtr,
-        ["vtysh", "-c", "show version"],
-        check=False,
-        capture_output=True,
-    )
-    if cp.returncode != 0:
-        die(f"{rtr}: vtysh not ready")
-
-def verify_lab_ready(rt: Runtime, topo: dict, lab: str) -> None:
-    nodes = topo.get("nodes", []) or []
-    for n in nodes:
-        name = n.get("name")
-        t = n.get("type")
-
-        if not name or not t:
-            die("Node missing 'name' or 'type' in topology")
-
-        if t == "host":
-            verify_host_ready(rt, lab, name)
-        elif t == "nft-fw":
-            verify_fw_routed_ready(rt, lab, name)
-        elif t == "frr":
-            verify_frr_ready(rt, lab, name)
-
-def fw_next_hops_from_links(topo: dict, fw_name: str) -> list[str]:
-    """
-    Returns the L3 peer IPs on links that connect to fw_name:* (uses topo['links'][*]['ipv4']).
-    Example: ["10.0.0.2", "10.0.0.5"]
-    """
-    hops: list[str] = []
-    for l in topo.get("links", []) or []:
-        eps = l.get("endpoints") or []
-        ipv4s = l.get("ipv4") or []
-        if len(eps) != 2 or len(ipv4s) != 2:
-            continue
-
-        a_ep, b_ep = eps
-        a_ipcidr, b_ipcidr = ipv4s
-
-        if a_ep.startswith(fw_name + ":"):
-            hops.append(b_ipcidr.split("/")[0])
-        elif b_ep.startswith(fw_name + ":"):
-            hops.append(a_ipcidr.split("/")[0])
-
-    # de-dupe but keep order
-    out: list[str] = []
-    for h in hops:
-        if h not in out:
-            out.append(h)
-    return out
-
-def nft_fw_setup_bridge(rt: "Runtime", lab_name: str, node: str) -> None:
-    # Create bridge br0 and enslave eth1/eth2
-    cmd = r"""
-set -e
-ip link add br0 type bridge 2>/dev/null || true
-ip link set eth1 up
-ip link set eth2 up
-ip link set eth1 master br0 2>/dev/null || true
-ip link set eth2 master br0 2>/dev/null || true
-ip link set br0 up
-"""
-    rt.sh(lab_name, node, cmd, check=True, capture_output=False)
-
-def lab_file_from_name(lab_name: str) -> Path:
-    return LABS_DIR / f"{lab_name}.clab.yaml"
-
-def parse_lab_nodes(lab_name: str) -> list[str]:
-    lf = lab_file_from_name(lab_name)
-    if not lf.exists():
-        die(f"Lab file not found: {lf} (run gen/up first)")
-    data = load_yaml(lf)
-    nodes = list((data.get("topology", {}).get("nodes", {}) or {}).keys())
-    return nodes
-
-def docker_is_running(container: str) -> bool:
-    """
-    Back-compat shim. If callers pass a container string, we can only support this
-    in docker runtime. Prefer rt.is_running(lab,node) everywhere.
-    """
-    rt = get_runtime()
-    return rt.is_running_id(container)
-
-def vty(rt: Runtime, lab: str, node: str, cmd: str) -> subprocess.CompletedProcess:
-    return rt.exec(lab, node, ["vtysh", "-c", cmd], check=False, capture_output=True)
-
-def topo_path_for_lab(lab_name: str) -> Path:
-    p_resolved = lab_dir(lab_name) / "topology.resolved.yaml"
-    if p_resolved.exists():
-        return p_resolved
-
-    p1 = lab_dir(lab_name) / "topology.yaml"
-    if p1.exists():
-        return p1
-
-    return TOPO_DIR / f"{lab_name}.yaml"
-
-def nodes_by_type(topo: dict, ntype: str) -> list[str]:
-    return [n["name"] for n in topo.get("nodes", []) if n.get("type") == ntype]
-
-def ensure_ip_tools(rt: "Runtime", lab: str, node: str) -> None:
-    """
-    Ensure the 'ip' command is available inside the node.
-
-    Runtime contract:
-      - No docker/container_name usage
-      - No package installs
-      - Pure capability check
-    """
-    cp = rt.sh(
-        lab,
-        node,
-        "command -v ip >/dev/null",
-        check=False,
-        capture_output=False,
-    )
-    if cp.returncode != 0:
-        die(f"{node}: 'ip' not found (image must include iproute2)")
-
-def resolved_topology_path(lab: str) -> Path:
-    return lab_dir(lab) / "topology.resolved.yaml"
-
-def load_resolved_topology(lab: str) -> dict[str, Any] | None:
-    p = resolved_topology_path(lab)
-    if not p.exists():
-        return None
-    try:
-        return load_yaml(p)
-    except Exception:
-        return None
-
-def frr_nodes_from_topology(topo: dict[str, Any]) -> set[str]:
-    out: set[str] = set()
-    for n in topo.get("nodes", []):
-        if n.get("type") == "frr" and n.get("name"):
-            out.add(n["name"])
-    return out
-
-def _iter_scenarios(topo: dict[str, Any]) -> list[dict[str, Any]]:
-    sc = topo.get("scenarios") or []
-    if sc is None:
-        return []
-    if not isinstance(sc, list):
-        die("topology 'scenarios' must be a list")
-    out: list[dict[str, Any]] = []
-    for s in sc:
-        if isinstance(s, dict):
-            out.append(s)
-        else:
-            die("each scenario entry must be a dict")
-    return out
-
-def validate_scenarios(topo: dict[str, Any]) -> None:
-    """
-    Fail-fast validation of scenario schema.
-    Must run before any scenario execution.
-
-    v1 rules:
-      - scenarios optional; if present must be list[dict]
-      - scenario keys only: id, description, steps
-      - steps is non-empty list
-      - each step must contain exactly one of: run | fault | wait_for | wait_for_bgp
-      - run: must reference an existing test name
-      - fault: exactly one action:
-          link_down/link_up: requires a,b; optional a_if,b_if (both-or-none)
-          interface_down/interface_up: requires node + if/iface/interface
-      - wait_for: type ping|tcp; from/to required; expect pass|fail; tcp requires port
-
-    v1 deep validation (multi-link disambiguation):
-      - For link_down/link_up:
-          * if a_if/b_if omitted => there must be exactly ONE declared link between a and b
-          * if a_if/b_if provided => it must match a declared link exactly
-    """
-    scenarios = topo.get("scenarios") or []
-    if not scenarios:
-        return
-
-    if not isinstance(scenarios, list):
-        die("scenarios: must be a list")
-
-    # Collect declared test names for run: validation
-    tests = topo.get("tests") or []
-    test_names: set[str] = set()
-    for t in tests:
-        if isinstance(t, dict):
-            n = t.get("name")
-            if isinstance(n, str) and n.strip():
-                test_names.add(n.strip())
-
-    # Enforce unique scenario IDs (determinism)
-    seen_ids: set[str] = set()
-
-    def _link_matches(a: str, b: str) -> list[tuple[str, str]]:
-        """
-        Return all interface pairs (a_if, b_if) for declared links between a and b.
-        Deterministic: derived only from topo['links'] endpoints.
-        """
-        links = topo.get("links", []) or []
-
-        def parse_ep(ep: str) -> tuple[str, str] | None:
-            if not isinstance(ep, str) or ":" not in ep:
-                return None
-            n, iface = ep.split(":", 1)
-            n = n.strip()
-            iface = iface.strip()
-            if not n or not iface:
-                return None
-            return n, iface
-
-        matches: list[tuple[str, str]] = []
-        for link in links:
-            eps = link.get("endpoints")
-            if not isinstance(eps, list) or len(eps) != 2:
-                continue
-            p0 = parse_ep(eps[0])
-            p1 = parse_ep(eps[1])
-            if not p0 or not p1:
-                continue
-
-            (n0, if0), (n1, if1) = p0, p1
-            if n0 == a and n1 == b:
-                matches.append((if0, if1))
-            elif n0 == b and n1 == a:
-                matches.append((if1, if0))
-
-        return matches
-
-    for si, sc in enumerate(scenarios, start=1):
-        ctx = f"scenarios[{si}]"
-
-        if not isinstance(sc, dict):
-            die(f"{ctx}: must be a dict")
-
-        allowed_sc_keys = {"id", "description", "steps"}
-        unknown_sc = set(sc) - allowed_sc_keys
-        if unknown_sc:
-            die(f"{ctx}: unknown keys {sorted(unknown_sc)}")
-
-        sid = sc.get("id")
-        if not isinstance(sid, str) or not sid.strip():
-            die(f"{ctx}: 'id' must be a non-empty string")
-        sid = sid.strip()
-
-        if sid in seen_ids:
-            die(f"{ctx}: duplicate id '{sid}'")
-        seen_ids.add(sid)
-
-        steps = sc.get("steps")
-        if not isinstance(steps, list) or not steps:
-            die(f"scenario '{sid}': 'steps' must be a non-empty list")
-
-        for step_i, step in enumerate(steps, start=1):
-            sctx = f"scenario '{sid}' step[{step_i}]"
-
-            if not isinstance(step, dict):
-                die(f"{sctx}: step must be a dict")
-            if not step:
-                die(f"{sctx}: empty step")
-
-            allowed_step_keys = {"run", "fault", "wait_for", "wait_for_bgp"}
-            keys = set(step)
-            unknown_step = keys - allowed_step_keys
-            if unknown_step:
-                die(f"{sctx}: unknown keys {sorted(unknown_step)}")
-            if len(keys) != 1:
-                die(f"{sctx}: step must contain exactly one of {sorted(allowed_step_keys)}")
-
-            # ---- run ----
-            if "run" in step:
-                ref = step.get("run")
-                if not isinstance(ref, str) or not ref.strip():
-                    die(f"{sctx}.run: must be a non-empty test name string")
-                ref = ref.strip()
-
-                if ref not in test_names:
-                    die(
-                        f"ERROR: scenario '{sid}' references unknown test '{ref}'\n"
-                        f"Known tests: [{', '.join(sorted(test_names))}]\n"
-                        "Scenario execution aborted before any steps ran."
-                    )
-
-            # ---- fault ----
-            if "fault" in step:
-                fault = step.get("fault")
-                if not isinstance(fault, dict) or len(fault) != 1:
-                    die(f"{sctx}.fault: must contain exactly one action")
-
-                action, spec = next(iter(fault.items()))
-                if action not in ("link_down", "link_up", "interface_down", "interface_up"):
-                    die(f"{sctx}.fault: unsupported action '{action}'")
-
-                if not isinstance(spec, dict):
-                    die(f"{sctx}.fault.{action}: must be a dict")
-
-                if action in ("link_down", "link_up"):
-                    allowed_spec = {"a", "b", "a_if", "b_if"}
-                    unknown = set(spec) - allowed_spec
-                    if unknown:
-                        die(f"{sctx}.fault.{action}: unknown keys {sorted(unknown)}")
-
-                    for k in ("a", "b"):
-                        v = spec.get(k)
-                        if not isinstance(v, str) or not v.strip():
-                            die(f"{sctx}.fault.{action}.{k}: must be a non-empty string")
-
-                    a_if = spec.get("a_if")
-                    b_if = spec.get("b_if")
-
-                    # both-or-none
-                    if (a_if is None) ^ (b_if is None):
-                        die(f"{sctx}.fault.{action}: must provide both a_if and b_if (or neither)")
-
-                    if a_if is not None:
-                        if not isinstance(a_if, str) or not a_if.strip():
-                            die(f"{sctx}.fault.{action}.a_if: must be a non-empty string")
-                        if not isinstance(b_if, str) or not b_if.strip():
-                            die(f"{sctx}.fault.{action}.b_if: must be a non-empty string")
-
-                    # --- deeper v1 validation: link disambiguation must match topo['links'] ---
-                    a = str(spec.get("a") or "").strip()
-                    b = str(spec.get("b") or "").strip()
-                    matches = _link_matches(a, b)
-
-                    if a_if is None and b_if is None:
-                        # implicit path must be unambiguous
-                        if len(matches) == 0:
-                            die(f"{sctx}.fault.{action}: no declared link found between {a} and {b}")
-                        if len(matches) > 1:
-                            die(
-                                f"{sctx}.fault.{action}: ambiguous links between {a} and {b} "
-                                f"({len(matches)} found); provide a_if/b_if"
-                            )
-                    else:
-                        # explicit path must match exactly one declared link
-                        a_if_s = str(a_if).strip()
-                        b_if_s = str(b_if).strip()
-                        if (a_if_s, b_if_s) not in matches:
-                            known = ", ".join([f"{a}:{x}<->{b}:{y}" for (x, y) in matches]) or "(none)"
-                            die(
-                                f"{sctx}.fault.{action}: provided {a}:{a_if_s}<->{b}:{b_if_s} "
-                                f"does not match any declared link between {a} and {b}. "
-                                f"Known links: {known}"
-                            )
-                    # -------------------------------------------------------------------------
-
-                else:
-                    # interface_down / interface_up
-                    allowed_spec = {"node", "if", "iface", "interface"}
-                    unknown = set(spec) - allowed_spec
-                    if unknown:
-                        die(f"{sctx}.fault.{action}: unknown keys {sorted(unknown)}")
-
-                    node = spec.get("node")
-                    if not isinstance(node, str) or not node.strip():
-                        die(f"{sctx}.fault.{action}.node: must be a non-empty string")
-                    node_s = node.strip()
-
-                    # Exactly ONE of if/iface/interface must be provided (no ambiguity)
-                    iface_keys = ["if", "iface", "interface"]
-                    provided = [k for k in iface_keys if k in spec and spec.get(k) is not None]
-
-                    if len(provided) == 0:
-                        die(f"{sctx}.fault.{action}: must include exactly one of if/iface/interface")
-                    if len(provided) > 1:
-                        die(
-                            f"{sctx}.fault.{action}: provide only one of if/iface/interface "
-                            f"(got {provided})"
-                        )
-
-                    iface_val = spec.get(provided[0])
-                    if not isinstance(iface_val, str) or not iface_val.strip():
-                        die(f"{sctx}.fault.{action}.{provided[0]}: must be a non-empty string")
-                    iface_s = iface_val.strip()
-
-                    # --- deeper v1 validation: node exists in topo['nodes'] ---
-                    nodes = topo.get("nodes") or []
-                    by_name: dict[str, dict] = {
-                        n.get("name"): n
-                        for n in nodes
-                        if isinstance(n, dict) and isinstance(n.get("name"), str)
-                    }
-                    nrec = by_name.get(node_s)
-                    if not nrec:
-                        die(f"{sctx}.fault.{action}.node: unknown node '{node_s}'")
-
-                    # --- deeper v1 validation: interface exists for that node in topo['links'] endpoints ---
-                    links = topo.get("links", []) or []
-
-                    def _parse_ep(ep: str) -> tuple[str, str] | None:
-                        if not isinstance(ep, str) or ":" not in ep:
-                            return None
-                        n, ifx = ep.split(":", 1)
-                        n = n.strip()
-                        ifx = ifx.strip()
-                        if not n or not ifx:
-                            return None
-                        return n, ifx
-
-                    node_ifaces: set[str] = set()
-                    for link in links:
-                        eps = link.get("endpoints")
-                        if not isinstance(eps, list) or len(eps) != 2:
-                            continue
-                        for ep in eps:
-                            p = _parse_ep(ep)
-                            if not p:
-                                continue
-                            n, ifx = p
-                            if n == node_s:
-                                node_ifaces.add(ifx)
-
-                    if iface_s not in node_ifaces:
-                        known = ", ".join(sorted(node_ifaces)) if node_ifaces else "(none)"
-                        die(
-                            f"{sctx}.fault.{action}: interface '{iface_s}' not found on node '{node_s}'. "
-                            f"Known interfaces from links: {known}"
-                        )
-
-            # ---- wait_for ----
-            if "wait_for" in step:
-                wf = step.get("wait_for")
-                if not isinstance(wf, dict):
-                    die(f"{sctx}.wait_for: must be a dict")
-
-                required = {"type", "from", "to", "expect"}
-                missing = required - set(wf)
-                if missing:
-                    die(f"{sctx}.wait_for: missing keys {sorted(missing)}")
-
-                # v1.x: allow ping tuning + optional deterministic source selector
-                allowed_wf = required | {
-                    "timeout",
-                    "interval_s",
-                    "count",
-                    "per_attempt_timeout_s",
-                    "src_ip",
-                    "src_if",
-                }
-                unknown = set(wf) - allowed_wf
-                if unknown:
-                    die(f"{sctx}.wait_for: unknown keys {sorted(unknown)}")
-
-                t = wf.get("type")
-                if t != "ping":
-                    die(f"{sctx}.wait_for.type: must be ping (v1)")
-
-                # v1.x optional ping source selector (Tier-1 validation only)
-                src_ip = wf.get("src_ip")
-                src_if = wf.get("src_if")
-
-                if src_ip is not None and src_if is not None:
-                    die(f"{sctx}.wait_for: specify only one of src_ip or src_if")
-
-                if src_ip is not None:
-                    if not isinstance(src_ip, str) or not src_ip.strip():
-                        die(f"{sctx}.wait_for.src_ip: must be a non-empty string")
-                    validate_ip_literal(src_ip.strip(), f"{sctx}.wait_for.src_ip")
-
-                if src_if is not None:
-                    if not isinstance(src_if, str) or not src_if.strip():
-                        die(f"{sctx}.wait_for.src_if: must be a non-empty string")
-                    if any(ch.isspace() for ch in src_if):
-                        die(f"{sctx}.wait_for.src_if: must not contain whitespace")
-
-                if "count" in wf:
-                    c = wf.get("count")
-                    if not isinstance(c, int) or c < 1:
-                        die(f"{sctx}.wait_for.count: must be an int >= 1")
-
-                if "per_attempt_timeout_s" in wf:
-                    pat = wf.get("per_attempt_timeout_s")
-                    if not isinstance(pat, int) or pat < 1:
-                        die(f"{sctx}.wait_for.per_attempt_timeout_s: must be an int >= 1")
-
-                exp = wf.get("expect")
-                if exp not in ("pass", "fail"):
-                    die(f"{sctx}.wait_for.expect: must be pass|fail")
-
-                for k in ("from", "to"):
-                    v = wf.get(k)
-                    if not isinstance(v, str) or not v.strip():
-                        die(f"{sctx}.wait_for.{k}: must be a non-empty string")
-
-                # v1: wait_for.to may be a node name OR an IP literal
-                to_raw = str(wf.get("to")).strip()
-                # v1.x: wait_for ping destinations are IPv4-only (no IPv6)
-                if is_ip_literal(to_raw) and ":" in to_raw:
-                    reason = classify_invalid_target(to_raw)  # should say IPv6
-                    die(
-                        f"{sctx}.wait_for.to: invalid destination '{to_raw}'. "
-                        "Allowed: node name declared in topology (e.g. 'h2') OR IPv4 literal (e.g. '192.168.2.10'). "
-                        "Hostnames/DNS are not supported (determinism). "
-                        f"Detail: {reason}"
-                    )
-
-                if is_ip_literal(to_raw):
-                    validate_ip_literal(to_raw, f"{sctx}.wait_for.to")
-                else:
-                    # must be an existing node name
-                    nodes = topo.get("nodes", []) or []
-                    if not any(isinstance(n, dict) and n.get("name") == to_raw for n in nodes):
-                        reason = classify_invalid_target(to_raw)
-                        die(
-                            f"{sctx}.wait_for.to: invalid destination '{to_raw}'. "
-                            f"Allowed: node name declared in topology (e.g. 'h2') OR IPv4 literal (e.g. '192.168.2.10'). "
-                            f"Hostnames/DNS are not supported (determinism). Detail: {reason}"
-                        )
-
-                if "timeout" in wf:
-                    to = wf.get("timeout")
-                    if not isinstance(to, int) or to <= 0:
-                        die(f"{sctx}.wait_for.timeout: must be a positive int")
-
-                if "interval_s" in wf:
-                    iv = wf.get("interval_s")
-                    if not isinstance(iv, (int, float)) or float(iv) <= 0:
-                        die(f"{sctx}.wait_for.interval_s: must be a positive number")
-
-            # ---- wait_for_bgp ----
-            if "wait_for_bgp" in step:
-                wf = step.get("wait_for_bgp")
-                if not isinstance(wf, dict):
-                    die(f"{sctx}.wait_for_bgp: must be a dict")
-
-                allowed = {"node", "timeout"}
-                unknown = set(wf) - allowed
-                if unknown:
-                    die(f"{sctx}.wait_for_bgp: unknown keys {sorted(unknown)}")
-
-                node = wf.get("node")
-                if not isinstance(node, str) or not node.strip():
-                    die(f"{sctx}.wait_for_bgp.node: must be a non-empty string")
-                node = node.strip()
-
-                if "timeout" in wf:
-                    to = wf.get("timeout")
-                    if not isinstance(to, int) or to <= 0:
-                        die(f"{sctx}.wait_for_bgp.timeout: must be a positive int")
-
-                # Optional: ensure node exists + is frr (fail-fast, deterministic)
-                nodes = topo.get("nodes") or []
-                by_name = {n.get("name"): n for n in nodes if isinstance(n, dict)}
-                nrec = by_name.get(node)
-                if not nrec:
-                    die(f"{sctx}.wait_for_bgp.node: unknown node '{node}'")
-
-                nt = nrec.get("type") or nrec.get("kind")
-                if nt != "frr":
-                    die(f"{sctx}.wait_for_bgp.node: node '{node}' is not type/kind 'frr' (got {nt!r})")
-
-def build_test_index(topo: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """
-    Map test name -> test dict. Names must be unique.
-    """
-    tests = topo.get("tests") or []
-    idx: dict[str, dict[str, Any]] = {}
-
-    for i, t in enumerate(tests):
-        if not isinstance(t, dict):
-            continue
-        name = t.get("name") or f"tests[{i+1}]"
-        if not isinstance(name, str) or not name.strip():
-            name = f"tests[{i+1}]"
-        if name in idx:
-            die(f"Duplicate test name '{name}' (scenario run references require unique names)")
-        idx[name] = t
-    return idx
-
-def resolve_dst_to_ip(topo: dict[str, Any], dst: str) -> str:
-    """
-    dst may be:
-      - node name in topo.nodes -> resolve via node_first_ipv4
-      - an IPv4/IPv6 literal -> return as-is
-    Anything else is an error (fail fast).
-
-    NOTE (v1.x determinism): DNS/hostnames are not supported.
-    """
-    if not isinstance(dst, str) or not dst.strip():
-        die("resolve_dst_to_ip: dst must be a non-empty string")
-
-    dst_s = dst.strip()
-
-    # If literal IP, use directly (v1-safe)
-    # If literal IP, use directly (v1-safe)
-    if is_ip_literal(dst_s):
-        # v1.x: for wait_for ping destinations, IPv4-only (determinism / scope)
-        if ":" in dst_s:
-            reason = classify_invalid_target(dst_s)  # should report IPv6
-            die(
-                f"wait_for ping: invalid destination '{dst_s}'.\n\n"
-                "Allowed forms:\n"
-                "- node name declared in topology (e.g. 'h2')\n"
-                "- IPv4 literal (e.g. '192.168.2.10')\n\n"
-                "Hostnames / DNS are not supported (determinism).\n"
-                f"Detail: {reason}"
-            )
-        validate_ip_literal(dst_s, "wait_for.to")
-        return dst_s
-
-    # Otherwise must be a node name
-    nodes = topo.get("nodes", []) or []
-    if any(isinstance(n, dict) and n.get("name") == dst_s for n in nodes):
-        return node_first_ipv4(topo, dst_s)
-
-    reason = classify_invalid_target(dst_s)
-    die(
-        f"wait_for ping: invalid destination '{dst_s}'.\n\n"
-        "Allowed forms:\n"
-        "- node name declared in topology (e.g. 'h2')\n"
-        "- IPv4 literal (e.g. '192.168.2.10')\n\n"
-        "Hostnames / DNS are not supported (determinism).\n"
-        f"Detail: {reason}"
-    )
-
-def wait_for_condition(
-    rt: "Runtime",
-    lab: str,
-    topo: dict[str, Any],
-    cond: dict[str, Any],
-    *,
-    interval_s: float = 1.0,
-) -> tuple[bool, int]:
-    """
-    Explicit convergence wait. Retries only because user declared wait_for + timeout.
-    Returns: (ok, attempts)
-    """
-    ctype = cond.get("type")
-    src = cond.get("from")
-    dst = cond.get("to")
-    expect = (cond.get("expect") or "pass").lower()
-    timeout = int(cond.get("timeout") or 30)
-
-    if ctype not in ("ping", "tcp"):
-        die(f"wait_for: unsupported type {ctype!r}")
-
-    if not isinstance(src, str) or not src.strip():
-        die("wait_for: invalid from (must be node name)")
-    if not isinstance(dst, str) or not dst.strip():
-        die("wait_for: invalid to (must be node name or IP literal)")
-
-    if expect not in ("pass", "fail"):
-        die("wait_for: expect must be pass|fail")
-
-    dst_ip = resolve_dst_to_ip(topo, dst.strip())
-    should_succeed = (expect == "pass")
-
-    def attempt() -> tuple[bool, Any]:
-        if ctype == "ping":
-            cp = rt.exec(lab, src, ["ping", "-c", "2", "-W", "1", dst_ip], check=False)
-            ok = (cp.returncode == 0)
-            return (ok == should_succeed), cp
-
-        # tcp wait_for (if you use it)
-        port = cond.get("port")
-        try:
-            port_i = int(port)
-        except Exception:
-            die("wait_for tcp: port must be an int")
-
-        ensure_nc(rt, lab, src)
-        cp = rt.exec(lab, src, ["sh", "-lc", f"nc -z -w 2 {dst_ip} {port_i}"], check=False)
-        ok = (cp.returncode == 0)
-        return (ok == should_succeed), cp
-
-    # retry_until already enforces explicit wait semantics
-    ok, _last, attempts, _dur_ms = retry_until(timeout, interval_s, attempt)
-    return ok, attempts
-
-def retry_until(timeout_s: int, interval_s: float, fn) -> tuple[bool, object, int, int]:
-    """
-    Returns: ok, last_val, attempts, duration_ms
-
-    Deterministic polling:
-      - fixed interval (no jitter)
-      - retries happen ONLY because caller explicitly requested a wait/timeout
-      - no hidden backoff or randomness
-    """
-    import time
-
-    start = time.time()
-    attempts = 0
-    last_val: object = None
-
-    while True:
-        attempts += 1
-        ok, val = fn()
-        last_val = val
-
-        if ok:
-            dur_ms = int((time.time() - start) * 1000)
-            return True, last_val, attempts, dur_ms
-
-        if (time.time() - start) >= float(timeout_s):
-            dur_ms = int((time.time() - start) * 1000)
-            return False, last_val, attempts, dur_ms
-
-        time.sleep(float(interval_s))
-
-def execute_scenario(
-    *,
-    rt: "Runtime",
-    lab: str,
-    topo: dict[str, Any],
-    scenario: dict[str, Any],
-    test_index: dict[str, dict[str, Any]],
-    run_atomic_test_fn,
-) -> dict[str, Any]:
-    """
-    Execute one scenario deterministically.
-
-    run_atomic_test_fn(test_dict) -> bool (pass=True/fail=False)
-    Must also record atomic test into results via existing record_test() pipeline.
-
-    Scenario verdict:
-      - pass only if all steps pass
-      - scenario step failures are visible and do not overwrite atomic verdicts
-    """
-    sid = str(scenario.get("id"))
-    steps = scenario.get("steps") or []
-
-    scen_rec: dict[str, Any] = {
-        "id": sid,
-        "description": str(scenario.get("description") or ""),
-        "steps": [],
-        "verdict": "pass",
+    cp1 = rt.exec(lab, node, ["sh", "-lc", cmd], check=False, capture_output=True)
+    ok = (cp1.returncode == 0)
+
+    post: list[dict[str, Any]] = []
+    cp2 = rt.exec(lab, node, ["sh", "-lc", "nft list ruleset"], check=False, capture_output=True)
+    post.append({
+        "name": "nft_list_ruleset",
+        "cmd": "nft list ruleset",
+        "exit_code": int(cp2.returncode),
+        "stdout": _safe_stdio(cp2.stdout or ""),
+        "stderr": _safe_stdio(cp2.stderr or ""),
+    })
+
+    finished = time.time()
+    return {
+        "node": node,
+        "node_type": "nft-fw",
+        "method": "nft -f",
+        "input": {"source_path": str(src), "sha256": sha},
+        "attempt": {"started_at_epoch_ms": int(started * 1000), "duration_ms": int((finished - started) * 1000)},
+        "result": {"applied_ok": bool(ok), "exit_code": int(cp1.returncode)},
+        "stdout": _safe_stdio(cp1.stdout or ""),
+        "stderr": _safe_stdio(cp1.stderr or ""),
+        "post_checks": post,
     }
 
-    for idx, step in enumerate(steps):
-        step_keys = list(step.keys())
-        stype = step_keys[0]
-        started = time.time()
+# -------------------------
+# FRR config generation (simple v1)
+# -------------------------
 
-        step_rec: dict[str, Any] = {"type": stype}
+def _two_run_load_yaml_path(arg: str) -> Path:
+    p = (TOPO_DIR / arg) if not Path(arg).is_file() else Path(arg)
+    return p
 
-        # ---- run ----
-        if stype == "run":
-            ref = step["run"]
-            step_rec["ref"] = ref
+def _two_run_make_temp_topology(*, base_topo_path: Path, new_name: str, out_path: Path) -> None:
+    topo = load_yaml(base_topo_path) or {}
+    if not isinstance(topo, dict):
+        die(f"two-run: topology must be a mapping: {base_topo_path}")
+    topo["name"] = new_name
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(yaml.safe_dump(topo, sort_keys=True), encoding="utf-8")
 
-            t = test_index.get(ref)
-            if not t:
-                step_rec["verdict"] = "fail"
-                step_rec["error"] = f"unknown test ref '{ref}'"
-                step_rec["duration_ms"] = int((time.time() - started) * 1000)
-                scen_rec["steps"].append(step_rec)
-                scen_rec["verdict"] = "fail"
-                break
+def _two_run_copy_tree(src: Path, dst: Path) -> None:
+    if dst.exists():
+        shutil.rmtree(dst)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, dst)
 
-            ok = bool(run_atomic_test_fn(t))
-            step_rec["verdict"] = "pass" if ok else "fail"
-            step_rec["duration_ms"] = int((time.time() - started) * 1000)
-            scen_rec["steps"].append(step_rec)
+def _two_run_load_json(p: Path) -> dict[str, Any]:
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        die(f"two-run: failed to read JSON {p}: {e}")
+    raise RuntimeError("unreachable")
 
-            if not ok:
-                scen_rec["verdict"] = "fail"
-                break
+def _two_run_normalized_topo_hash(resolved_topo_path: Path) -> str:
+    topo = load_yaml(resolved_topo_path) or {}
+    if not isinstance(topo, dict):
+        return ""
+    topo2 = dict(topo)
+    topo2.pop("name", None)
+    blob = json.dumps(topo2, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
-        # ---- wait ----
-        elif stype == "wait":
-            sec = int(step["wait"]["seconds"])
-            time.sleep(sec)
-            step_rec["seconds"] = sec
-            step_rec["verdict"] = "pass"
-            step_rec["duration_ms"] = int((time.time() - started) * 1000)
-            scen_rec["steps"].append(step_rec)
-
-        # ---- wait_for ----
-        elif stype == "wait_for":
-            cond = step["wait_for"]
-            step_rec["condition"] = cond
-            ok, attempts = wait_for_condition(rt, lab, topo, cond, interval_s=float(cond.get("interval_s") or 1.0))
-            step_rec["attempts"] = attempts
-            step_rec["verdict"] = "pass" if ok else "fail"
-            step_rec["duration_ms"] = int((time.time() - started) * 1000)
-            scen_rec["steps"].append(step_rec)
-
-            if not ok:
-                scen_rec["verdict"] = "fail"
-                break
-
-        # ---- fault ----
-        elif stype == "fault":
-            # Step 1: executor skeleton only.
-            # Step 2 will implement runtime-backed fault primitives.
-            step_rec["fault"] = step["fault"]
-            step_rec["verdict"] = "fail"
-            step_rec["error"] = "fault primitives not implemented yet (Step 2)"
-            step_rec["duration_ms"] = int((time.time() - started) * 1000)
-            scen_rec["steps"].append(step_rec)
-            scen_rec["verdict"] = "fail"
-            break
-
-        else:
-            step_rec["verdict"] = "fail"
-            step_rec["error"] = f"unknown step type '{stype}'"
-            step_rec["duration_ms"] = int((time.time() - started) * 1000)
-            scen_rec["steps"].append(step_rec)
-            scen_rec["verdict"] = "fail"
-            break
-
-    return scen_rec
-
-def _atomic_test_ids(topo: dict) -> list[str]:
+def _two_run_extract_declared_sets(resolved_topo_path: Path) -> tuple[list[str], list[tuple[str, int, list[str]]]]:
+    topo = load_yaml(resolved_topo_path) or {}
     tests = topo.get("tests", []) or []
-    ids: list[str] = []
-    for idx, t in enumerate(tests, start=1):
-        # Keep deterministic naming aligned with cmd_test()
-        if isinstance(t, dict) and t.get("name"):
-            ids.append(str(t["name"]))
+    test_names: list[str] = []
+    for i, t in enumerate(tests, start=1):
+        if isinstance(t, dict) and isinstance(t.get("name"), str) and t.get("name").strip():
+            test_names.append(t["name"].strip())
         else:
-            ids.append(f"tests[{idx}]")
-    return ids
-
-def validate_scenario_run_refs_or_die(topo: dict, scenario_ids: list[str] | None = None) -> None:
-    """
-    Hard rule — Scenario References Must Resolve (Fail-Fast)
-
-    Before executing ANY scenario steps, validate that every `steps[].run: <test_name>`
-    references a declared atomic test name in `topo["tests"]`.
-
-    If any ref is missing/invalid:
-      - FAIL FAST
-      - BEFORE executing any runtime actions
-      - WITH a clear deterministic error
-      - NO partial execution
-
-    scenario_ids:
-      - None  => validate all scenarios in topo
-      - list  => validate only those scenario ids
-    """
-    known = _atomic_test_ids(topo)  # authoritative list of test names (deterministic order)
-    known_set = set(known)
+            test_names.append(f"tests[{i}]")
 
     scenarios = topo.get("scenarios", []) or []
-    if not isinstance(scenarios, list):
-        die("ERROR: topology 'scenarios' must be a list")
+    scen_sig: list[tuple[str, int, list[str]]] = []
+    for s in scenarios:
+        if not isinstance(s, dict):
+            continue
+        sid = str(s.get("id") or "").strip()
+        steps = s.get("steps", []) or []
+        step_types: list[str] = []
+        if isinstance(steps, list):
+            for st in steps:
+                if not isinstance(st, dict):
+                    step_types.append("invalid")
+                    continue
+                # determine step type by key intersection (contract)
+                keys = set(st.keys())
+                for k in ("run", "fault", "wait_for", "wait_for_bgp"):
+                    if k in keys:
+                        step_types.append(k)
+                        break
+                else:
+                    step_types.append("unknown")
+        scen_sig.append((sid, len(steps) if isinstance(steps, list) else 0, step_types))
 
-    # Filter scenarios if requested (deterministic) + fail-fast if scenario id not found
-    scenarios_all = [s for s in scenarios if isinstance(s, dict)]
+    scen_sig.sort(key=lambda x: x[0])
+    return (test_names, scen_sig)
 
-    available_ids = sorted(
-        {str(s.get("id", "")).strip() for s in scenarios_all if str(s.get("id", "")).strip()}
-    )
-    available_set = set(available_ids)
+def _two_run_compare(*, baseline_dir: Path, change_dir: Path, base_name: str) -> tuple[dict[str, Any], str]:
+    b_results = _two_run_load_json(baseline_dir / "results.json")
+    c_results = _two_run_load_json(change_dir / "results.json")
 
-    if scenario_ids is not None:
-        want_list = [str(x).strip() for x in scenario_ids if str(x).strip()]
-        want_set = set(want_list)
+    b_resolved = baseline_dir / "topology.resolved.yaml"
+    c_resolved = change_dir / "topology.resolved.yaml"
 
-        missing = sorted(want_set - available_set)
-        if missing:
-            if not available_ids:
-                die(
-                    f"no scenarios are defined in this topology (requested: {', '.join(missing)})"
-                )
-            if len(missing) == 1:
-                die(
-                    f"scenario id '{missing[0]}' not found. Valid scenario ids: {', '.join(available_ids)}"
-                )
-            die(
-                f"scenario ids not found: {', '.join(missing)}. Valid scenario ids: {', '.join(available_ids)}"
-            )
+    topo_hash_b = _two_run_normalized_topo_hash(b_resolved)
+    topo_hash_c = _two_run_normalized_topo_hash(c_resolved)
 
-        scenarios = [s for s in scenarios_all if str(s.get("id", "")).strip() in want_set]
-    else:
-        scenarios = scenarios_all
+    b_tests, b_scens = _two_run_extract_declared_sets(b_resolved)
+    c_tests, c_scens = _two_run_extract_declared_sets(c_resolved)
 
-    # Deterministic ordering for validation / error reporting
-    scenarios_sorted = sorted(
-        scenarios,
-        key=lambda s: str(s.get("id", "")).strip(),
-    )
+    comparability_errors: list[str] = []
+    if topo_hash_b != topo_hash_c:
+        comparability_errors.append("topology identity mismatch (normalized resolved topology differs)")
+    if b_tests != c_tests:
+        comparability_errors.append("declared test set mismatch between baseline and change")
+    if b_scens != c_scens:
+        comparability_errors.append("declared scenario set mismatch between baseline and change")
 
-    for s in scenarios_sorted:
-        sid = str(s.get("id") or "<unnamed>")
-        steps = s.get("steps", [])
-        if steps is None:
-            steps = []
-        if not isinstance(steps, list):
-            die(f"ERROR: scenario '{sid}' steps must be a list")
+    def _index_tests(results: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        out: dict[str, dict[str, Any]] = {}
+        for t in results.get("tests", []) or []:
+            if not isinstance(t, dict):
+                continue
+            name = str(t.get("name") or "").strip()
+            if not name:
+                continue
+            out[name] = t
+        return out
 
-        for idx, st in enumerate(steps, start=1):
-            if not isinstance(st, dict):
-                die(f"ERROR: scenario '{sid}' step[{idx}] must be a dict (invalid schema)")
+    b_idx = _index_tests(b_results)
+    c_idx = _index_tests(c_results)
 
-            # Only validate run refs here (fault/wait/wait_for validation is separate)
-            if "run" in st:
-                ref = st.get("run")
+    # Deterministic per-test diffs (declared order)
+    test_diffs: list[dict[str, Any]] = []
+    for name in b_tests:
+        bt = b_idx.get(name, {})
+        ct = c_idx.get(name, {})
+        fields = ("expected", "observed", "verdict", "duration_ms")
+        changed: dict[str, Any] = {}
+        for f in fields:
+            bv = bt.get(f)
+            cv = ct.get(f)
+            if bv != cv:
+                changed[f] = {"baseline": bv, "change": cv}
+        if changed:
+            test_diffs.append({"name": name, "changes": changed})
 
-                if not isinstance(ref, str) or not ref.strip():
-                    die(f"ERROR: scenario '{sid}' step[{idx}] has invalid run ref (must be non-empty string)")
+    # Scenario diffs (from results.json scenarios)
+    def _idx_scen(results: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        out: dict[str, dict[str, Any]] = {}
+        for s in results.get("scenarios", []) or []:
+            if not isinstance(s, dict):
+                continue
+            sid = str(s.get("id") or "").strip()
+            if sid:
+                out[sid] = s
+        return out
 
-                ref = ref.strip()
-                if ref not in known_set:
-                    known_str = ", ".join(known)
-                    die(
-                        f"ERROR: scenario '{sid}' references unknown test '{ref}'\n"
-                        f"Known tests: [{known_str}]\n"
-                        f"Scenario execution aborted before any steps ran."
-                    )
+    b_sidx = _idx_scen(b_results)
+    c_sidx = _idx_scen(c_results)
 
-    # Optional: if the user asked to validate a specific scenario id and it doesn't exist,
-    # fail here (still pre-execution). This helps avoid “it ran nothing” ambiguity.
-    if scenario_ids is not None:
-        topo_ids = set(str(s.get("id", "")) for s in (topo.get("scenarios", []) or []) if isinstance(s, dict))
-        missing = [sid for sid in (str(x) for x in scenario_ids) if sid not in topo_ids]
-        if missing:
-            missing_sorted = ", ".join(sorted(missing))
-            die(f"ERROR: requested scenario id(s) not found in topology: {missing_sorted}")
+    scen_diffs: list[dict[str, Any]] = []
+    for (sid, _nsteps, _types) in b_scens:
+        bs = b_sidx.get(sid, {})
+        cs = c_sidx.get(sid, {})
+        changed: dict[str, Any] = {}
+        for f in ("verdict", "duration_ms"):
+            if bs.get(f) != cs.get(f):
+                changed[f] = {"baseline": bs.get(f), "change": cs.get(f)}
 
-def _container_is_running(container_name: str) -> bool:
-    """
-    Legacy helper kept for compatibility.
-    IMPORTANT: must not call docker directly; runtime owns execution.
-    """
-    rt = get_runtime()
-    return rt.is_running_id(container_name)
+        # step verdict/duration diffs by index
+        b_steps = bs.get("steps", []) or []
+        c_steps = cs.get("steps", []) or []
+        step_changes: list[dict[str, Any]] = []
+        if isinstance(b_steps, list) and isinstance(c_steps, list):
+            for i in range(min(len(b_steps), len(c_steps))):
+                bst = b_steps[i] if isinstance(b_steps[i], dict) else {}
+                cst = c_steps[i] if isinstance(c_steps[i], dict) else {}
+                sc: dict[str, Any] = {}
+                for f in ("type", "verdict", "duration_ms"):
+                    if bst.get(f) != cst.get(f):
+                        sc[f] = {"baseline": bst.get(f), "change": cst.get(f)}
+                if sc:
+                    step_changes.append({"step": i + 1, "changes": sc})
+        if step_changes:
+            changed["steps"] = step_changes
 
-class Runtime:
-    """
-    Runtime abstraction stub.
+        if changed:
+            scen_diffs.append({"id": sid, "changes": changed})
 
-    v1: container-only
-    future: vm runtime can be added behind this interface without changing command logic.
-    """
+    summary = {
+        "schema_version": "1",
+        "authority": "supporting_evidence",
+        "statement": "This diff is evidence-only and never determines verdicts.",
+        "two_run": {
+            "base_lab": base_name,
+            "baseline": {"overall": (b_results.get("result") or ""), "topo_hash": topo_hash_b},
+            "change": {"overall": (c_results.get("result") or ""), "topo_hash": topo_hash_c},
+        },
+        "comparability": {
+            "ok": (len(comparability_errors) == 0),
+            "errors": comparability_errors,
+        },
+        "diffs": {
+            "tests": test_diffs,
+            "scenarios": scen_diffs,
+        },
+    }
 
-    def node_id(self, lab: str, node: str) -> str:
-        raise NotImplementedError
+    # Deterministic human summary
+    lines: list[str] = []
+    lines.append("ai-netsim two-run diff (evidence-only)")
+    lines.append(f"base_lab: {base_name}")
+    lines.append(f"baseline_overall: {b_results.get('result')}")
+    lines.append(f"change_overall: {c_results.get('result')}")
+    lines.append(f"comparability_ok: {str(len(comparability_errors) == 0).lower()}")
+    if comparability_errors:
+        lines.append("comparability_errors:")
+        for e in comparability_errors:
+            lines.append(f" - {e}")
 
-    def exec(
-        self,
-        lab: str,
-        node: str,
-        cmd: list[str],
-        *,
-        check: bool = False,
-        capture_output: bool = True,   # <-- IMPORTANT: default True so helpers can parse stdout
-        interactive: bool = False,
-    ) -> subprocess.CompletedProcess:
-        raise NotImplementedError
+    lines.append(f"test_diffs: {len(test_diffs)}")
+    for d in test_diffs[:25]:
+        lines.append(f" - {d['name']}: {', '.join(sorted(d['changes'].keys()))}")
+    if len(test_diffs) > 25:
+        lines.append(f" - (+{len(test_diffs)-25} more)")
 
-    def sh(
-        self,
-        lab: str,
-        node: str,
-        script: str,
-        *,
-        check: bool = False,
-        capture_output: bool = True,   # <-- match exec default
-    ) -> subprocess.CompletedProcess:
-        return self.exec(
-            lab,
-            node,
-            ["sh", "-lc", script],
-            check=check,
-            capture_output=capture_output,
+    lines.append(f"scenario_diffs: {len(scen_diffs)}")
+    for d in scen_diffs[:25]:
+        lines.append(f" - {d['id']}: changed")
+    if len(scen_diffs) > 25:
+        lines.append(f" - (+{len(scen_diffs)-25} more)")
+
+    return summary, "\n".join(lines) + "\n"
+
+def _cmd_test_two_run(args: argparse.Namespace) -> None:
+    base_topo_path = _two_run_load_yaml_path(str(getattr(args, "two_run_topology")))
+    topo = load_yaml(base_topo_path) or {}
+    if not isinstance(topo, dict):
+        die(f"two-run: invalid topology: {base_topo_path}")
+    base_name = topo.get("name")
+    if not isinstance(base_name, str) or not base_name.strip():
+        die(f"two-run: topology has no valid 'name': {base_topo_path}")
+    base_name = base_name.strip()
+
+    # two-run requires candidate-config for the CHANGE run (even though baseline does not use it)
+    cand_raw = getattr(args, "candidate_config", None)
+    if cand_raw is None:
+        die("two-run: missing required --candidate-config for CHANGE run")
+
+    # Normalize candidate dir to an absolute, resolved path to avoid cwd ambiguity
+    cand_dir = Path(str(cand_raw)).expanduser()
+    if not cand_dir.is_absolute():
+        cand_dir = (Path.cwd() / cand_dir)
+    cand_dir = cand_dir.resolve()
+
+    # Pre-validate candidate dir *before any runs* so we fail fast without deploying labs.
+    # This enforces the "recognized inputs exist" invariant and gives a deterministic error.
+    _candidate_parse_dir_or_die(topo, cand_dir)
+
+    # Bundle root (stable)
+    bundle_root = LABS_DIR / f"clab-{base_name}" / "two_run"
+    tmp_dir = bundle_root / "_tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    baseline_name = f"{base_name}-baseline"
+    change_name = f"{base_name}-change"
+
+    baseline_topo = tmp_dir / "baseline.topology.yaml"
+    change_topo = tmp_dir / "change.topology.yaml"
+
+    _two_run_make_temp_topology(base_topo_path=base_topo_path, new_name=baseline_name, out_path=baseline_topo)
+    _two_run_make_temp_topology(base_topo_path=base_topo_path, new_name=change_name, out_path=change_topo)
+
+    def run_one(*, topo_path: Path, lab_name: str, candidate: Path | None, label: str) -> tuple[int, str]:
+        """
+        Returns: (exit_code, overall_result_string)
+        exit_code is for hard failure decisions; test failures are not treated as hard here.
+        """
+        # Always clean-state for this run
+        up_args = argparse.Namespace(topology=str(topo_path), reconfigure=True)
+        try:
+            cmd_up(up_args)
+        except SystemExit as e:
+            die(f"{label}: deploy/provision failed")
+        except Exception:
+            die(f"{label}: deploy/provision failed")
+
+        # If candidate is provided, re-validate it against the resolved topology
+        # produced by THIS run (stronger than base YAML).
+        if candidate is not None:
+            rpath = LABS_DIR / f"clab-{lab_name}" / "topology.resolved.yaml"
+            if not rpath.exists():
+                die(f"{label}: missing resolved topology: {rpath}")
+            rtopo = load_yaml(rpath) or {}
+            if not isinstance(rtopo, dict):
+                die(f"{label}: invalid resolved topology: {rpath}")
+            ensure_valid_topology(rtopo)
+            _candidate_parse_dir_or_die(rtopo, candidate)
+
+        # Run tests (may fail normally)
+        test_ns = argparse.Namespace(
+            lab=lab_name,
+            name=getattr(args, "name", None),
+            kind=getattr(args, "kind", None),
+            keep_going=bool(getattr(args, "keep_going", False)),
+            json=bool(getattr(args, "json", False)),
+            candidate_config=(str(candidate) if candidate is not None else None),
+            scenario=getattr(args, "scenario", None),
+            all_scenarios=bool(getattr(args, "all_scenarios", False)),
+            scenario_verbose=bool(getattr(args, "scenario_verbose", False)),
+            precheck_controlplane=bool(getattr(args, "precheck_controlplane", False)),
+            list_scenarios=False,
         )
+        try:
+            cmd_test(test_ns)
+        except SystemExit:
+            # Normal test failure OR candidate apply failure. Decide later by inspecting results.json.
+            pass
 
-    def is_running(self, lab: str, node: str) -> bool:
-        raise NotImplementedError
+        # Collect best-effort (still deterministic)
+        try:
+            cmd_collect(argparse.Namespace(lab=lab_name))
+        except SystemExit:
+            pass
+        except Exception:
+            pass
 
-    def is_running_id(self, node_id: str) -> bool:
-        """
-        Return True if the runtime instance identified by node_id exists and is running.
+        # Read overall result (if available)
+        rpath = LABS_DIR / f"clab-{lab_name}" / "results.json"
+        overall = ""
+        if rpath.exists():
+            overall = str((_two_run_load_json(rpath)).get("result") or "")
 
-        ContainerRuntime: node_id is a docker container name like "clab-<lab>-<node>"
-        VMRuntime (future): node_id could be VM name/uuid, etc.
-        """
-        raise NotImplementedError
+        # Always destroy for clean-state gate semantics
+        try:
+            cmd_down(argparse.Namespace(name=lab_name))
+        except SystemExit:
+            pass
+        except Exception:
+            pass
 
+        return (0, overall)
 
-class ContainerRuntime(Runtime):
-    def node_id(self, lab: str, node: str) -> str:
-        return f"clab-{lab}-{node}"
+    # Run baseline first
+    run_one(topo_path=baseline_topo, lab_name=baseline_name, candidate=None, label="baseline")
 
-    def exec(
-        self,
-        lab: str,
-        node: str,
-        cmd: list[str],
-        *,
-        check: bool = False,
-        capture_output: bool = True,
-        interactive: bool = False,
-    ) -> subprocess.CompletedProcess:
-        c = self.node_id(lab, node)
+    # If baseline artifacts missing, treat as hard failure
+    baseline_dir = LABS_DIR / f"clab-{baseline_name}"
+    if not (baseline_dir / "results.json").exists():
+        die("baseline: hard failure (missing results.json)")
 
-        argv: list[str] = ["docker", "exec"]
-        if interactive:
-            # interactive calls should not capture output (TTY behavior)
-            argv += ["-it"]
-            argv += [c, *cmd]
-            # Ensure we don't accidentally depend on stdout/stderr for interactive calls
-            return run(argv, check=check, capture_output=False)
+    # Run change second (with candidate apply)
+    run_one(topo_path=change_topo, lab_name=change_name, candidate=cand_dir, label="change")
 
-        argv += [c, *cmd]
+    change_dir = LABS_DIR / f"clab-{change_name}"
+    if not (change_dir / "results.json").exists():
+        die("change: hard failure (missing results.json)")
 
-        # Non-interactive calls: capture output by default so scenario helpers can parse stdout
-        # (e.g., ip route snapshots for deterministic restoration after link up)
-        return run(argv, check=check, capture_output=capture_output)
+    # If candidate apply failed, treat as hard failure (per handover)
+    cjson = _two_run_load_json(change_dir / "results.json")
+    ca = cjson.get("candidate_apply") or {}
+    if isinstance(ca, dict) and ca.get("enabled") and str(ca.get("verdict") or "") == "fail":
+        # still proceed to bundle copy + diff if possible, but exit non-zero
+        apply_failed = True
+    else:
+        apply_failed = False
 
+    # Bundle placement (stable dirs)
+    bdst = bundle_root / "baseline"
+    cdst = bundle_root / "change"
+    ddst = bundle_root / "diff"
+    ddst.mkdir(parents=True, exist_ok=True)
 
-    def is_running(self, lab: str, node: str) -> bool:
-        return self.is_running_id(self.node_id(lab, node))
+    _two_run_copy_tree(baseline_dir, bdst)
+    _two_run_copy_tree(change_dir, cdst)
 
-    def is_running_id(self, node_id: str) -> bool:
-        cp = run(["docker", "inspect", "-f", "{{.State.Running}}", node_id], check=False, capture_output=True)
-        if cp.returncode != 0:
-            return False
+    summary, txt = _two_run_compare(baseline_dir=bdst, change_dir=cdst, base_name=base_name)
+    (ddst / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (ddst / "summary.txt").write_text(txt, encoding="utf-8")
 
-        out = cp.stdout
-        if isinstance(out, bytes):
-            out = out.decode("utf-8", errors="replace")
-        return (out or "").strip() == "true"
+    # Comparability broken => hard failure
+    comp = summary.get("comparability") or {}
+    if isinstance(comp, dict) and not bool(comp.get("ok")):
+        die("comparison invalid: " + "; ".join(comp.get("errors") or []))
 
+    # Candidate apply failure => hard failure
+    if apply_failed:
+        die("change: candidate apply failed (tests/scenarios did not run)")
 
-class VmRuntimeStub(Runtime):
-    def __init__(self) -> None:
-        self._msg = "VM runtime not implemented yet (Phase-1 stub). Use container runtime."
+    # Exit code reflects change verdict only
+    if str(cjson.get("result") or "") != "pass":
+        die("two-run: CHANGE verdict is FAIL", code=1)
 
-    def node_id(self, lab: str, node: str) -> str:
-        die(self._msg)
-        raise RuntimeError(self._msg)
-
-    def exec(
-        self,
-        lab: str,
-        node: str,
-        cmd: list[str],
-        *,
-        check: bool = False,
-        capture_output: bool = True,
-        interactive: bool = False,
-    ) -> subprocess.CompletedProcess:
-        die(self._msg)
-        raise RuntimeError(self._msg)
-
-    def is_running(self, lab: str, node: str) -> bool:
-        die(self._msg)
-        return False
-
-    def is_running_id(self, node_id: str) -> bool:
-        die(self._msg)
-        return False
-
-
-def get_runtime(topo: dict[str, Any] | None = None) -> Runtime:
-    """
-    Decide runtime. For now:
-      - default: container
-      - allow future extension: topo['runtime'] or node['runtime'] (not required yet)
-    """
-    return ContainerRuntime()
+    print(f"✅ two-run PASS: bundle at {bundle_root}")
 
 # -------------------------
 # Commands
@@ -3188,10 +1819,46 @@ def cmd_test(args: argparse.Namespace) -> None:
       If scenarios are requested, validate ALL scenario run refs up-front and FAIL FAST
       (before any runtime actions) if a referenced atomic test name does not exist.
     """
+    # v1.5 hard guardrail: capture-config is exploration evidence only (never allowed in gate-first test)
+    if bool(getattr(args, "capture_config", False)):
+        die("--capture-config is exploration evidence only and is not allowed in netsim test", code=2)
+
+    # -------------------------------------------------------------------------
+    # Two-run gate orchestrator (v1.5): baseline vs change (evidence-only)
+    # -------------------------------------------------------------------------
+    if bool(getattr(args, "two_run", False)):
+        topo_arg = getattr(args, "two_run_topology", None)
+        cand_arg = getattr(args, "candidate_config", None)
+
+        if not topo_arg:
+            die("--two-run requires --two-run-topology <topology.yaml>")
+        if not cand_arg:
+            die("--two-run requires --candidate-config <dir> (used for the change run)")
+
+        _cmd_test_two_run(args)
+        return
+    
     import json
-    import time
 
     lab = args.lab
+    # ------------------------------------------------------------
+    # v1.x UX hardening: lab name is required for normal test runs
+    # (Two-run is the ONLY mode that can run without a lab name.)
+    # ------------------------------------------------------------
+    if not lab:
+        die(
+            "ERROR: missing LAB NAME.\n\n"
+            "Usage:\n"
+            "  netsim test <lab-name> [options]\n\n"
+            "Examples:\n"
+            "  netsim up topologies/foo.yaml --reconfigure\n"
+            "  netsim test foo\n\n"
+            "Note:\n"
+            "  If you want the baseline-vs-change gate, use:\n"
+            "    netsim test --two-run --two-run-topology <topology.yaml> --candidate-config <dir>\n",
+            code=2,
+        )
+
     # ------------------------------------------------------------
     # v1.x UX hardening: netsim test expects a LAB NAME, not a topology path
     # Deterministic heuristic only (no filesystem stat).
@@ -3309,6 +1976,18 @@ def cmd_test(args: argparse.Namespace) -> None:
     topo = load_yaml(tpath)
     ensure_valid_topology(topo)
 
+    # Candidate config fail-fast validation (no runtime actions required)
+    # Normalize to absolute + resolved (same semantics as two-run)
+    cand_dir_raw: str | None = getattr(args, "candidate_config", None)
+    cand_dir: Path | None = None
+    cand_plan: list[dict] | None = None
+
+    if cand_dir_raw:
+        cand_dir = Path(str(cand_dir_raw)).expanduser()
+        if not cand_dir.is_absolute():
+            cand_dir = (Path.cwd() / cand_dir)
+        cand_dir = cand_dir.resolve()
+        cand_plan = _candidate_parse_dir_or_die(topo, cand_dir)
     # -----------------------------------------------------------------------------
     # Hard guardrail: validate scenario run refs up-front (no partial execution)
     # This MUST happen before ANY runtime actions (docker/VM exec, faults, waits, etc.)
@@ -3323,7 +2002,11 @@ def cmd_test(args: argparse.Namespace) -> None:
 
     # Disallow filters when running scenarios: avoids silent "pass" with 0 executed runs
     if want_scenarios and (filter_name or filter_kind):
-        die("ERROR: --name/--kind filters are not supported with --scenario/--all-scenarios (would skip scenario run steps).")
+        die(
+            "ERROR: --name/--kind filters are not supported with --scenario/--all-scenarios "
+            "(would skip scenario run steps).",
+            code=2,
+        )
 
     # Phase-1 runtime abstraction (container today, VM later)
     rt = get_runtime(topo)
@@ -3355,6 +2038,26 @@ def cmd_test(args: argparse.Namespace) -> None:
         "scenarios": [],
         "events": [],
     }
+
+    # v1.5 EVPN Awareness (presence-only): informational results metadata.
+    # Authority remains tests/scenarios only; this must never affect verdict or exit code.
+    try:
+        fabric = topo.get("fabric")
+        evpn = fabric.get("evpn") if isinstance(fabric, dict) else None
+        if isinstance(evpn, dict) and bool(evpn.get("enabled")) and str(evpn.get("mode") or "evpn") == "evpn":
+            rf = results.get("fabric")
+            if not isinstance(rf, dict):
+                rf = {}
+                results["fabric"] = rf
+            rf["evpn"] = {
+                "present": True,
+                "authority": "outcome-only",
+                "internals_validated": False,
+                "notes": "EVPN declared via fabric.evpn. v1.5 validates outcomes via tests/scenarios only; EVPN internals are not validated.",
+            }
+    except Exception:
+        # Never allow informational metadata to impact gate execution.
+        pass
 
     def record_test(
         *,
@@ -3460,9 +2163,101 @@ def cmd_test(args: argparse.Namespace) -> None:
         results["events"].append(rec)
 
     def write_results() -> None:
+        # Collect-time schema stabilization (additive-only; must not change semantics)
+        try:
+            _finalize_results_schema(
+                results=results,
+                command="test",
+                topo_name=str(topo.get("name") or lab),
+                lab_name=str(lab),
+                phase="collect",
+            )
+        except Exception as e:
+            # Never allow schema labeling to break gate execution.
+            # Record as supporting evidence only (non-authoritative).
+            try:
+                auth = results.get("authority")
+                if not isinstance(auth, dict):
+                    auth = {}
+                    results["authority"] = auth
+
+                se = auth.get("supporting_evidence")
+                if not isinstance(se, list):
+                    se = []
+                    auth["supporting_evidence"] = se
+
+                se.append(
+                    {
+                        "type": "schema_finalize_error",
+                        "authority": "supporting_evidence",
+                        "error": _safe_stdio(str(e)),
+                    }
+                )
+            except Exception:
+                pass
+
+        # Deterministic schema floor (additive-only):
+        # Ensure stable headers + authority boundary + overall envelope exist,
+        # even if _finalize_results_schema() is a no-op.
+        try:
+            results.setdefault("results_schema", "results.v1")
+            results.setdefault("results_schema_version", "1.0.0")
+            results.setdefault("tool", "ai-netsim")
+            results.setdefault("command", "test")
+
+            topo_obj = results.get("topology")
+            if not isinstance(topo_obj, dict):
+                topo_obj = {}
+                results["topology"] = topo_obj
+            topo_obj.setdefault("name", str(topo.get("name") or lab))
+
+            lab_obj = results.get("lab_obj")
+            if not isinstance(lab_obj, dict):
+                lab_obj = {}
+                results["lab_obj"] = lab_obj
+            lab_obj.setdefault("name", str(lab))
+
+            auth = results.get("authority")
+            if not isinstance(auth, dict):
+                auth = {}
+                results["authority"] = auth
+            auth.setdefault("verdict_source", "tests")
+            se = auth.get("supporting_evidence")
+            if not isinstance(se, list):
+                auth["supporting_evidence"] = []
+
+            if "hard_failure" not in results or not isinstance(results.get("hard_failure"), dict):
+                results["hard_failure"] = {"occurred": False, "phase": "", "error": ""}
+
+            if "tests" not in results or not isinstance(results.get("tests"), list):
+                results["tests"] = results.get("tests") if isinstance(results.get("tests"), list) else []
+
+            if "scenarios" not in results or not isinstance(results.get("scenarios"), list):
+                results["scenarios"] = results.get("scenarios") if isinstance(results.get("scenarios"), list) else []
+
+            if "events" not in results or not isinstance(results.get("events"), list):
+                results["events"] = results.get("events") if isinstance(results.get("events"), list) else []
+
+            legacy_result = str(results.get("result") or "fail").strip().lower()
+            overall_verdict = "pass" if legacy_result == "pass" else "fail"
+            overall_exit = 0 if overall_verdict == "pass" else 1
+
+            overall = results.get("overall")
+            if not isinstance(overall, dict):
+                overall = {}
+                results["overall"] = overall
+            overall.setdefault("expected", "pass")
+            overall["observed"] = overall_verdict
+            overall["verdict"] = overall_verdict
+            overall.setdefault("phase", "collect")
+            overall.setdefault("exit_code", overall_exit)
+        except Exception:
+            # Never allow schema floor enforcement to break the gate
+            pass
+
         out = lab_dir(lab) / "results.json"
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(results, indent=2), encoding="utf-8")
+        write_json_canonical(out, results)
         print(f"Wrote: {out}")
 
         summary_path = write_test_summary_artifact(lab, results)
@@ -3713,6 +2508,105 @@ def cmd_test(args: argparse.Namespace) -> None:
         if isinstance(t, dict) and t.get("name"):
             tests_by_name[str(t["name"])] = t
 
+    def run_route_prefix_test(*, test_name: str, src: str, t: dict, record_fn=record_test) -> str:
+        """
+        v1.5: per-prefix assertion (execution-backed), minimal deterministic parsing.
+        - src: vantage node name (runs check here)
+        - prefix: CIDR string
+        - expect: pass|fail (negative semantics preserved)
+        Current v1.5 support: frr nodes only (vtysh).
+        """
+        prefix = str(t.get("prefix") or "").strip()
+
+        expected = str(t.get("expect") or "pass").strip().lower()
+        if expected not in ("pass", "fail"):
+            expected = "pass"
+
+        # Resolve node type deterministically from resolved topology
+        node_type = ""
+        for n in (topo.get("nodes") or []):
+            if isinstance(n, dict) and n.get("name") == src:
+                node_type = str(n.get("type") or "").strip().lower()
+                break
+
+        start = time.time()
+
+        if node_type != "frr":
+            dur_ms = int((time.time() - start) * 1000)
+            observed = "fail"
+            verdict = "fail" if expected == "pass" else "pass"
+            record_fn(
+                name=test_name,
+                kind="route_prefix",
+                src=src,
+                dst="",
+                expected=expected,
+                observed=observed,
+                verdict=verdict,
+                duration_ms=dur_ms,
+                error=f"route_prefix unsupported on node type '{node_type}' (supported: frr only)",
+                evidence={"reason": "unsupported_node_type"},
+                meta={"prefix": prefix, "node_type": node_type},
+            )
+            return verdict
+
+        # Deterministic route presence check (kernel FIB)
+        # Rationale: connected routes + installed routes are observable here even if FRR daemons/vtysh view differs.
+        try:
+            nw = ipaddress.ip_network(prefix, strict=False)
+            ipver = nw.version
+        except Exception:
+            # Should have been caught in resolve-time validation; keep deterministic failure here.
+            ipver = 4
+
+        ip_cmd = ["ip", f"-{ipver}", "route", "show", prefix]
+        cp = rt.exec(lab, src, ip_cmd, check=False, capture_output=True)
+
+        # rt.exec() may return a CompletedProcess-like object OR a raw string.
+        if isinstance(cp, str):
+            out = cp
+            rc = None
+        else:
+            out = ""
+            if hasattr(cp, "stdout") and cp.stdout is not None:
+                out = cp.stdout
+            elif hasattr(cp, "output") and cp.output is not None:
+                out = cp.output
+
+            # Normalize bytes -> str (defensive)
+            if isinstance(out, (bytes, bytearray)):
+                try:
+                    out = out.decode("utf-8", errors="replace")
+                except Exception:
+                    out = str(out)
+
+            rc = getattr(cp, "returncode", None)
+
+        out = str(out or "")
+        # Deterministic presence rule for `ip route show <prefix>`:
+        # - present => prints one or more lines
+        # - absent  => prints nothing
+        present = bool(out.strip())
+
+        observed = "pass" if present else "fail"
+        verdict = "pass" if observed == expected else "fail"
+
+        dur_ms = int((time.time() - start) * 1000)
+        record_fn(
+            name=test_name,
+            kind="route_prefix",
+            src=src,
+            dst="",
+            expected=expected,
+            observed=observed,
+            verdict=verdict,
+            duration_ms=dur_ms,
+            error="" if verdict == "pass" else f"route_prefix mismatch (expected {expected}, observed {observed})",
+            evidence={"cmd": " ".join(ip_cmd), "rc": rc},
+            meta={"prefix": prefix, "present": bool(present)},
+        )
+        return verdict
+
     def run_bgp_neighbor_test(*, test_name: str, src: str, dst: str, t: dict, record_fn=record_test) -> str:
         """
         v1.x: binary control-plane health invariant.
@@ -3874,12 +2768,7 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         t = tests_by_name[ref]
 
-        # Apply existing filters even for scenario-runs (minimal invasive, consistent behavior)
         kind = (t.get("kind") or t.get("type") or "").strip()
-        if filter_name and ref != filter_name:
-            return "pass"  # filtered-out: treat as non-executed (scenario still proceeds)
-        if filter_kind and kind != filter_kind:
-            return "pass"
 
         src = t.get("src")
         dst = t.get("dst")
@@ -4267,107 +3156,237 @@ def cmd_test(args: argparse.Namespace) -> None:
         return int((time.time() - start) * 1000)
 
     def wait_for_predicate(wait_for: dict) -> tuple[str, str, str, int, dict, str]:
-        """
-        Returns: (type, expected, observed, duration_ms, meta, verdict)
-
-        v1 supports:
-        - type: ping (from/to/expect/timeout)
-
-        Semantics:
-        - expect: pass => succeed when ping succeeds
-        - expect: fail => succeed when ping fails
-        """
-        wtype = wait_for.get("type")
-        if wtype != "ping":
-            raise ValueError(f"wait_for: unsupported type '{wtype}' (v1 supports: ping)")
-
         src = wait_for.get("from")
-        to = wait_for.get("to")
+        wtype = (wait_for.get("type") or "ping").strip().lower()
         expected = (wait_for.get("expect") or "pass").lower()
         timeout_s = int(wait_for.get("timeout") or 30)
         interval_s = float(wait_for.get("interval_s") or 1.0)
 
-        # v1.x ping tuning (deterministic, explicit)
-        count = int(wait_for.get("count") or 1)
+        if expected not in ("pass", "fail"):
+            raise ValueError(f"wait_for {wtype}: expect must be pass|fail")
+        if not isinstance(src, str) or not src.strip():
+            raise ValueError(f"wait_for {wtype}: from must be a non-empty node name")
+
+        # Shared bounded semantics:
+        # - Define "attempt success" as the underlying check returning PASS.
+        # - expect=pass => pass if any attempt succeeds within timeout.
+        # - expect=fail => pass if NO attempt succeeds within timeout.
+        #
+        # IMPORTANT:
+        # retry_until() returns ok=True when the attempt reports "success" (underlying PASS),
+        # and ok=False if no underlying PASS occurred within timeout.
+
+        # Optional per-attempt timeout (recorded; enforced only where explicitly supported)
         per_attempt_timeout_s = int(wait_for.get("per_attempt_timeout_s") or 1)
 
         # v1.x optional ping source selector (Tier-1 validation only)
         src_ip = wait_for.get("src_ip")
         src_if = wait_for.get("src_if")
-
         if src_ip is not None and src_if is not None:
             raise ValueError("wait_for ping: specify only one of src_ip or src_if")
 
-        if src_ip is not None:
-            if not isinstance(src_ip, str) or not src_ip.strip():
-                raise ValueError("wait_for ping: src_ip must be a non-empty string")
-            validate_ip_literal(src_ip.strip(), "wait_for ping src_ip")
+        first_success_ms = None
+        first_success_observed = None  # "pass"|"fail" (underlying)
+        last_cp = None
+        last_obs = "fail"
+        last_evidence: dict = {}
 
-        if src_if is not None:
-            if not isinstance(src_if, str) or not src_if.strip():
-                raise ValueError("wait_for ping: src_if must be a non-empty string")
-            if any(ch.isspace() for ch in src_if):
-                raise ValueError("wait_for ping: src_if must not contain whitespace")
+        start = time.time()
 
-        if count < 1:
-            raise ValueError("wait_for ping: count must be >= 1")
-        if per_attempt_timeout_s < 1:
-            raise ValueError("wait_for ping: per_attempt_timeout_s must be >= 1")
-
-
-        if expected not in ("pass", "fail"):
-            raise ValueError("wait_for ping: expect must be pass|fail")
-        if not src or not to:
-            raise ValueError("wait_for ping: requires from + to")
-
-        # If "to" looks like a node name, resolve to its first IPv4
-        # v1-safe: "to" may be node name OR IP literal (fail-fast otherwise)
-        if not isinstance(to, str) or not to.strip():
-            raise ValueError("wait_for ping: to must be a non-empty string (node name or IP literal)")
-        dst_ip = resolve_dst_to_ip(topo, to.strip())
-
-        should_succeed = (expected == "pass")
+        def _mark_success(obs: str) -> None:
+            nonlocal first_success_ms, first_success_observed
+            if first_success_ms is None:
+                first_success_ms = int((time.time() - start) * 1000)
+                first_success_observed = obs
 
         def attempt():
-            ping_cmd = ["ping", "-c", str(count), "-W", str(per_attempt_timeout_s)]
-            if src_ip:
-                ping_cmd += ["-I", str(src_ip).strip()]
-            elif src_if:
-                ping_cmd += ["-I", str(src_if).strip()]
-            ping_cmd += [str(dst_ip)]
+            nonlocal last_cp, last_obs, last_evidence
 
-            cp = rt.exec(
-                lab,
-                str(src),
-                ping_cmd,
-                check=False,
-            )
-            ping_ok = (cp.returncode == 0)
+            # -------------------------
+            # type: ping
+            # -------------------------
+            if wtype == "ping":
+                to = wait_for.get("to")
+                if not to:
+                    raise ValueError("wait_for ping: requires to")
 
-            # Condition is met when ping_ok matches what we expect
-            condition_met = (ping_ok == should_succeed)
-            return condition_met, (cp, ping_ok)
+                # v1.x ping tuning (deterministic, explicit)
+                count = int(wait_for.get("count") or 1)
+
+                if src_ip is not None:
+                    if not isinstance(src_ip, str) or not str(src_ip).strip():
+                        raise ValueError("wait_for ping: src_ip must be a non-empty string")
+                    validate_ip_literal(str(src_ip).strip(), "wait_for ping src_ip")
+
+                if src_if is not None:
+                    if not isinstance(src_if, str) or not str(src_if).strip():
+                        raise ValueError("wait_for ping: src_if must be a non-empty string")
+                    if any(ch.isspace() for ch in str(src_if)):
+                        raise ValueError("wait_for ping: src_if must not contain whitespace")
+
+                if count < 1:
+                    raise ValueError("wait_for ping: count must be >= 1")
+                if per_attempt_timeout_s < 1:
+                    raise ValueError("wait_for ping: per_attempt_timeout_s must be >= 1")
+
+                if not isinstance(to, str) or not to.strip():
+                    raise ValueError("wait_for ping: to must be a non-empty string (node name or IP literal)")
+                dst_ip = resolve_dst_to_ip(topo, to.strip())
+
+                ping_cmd = ["ping", "-c", str(count), "-W", str(per_attempt_timeout_s)]
+                if src_ip:
+                    ping_cmd += ["-I", str(src_ip).strip()]
+                elif src_if:
+                    ping_cmd += ["-I", str(src_if).strip()]
+                ping_cmd += [str(dst_ip)]
+
+                cp = rt.exec(lab, str(src).strip(), ping_cmd, check=False)
+                last_cp = cp
+                ping_ok = (cp.returncode == 0)
+
+                last_obs = "pass" if ping_ok else "fail"
+                last_evidence = {
+                    "cmd": "ping",
+                    "dst_ip": str(dst_ip),
+                    "last_rc": getattr(cp, "returncode", None),
+                }
+
+                attempt_success = (last_obs == "pass")
+                return attempt_success, (cp, last_obs)
+
+            # -------------------------
+            # type: tcp
+            # -------------------------
+            if wtype == "tcp":
+                to = wait_for.get("to")
+                port = wait_for.get("port")
+
+                if not isinstance(to, str) or not to.strip():
+                    raise ValueError("wait_for tcp: to must be a non-empty string (node name or IP literal)")
+
+                try:
+                    port_i = int(port)
+                except Exception:
+                    raise ValueError("wait_for tcp: port must be an int")
+                if port_i < 1 or port_i > 65535:
+                    raise ValueError("wait_for tcp: port must be in range 1..65535")
+
+                dst_ip = resolve_dst_to_ip(topo, to.strip())
+                ensure_nc(rt, lab, str(src).strip())
+
+                # Deterministic connect check; attempt timeout is explicit via -w
+                cp = rt.exec(
+                    lab,
+                    str(src).strip(),
+                    ["sh", "-lc", f"nc -z -w {per_attempt_timeout_s} {dst_ip} {port_i}"],
+                    check=False,
+                )
+                last_cp = cp
+                tcp_ok = (cp.returncode == 0)
+
+                last_obs = "pass" if tcp_ok else "fail"
+                last_evidence = {
+                    "cmd": "nc -z",
+                    "dst_ip": str(dst_ip),
+                    "port": int(port_i),
+                    "last_rc": getattr(cp, "returncode", None),
+                }
+
+                attempt_success = (last_obs == "pass")
+                return attempt_success, (cp, last_obs)
+
+            # -------------------------
+            # type: route_prefix
+            # -------------------------
+            if wtype == "route_prefix":
+                # Vantage node is wait_for.src (normalized from on->src in resolve)
+                vantage = wait_for.get("src") or wait_for.get("on")
+                if not isinstance(vantage, str) or not vantage.strip():
+                    raise ValueError("wait_for route_prefix: requires src/on as a node name")
+
+                prefix = wait_for.get("prefix")
+                if not isinstance(prefix, str) or not prefix.strip():
+                    raise ValueError("wait_for route_prefix: requires prefix as CIDR")
+
+                # Deterministic: ip route lookup should be fast; per_attempt_timeout_s is recorded.
+                cmd = ["sh", "-lc", f"ip -4 route show {prefix.strip()} 2>/dev/null || true"]
+                cp = rt.exec(lab, str(vantage).strip(), cmd, check=False)
+                last_cp = cp
+
+                out = getattr(cp, "stdout", "") or ""
+                if isinstance(out, (bytes, bytearray)):
+                    try:
+                        out = out.decode("utf-8", errors="replace")
+                    except Exception:
+                        out = str(out)
+
+                present = (prefix.strip() in str(out))
+
+                # Underlying success for route_prefix is: present == True (uniform success definition)
+                last_obs = "pass" if present else "fail"
+                last_evidence = {
+                    "cmd": f"ip -4 route show {prefix.strip()}",
+                    "prefix": prefix.strip(),
+                    "present": bool(present),
+                    "last_rc": getattr(cp, "returncode", None),
+                }
+
+                attempt_success = (last_obs == "pass")
+                return attempt_success, (cp, last_obs)
+
+            raise ValueError(f"wait_for: unsupported type {wtype!r}")
 
         ok, last_val, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
-        cp, ping_ok = last_val  # type: ignore[misc]
+        last_cp, last_obs = last_val  # type: ignore[misc]
 
-        observed = "pass" if ping_ok else "fail"
-        verdict = "pass" if ok else "fail"
+        # First success timing (for bounds)
+        if ok:
+            _mark_success(last_obs)
+
+        succeeded = bool(ok)
+
+        # Observed is always the underlying check result from the last attempt.
+        observed = str(last_obs)
+        verdict = "pass" if succeeded else "fail"
+
+        # Apply expect inversion semantics at verdict level:
+        # - expect=pass => want succeeded==True
+        # - expect=fail => want succeeded==False
+        want = (expected == "pass")
+        final_pass = (succeeded == want)
+        verdict = "pass" if final_pass else "fail"
 
         meta = {
-            "from": str(src),
-            "to": str(to),
-            "dst_ip": str(dst_ip),
-            "src_ip": (str(src_ip).strip() if src_ip else ""),
-            "src_if": (str(src_if).strip() if src_if else ""),
-            "attempts": attempts,
-            "timeout_s": timeout_s,
-            "interval_s": interval_s,
-            "count": count,
-            "per_attempt_timeout_s": per_attempt_timeout_s,
-            "last_rc": getattr(cp, "returncode", None),
+            "type": wtype,
+            "from": str(src).strip(),
+            "attempts": int(attempts),
+            "timeout_s": int(timeout_s),
+            "interval_s": float(interval_s),
+            "per_attempt_timeout_s": int(per_attempt_timeout_s),
+            "succeeded": bool(succeeded),
+            "time_to_success_ms": (int(first_success_ms) if (expected == "pass") else None),
+            "time_to_first_success_ms": (int(first_success_ms) if (expected == "fail" and succeeded) else None),
+            "last_rc": getattr(last_cp, "returncode", None),
         }
-        return "ping", expected, observed, dur_ms, meta, verdict
+
+        # Keep type-specific info inside meta
+        if wtype in ("ping", "tcp"):
+            meta["to"] = str(wait_for.get("to") or "")
+            meta["src_ip"] = (str(src_ip).strip() if src_ip else "")
+            meta["src_if"] = (str(src_if).strip() if src_if else "")
+            if wtype == "ping":
+                meta["count"] = int(wait_for.get("count") or 1)
+            if wtype == "tcp":
+                meta["port"] = int(wait_for.get("port") or 0)
+
+        if wtype == "route_prefix":
+            meta["src"] = str(wait_for.get("src") or wait_for.get("on") or "")
+            meta["prefix"] = str(wait_for.get("prefix") or "")
+
+        # Evidence: bounded and last-attempt only
+        meta["evidence"] = dict(last_evidence)
+
+        return wtype, expected, observed, int(dur_ms), meta, verdict
 
     def run_scenario(s: dict) -> str:
         sid = s.get("id") or ""
@@ -4384,6 +3403,34 @@ def cmd_test(args: argparse.Namespace) -> None:
         }
 
         def scen_step(rec: dict) -> None:
+            # wait_for step shape stabilization (representation-only, v1.5):
+            # Ensure wait_for step records have a stable key-set across all paths
+            # (success/fail/not-a-dict/exception) using present-with-null.
+            if isinstance(rec, dict) and rec.get("type") == "wait_for":
+                # Canonical schema = union of keys currently emitted across paths.
+                # (Do not add new meaning-bearing keys.)
+                canonical_keys = (
+                    "type",
+                    "wait_type",
+                    "expected",
+                    "observed",
+                    "verdict",
+                    "duration_ms",
+                    "attempts",
+                    "timeout_s",
+                    "interval_s",
+                    "succeeded",
+                    "time_to_success_ms",
+                    "time_to_first_success_ms",
+                    "meta",
+                    "error",
+                    "wait_for",
+                    "step",
+                )
+                for k in canonical_keys:
+                    if k not in rec:
+                        rec[k] = None
+
             scen_rec["steps"].append(rec)
 
         def _sv(msg: str) -> None:
@@ -4613,6 +3660,13 @@ def cmd_test(args: argparse.Namespace) -> None:
                         "observed": observed,
                         "verdict": verdict,
                         "duration_ms": dur_ms,
+                        # bounded semantics (additive, step-level)
+                        "attempts": int((meta or {}).get("attempts") or 0),
+                        "timeout_s": int((meta or {}).get("timeout_s") or 0),
+                        "interval_s": float((meta or {}).get("interval_s") or 0.0),
+                        "succeeded": bool((meta or {}).get("succeeded")),
+                        "time_to_success_ms": (meta or {}).get("time_to_success_ms"),
+                        "time_to_first_success_ms": (meta or {}).get("time_to_first_success_ms"),
                         "meta": meta,
                         "step": step_idx,
                     })
@@ -4705,6 +3759,307 @@ def cmd_test(args: argparse.Namespace) -> None:
                         break
 
                 continue
+
+            # -------------------------
+            # PCAP (supporting evidence only)
+            # -------------------------
+            if "pcap_start" in step or "pcap_stop" in step:
+                # NOTE: cmd_test already imports json/time; do not re-import here because it shadows
+                # the outer 'time' and breaks earlier time.time() usage (UnboundLocalError).
+                from netsim_artifacts import pcap_session_paths, write_file
+
+                # Non-gating invariant: any runtime/pcap failure becomes evidence only.
+                # Scenario must continue.
+                try:
+                    results.setdefault("authority", {}).setdefault("supporting_evidence", [])
+                except Exception:
+                    # Never allow evidence indexing to break execution
+                    pass
+
+                # One active capture per scenario (v1.5 rule)
+                if not hasattr(run_scenario, "_pcap_state"):
+                    run_scenario._pcap_state = {}  # type: ignore[attr-defined]
+
+                st = run_scenario._pcap_state  # type: ignore[attr-defined]
+                key = str(scenario_id)
+
+                if "pcap_start" in step:
+                    cfg = step.get("pcap_start") or {}
+                    target = cfg.get("target") or {}
+
+                    # Validation should have enforced shapes; at runtime, treat as non-gating
+                    node = str((target.get("node") or "")).strip()
+                    iface = str((target.get("iface") or "")).strip()
+
+                    label = cfg.get("label")
+                    max_seconds = cfg.get("max_seconds")
+                    max_kb = cfg.get("max_kb")
+                    snaplen = cfg.get("snaplen")
+                    filt = cfg.get("filter")
+
+                    # If already active: evidence-only failure, do not start a second
+                    if st.get(key, {}).get("active"):
+                        try:
+                            results.setdefault("authority", {}).setdefault("supporting_evidence", []).append(
+                                {
+                                    "type": "pcap",
+                                    "authority": "supporting_evidence",
+                                    "scenario_id": str(scenario_id),
+                                    "step": int(step_index),
+                                    "tool_status": "failed",
+                                    "error": "pcap_start while capture active (one per scenario allowed)",
+                                }
+                            )
+                        except Exception:
+                            pass
+                        continue
+
+                    # Determine deterministic artifact paths (host side)
+                    pcap_path, meta_path = pcap_session_paths(
+                        lab_name=str(lab),
+                        scenario_id=str(scenario_id),
+                        step_seq=int(step_idx),
+                        label=str(label) if label is not None else None,
+                        node=node,
+                        iface=iface,
+                    )
+                    pcap_path.parent.mkdir(parents=True, exist_ok=True)
+
+                    # Container temp path (deterministic per step)
+                    tmp_pcap = f"/tmp/netsim_pcap_{int(step_idx):03d}.pcap"
+
+                    # Build tcpdump command (no stdout packet printing)
+                    # NOTE: do not store filter text in filenames/meta by default.
+                    cmd = ["sh", "-lc"]
+                    td = ["tcpdump", "-i", iface, "-U", "-w", tmp_pcap]
+
+                    if snaplen is not None:
+                        td += ["-s", str(int(snaplen))]
+
+                    # Size cap: use -C (MB) + single file (-W 1) with stable prefix;
+                    # tcpdump appends '0' when -C/-W used.
+                    # We keep it simple here: if max_kb set, convert to MB floor(>=1).
+                    rotated = False
+                    if max_kb is not None:
+                        try:
+                            mb = max(1, int(int(max_kb) / 1024))
+                            # use prefix without extension; tcpdump will create <prefix>0
+                            tmp_prefix = f"/tmp/netsim_pcap_{int(step_idx):03d}"
+                            td = ["tcpdump", "-i", iface, "-U", "-C", str(mb), "-W", "1", "-w", tmp_prefix]
+                            rotated = True
+                        except Exception:
+                            pass
+
+                    # Optional filter (BPF): append as final tokens
+                    if filt:
+                        td += [str(filt)]
+
+                    # Duration cap: run under timeout if provided
+                    if max_seconds is not None:
+                        td = ["timeout", str(int(max_seconds))] + td
+
+                    # Background + pid capture
+                    sh = " ".join([_shell_quote(x) for x in td]) + " >/dev/null 2>&1 & echo $!"
+                    cp = rt.exec(lab, node, cmd + [sh], check=False, capture_output=True)
+
+                    pid = ""
+                    if cp.stdout:
+                        out = cp.stdout.decode("utf-8", errors="replace") if isinstance(cp.stdout, (bytes, bytearray)) else str(cp.stdout)
+                        pid = (out or "").strip().splitlines()[-1].strip()
+
+                    started_at = time.time()
+
+                    # Record state (evidence-only)
+                    # NOTE: when rotated (-C/-W) is used, tcpdump writes using the prefix passed to -w.
+                    # Different tcpdump builds may emit either <prefix>0 or <prefix>; we probe deterministically at stop.
+                    tmp_candidates: list[str] = []
+                    if rotated:
+                        try:
+                            tmp_candidates = [f"{tmp_prefix}0", str(tmp_prefix)]
+                        except Exception:
+                            tmp_candidates = []
+                    else:
+                        tmp_candidates = [str(tmp_pcap)]
+
+                    st[key] = {
+                        "active": True,
+                        "node": node,
+                        "iface": iface,
+                        "pid": pid,
+                        "started_at": started_at,
+                        "tmp_pcap": str(tmp_pcap),
+                        "tmp_prefix": str(tmp_prefix) if rotated else "",
+                        "rotated": bool(rotated),
+                        "tmp_candidates": tmp_candidates,
+                        "pcap_path": str(pcap_path),
+                        "meta_path": str(meta_path),
+                        "step": int(step_idx),
+                        "max_seconds": int(max_seconds) if max_seconds is not None else None,
+                        "max_kb": int(max_kb) if max_kb is not None else None,
+                        "snaplen": int(snaplen) if snaplen is not None else None,
+                    }
+
+                    # Non-authoritative index entry
+                    try:
+                        results.setdefault("authority", {}).setdefault("supporting_evidence", []).append(
+                            {
+                                "type": "pcap",
+                                "authority": "supporting_evidence",
+                                "scenario_id": str(scenario_id),
+                                "step": int(step_index),
+                                "tool_status": "ok" if cp.returncode == 0 else "failed",
+                                "error": "" if cp.returncode == 0 else "tcpdump start failed",
+                            }
+                        )
+                    except Exception:
+                        pass
+
+                    continue
+
+                # pcap_stop
+                if "pcap_stop" in step:
+                    cur = st.get(key) or {}
+                    if not cur.get("active"):
+                        # Stop-without-start: evidence-only, ignore
+                        continue
+
+                    node = str(cur.get("node") or "")
+                    pid = str(cur.get("pid") or "").strip()
+
+                    tmp_pcap = str(cur.get("tmp_pcap") or "")
+                    pcap_path = Path(str(cur.get("pcap_path") or ""))
+                    meta_path = Path(str(cur.get("meta_path") or ""))
+
+                    stopped_at = time.time()
+
+                    tool_status = "ok"
+                    err = ""
+
+                    # Deterministically probe candidate tmp filenames (rotated tcpdump may emit prefix or prefix0)
+                    candidates = cur.get("tmp_candidates")
+                    if not isinstance(candidates, list) or not candidates:
+                        candidates = [tmp_pcap]
+                    candidates = [str(x) for x in candidates if isinstance(x, str) and x.strip()]
+
+                    chosen_tmp = ""
+                    try:
+                        for cand in candidates:
+                            cp_exists = rt.exec(
+                                lab,
+                                node,
+                                ["sh", "-lc", f"test -f {cand} && echo OK || true"],
+                                check=False,
+                                capture_output=True,
+                            )
+                            out = ""
+                            if cp_exists.stdout:
+                                out = (
+                                    cp_exists.stdout.decode("utf-8", errors="replace")
+                                    if isinstance(cp_exists.stdout, (bytes, bytearray))
+                                    else str(cp_exists.stdout)
+                                )
+                            if "OK" in (out or ""):
+                                chosen_tmp = cand
+                                break
+                    except Exception as e:
+                        tool_status = "failed"
+                        err = _safe_stdio(str(e))
+
+                    try:
+                        if pid:
+                            rt.exec(
+                                lab,
+                                node,
+                                ["sh", "-lc", f"kill {pid} >/dev/null 2>&1 || true"],
+                                check=False,
+                                capture_output=True,
+                            )
+                        else:
+                            # Best effort: kill by filename pattern (still scoped to step id)
+                            rt.exec(
+                                lab,
+                                node,
+                                ["sh", "-lc", f"pkill -f 'tcpdump.*netsim_pcap_{int(cur.get('step_seq_start')):03d}' >/dev/null 2>&1 || true"],
+                                check=False,
+                                capture_output=True,
+                            )
+                    except Exception as e:
+                        tool_status = "failed"
+                        if not err:
+                            err = _safe_stdio(str(e))
+
+                    # Copy out if a tmp file was found (evidence-only, non-gating)
+                    bytes_written = 0
+                    try:
+                        if not chosen_tmp:
+                            tool_status = "failed" if tool_status == "ok" else tool_status
+                            if not err:
+                                err = "pcap tmp file not found in node"
+                        else:
+                            rt.copy_from_node(lab, node, chosen_tmp, str(pcap_path))
+                            try:
+                                bytes_written = int(pcap_path.stat().st_size)
+                            except Exception:
+                                bytes_written = 0
+                    except Exception as e:
+                        tool_status = "failed" if tool_status == "ok" else tool_status
+                        if not err:
+                            err = _safe_stdio(str(e))
+
+                    # attempt to remove tmp pcaps (never fail)
+                    try:
+                        for cand in candidates:
+                            rt.exec(lab, node, ["sh", "-lc", f"rm -f {cand} 2>/dev/null || true"], check=False, capture_output=False)
+                    except Exception:
+                        pass
+
+                    # Write meta json (host side)
+                    meta = {
+                        "authority": "supporting_evidence",
+                        "scenario_id": str(scenario_id),
+                        "step_seq_start": int(cur.get("step_seq_start") or 0),
+                        "step_seq_stop": int(step_idx),
+                        "target": {"node": str(cur.get("node") or ""), "iface": str(cur.get("iface") or "")},
+                        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(cur.get("started_at") or stopped_at))),
+                        "stopped_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stopped_at)),
+                        "duration_s": float(stopped_at - float(cur.get("started_at") or stopped_at)),
+                        "tool": "tcpdump",
+                        "tool_status": tool_status,
+                        "bytes_written": int(bytes_written),
+                        "pcap_file": str(pcap_path.relative_to(lab_dir(str(lab)))),
+                    }
+                    if cur.get("snaplen") is not None:
+                        meta["snaplen"] = int(cur["snaplen"])
+                    if cur.get("max_seconds") is not None:
+                        meta["max_seconds"] = int(cur["max_seconds"])
+                    if cur.get("max_kb") is not None:
+                        meta["max_kb"] = int(cur["max_kb"])
+                    if err:
+                        meta["error"] = str(err)
+
+                    write_file(meta_path, json.dumps(meta, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
+
+                    # Top-level evidence index entry (supporting evidence only; non-gating)
+                    try:
+                        results.setdefault("authority", {}).setdefault("supporting_evidence", []).append(
+                            {
+                                "type": "pcap",
+                                "authority": "supporting_evidence",
+                                "scenario_id": str(scenario_id),
+                                "step": int(step_idx),
+                                "tool_status": str(tool_status),
+                                "error": str(err or ""),
+                                "pcap_file": str(pcap_path.relative_to(lab_dir(str(lab)))),
+                            }
+                        )
+                    except Exception:
+                        pass
+
+                    # Clear active capture
+                    st[key] = {"active": False}
+
+                    continue
+
             # -------------------------
             # unknown step
             # -------------------------
@@ -4756,12 +4111,56 @@ def cmd_test(args: argparse.Namespace) -> None:
             hint_lines = [
                 "Lab exists but one or more containers are not running.",
                 "Try:",
+                "  netsim destroy <lab>",
                 "  netsim up <topology.yaml> --reconfigure",
-                "or (advanced):",
-                f"  sudo containerlab deploy -t {tpath}",
+                "or:",
+                "  netsim cleanup --all --yes",
             ]
             die(f"{name} is not running\n\n" + "\n".join(hint_lines))
 
+    # =============================================================================
+    # 1.5) State capture plan (supporting evidence only) - fail-fast config validation
+    # =============================================================================
+    state_mode = str(getattr(args, "state_capture", "none") or "none").strip().lower()
+    state_profiles = getattr(args, "state_profile", None)
+    if state_profiles is None:
+        state_profiles = []
+    if not isinstance(state_profiles, list):
+        state_profiles = [str(state_profiles)]
+
+    # Expand deterministic plan (blocking only for invalid config, never runtime errors)
+    state_plan = _state_capture_expand_plan_or_die(topo=topo, mode=state_mode, profiles=[str(x) for x in state_profiles])
+
+    # Always write plan.json when enabled (audit primitive)
+    state_plan_path = ""
+    if bool(state_plan.get("enabled")):
+        state_plan_path = str(_state_capture_write_plan(lab, state_plan))
+
+    # Additive-only results labeling (never affects verdict)
+    results["state_capture"] = {
+        "enabled": bool(state_plan.get("enabled")),
+        "mode": str(state_plan.get("mode") or "none"),
+        "profiles": list(state_plan.get("profiles") or []),
+        "plan_path": state_plan_path,
+        "pre": {"ran": 0, "ok": 0, "error": 0, "timeout": 0},
+        "post": {"ran": 0, "ok": 0, "error": 0, "timeout": 0},
+    }
+
+    # Link into authority.supporting_evidence (additive pointer only)
+    if bool(state_plan.get("enabled")):
+        try:
+            results.setdefault("authority", {}).setdefault("supporting_evidence", []).append(
+                {
+                    "type": "state_capture",
+                    "authority": "supporting_evidence",
+                    "path": state_plan_path,
+                    "mode": str(state_plan.get("mode") or "none"),
+                    "profiles": list(state_plan.get("profiles") or []),
+                }
+            )
+        except Exception:
+            # Never allow evidence indexing to break execution
+            pass
 
     # =============================================================================
     # 2) Node readiness gate (no control-plane assumptions yet)
@@ -4775,6 +4174,156 @@ def cmd_test(args: argparse.Namespace) -> None:
         results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
         write_results()
         raise
+
+    # =============================================================================
+    # 2.5) Candidate Config Apply (v1.5) - gate-only, atomic, evidenced
+    # =============================================================================
+    # IMPORTANT: this must run AFTER readiness and BEFORE any tests/scenarios.
+    # Reuse normalized cand_dir + cand_plan from earlier fail-fast parse if present.
+    # Fallback to parsing here only if older code path didn't create them.
+    if "cand_dir" not in locals():
+        cand_dir = None  # type: ignore[assignment]
+    if "cand_plan" not in locals():
+        cand_plan = None  # type: ignore[assignment]
+
+    cand_dir_raw = getattr(args, "candidate_config", None)
+
+    if cand_dir is None and cand_dir_raw:
+        cand_dir = Path(str(cand_dir_raw)).expanduser()
+        if not cand_dir.is_absolute():
+            cand_dir = (Path.cwd() / cand_dir)
+        cand_dir = cand_dir.resolve()
+        cand_plan = _candidate_parse_dir_or_die(topo, cand_dir)
+
+    # Only run apply when we actually have candidate inputs enabled
+    if cand_dir is not None and cand_plan is not None:
+        results["candidate_apply"] = {
+            "enabled": True,
+            "input_dir": str(cand_dir),
+            "plan": [r["node"] for r in cand_plan],
+            "verdict": "unknown",
+            "failed_nodes": [],
+            "failed": [],  # additive UX: [{"node": "...", "reason": "..."}]
+            "duration_ms": None,
+        }
+
+        apply_started = time.time()
+        failed: list[str] = []
+
+        for item in cand_plan:
+            node = item["node"]
+            ntype = item["node_type"]
+            src = Path(item["source_path"])
+
+            # Always emit a per-node artifact for every attempted node.
+            rec: dict[str, Any]
+            try:
+                if ntype == "frr":
+                    rec = _candidate_apply_frr_generated_only(rt, lab, topo, node, src)
+                elif ntype == "nft-fw":
+                    rec = _candidate_apply_nft(rt, lab, node, src)
+                else:
+                    rec = {
+                        "node": node,
+                        "node_type": str(ntype),
+                        "method": "unsupported",
+                        "input": {
+                            "source_path": str(src),
+                            "sha256": _sha256_file(src) if src.exists() else "",
+                        },
+                        "attempt": {
+                            "started_at_epoch_ms": int(time.time() * 1000),
+                            "duration_ms": 0,
+                        },
+                        "result": {"applied_ok": False, "exit_code": 3},
+                        "stdout": "",
+                        "stderr": _safe_stdio(f"candidate apply: unsupported node_type '{ntype}'"),
+                        "post_checks": [],
+                    }
+            except SystemExit as e:
+                rec = {
+                    "node": node,
+                    "node_type": str(ntype),
+                    "method": "exception",
+                    "input": {
+                        "source_path": str(src),
+                        "sha256": _sha256_file(src) if src.exists() else "",
+                    },
+                    "attempt": {
+                        "started_at_epoch_ms": int(time.time() * 1000),
+                        "duration_ms": 0,
+                    },
+                    "result": {"applied_ok": False, "exit_code": 1},
+                    "stdout": "",
+                    "stderr": _safe_stdio(str(e)),
+                    "post_checks": [],
+                }
+
+            _write_candidate_apply_artifact(lab, node, rec)
+
+            if not bool(((rec.get("result") or {}).get("applied_ok"))):
+                failed.append(node)
+
+                # UX: capture a short “reason” for summary (prefer top-level stderr)
+                reason = (rec.get("stderr") or "").strip()
+                if not reason:
+                    # fall back to vtysh stderr if present
+                    v = rec.get("vtysh_apply") or {}
+                    reason = (v.get("stderr") or "").strip()
+
+                results["candidate_apply"]["failed"].append({"node": node, "reason": _safe_stdio(reason)})
+                continue
+
+        apply_finished = time.time()
+        results["candidate_apply"]["duration_ms"] = int((apply_finished - apply_started) * 1000)
+
+        results["candidate_apply"]["failed_nodes"] = list(failed)
+        results["candidate_apply"]["verdict"] = ("fail" if failed else "pass")
+
+        # HARD GATE: candidate apply failures are authoritative and MUST fail the run.
+        if failed:
+            # One deterministic failure record is enough to drive the overall verdict/exit code.
+            record_test(
+                name="candidate_apply:verdict",
+                kind="candidate_apply",
+                src="",
+                dst=",".join(sorted(failed)),
+                expected="pass",
+                observed="fail",
+                verdict="fail",
+                duration_ms=int(results["candidate_apply"].get("duration_ms") or 0),
+                error=f"candidate apply failed for node(s): {', '.join(sorted(failed))}",
+                meta={
+                    "failed_nodes": sorted(failed),
+                    "input_dir": str(results["candidate_apply"].get("input_dir") or ""),
+                },
+                evidence={
+                    "artifacts_dir": str(_candidate_artifacts_dir(lab)),
+                },
+            )
+
+            # Enforce HARD GATE semantics: fail-fast after candidate apply concludes.
+            # IMPORTANT: must stop BEFORE any control-plane prechecks, state capture, tests, or scenarios.
+            results["result"] = "fail"
+
+            finished_at = time.time()
+            results["summary"]["finished_at"] = finished_at
+            results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
+
+            # Summary counts must be consistent with the authoritative tests recorded so far
+            total = len(results["tests"])
+            failed_count = sum(1 for r in results["tests"] if r.get("verdict") == "fail")
+            passed_count = total - failed_count
+
+            results["summary"]["total"] = total
+            results["summary"]["passed"] = passed_count
+            results["summary"]["failed"] = failed_count
+
+            # Optional/defensive: make explicit that steady-state tests did not run
+            results["summary"]["tests_executed"] = 0
+
+            write_results()
+            raise SystemExit(1)
 
     # =============================================================================
     # 3) Optional control-plane checks (FRR/BGP)
@@ -4813,6 +4362,25 @@ def cmd_test(args: argparse.Namespace) -> None:
             results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
             write_results()
             raise
+
+    # =============================================================================
+    # 3.5) Pre-state capture (supporting evidence only; never gates)
+    # =============================================================================
+    if bool(results.get("state_capture", {}).get("enabled")) and str(results["state_capture"].get("mode")) in ("pre", "both"):
+        try:
+            summ = _state_capture_run_plan(rt=rt, lab=lab, plan=state_plan, when="pre", timeout_s=5)
+            results["state_capture"]["pre"] = {k: int(summ.get(k, 0)) for k in ["ran", "ok", "error", "timeout", "skipped"]}
+        except Exception as e:
+            # Non-authoritative: record but do not fail
+            results["state_capture"]["pre"] = {"ran": 0, "ok": 0, "error": 1, "timeout": 0, "skipped": 0}
+            results.setdefault("authority", {}).setdefault("supporting_evidence", []).append(
+                {
+                    "type": "state_capture_error",
+                    "authority": "supporting_evidence",
+                    "when": "pre",
+                    "error": _safe_stdio(str(e)),
+                }
+            )
 
     # =============================================================================
     # 4) Scenarios (opt-in) OR Declared tests (default)
@@ -4933,7 +4501,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 src = t.get("src")
                 dst = t.get("dst")
 
-                if kind not in ("ping", "tcp", "bgp_neighbor"):
+                if kind not in ("ping", "tcp", "bgp_neighbor", "route_prefix"):
                     record_test(
                         name=test_name,
                         kind=str(kind),
@@ -4955,6 +4523,23 @@ def cmd_test(args: argparse.Namespace) -> None:
 
                 src = t.get("src")
                 dst = t.get("dst")
+
+                if kind == "route_prefix":
+                    prefix = t.get("prefix")
+                    if not isinstance(src, str) or not src.strip() or not isinstance(prefix, str) or not prefix.strip():
+                        record_test(
+                            name=test_name,
+                            kind="route_prefix",
+                            src=(src or ""),
+                            dst="",
+                            expected=str(t.get("expect") or "pass"),
+                            observed="fail",
+                            verdict="fail",
+                            duration_ms=0,
+                            error="missing src(on)/prefix",
+                        )
+                        fail_or_continue(f"tests[{i}]: route_prefix requires src(on) + prefix")
+                        continue
 
                 if kind == "ping":
                     # v1: ping supports dst (node) OR to/to_ip (ip literal)
@@ -5005,8 +4590,8 @@ def cmd_test(args: argparse.Namespace) -> None:
                         fail_or_continue(f"tests[{i}]: bgp_neighbor dst must be an IPv4 literal")
                         continue
 
-                else:
-                    # tcp (and future kinds) keep legacy requirement
+                elif kind == "tcp":
+                    # tcp keeps legacy requirement
                     if not src or not dst:
                         record_test(
                             name=test_name,
@@ -5046,6 +4631,14 @@ def cmd_test(args: argparse.Namespace) -> None:
                         )
                     continue
 
+                if kind == "route_prefix":
+                    verdict = run_route_prefix_test(test_name=test_name, src=src, t=t)
+                    if verdict != "pass":
+                        fail_or_continue(
+                            f"tests[{i}] route_prefix mismatch: on {src} prefix {t.get('prefix')} expected {t.get('expect','pass')}"
+                        )
+                    continue
+
                 if kind == "bgp_neighbor":
                     verdict = run_bgp_neighbor_test(test_name=test_name, src=src, dst=dst, t=t)
                     if verdict != "pass":
@@ -5082,6 +4675,42 @@ def cmd_test(args: argparse.Namespace) -> None:
         # Always stop any listeners we started (deterministic cleanup)
         for dst_node in listeners_started.keys():
             rt.exec(lab, dst_node, ["sh", "-lc", 'pkill -f "nc.*-p" 2>/dev/null || true'], check=False)
+
+        # ------------------------------------------------------------
+        # Post-state capture (supporting evidence only; never gates)
+        # ------------------------------------------------------------
+        try:
+            if bool(results.get("state_capture", {}).get("enabled")) and str(results["state_capture"].get("mode")) in ("post", "both"):
+                summ = _state_capture_run_plan(rt=rt, lab=lab, plan=state_plan, when="post", timeout_s=5)
+                results["state_capture"]["post"] = {
+                    k: int(summ.get(k, 0)) for k in ["ran", "ok", "error", "timeout", "skipped"]
+                }
+        except Exception as e:
+            # Non-authoritative: record but do not fail
+            results["state_capture"]["post"] = {"ran": 0, "ok": 0, "error": 1, "timeout": 0, "skipped": 0}
+
+            # Type-safe append into authority.supporting_evidence (do not assume shapes)
+            try:
+                auth = results.get("authority")
+                if not isinstance(auth, dict):
+                    auth = {}
+                    results["authority"] = auth
+
+                se = auth.get("supporting_evidence")
+                if not isinstance(se, list):
+                    se = []
+                    auth["supporting_evidence"] = se
+
+                se.append(
+                    {
+                        "type": "state_capture_error",
+                        "authority": "supporting_evidence",
+                        "when": "post",
+                        "error": _safe_stdio(str(e)),
+                    }
+                )
+            except Exception:
+                pass
 
         finished_at = time.time()
         results["summary"]["finished_at"] = finished_at
@@ -5125,7 +4754,7 @@ def cmd_test(args: argparse.Namespace) -> None:
     # 5) Success output (human-friendly)
     # =============================================================================
     if results["result"] == "fail":
-        die(f"TEST FAIL: {results['summary']['failed']} failed / {results['summary']['total']} total")
+        fail(f"{results['summary']['failed']} failed / {results['summary']['total']} total")
 
     if bgp_participants and results["summary"].get("precheck_controlplane"):
         print(f"✅ Control-plane PASS: BGP established ({len(bgp_participants)} participants)")
@@ -5150,215 +4779,299 @@ def cmd_test(args: argparse.Namespace) -> None:
 
     print("✅ TEST PASS: containers running + checks OK")
 
-def _fmt_dur_s(dur_ms: object) -> str:
+def _capture_config_run_exploration(rt: Runtime, *, lab: str) -> Path:
+    """
+    Supporting evidence only (exploration mode).
+    Writes:
+      labs/<lab>/artifacts/capture_config/manifest.json
+      labs/<lab>/artifacts/capture_config/nodes/<node>/{host,live}/*
+    Returns manifest path.
+
+    MUST NOT:
+      - gate outcomes
+      - affect exit codes
+      - mutate runtime state
+    """
+    import json
+    import time
+
+    started = time.time()
+    root = _capture_config_artifacts_root(lab)
+    nodes_root = root / "nodes"
+
+    # Fail-fast only on filesystem issues for the *root* dir (explicit requirement)
     try:
-        ms = int(dur_ms)
-        if ms < 0:
-            return ""
-        return f"{ms/1000.0:.1f}s"
+        nodes_root.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        die(f"--capture-config: failed to create artifact directory: {nodes_root} ({e})")
+
+    # Resolve nodes/types from resolved topology (best effort; required for stable ordering)
+    topo_resolved = lab_dir(lab) / "topology.resolved.yaml"
+    topo: dict[str, Any] = {}
+    try:
+        topo = load_yaml(topo_resolved) or {}
     except Exception:
-        return ""
+        topo = {}
 
-def _render_scenarios_summary(results: dict) -> str:
-    scenarios = results.get("scenarios") or []
-    if not isinstance(scenarios, list) or not scenarios:
-        return ""
+    topo_nodes = topo.get("nodes", []) if isinstance(topo.get("nodes", []), list) else []
+    node_types: dict[str, str] = {}
+    for n in topo_nodes:
+        if isinstance(n, dict) and isinstance(n.get("name"), str):
+            node_types[n["name"]] = str(n.get("type") or "")
 
-    # Deterministic ordering by scenario id (string)
-    scenarios_all = [s for s in scenarios if isinstance(s, dict)]
-    scenarios_sorted = sorted(
-        scenarios_all,
-        key=lambda s: str(s.get("id") or "").strip(),
+    # Default selection: all nodes in lab (deterministic lex order by name)
+    selected = sorted(node_types.keys())
+
+    manifest: dict[str, Any] = {
+        "schema_version": _CAPTURE_CONFIG_SCHEMA_VERSION,
+        "authority": "supporting_evidence",
+        "feature": "capture_config",
+        "mode": "exploration",
+        "gating": False,
+        "lab": lab,
+        "started_at": None,
+        "finished_at": None,
+        "duration_ms": None,
+        "nodes": [],
+    }
+
+    # If resolved topology missing, still emit a manifest with no nodes.
+    # This remains supporting evidence only.
+    for node in selected:
+        ntype = node_types.get(node, "")
+        node_dir = nodes_root / node
+        host_dir = node_dir / "host"
+        live_dir = node_dir / "live"
+
+        host_files: list[dict[str, Any]] = []
+        live_cmds: list[dict[str, Any]] = []
+
+        # Create per-node dirs best-effort (root dir creation is already fail-fast).
+        try:
+            host_dir.mkdir(parents=True, exist_ok=True)
+            live_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            # Supporting evidence only: don't gate; writes will record failures if they occur.
+            pass
+
+        any_ok = False
+        any_fail = False
+        any_attempt = False
+
+        # 1) host-generated config files (if present)
+        if ntype == "frr":
+            any_attempt = True
+            src = node_cfg_dir(lab, node) / "frr.conf"
+            dst = host_dir / "frr.conf"
+            rec = _capture_config_copy_host_file(src=src, dst=dst)
+            host_files.append(rec)
+            if rec.get("captured_ok"):
+                any_ok = True
+            else:
+                any_fail = True
+
+        # nft-fw host file is "if present"; current v1.5 may not persist one.
+        # If a file exists under labs/<lab>/nodes/<node>/..., capture it deterministically as nft.ruleset.
+        if ntype == "nft-fw":
+            any_attempt = True
+            # Try a small, deterministic set of common candidates (best-effort, no guessing beyond allowlist)
+            candidates = [
+                node_cfg_dir(lab, node) / "ruleset.nft",
+                node_cfg_dir(lab, node) / "fw.nft",
+                node_cfg_dir(lab, node) / "nft.ruleset",
+            ]
+            picked: Path | None = None
+            for c in candidates:
+                if c.exists() and c.is_file():
+                    picked = c
+                    break
+            if picked is not None:
+                rec = _capture_config_copy_host_file(src=picked, dst=(host_dir / "nft.ruleset"))
+                host_files.append(rec)
+                if rec.get("captured_ok"):
+                    any_ok = True
+                else:
+                    any_fail = True
+
+        # 2) live readbacks (allowlisted argv only; no shell)
+        def _run_live_cmd(cmd_id: str, argv: list[str], out_path: Path) -> None:
+            nonlocal any_ok, any_fail, any_attempt
+            any_attempt = True
+            t0 = time.time()
+            try:
+                cp = rt.exec(lab, node, argv, check=False, capture_output=True, timeout_s=_CAPTURE_CONFIG_CMD_TIMEOUT_S)
+                dt_ms = int((time.time() - t0) * 1000)
+
+                stdout = (cp.stdout or "") if isinstance(cp.stdout, str) else str(cp.stdout or "")
+                stderr = (cp.stderr or "") if isinstance(cp.stderr, str) else str(cp.stderr or "")
+
+                merged = stdout
+                if not merged and stderr:
+                    merged = stderr
+
+                out, redaction_applied, truncated = _capture_config_redact_and_truncate(
+                    merged,
+                    limit_chars=_CAPTURE_CONFIG_MAX_CHARS,
+                )
+                _capture_config_write_text(out_path, out)
+
+                live_cmds.append({
+                    "id": cmd_id,
+                    "command": " ".join(argv),
+                    "exit_code": int(getattr(cp, "returncode", 1)),
+                    "duration_ms": dt_ms,
+                    "bytes": int(len(out.encode("utf-8"))),
+                    "truncated": bool(truncated),
+                    "captured_ok": (int(getattr(cp, "returncode", 1)) == 0),
+                    "error": "",
+                    "redaction_applied": bool(redaction_applied),
+                })
+
+                if int(getattr(cp, "returncode", 1)) == 0:
+                    any_ok = True
+                else:
+                    any_fail = True
+
+            except Exception as e:
+                dt_ms = int((time.time() - t0) * 1000)
+                msg, redaction_applied, truncated = _capture_config_redact_and_truncate(
+                    str(e),
+                    limit_chars=4000,
+                )
+                live_cmds.append({
+                    "id": cmd_id,
+                    "command": " ".join(argv),
+                    "exit_code": 1,
+                    "duration_ms": dt_ms,
+                    "bytes": int(len(msg.encode("utf-8"))),
+                    "truncated": bool(truncated),
+                    "captured_ok": False,
+                    "error": msg,
+                    "redaction_applied": bool(redaction_applied),
+                })
+                any_fail = True
+
+        if ntype == "frr":
+            _run_live_cmd("frr_running_config", ["vtysh", "-c", "show running-config"], live_dir / "running-config.txt")
+            _run_live_cmd("frr_bgp_summary", ["vtysh", "-c", "show bgp summary"], live_dir / "bgp-summary.txt")
+
+        if ntype == "nft-fw":
+            _run_live_cmd("nft_list_ruleset", ["nft", "list", "ruleset"], live_dir / "nft-list-ruleset.txt")
+
+        # hosts: minimal, stable live readbacks (supporting evidence only)
+        if ntype == "host":
+            _run_live_cmd("host_ip_br_a", ["ip", "-br", "a"], live_dir / "ip-br-a.txt")
+            _run_live_cmd("host_ip_route", ["ip", "route"], live_dir / "ip-route.txt")
+
+        # status computation
+        status: str
+        if not any_attempt:
+            status = "skipped"
+        elif any_ok and not any_fail:
+            status = "ok"
+        elif any_ok and any_fail:
+            status = "partial"
+        else:
+            status = "error"
+
+        manifest["nodes"].append({
+            "node": node,
+            "node_type": ntype,
+            "host_files": host_files,
+            "live_commands": live_cmds,
+            "status": status,
+        })
+
+    finished = time.time()
+    manifest["started_at"] = int(started * 1000)
+    manifest["finished_at"] = int(finished * 1000)
+    manifest["duration_ms"] = int((finished - started) * 1000)
+
+    out_manifest = root / "manifest.json"
+    _capture_config_write_text(out_manifest, json.dumps(manifest, indent=2, sort_keys=True))
+    return out_manifest
+
+# -----------------------------
+# results.json schema guarantee (v1.5)
+# -----------------------------
+RESULTS_SCHEMA = "results.v1"
+RESULTS_SCHEMA_VERSION = "1.0.0"
+
+def _finalize_results_schema(
+    *,
+    results: dict,
+    command: str,
+    topo_name: str,
+    lab_name: str,
+    phase: str,
+) -> None:
+    """
+    Additive-only schema stabilization for results.json.
+
+    Hard rules:
+      - never remove/rename/repurpose existing keys
+      - never change verdict/exit semantics (this is labeling only)
+      - no AI/heuristic authority fields
+    """
+
+    # 1) Required schema identifiers (additive)
+    results.setdefault("results_schema", RESULTS_SCHEMA)
+    results.setdefault("results_schema_version", RESULTS_SCHEMA_VERSION)
+
+    # 2) Identity (additive)
+    results.setdefault("tool", "ai-netsim")
+    results.setdefault("command", str(command))
+
+    # Keep existing "lab": <string> as-is; add a structured lab object additively.
+    results.setdefault("lab_obj", {"name": str(lab_name)})
+
+    # Keep topology info minimal and non-authoritative.
+    results.setdefault("topology", {"name": str(topo_name)})
+
+    # 3) Authority boundary (explicit, additive)
+    # verdict_source is LOCKED: tests (per design contract / handover).
+    results.setdefault(
+        "authority",
+        {
+            "verdict_source": "tests",
+            "supporting_evidence": [],
+        },
     )
 
-    out: list[str] = []
-    out.append("=== Scenarios ===")
-
-    for s in scenarios_sorted:
-        sid = str(s.get("id") or "").strip() or "<missing-id>"
-        verdict = str(s.get("verdict") or "").strip().lower() or "unknown"
-        dur_s = _fmt_dur_s(s.get("duration_ms"))
-        dur_part = f" (duration: {dur_s})" if dur_s else ""
-
-        out.append(f"scenario {sid}: {verdict.upper()}{dur_part}")
-
-        steps = s.get("steps") or []
-        if not isinstance(steps, list) or not steps:
-            continue
-
-        for i, st in enumerate(steps, start=1):
-            if not isinstance(st, dict):
-                continue
-
-            stype = str(st.get("type") or "").strip() or "step"
-            line_parts: list[str] = [f"  [{i}] {stype}"]
-
-            # Key identifiers per step type
-            if stype == "run":
-                ref = st.get("ref")
-                if isinstance(ref, str) and ref.strip():
-                    line_parts.append(f"test={ref.strip()}")
-
-            elif stype == "fault":
-                action = st.get("action")
-                if isinstance(action, str) and action.strip():
-                    line_parts.append(action.strip())
-                target = st.get("target")
-                if isinstance(target, str) and target.strip():
-                    line_parts.append(target.strip())
-
-            elif stype == "wait_for":
-                wf = st.get("wait_for") or {}
-                if isinstance(wf, dict):
-                    wtype = wf.get("type")
-                    if isinstance(wtype, str) and wtype.strip():
-                        line_parts.append(wtype.strip())
-
-                    src = wf.get("from")
-                    dst = wf.get("to") or wf.get("to_ip")
-                    src_s = src.strip() if isinstance(src, str) and src.strip() else ""
-                    dst_s = dst.strip() if isinstance(dst, str) and dst.strip() else ""
-                    if src_s and dst_s:
-                        line_parts.append(f"{src_s}->{dst_s}")
-
-                    exp = wf.get("expect")
-                    if isinstance(exp, str) and exp.strip():
-                        line_parts.append(f"expect={exp.strip()}")
-
-                    # Optional selectors
-                    src_if = wf.get("src_if")
-                    if isinstance(src_if, str) and src_if.strip():
-                        line_parts.append(f"src_if={src_if.strip()}")
-
-            elif stype == "wait_for_bgp":
-                node = st.get("node")
-                if isinstance(node, str) and node.strip():
-                    line_parts.append(f"node={node.strip()}")
-
-            # verdict / observed / expected when present
-            v = st.get("verdict")
-            if isinstance(v, str) and v.strip():
-                line_parts.append(f"verdict={v.strip().lower()}")
-
-            expected = st.get("expected")
-            observed = st.get("observed")
-            if expected is not None:
-                line_parts.append(f"expected={expected}")
-            if observed is not None:
-                line_parts.append(f"observed={observed}")
-
-            dur_step = _fmt_dur_s(st.get("duration_ms"))
-            if dur_step:
-                line_parts.append(f"dur={dur_step}")
-
-            out.append("  " + " ".join(line_parts))
-
-    return "\n".join(out) + "\n"
-
-def _format_test_summary(results: dict) -> str:
-    lab = results.get("lab", "")
-    summ = results.get("summary", {}) or {}
+    # 4) Timing (structure stable; values vary)
+    summ = results.get("summary") if isinstance(results.get("summary"), dict) else {}
     duration_ms = summ.get("duration_ms")
+    timing = results.setdefault("timing", {})
+    if isinstance(timing, dict):
+        # Preserve existing started_at/finished_at in summary; do NOT invent required wall-clock fields.
+        # Only mirror duration_ms structurally if available.
+        if duration_ms is not None:
+            try:
+                timing.setdefault("duration_ms", int(duration_ms))
+            except Exception:
+                pass
 
-    # Declared tests summary (authoritative steady-state tests)
-    # In scenario-only mode, you likely want these to remain 0/0/0 (by design).
-    total = int(summ.get("total") or 0)
-    passed = int(summ.get("passed") or 0)
-    failed = int(summ.get("failed") or 0)
+    # 5) Overall envelope (explicit, additive)
+    # Derive from existing fields without changing semantics.
+    result = str(results.get("result") or "").strip().lower() or "unknown"
+    observed = "pass" if result == "pass" else ("fail" if result == "fail" else "error")
+    verdict = "pass" if result == "pass" else "fail"
 
-    lines: list[str] = []
-    lines.append(f"lab: {lab}")
-    lines.append(f"result: {results.get('result', 'unknown')}")
-    if duration_ms is not None:
-        lines.append(f"duration_ms: {int(duration_ms)}")
+    # Gate exit code semantics remain in process control flow; here we only label.
+    exit_code = 0 if verdict == "pass" else 1
 
-    # Keep tests as declared tests summary (Option A)
-    lines.append(f"tests: total={total} passed={passed} failed={failed}")
+    results.setdefault(
+        "overall",
+        {
+            "observed": observed,
+            "verdict": verdict,
+            "exit_code": int(exit_code),
+            "phase": str(phase),
+        },
+    )
 
-    # -------------------------------------------------------------------------
-    # Scenario event runs summary (Option A): scenario_test_run events
-    # -------------------------------------------------------------------------
-    events = results.get("events", []) or []
-    scenario_runs = [e for e in events if e.get("type") == "scenario_test_run"]
-    if scenario_runs:
-        sr_total = len(scenario_runs)
-        sr_passed = sum(1 for e in scenario_runs if e.get("verdict") == "pass")
-        sr_failed = sr_total - sr_passed
-        lines.append(f"scenario_test_runs: total={sr_total} passed={sr_passed} failed={sr_failed}")
-
-    # -------------------------------------------------------------------------
-    # Scenarios summary (optional; non-authoritative; does not change result)
-    # -------------------------------------------------------------------------
-    scenarios = results.get("scenarios", []) or []
-    if scenarios:
-        sc_total = len(scenarios)
-        sc_passed = sum(1 for s in scenarios if s.get("verdict") == "pass")
-        sc_failed = sc_total - sc_passed
-        lines.append(f"scenarios: total={sc_total} passed={sc_passed} failed={sc_failed}")
-
-    # -------------------------------------------------------------------------
-    # Failed declared tests (results["tests"])
-    # -------------------------------------------------------------------------
-    failed_tests = []
-    for t in results.get("tests", []) or []:
-        if t.get("verdict") == "fail":
-            name = t.get("name", "<unnamed>")
-            kind = t.get("kind", "")
-            src = t.get("from", "")
-            dst = t.get("to", "")
-            err = t.get("error", "")
-            failed_tests.append((name, kind, src, dst, err))
-
-    failed_tests.sort()
-
-    if failed_tests:
-        lines.append("failed_tests:")
-        cap = 10
-        for (name, kind, src, dst, err) in failed_tests[:cap]:
-            line = f" - {name} ({kind}) {src}->{dst}"
-            if err:
-                line += f" : {err}"
-            lines.append(line)
-        if len(failed_tests) > cap:
-            lines.append(f" - (+{len(failed_tests) - cap} more)")
-    else:
-        lines.append("failed_tests: (none)")
-
-    # -------------------------------------------------------------------------
-    # Failed scenarios list (optional)
-    # -------------------------------------------------------------------------
-    if scenarios:
-        failed_scenarios = []
-        for s in scenarios:
-            if s.get("verdict") == "fail":
-                sid = s.get("id", "<unnamed>")
-                failed_scenarios.append(sid)
-
-        failed_scenarios.sort()
-        if failed_scenarios:
-            lines.append("failed_scenarios:")
-            cap = 10
-            for sid in failed_scenarios[:cap]:
-                lines.append(f" - {sid}")
-            if len(failed_scenarios) > cap:
-                lines.append(f" - (+{len(failed_scenarios) - cap} more)")
-        else:
-            lines.append("failed_scenarios: (none)")
-
-    # -------------------------------------------------------------------------
-    # Scenario step breakdown (human-only, deterministic, non-authoritative)
-    # -------------------------------------------------------------------------
-    scen_txt = _render_scenarios_summary(results)
-    if scen_txt:
-        lines.append(scen_txt.rstrip("\n"))
-
-
-    return "\n".join(lines) + "\n"
-
-def write_test_summary_artifact(lab: str, results: dict) -> Path:
-    out = lab_dir(lab) / "results.summary.txt"
-    out.write_text(_format_test_summary(results), encoding="utf-8")
-    return out
+    # 6) Hard failure block (additive; keep null when not used)
+    results.setdefault("hard_failure", None)
 
 def cmd_gen(args: argparse.Namespace) -> None:
     topo_path = (TOPO_DIR / args.topology) if not Path(args.topology).is_file() else Path(args.topology)
@@ -5381,7 +5094,7 @@ def cmd_validate(args: argparse.Namespace) -> None:
     import json
     import sys  # keep (often used elsewhere)
 
-    global _QUIET_DIE  # module-global flag used by die()
+    # module-global flag used by die() (moved to netsim_common)
 
     topo_path = (TOPO_DIR / args.topology) if not Path(args.topology).is_file() else Path(args.topology)
     want_json: bool = bool(getattr(args, "json", False))
@@ -5395,21 +5108,26 @@ def cmd_validate(args: argparse.Namespace) -> None:
             "error": error or "",
         }
         if want_json:
-            print(json.dumps(payload, indent=2))
+            # Canonical JSON to stdout (deterministic, diff-friendly).
+            print(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False))
         else:
             if result == "pass":
                 print(f"✅ VALIDATE PASS: {topo_path}")
             else:
                 die(error or "validation failed")
 
-    prev_quiet = bool(globals().get("_QUIET_DIE", False))
-    _QUIET_DIE = want_json
+    prev_quiet = bool(getattr(netsim_common, "_QUIET_DIE", False))
+    netsim_common._QUIET_DIE = want_json
     try:
         topo = load_yaml(topo_path)
         ensure_valid_topology(topo)
 
         resolved = resolve_topology(topo)
         validate_scenarios(resolved)
+
+        # Advisory-only coverage model (declared-only, resolve-time)
+        cov = build_coverage_model(resolved, topo_path=topo_path)
+        write_coverage_artifact(resolved["name"], cov)
 
         emit("pass", "")
         return  # do not fall through
@@ -5430,7 +5148,172 @@ def cmd_validate(args: argparse.Namespace) -> None:
         die(msg)
 
     finally:
-        _QUIET_DIE = prev_quiet
+        netsim_common._QUIET_DIE = prev_quiet
+
+def cmd_preflight(args: argparse.Namespace) -> None:
+    """
+    Advisory-only static preflight:
+      - declared-only (topology + resolve + coverage model)
+      - no deploy/provision/runtime
+      - never gates; exit 0 on success, exit 2 on input/validation error
+    """
+    import json  # ensure available even if earlier code moves
+    import sys
+
+    input_ref = str(getattr(args, "topology", "") or "").strip()
+    if not input_ref:
+        die("preflight: missing topology argument", code=2)
+
+    topo_path = (TOPO_DIR / input_ref) if not Path(input_ref).is_file() else Path(input_ref)
+    if not topo_path.exists():
+        die(f"preflight: topology not found: {topo_path}", code=2)
+
+    out_arg = getattr(args, "out", None)
+    fmt = str(getattr(args, "format", "json") or "json").strip().lower()
+    if fmt not in ("json", "text"):
+        die("preflight: --format must be json or text", code=2)
+
+    out_path = Path(str(out_arg)).expanduser() if out_arg else _preflight_default_out()
+
+    try:
+        topo = load_yaml(topo_path)
+        ensure_valid_topology(topo)
+
+        resolved = resolve_topology(topo)
+        validate_scenarios(resolved)
+
+        # Declared-only coverage model (authoritative dependency; still advisory output)
+        cov = build_coverage_model(resolved, topo_path=topo_path)
+
+        adapter_paths = getattr(args, "adapter", None) or []
+        adapters = None
+        if isinstance(adapter_paths, list) and adapter_paths:
+            # Explicit-only; missing/unreadable adapter is a user invocation error for preflight.
+            # Normalize exit code to 1 (deterministic) even if helper raises SystemExit without code.
+            try:
+                adapters = _preflight_load_adapters(adapter_paths)
+            except SystemExit as e:
+                msg = str(e)
+                if not msg:
+                    msg = "preflight: adapter load failed"
+                die(msg, code=1)
+
+        report = _preflight_report(
+            input_ref=input_ref,
+            topo_path=topo_path,
+            resolved=resolved,
+            cov=cov,
+            adapters=adapters,
+        )
+
+        if fmt == "json":
+            # Canonical JSON serialization for deterministic artifacts (advisory output; stable bytes).
+            from netsim_artifacts import write_json_canonical
+            write_json_canonical(out_path, report)
+        else:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(
+                _preflight_format_text(report),
+                encoding="utf-8",
+            )
+
+        # Human hint (non-authoritative, stable path string)
+        print(f"✅ PREFLIGHT OK (advisory): wrote {out_path}")
+        return
+
+    except SystemExit as e:
+        msg = str(e).strip() or "preflight: invalid input"
+        # Preserve explicit, deterministic exit codes when sub-helpers raise SystemExit(code).
+        # This is required so preflight --adapter missing/unreadable can exit 1 (user invocation error),
+        # while other preflight input/validation errors remain exit 2 by convention.
+        code = 2
+        try:
+            if isinstance(e.code, int):
+                code = int(e.code)
+        except Exception:
+            code = 2
+        die(msg, code=code)
+
+    except Exception as e:
+        msg = str(e).strip() or "preflight: invalid input"
+        die(msg, code=2)
+
+def cmd_adapt_terraform(args: argparse.Namespace) -> None:
+    """
+    Read-only input adapter: Terraform plan JSON -> normalized advisory JSON.
+    Exit codes (authoritative):
+      - missing/unreadable input plan path: 1
+      - parse errors: 0 by default (writes JSON with parse_errors), 1 if --strict
+    """
+    plan_arg = str(getattr(args, "plan", "") or "").strip()
+    if not plan_arg:
+        die("adapt terraform: missing --plan <path>", code=1)
+
+    plan_path = Path(plan_arg).expanduser()
+    if not plan_path.exists() or not plan_path.is_file():
+        die(f"adapt terraform: plan not found: {plan_path}", code=1)
+
+    out_arg = getattr(args, "out", None)
+    out_dir = Path(str(out_arg)).expanduser() if out_arg else (BASE_DIR / "artifacts" / "adapters")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "terraform.plan.adapter.json"
+
+    strict = bool(getattr(args, "strict", False))
+
+    payload = adapt_terraform_plan_json(plan_path)
+
+    # Deterministic write
+    write_file(out_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+    # strict parsing semantics: only based on parse_errors field
+    pe = payload.get("parse_errors") or []
+    pw = payload.get("parse_warnings") or []
+    pe_n = len(pe) if isinstance(pe, list) else 0
+    pw_n = len(pw) if isinstance(pw, list) else 0
+
+    if pe_n > 0 and strict:
+        die(f"adapt terraform: parse_errors={pe_n} (see {out_path})", code=1)
+
+    # Deterministic, actionable output messaging (advisory-only)
+    suffix = ""
+    if pw_n > 0 or pe_n > 0:
+        suffix = f" (parse_warnings={pw_n}, parse_errors={pe_n})"
+
+    print(f"✅ ADAPT OK (advisory): wrote {out_path}{suffix}")
+
+def cmd_adapt_ansible(args: argparse.Namespace) -> None:
+    """
+    Read-only input adapter: rendered Ansible output dir -> normalized advisory JSON.
+    Exit codes (authoritative):
+      - missing/unreadable input dir path: 1
+      - parse errors: 0 by default (writes JSON with parse_errors), 1 if --strict
+    """
+    dir_arg = str(getattr(args, "dir", "") or "").strip()
+    if not dir_arg:
+        die("adapt ansible: missing --dir <path>", code=1)
+
+    root_dir = Path(dir_arg).expanduser()
+    if not root_dir.exists() or not root_dir.is_dir():
+        die(f"adapt ansible: dir not found: {root_dir}", code=1)
+
+    out_arg = getattr(args, "out", None)
+    out_dir = Path(str(out_arg)).expanduser() if out_arg else (BASE_DIR / "artifacts" / "adapters")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "ansible.rendered.adapter.json"
+
+    strict = bool(getattr(args, "strict", False))
+
+    payload = adapt_ansible_rendered_dir(root_dir)
+
+    # Deterministic write
+    write_file(out_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+    # strict parsing semantics: only based on parse_errors field
+    pe = payload.get("parse_errors") or []
+    if isinstance(pe, list) and len(pe) > 0 and strict:
+        die(f"adapt ansible: parse_errors={len(pe)} (see {out_path})", code=1)
+
+    print(f"✅ ADAPT OK (advisory): wrote {out_path}")
 
 def cmd_up(args: argparse.Namespace) -> None:
     topo_path = (TOPO_DIR / args.topology) if not Path(args.topology).is_file() else Path(args.topology)
@@ -5513,35 +5396,170 @@ def cmd_up(args: argparse.Namespace) -> None:
     configure_frr_interfaces_from_topology(rt, lab_name, topo)
 
 def cmd_down(args: argparse.Namespace) -> None:
-    out = lab_file_from_name(args.name)
+    """
+    Destroy a lab deterministically.
+
+    UX rule (deterministic, no guessing beyond explicit file existence):
+      - If arg looks like a topology file (*.yaml|*.yml) and exists (either as a path or under topologies/),
+        load it and use its 'name' as the lab name.
+      - Otherwise treat arg as a lab name (and strip a .yaml/.yml suffix if present).
+    """
+    raw = str(getattr(args, "name", "") or "").strip()
+    if not raw:
+        die("down requires a lab name or a topology filename (.yaml)")
+
+    # Mirror cmd_up resolution: accept either a real path or a name under topologies/
+    topo_path = (TOPO_DIR / raw) if not Path(raw).is_file() else Path(raw)
+
+    lab_name: str
+    if topo_path.suffix in (".yaml", ".yml") and topo_path.exists():
+        topo_doc = load_yaml(topo_path) or {}
+        lab_name = str((topo_doc.get("name") or "").strip())
+        if not lab_name:
+            die(f"Topology '{topo_path}' has no valid 'name' field (required).")
+    else:
+        # Treat as lab name; tolerate accidental ".yaml" suffix
+        if raw.endswith(".yaml") or raw.endswith(".yml"):
+            lab_name = Path(raw).stem.strip()
+        else:
+            lab_name = raw
+
+        if not lab_name:
+            die("down requires a non-empty lab name")
+
+    out = lab_file_from_name(lab_name)
+
+    # Idempotent behavior (default):
+    # If the generated containerlab file is missing, treat this as "already down".
     if not out.exists():
-        die(f"Lab file not found: {out} (did you run gen/up first?)")
+        print(f"INFO: no lab to destroy (file not found): {out}")
+        return
+
+    # Destroy via containerlab (authoritative destroy mechanism)
     run(["sudo", "containerlab", "destroy", "-t", str(out)])
 
-def list_owned_labs_from_artifacts() -> list[tuple[str, Path]]:
-    """
-    Ownership source of truth (LOCKED):
-      - ONLY labs with artifact directories under labs/clab-*
-      - Never scan Docker globally
-      - Deterministic ordering (lexicographic by directory name)
-    Returns: [(lab_name, artifact_dir), ...]
-    """
-    if not LABS_DIR.exists():
-        return []
+    # Best-effort cleanup of lab artifact dir (may be root-owned due to containerlab)
+    run(["sudo", "rm", "-rf", str(lab_dir(lab_name))], check=False)
 
-    out: list[tuple[str, Path]] = []
-    for p in LABS_DIR.iterdir():
-        if not p.is_dir():
-            continue
-        if not p.name.startswith("clab-"):
-            continue
-        lab = p.name[len("clab-") :].strip()
-        if not lab:
-            continue
-        out.append((lab, p))
+def cmd_destroy(args: argparse.Namespace) -> None:
+    """
+    Explicit ops command (non-authoritative):
+      netsim destroy <lab> [--purge-artifacts]
 
-    out.sort(key=lambda t: t[1].name)
-    return out
+    Semantics:
+      - Attempts runtime teardown using containerlab destroy when the generated <lab>.clab.yaml exists.
+      - Does NOT delete disk artifacts by default.
+      - If --purge-artifacts is set: deletes labs/clab-<lab> after runtime teardown attempt.
+      - Idempotent and deterministic: missing runtime/artifacts => "nothing to do" (exit 0).
+      - Returns non-zero if runtime teardown fails OR (if --purge-artifacts) artifact purge fails.
+      - Optional machine-readable report: labs/_cleanup/destroy-<lab>.json (supporting evidence only)
+    """
+    raw = str(getattr(args, "name", "") or "").strip()
+    if not raw:
+        die("destroy requires a non-empty lab name")
+
+    # Tolerate accidental ".yaml" suffix (treat as lab name)
+    if raw.endswith(".yaml") or raw.endswith(".yml"):
+        lab_name = Path(raw).stem.strip()
+    else:
+        lab_name = raw
+
+    if not lab_name:
+        die("destroy requires a non-empty lab name")
+
+    clab_yaml = lab_file_from_name(lab_name)
+    artifact_dir = lab_dir(lab_name)
+
+    failures: list[str] = []
+    report = {
+        "authority": "supporting_evidence",
+        "schema_version": "destroy.v1",
+        "command": "destroy",
+        "lab": lab_name,
+        "clab_yaml": str(clab_yaml),
+        "artifact_dir": str(artifact_dir),
+        "runtime_destroy": {"attempted": False, "status": "skipped", "detail": ""},
+        "artifact_purge": {"attempted": False, "status": "skipped", "detail": ""},
+        "failures": failures,
+    }
+
+    did_anything = False
+
+    # Step 1: runtime teardown (only if we have the generated .clab.yaml; we do NOT scan Docker)
+    if clab_yaml.exists():
+        did_anything = True
+        report["runtime_destroy"]["attempted"] = True
+        cp = run(
+            ["sudo", "containerlab", "destroy", "-t", str(clab_yaml)],
+            check=False,
+            capture_output=True,
+        )
+
+        if cp.returncode == 0:
+            report["runtime_destroy"]["status"] = "succeeded"
+            print(f"OK  {lab_name}: destroyed")
+        else:
+            combined = ((cp.stdout or "") + "\n" + (cp.stderr or "")).strip()
+            low = combined.lower()
+            if "not found" in low or "no such" in low:
+                report["runtime_destroy"]["status"] = "skipped"
+                report["runtime_destroy"]["detail"] = "already down / not found"
+                print(f"OK  {lab_name}: already down / not found")
+            else:
+                summary = combined.splitlines()[-1].strip() if combined else f"exit {cp.returncode}"
+                report["runtime_destroy"]["status"] = "failed"
+                report["runtime_destroy"]["detail"] = summary
+                failures.append(f"runtime destroy failed: {summary}")
+                print(f"WARN {lab_name}: destroy failed: {summary}")
+    else:
+        report["runtime_destroy"]["detail"] = f"missing {clab_yaml.name} (no runtime destroy attempted)"
+
+    # Step 2: optional disk purge
+    do_purge = bool(getattr(args, "purge_artifacts", False))
+    if do_purge:
+        report["artifact_purge"]["attempted"] = True
+        if artifact_dir.exists():
+            did_anything = True
+            cp_rm = run(
+                ["sudo", "rm", "-rf", str(artifact_dir)],
+                check=False,
+                capture_output=True,
+            )
+            if cp_rm.returncode == 0:
+                report["artifact_purge"]["status"] = "succeeded"
+                print(f"OK  {lab_name}: artifacts purged")
+            else:
+                combined_rm = ((cp_rm.stdout or "") + "\n" + (cp_rm.stderr or "")).strip()
+                summary_rm = combined_rm.splitlines()[-1].strip() if combined_rm else f"exit {cp_rm.returncode}"
+                report["artifact_purge"]["status"] = "failed"
+                report["artifact_purge"]["detail"] = summary_rm
+                failures.append(f"artifact purge failed: {summary_rm}")
+                print(f"WARN {lab_name}: artifact purge failed: {summary_rm}")
+        else:
+            report["artifact_purge"]["status"] = "skipped"
+            report["artifact_purge"]["detail"] = "artifacts absent"
+            print(f"OK  {lab_name}: artifacts absent (nothing to purge)")
+    else:
+        report["artifact_purge"]["detail"] = "not requested (default: keep artifacts)"
+
+    # Write optional machine-readable report (supporting evidence only)
+    try:
+        report_path = LABS_DIR / "_cleanup" / f"destroy-{lab_name}.json"
+        write_file(report_path, json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
+        print(f"Wrote: {report_path}")
+    except Exception as e:
+        failures.append(f"destroy report write failed: {e}")
+        print(f"WARN: destroy report write failed: {e}")
+
+    if failures:
+        print("Destroy completed with failures:")
+        for f in failures:
+            print(f"- {lab_name}: {f}")
+        die("destroy: one or more actions failed", code=1)
+
+    if not did_anything:
+        print(f"INFO: nothing to do for lab '{lab_name}'")
+        return
 
 def cmd_cleanup(args: argparse.Namespace) -> None:
     """
@@ -5550,16 +5568,20 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
 
     Safety:
       - ONLY targets ai-netsim labs that have artifacts under labs/clab-*
-      - Dry-run by default; --yes required to destroy
-      - Never touches labs not present in labs/
-      - Does NOT delete artifacts
+      - Dry-run by default; --yes required to execute
+      - Never touches labs not present in labs/ (no Docker scans)
+      - On execute: attempts runtime teardown (if .clab.yaml exists) AND purges artifacts under labs/clab-*
+      - Best-effort across labs; final exit non-zero if any intended action failed
+      - Optional machine-readable report: labs/_cleanup/cleanup.json
     """
     if not getattr(args, "all", False):
         die("cleanup requires --all. This command only targets ai-netsim labs present in labs/ (labs/clab-*).")
 
     candidates = list_owned_labs_from_artifacts()
 
-    print("Cleanup plan (dry-run):" if not getattr(args, "yes", False) else "Cleanup plan (execute):")
+    do_exec = bool(getattr(args, "yes", False))
+    print("Cleanup plan (execute):" if do_exec else "Cleanup plan (dry-run):")
+
     if not candidates:
         print("- (none)  No ai-netsim lab artifacts found under labs/clab-*")
         return
@@ -5567,50 +5589,97 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
     for lab, artifact_dir in candidates:
         print(f"- {lab}   ({artifact_dir})")
 
-    if not getattr(args, "yes", False):
-        print("Run with --yes to destroy these labs. (Artifacts under labs/clab-* are not deleted automatically.)")
+    if not do_exec:
+        print("Run with --yes to execute cleanup. (This will destroy runtime state when possible and purge labs/clab-* artifacts.)")
         return
 
     # Execute: best-effort, deterministic order, never stops on per-lab failure
     failures: list[str] = []
+    report_labs: list[dict[str, object]] = []
 
     for lab, artifact_dir in candidates:
+        lab_entry: dict[str, object] = {
+            "lab": lab,
+            "artifact_dir": str(artifact_dir),
+            "runtime_destroy": {"attempted": False, "status": "skipped", "detail": ""},
+            "artifact_purge": {"attempted": False, "status": "skipped", "detail": ""},
+        }
+
+        # Runtime destroy (only if we have the generated .clab.yaml; we do NOT scan Docker)
         clab_yaml = lab_file_from_name(lab)
+        if clab_yaml.exists():
+            lab_entry["runtime_destroy"]["attempted"] = True
+            cp = run(
+                ["sudo", "containerlab", "destroy", "-t", str(clab_yaml)],
+                check=False,
+                capture_output=True,
+            )
 
-        # If the generated containerlab file is missing, we still keep safety:
-        # we DO NOT scan Docker; we treat this as a safe no-op attempt.
-        if not clab_yaml.exists():
-            print(f"OK  {lab}: no {clab_yaml.name} found (treating as already down; artifacts kept)")
-            continue
+            if cp.returncode == 0:
+                lab_entry["runtime_destroy"]["status"] = "succeeded"
+                print(f"OK  {lab}: destroyed")
+            else:
+                combined = ((cp.stdout or "") + "\n" + (cp.stderr or "")).strip()
+                low = combined.lower()
+                if "not found" in low or "no such" in low:
+                    lab_entry["runtime_destroy"]["status"] = "skipped"
+                    lab_entry["runtime_destroy"]["detail"] = "already down / not found"
+                    print(f"OK  {lab}: already down / not found")
+                else:
+                    summary = combined.splitlines()[-1].strip() if combined else f"exit {cp.returncode}"
+                    lab_entry["runtime_destroy"]["status"] = "failed"
+                    lab_entry["runtime_destroy"]["detail"] = summary
+                    print(f"WARN {lab}: destroy failed: {summary}")
+                    failures.append(f"{lab}: runtime destroy failed: {summary}")
+        else:
+            lab_entry["runtime_destroy"]["detail"] = f"missing {clab_yaml.name} (no runtime destroy attempted)"
 
-        cp = run(
-            ["sudo", "containerlab", "destroy", "-t", str(clab_yaml)],
+        # Artifact purge (always for cleanup --all)
+        lab_entry["artifact_purge"]["attempted"] = True
+        cp_rm = run(
+            ["sudo", "rm", "-rf", str(artifact_dir)],
             check=False,
             capture_output=True,
         )
+        if cp_rm.returncode == 0:
+            lab_entry["artifact_purge"]["status"] = "succeeded"
+            print(f"OK  {lab}: artifacts purged")
+        else:
+            combined_rm = ((cp_rm.stdout or "") + "\n" + (cp_rm.stderr or "")).strip()
+            summary_rm = combined_rm.splitlines()[-1].strip() if combined_rm else f"exit {cp_rm.returncode}"
+            lab_entry["artifact_purge"]["status"] = "failed"
+            lab_entry["artifact_purge"]["detail"] = summary_rm
+            print(f"WARN {lab}: artifact purge failed: {summary_rm}")
+            failures.append(f"{lab}: artifact purge failed: {summary_rm}")
 
-        if cp.returncode == 0:
-            print(f"OK  {lab}: destroyed")
-            continue
+        report_labs.append(lab_entry)
 
-        # Best-effort classification: containerlab may say "not found" if already down.
-        combined = ((cp.stdout or "") + "\n" + (cp.stderr or "")).strip()
-        low = combined.lower()
-        if "not found" in low or "no such" in low:
-            print(f"OK  {lab}: already down / not found (artifacts kept)")
-            continue
-
-        # Otherwise warn and continue
-        summary = combined.splitlines()[-1].strip() if combined else f"exit {cp.returncode}"
-        print(f"WARN {lab}: destroy failed: {summary}")
-        failures.append(f"{lab}: {summary}")
+    # Write optional machine-readable report (supporting evidence only)
+    try:
+        cleanup_report = {
+            "authority": "supporting_evidence",
+            "schema_version": "cleanup.v1",
+            "command": "cleanup --all",
+            "executed": True,
+            "labs_targeted": [lab for lab, _ in candidates],
+            "labs": report_labs,
+            "failures": failures,
+        }
+        report_path = LABS_DIR / "_cleanup" / "cleanup.json"
+        write_file(report_path, json.dumps(cleanup_report, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
+        print(f"Wrote: {report_path}")
+    except Exception as e:
+        # Report writing must never mask cleanup failures; treat as an additional failure signal.
+        failures.append(f"cleanup report write failed: {e}")
+        print(f"WARN: cleanup report write failed: {e}")
 
     if failures:
-        print("Cleanup completed with warnings:")
+        print("Cleanup completed with failures:")
         for f in failures:
             print(f"- {f}")
-    else:
-        print("Cleanup completed successfully. (Artifacts were not deleted.)")
+        die("cleanup --all: one or more actions failed", code=1)
+
+    print("Cleanup completed successfully.")
 
 def cmd_exec(args: argparse.Namespace) -> None:
     rt = get_runtime()
@@ -5708,10 +5777,9 @@ def cmd_status(args: argparse.Namespace) -> None:
     routes_verbose = bool(getattr(args, "routes_verbose", False))
 
     # Suppress "+ <cmd>" echoes during JSON mode (so JSON is clean)
-    global QUIET_RUN
-    old_quiet = QUIET_RUN
+    old_quiet = netsim_common.QUIET_RUN
     if as_json:
-        QUIET_RUN = True
+        netsim_common.QUIET_RUN = True
 
     try:
         topo = _load_resolved_topology(lab)
@@ -6056,7 +6124,7 @@ def cmd_status(args: argparse.Namespace) -> None:
             raise SystemExit(2)
 
     finally:
-        QUIET_RUN = old_quiet
+        netsim_common.QUIET_RUN = old_quiet
 
 def cmd_collect(args: argparse.Namespace) -> None:
     import json
@@ -6235,7 +6303,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
 def cmd_run(args: argparse.Namespace) -> None:
     """
     Ephemeral workflow:
-      up -> test -> collect -> (down)
+      up -> (capture-config) -> (test) -> (collect) -> (down)
 
     Teardown policy:
       - Default: destroy ONLY on full success (so failures keep the lab for debugging)
@@ -6244,6 +6312,8 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     Other:
       - collect runs best-effort even if test fails (unless --no-collect)
+      - capture-config is supporting evidence only; never gates
+      - UX: if --keep and NOT --reconfigure and lab is already up, do NOT redeploy
     """
     topo_path = (TOPO_DIR / args.topology) if not Path(args.topology).is_file() else Path(args.topology)
 
@@ -6257,11 +6327,17 @@ def cmd_run(args: argparse.Namespace) -> None:
     if not lab_name or not isinstance(lab_name, str):
         die(f"Topology '{topo_path}' has no valid 'name' field (required).")
 
+    lab_name = lab_name.strip()
+    if not lab_name:
+        die(f"Topology '{topo_path}' has no valid 'name' field (required).")
+
     # Flags
     keep = bool(getattr(args, "keep", False))
     destroy_always = bool(getattr(args, "destroy_always", False))
     do_collect = not bool(getattr(args, "no_collect", False))
+    do_test = not bool(getattr(args, "no_test", False))  # ok even if flag not yet added
     do_reconfigure = bool(getattr(args, "reconfigure", False))
+    do_capture_config = bool(getattr(args, "capture_config", False))
 
     exit_code: int | None = None   # None means "no failure captured"
     up_ok = False
@@ -6278,11 +6354,99 @@ def cmd_run(args: argparse.Namespace) -> None:
         if exit_code is None:
             exit_code = _as_exit_code(code)
 
+    def _expected_node_names_from_topology(path: Path) -> list[str]:
+        """
+        Deterministic node name extraction from the *authoritative* topology schema.
+        Accept both historical shapes to reduce UX surprises:
+          - nodes: { r1: {...}, r2: {...} }  (dict)
+          - nodes: [ {name: r1, ...}, ... ]  (list)
+        """
+        try:
+            topo_doc = load_yaml(path)
+        except Exception:
+            return []
+
+        if not isinstance(topo_doc, dict):
+            return []
+
+        nodes = topo_doc.get("nodes", None)
+        names: list[str] = []
+
+        if isinstance(nodes, dict):
+            names = [str(k) for k in nodes.keys()]
+        elif isinstance(nodes, list):
+            for item in nodes:
+                if not isinstance(item, dict):
+                    continue
+                n = item.get("name")
+                if isinstance(n, str) and n.strip():
+                    names.append(n.strip())
+
+        return sorted(set(names))
+
+    def _container_running(name: str) -> bool:
+        cp = run(["docker", "inspect", "-f", "{{.State.Running}}", name], check=False, capture=True, text=True)
+        return (cp.returncode == 0 and (cp.stdout or "").strip() == "true")
+
+    def _container_exists(name: str) -> bool:
+        cp = run(["docker", "inspect", name], check=False, capture=True, text=True)
+        return cp.returncode == 0
+
+    def _lab_fully_running(lab: str, node_names: list[str]) -> bool:
+        if not node_names:
+            return False
+        for n in node_names:
+            cname = f"clab-{lab}-{n}"
+            if not _container_running(cname):
+                return False
+        return True
+
+    def _lab_any_exists(lab: str, node_names: list[str]) -> bool:
+        if not node_names:
+            return False
+        for n in node_names:
+            cname = f"clab-{lab}-{n}"
+            if _container_exists(cname):
+                return True
+        return False
+
+    def _load_resolved_topology_or_die(lab: str) -> dict:
+        rp = lab_dir(lab) / "topology.resolved.yaml"
+        if not rp.exists():
+            die(f"Resolved topology not found: {rp} (lab may not be deployed, or artifacts were removed)")
+        topo = load_yaml(rp) or {}
+        if not isinstance(topo, dict):
+            die(f"Resolved topology is invalid (expected dict): {rp}")
+        return topo
+
     try:
         # 1) up
+        #
+        # UX rule for run:
+        # - If --keep and NOT --reconfigure:
+        #     * If the lab is already fully up, do NOT redeploy; proceed to capture/test/collect.
+        #     * If containers exist but the lab is not fully up, fail-fast with a clear message.
+        # - Otherwise: behave as before (call cmd_up).
         try:
-            cmd_up(argparse.Namespace(topology=str(topo_path), reconfigure=do_reconfigure))
-            up_ok = True
+            node_names = _expected_node_names_from_topology(topo_path)
+
+            if keep and (not do_reconfigure):
+                if _lab_fully_running(lab_name, node_names):
+                    up_ok = True
+                elif _lab_any_exists(lab_name, node_names):
+                    print(
+                        f"ERROR: lab '{lab_name}' already exists but is not fully running. "
+                        f"Use '--reconfigure' to rebuild it (or run 'netsim down {lab_name}' first).",
+                        file=sys.stderr,
+                    )
+                    record_failure(1)
+                else:
+                    cmd_up(argparse.Namespace(topology=str(topo_path), reconfigure=do_reconfigure))
+                    up_ok = True
+            else:
+                cmd_up(argparse.Namespace(topology=str(topo_path), reconfigure=do_reconfigure))
+                up_ok = True
+
         except SystemExit as e:
             record_failure(getattr(e, "code", 1))
         except Exception:
@@ -6290,13 +6454,26 @@ def cmd_run(args: argparse.Namespace) -> None:
 
         # If up failed, skip the rest (but still hit finally + final reporting)
         if up_ok:
-            # 2) test
-            try:
-                cmd_test(argparse.Namespace(lab=lab_name))
-            except SystemExit as e:
-                record_failure(getattr(e, "code", 1))
-            except Exception:
-                record_failure(1)
+            # 1b) supporting evidence: capture-config (best-effort; never gates)
+            if do_capture_config:
+                try:
+                    topo_resolved = _load_resolved_topology_or_die(lab_name)
+                    rt = get_runtime(topo_resolved)
+                    _capture_config_run_exploration(rt, lab=lab_name)
+                except SystemExit as e:
+                    # Filesystem root failures are fail-fast by contract; record and continue to finally.
+                    record_failure(getattr(e, "code", 1))
+                except Exception:
+                    record_failure(1)
+
+            # 2) test (optional)
+            if do_test:
+                try:
+                    cmd_test(argparse.Namespace(lab=lab_name))
+                except SystemExit as e:
+                    record_failure(getattr(e, "code", 1))
+                except Exception:
+                    record_failure(1)
 
             # 3) collect (best-effort; very useful for debugging failures)
             if do_collect:
@@ -6341,11 +6518,19 @@ def cmd_run(args: argparse.Namespace) -> None:
             print(f"❌ RUN FAIL: exit={exit_code} (lab kept for debugging): {lab_name}")
         raise SystemExit(int(exit_code))
 
-    # Success
+    # Success messaging (reflect what actually ran)
+    bits: list[str] = ["up"]
+    if do_capture_config:
+        bits.append("capture-config")
+    if do_test:
+        bits.append("test")
+    if do_collect:
+        bits.append("collect")
+
     if keep:
-        print(f"✅ RUN PASS: up + test + collect completed (lab kept): {lab_name}")
+        print(f"✅ RUN PASS: " + " + ".join(bits) + f" completed (lab kept): {lab_name}")
     else:
-        print(f"✅ RUN PASS: up + test + collect completed (lab destroyed): {lab_name}")
+        print(f"✅ RUN PASS: " + " + ".join(bits) + f" completed (lab destroyed): {lab_name}")
 
 # --- Assistive AI (v1: advisory-only, artifact-only, post-exec, BYO-key online optional) ---
 
@@ -7144,10 +7329,18 @@ def cmd_ai_explain(args) -> None:
         )
         sys.exit(2)
 
+    adapter_paths = list(getattr(args, "adapter", None) or [])
+    adapters = _ai_load_adapters(adapter_paths, command_name="explain") if adapter_paths else {
+        "authority": "advisory",
+        "count": 0,
+        "inputs": [],
+    }
+
     bundle = {
         "schema_version": "1",
         **_ai_advisory_headers(),
         "command": "explain",
+        "adapters": adapters,
         "lab": {"name": lab, "labdir": labdir},
         "artifacts": {
             "results_json": os.path.join(labdir, "results.json"),
@@ -7516,6 +7709,77 @@ def _ai_read_yaml(path: str) -> Any:
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
     
+def _ai_load_adapters(paths: list[str], command_name: str) -> dict[str, Any]:
+    """
+    Load adapters.v1 JSON files for AI context only.
+    Missing/unreadable path is an AI usage error (exit 2) because the user explicitly requested it.
+    Adapter parse_errors inside the JSON are preserved as advisory and do not fail the AI command.
+    """
+    from pathlib import Path
+
+    norm_paths: list[str] = []
+    for p in (paths or []):
+        if isinstance(p, str) and p.strip():
+            norm_paths.append(p.strip())
+
+    # Deterministic order
+    norm_paths = sorted(set(norm_paths))
+
+    out_inputs: list[dict[str, Any]] = []
+    for p in norm_paths:
+        pp = Path(p)
+        if not pp.exists():
+            print(f"AI usage error: adapter not found: {pp}", file=sys.stderr)
+            sys.exit(2)
+        if not pp.is_file():
+            print(f"AI usage error: adapter is not a file: {pp}", file=sys.stderr)
+            sys.exit(2)
+
+        try:
+            with pp.open("r", encoding="utf-8") as f:
+                obj = json.load(f)
+        except Exception as e:
+            print(f"AI usage error: failed to read adapter JSON {pp}: {e!s}", file=sys.stderr)
+            sys.exit(2)
+
+        # Minimal schema sanity (advisory-only)
+        schema_version = str(obj.get("schema_version") or "")
+        authority = str(obj.get("authority") or "")
+        source_type = str(obj.get("source_type") or "")
+        summary = obj.get("summary") if isinstance(obj.get("summary"), dict) else {}
+
+        parse_errors = obj.get("parse_errors") if isinstance(obj.get("parse_errors"), list) else []
+        parse_warnings = obj.get("parse_warnings") if isinstance(obj.get("parse_warnings"), list) else []
+
+        out_inputs.append(
+            {
+                "path": str(pp),
+                "schema_version": schema_version,
+                "authority": authority,
+                "source_type": source_type,
+                "summary": {
+                    "items_total": int(summary.get("items_total") or 0),
+                    "items_changed": int(summary.get("items_changed") or 0),
+                    "items_added": int(summary.get("items_added") or 0),
+                    "items_removed": int(summary.get("items_removed") or 0),
+                },
+                "parse": {
+                    "warnings": int(len(parse_warnings)),
+                    "errors": int(len(parse_errors)),
+                },
+                "notes": [
+                    "Advisory-only adapter context. Does not affect verdicts/exit codes.",
+                    f"Loaded by ai {command_name}.",
+                ],
+            }
+        )
+
+    return {
+        "authority": "advisory",
+        "count": int(len(out_inputs)),
+        "inputs": out_inputs,
+    }
+
 def _ai_review_change_sections(bundle: dict[str, Any]) -> dict[str, Any]:
     """
     Deterministic, vendor-agnostic offline review sections for Change Context.
@@ -7817,10 +8081,18 @@ def cmd_ai_review(args) -> None:
 
     snippets = snippets[:max_items]
 
+    adapter_paths = list(getattr(args, "adapter", None) or [])
+    adapters = _ai_load_adapters(adapter_paths, command_name="review") if adapter_paths else {
+        "authority": "advisory",
+        "count": 0,
+        "inputs": [],
+    }
+
     bundle = {
         "schema_version": "1",
         **_ai_advisory_headers(),
         "command": "review",
+        "adapters": adapters,
         "topology": str(topo_path),
         "counts": {"nodes": len(nodes), "tests": len(tests), "scenarios": len(scenarios)},
         "inventory": {
@@ -7892,6 +8164,30 @@ def main() -> None:
     p_val.add_argument("--json", action="store_true", help="Emit machine-readable JSON (CI-friendly)")
     p_val.set_defaults(func=cmd_validate)
 
+    # preflight (advisory-only, declared-only, resolve-time)
+    p_pre = sub.add_parser("preflight", help="Advisory static preflight (declared-only; no execution)")
+    p_pre.add_argument("topology", help="Topology YAML filename under ./topologies or a full path")
+    p_pre.add_argument("--format", choices=["json", "text"], default="json", help="Output format")
+    p_pre.add_argument("--out", default=None, help="Output path (default: artifacts/preflight/preflight.json)")
+    p_pre.add_argument("--adapter", action="append", default=[], help="Path to an adapters.v1 JSON (repeatable; advisory-only)")
+    p_pre.set_defaults(func=cmd_preflight)
+
+    # adapt (read-only input adapters; advisory-only)
+    p_adapt = sub.add_parser("adapt", help="Read-only input adapters (advisory-only)")
+    sub_adapt = p_adapt.add_subparsers(dest="adapter", required=True)
+
+    p_tf = sub_adapt.add_parser("terraform", help="Adapt Terraform plan JSON (terraform show -json)")
+    p_tf.add_argument("--plan", required=True, help="Path to terraform plan JSON (terraform show -json)")
+    p_tf.add_argument("--out", default=None, help="Output directory (default: artifacts/adapters/)")
+    p_tf.add_argument("--strict", action="store_true", help="Fail (exit 1) if parse_errors are present")
+    p_tf.set_defaults(func=cmd_adapt_terraform)
+
+    p_ans = sub_adapt.add_parser("ansible", help="Adapt rendered Ansible output directory (read-only)")
+    p_ans.add_argument("--dir", required=True, help="Path to rendered Ansible output directory")
+    p_ans.add_argument("--out", default=None, help="Output directory (default: artifacts/adapters/)")
+    p_ans.add_argument("--strict", action="store_true", help="Fail (exit 1) if parse_errors are present")
+    p_ans.set_defaults(func=cmd_adapt_ansible)
+
     # up
     p_up = sub.add_parser("up", help="Generate + deploy")
     p_up.add_argument("topology", help="Topology YAML filename under ./topologies or a full path")
@@ -7906,6 +8202,17 @@ def main() -> None:
     p_down = sub.add_parser("down", help="Destroy a deployed lab by name")
     p_down.add_argument("name", help="Lab name (topology 'name')")
     p_down.set_defaults(func=cmd_down)
+
+    # destroy (explicit ops; does not delete artifacts by default)
+    p_destroy = sub.add_parser("destroy", help="Destroy a lab runtime; keep artifacts unless --purge-artifacts")
+    p_destroy.add_argument("name", help="Lab name (topology 'name')")
+    p_destroy.add_argument(
+        "--purge-artifacts",
+        dest="purge_artifacts",
+        action="store_true",
+        help="Also delete labs/clab-<lab> artifacts after runtime teardown attempt.",
+    )
+    p_destroy.set_defaults(func=cmd_destroy)
 
     # cleanup
     p_cleanup = sub.add_parser(
@@ -7957,8 +8264,24 @@ def main() -> None:
     p_status.set_defaults(func=cmd_status)
 
     # test
-    p_test = sub.add_parser("test", help="Run declared tests for a lab")
-    p_test.add_argument("lab", help="Lab name (e.g. three-frr-two-hosts-fw-routed)")
+    p_test = sub.add_parser("test", help="Run declared tests against an existing lab by name")
+    p_test.add_argument(
+        "lab",
+        nargs="?",
+        help="Lab name (topology 'name', e.g. three-frr-two-hosts-fw-routed). "
+             "Optional when using --two-run (then provide --two-run-topology).",
+    )
+    p_test.add_argument(
+        "--two-run",
+        action="store_true",
+        help="Run the authoritative gate twice (baseline then change) and write an evidence-only diff bundle. "
+             "Requires --two-run-topology and --candidate-config.",
+    )
+    p_test.add_argument(
+        "--two-run-topology",
+        dest="two_run_topology",
+        help="Topology YAML filename under ./topologies or a full path (used only with --two-run).",
+    )
     p_test.add_argument("--name", help="Run only the test with this name (e.g. tests[4] or a named test)")
     p_test.add_argument("--kind", choices=["ping", "tcp"], help="Run only tests of this kind")
     p_test.add_argument(
@@ -7971,15 +8294,44 @@ def main() -> None:
         action="store_true",
         help="Print results.json to stdout in addition to writing the file",
     )
+    p_test.add_argument(
+        "--candidate-config",
+        dest="candidate_config",
+        help="Apply candidate operational configs from a directory before running tests (gate-only, atomic). "
+             "Directory contract: frr/<node>.conf and/or nft/<node>.nft|.ruleset",
+    )
     p_test.set_defaults(func=cmd_test)
     p_test.add_argument("--scenario", help="Run only this scenario id (scenarios[*].id)")
     p_test.add_argument("--all-scenarios", action="store_true", help="Run all scenarios after steady-state tests")
+    # capture-config (supporting evidence only; exploration feature) - explicitly forbidden in gate-first test
+    p_test.add_argument(
+        "--capture-config",
+        action="store_true",
+        help="Exploration evidence only (writes labs/<lab>/artifacts/capture_config/**). "
+             "Forbidden in netsim test; will exit 2 if used.",
+    )
     p_test.add_argument("--scenario-verbose", action="store_true", help="Print each scenario step as it runs (human-only; does not change artifacts)",)
     p_test.add_argument(
     "--precheck-controlplane",
     action="store_true",
     help="Run global control-plane prechecks (e.g., BGP wait) before executing scenarios. "
          "Default: off when --scenario/--all-scenarios is used.",
+    )
+        # State capture (supporting evidence only; never gates)
+    p_test.add_argument(
+        "--state-capture",
+        default="none",
+        choices=["none", "pre", "post", "both"],
+        help="supporting evidence capture timing (none|pre|post|both). Non-authoritative; never affects verdicts.",
+    )
+    p_test.add_argument(
+        "--state-profile",
+        action="append",
+        default=[],
+        help=(
+            "enable supporting evidence capture profile (repeatable). "
+            "No implicit default; required when --state-capture != none."
+        ),
     )
     p_test.add_argument(
     "--list-scenarios",
@@ -8009,6 +8361,13 @@ def main() -> None:
         action="store_true",
         help="Skip collect (faster, but no artifacts).",
     )
+    p_run.add_argument(
+        "--capture-config",
+        action="store_true",
+        help="Exploration evidence only: capture host+live configs after provision "
+             "into labs/<lab>/artifacts/capture_config/** (never gates).",
+    )
+    p_run.add_argument("--no-test", action="store_true", help="Skip test phase (still may collect/capture-config).")
     p_run.set_defaults(func=cmd_run)
 
     # ai (group)
@@ -8021,6 +8380,12 @@ def main() -> None:
         p.add_argument("--online", action="store_true", help="Attempt online model call (BYO key). Never gates; exit 0 on failure.")
         p.add_argument("--model", help="Override model name (else AI_NETSIM_AI_MODEL)")
         p.add_argument("--format", choices=["json", "text"], default="json", help="Output format (json is CI-safe)")
+        p.add_argument(
+            "--adapter",
+            action="append",
+            default=[],
+            help="Path to adapters.v1 JSON (repeatable). Advisory-only context; never gates.",
+        )
 
     # ai explain
     p_ai_explain = ai_sub.add_parser("explain", help="Explain a prior run using artifacts only")
@@ -8048,7 +8413,18 @@ def main() -> None:
     p_ai_coach.set_defaults(func=cmd_ai_coach)
 
     args = parser.parse_args()
-    args.func(args)
+
+    footer_lab = ""
+    try:
+        # Footer (WI-1a): only for single-lab `netsim test <lab>` executions
+        if str(getattr(args, "cmd", "") or "") == "test":
+            if not bool(getattr(args, "two_run", False)) and not bool(getattr(args, "list_scenarios", False)):
+                footer_lab = str(getattr(args, "lab", "") or "").strip()
+
+        args.func(args)
+    finally:
+        if footer_lab:
+            _print_artifacts_footer_for_lab(footer_lab)
 
 
 if __name__ == "__main__":

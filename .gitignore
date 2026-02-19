@@ -40,3 +40,4 @@ images/**
 
 changes/
 docs/future/
+scripts/netsim_snapshot.sh

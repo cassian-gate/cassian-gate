@@ -1,0 +1,47 @@
+{
+  "authority": "advisory",
+  "items": [
+    {
+      "action": "unknown",
+      "address": "group_vars.yml",
+      "details": {
+        "file_hash": "d09edadd173a8bbc233d47dcafc30cc876af2fb569812f2bbe0e92a1905bbce8"
+      },
+      "id": "ansible:file:group_vars.yml:unknown",
+      "kind": "file",
+      "provider": "ansible"
+    },
+    {
+      "action": "unknown",
+      "address": "site.conf",
+      "details": {
+        "file_hash": "b9148fc6dfefbfb3cd3bcda8ac9cab2b2956a206586e45bd6c0250a5f78665dd"
+      },
+      "id": "ansible:file:site.conf:unknown",
+      "kind": "file",
+      "provider": "ansible"
+    },
+    {
+      "action": "unknown",
+      "address": "vars.json",
+      "details": {
+        "file_hash": "a809a2ad2edea012e73c056fae05a159daf4c9b2204b91891380f3a5b9531fb3"
+      },
+      "id": "ansible:file:vars.json:unknown",
+      "kind": "file",
+      "provider": "ansible"
+    }
+  ],
+  "parse_errors": [],
+  "parse_warnings": [],
+  "schema_version": "adapters.v1",
+  "source_path": "tests/adapters/fixtures/ansible_rendered",
+  "source_type": "ansible_rendered_dir",
+  "summary": {
+    "items_added": 0,
+    "items_changed": 0,
+    "items_removed": 0,
+    "items_total": 3
+  }
+}
+

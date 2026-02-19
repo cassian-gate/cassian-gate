@@ -1,0 +1,5 @@
+lab: ex-evpn-outcome-only
+result: pass
+duration_ms: 6858
+tests: total=4 passed=4 failed=0
+failed_tests: (none)

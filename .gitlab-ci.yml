@@ -1,0 +1,72 @@
+stages:
+  - test
+
+# NOTE:
+# - containerlab requires privileged Docker networking / netns access.
+# - Recommended: GitLab Runner using Shell executor on a Linux host with Docker + containerlab installed.
+# - If using Docker executor: it must be privileged and allow Docker socket access; this is org-specific.
+
+ai_netsim_gate:
+  stage: test
+  # Prefer a pinned Python image; runner must provide Docker + containerlab on the host.
+  image: python:3.11
+
+  variables:
+    PYTHONUNBUFFERED: "1"
+    PYTHONPATH: "src"
+    PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    PIP_NO_CACHE_DIR: "1"
+
+  script:
+    - set -euo pipefail
+    - python -V
+    - python -m pip install --upgrade pip
+    - |
+      if [ -f requirements.txt ]; then
+        python -m pip install -r requirements.txt
+      else
+        python -m pip install .
+      fi
+
+    - python -m py_compile src/*.py
+
+    # Runner prerequisites check (fail-fast, actionable)
+    - |
+      echo "=== Docker ==="
+      docker version
+      echo
+      echo "=== containerlab ==="
+      if command -v containerlab >/dev/null 2>&1; then
+        containerlab version
+      else
+        echo "ERROR: containerlab not found on runner."
+        echo "This pipeline requires a runner with containerlab preinstalled (pinned) and Docker privileges."
+        exit 2
+      fi
+
+    # Authoritative verification oracle (repo's deterministic contract checks)
+    - bash scripts/verify_phase1.sh
+
+    # Project gate (up -> test -> down)
+    - ./src/netsim.py up topologies/three-frr-two-hosts-fw-routed.yaml --reconfigure
+    - ./src/netsim.py test three-frr-two-hosts-fw-routed --scenario quick_all
+    - ./src/netsim.py down three-frr-two-hosts-fw-routed
+
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - labs/**/results.json
+      - labs/**/results.summary.txt
+      - labs/**/topology.resolved.yaml
+      - labs/**/two_run/**
+      - labs/**/artifacts/**
+    # Optional: include full labs/ on failures (bigger evidence)
+    # To enable, replace paths: with "labs/**" or add a second job dedicated to failure bundles.
+
+  # If you use tagged runners, uncomment and set your runner tags:
+  # tags:
+  #   - self-hosted
+  #   - docker
+  #   - containerlab
+

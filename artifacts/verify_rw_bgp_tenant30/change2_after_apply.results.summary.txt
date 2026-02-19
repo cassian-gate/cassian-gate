@@ -1,0 +1,17 @@
+lab: rw-bgp-tenant30-change2
+result: pass
+duration_ms: 5403
+tests: total=0 passed=0 failed=0
+scenario_test_runs: total=5 passed=5 failed=0
+scenarios: total=1 passed=1 failed=0
+failed_tests: (none)
+failed_scenarios: (none)
+=== Scenarios ===
+scenario prove_change_after_apply: PASS (duration: 4.3s)
+    [1] run test=h10_to_leaf1_gw_ping verdict=pass dur=0.1s
+    [2] run test=h20_to_leaf2_gw_ping verdict=pass dur=0.0s
+    [3] run test=h30_to_leaf1_t30_gw_ping verdict=pass dur=0.0s
+    [4] run test=h10_to_h20_declared_fail verdict=pass dur=1.0s
+    [5] run test=h20_to_h30_declared_fail verdict=pass dur=1.0s
+    [6] wait_for verdict=pass expected=pass observed=pass dur=1.1s
+    [7] wait_for verdict=pass expected=pass observed=pass dur=1.1s

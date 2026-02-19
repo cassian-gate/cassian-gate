@@ -1,0 +1,77 @@
+{
+  "node": "leaf2",
+  "node_type": "frr",
+  "method": "frr_inplace_reload",
+  "input": {
+    "source_path": "/home/auser/projects/ai-netsim/tests/fixtures/rw-bgp-tenant30-change2/frr/leaf2.conf",
+    "sha256": "a4f2cc9c9066f25a5de9031f21f6a1801cd3ce27004d32df20ce8f7cc57adf2e"
+  },
+  "attempt": {
+    "started_at_epoch_ms": 1769856038042,
+    "duration_ms": 449
+  },
+  "result": {
+    "applied_ok": true,
+    "exit_code": 0
+  },
+  "stdout": "",
+  "stderr": "",
+  "post_checks": [
+    {
+      "name": "show_version",
+      "cmd": "vtysh -c \"show version\"",
+      "exit_code": 0,
+      "stdout": "FRRouting 8.4_git (leaf2) on Linux(6.6.87.2-microsoft-standard-WSL2).\nCopyright 1996-2005 Kunihiro Ishiguro, et al.\nconfigured with:\n    '--prefix=/usr' '--sbindir=/usr/lib/frr' '--sysconfdir=/etc/frr' '--libdir=/usr/lib' '--localstatedir=/var/run/frr' '--enable-rpki' '--enable-vtysh' '--enable-multipath=64' '--enable-vty-group=frrvty' '--enable-user=frr' '--enable-group=frr' '--enable-pcre2posix' 'CC=gcc' 'CXX=g++'\n",
+      "stderr": ""
+    },
+    {
+      "name": "show_bgp_summary",
+      "cmd": "vtysh -c \"show bgp summary\"",
+      "exit_code": 0,
+      "stdout": "\nIPv4 Unicast Summary (VRF default):\nBGP router identifier 10.0.0.1, local AS number 65102 vrf-id 0\nBGP table version 1\nRIB entries 1, using 192 bytes of memory\nPeers 1, using 717 KiB of memory\n\nNeighbor        V         AS   MsgRcvd   MsgSent   TblVer  InQ OutQ  Up/Down State/PfxRcd   PfxSnt Desc\n10.0.0.0        4      65101         0         0        0    0    0    never         Idle        0 N/A\n\nTotal number of neighbors 1\n",
+      "stderr": ""
+    }
+  ],
+  "apply_method": "vtysh",
+  "container_id_before": "f467df3457407b9cba618c0b6c24ed77f8b6e7858f3e75223dd3efc6e7761686",
+  "container_id_after": "f467df3457407b9cba618c0b6c24ed77f8b6e7858f3e75223dd3efc6e7761686",
+  "interfaces_before": "1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000\\    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00\n2: eth0@if1300: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default \\    link/ether e6:c0:55:31:f5:f6 brd ff:ff:ff:ff:ff:ff link-netnsid 0\n1298: eth1@if1299: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9500 qdisc noqueue state UP mode DEFAULT group default \\    link/ether aa:c1:ab:3e:bd:9a brd ff:ff:ff:ff:ff:ff link-netnsid 1\n1305: eth2@if1306: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9500 qdisc noqueue state UP mode DEFAULT group default \\    link/ether aa:c1:ab:ba:26:dd brd ff:ff:ff:ff:ff:ff link-netnsid 2\n",
+  "interfaces_after": "1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000\\    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00\n2: eth0@if1300: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default \\    link/ether e6:c0:55:31:f5:f6 brd ff:ff:ff:ff:ff:ff link-netnsid 0\n1298: eth1@if1299: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9500 qdisc noqueue state UP mode DEFAULT group default \\    link/ether aa:c1:ab:3e:bd:9a brd ff:ff:ff:ff:ff:ff link-netnsid 1\n1305: eth2@if1306: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9500 qdisc noqueue state UP mode DEFAULT group default \\    link/ether aa:c1:ab:ba:26:dd brd ff:ff:ff:ff:ff:ff link-netnsid 2\n",
+  "ro_probe": {
+    "cmd": "mount | grep -F 'on /etc/frr/frr.conf ' | grep -q '(ro,'",
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": "",
+    "dst_is_ro": true
+  },
+  "copy": {
+    "cmd": "copy_to_tmp:/tmp/netsim.candidate.frr.conf; ro_probe:mount|grep on /etc/frr/frr.conf|grep (ro,; sanitize->vtysh -f /tmp/netsim.candidate.frr.vtysh.conf",
+    "exit_code": 0,
+    "stdout": "skipped (dst is RO; applying via vtysh -f)",
+    "stderr": ""
+  },
+  "sanitize": {
+    "cmd": "sanitize_for_vtysh: /tmp/netsim.candidate.frr.conf -> /tmp/netsim.candidate.frr.vtysh.conf",
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "sanitize_nonempty": {
+    "cmd": "test -s /tmp/netsim.candidate.frr.vtysh.conf",
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "vtysh_apply": {
+    "cmd": "vtysh -f /tmp/netsim.candidate.frr.vtysh.conf",
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "reload": {
+    "cmd": "/usr/lib/frr/frrinit.sh restart",
+    "exit_code": 0,
+    "stdout": "skipped (applied via vtysh -f)",
+    "stderr": ""
+  }
+}
