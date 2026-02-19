@@ -388,6 +388,57 @@ else
   echo "OK: PCAP schema sanity skipped (no artifacts/results present)"
 fi
 echo
+# ------------------------------------------------------------------------------
+echo "=== 6c) wait_for step shape consistency (authoritative artifact shape) ==="
+# Invariant (representation-only):
+# - wait_for steps must have a stable key-set across paths (present-with-null).
+# Proof:
+# - run a scenario containing wait_for (ping_test)
+# - assert at least one wait_for step exists
+# - assert every wait_for step has the canonical key-set
+
+set +e
+wf_out="$($NS test "$LAB" --scenario ping_test 2>&1)"
+wf_rc=$?
+set -e
+if [ "$wf_rc" -ne 0 ]; then
+  echo "FAIL: expected --scenario ping_test run to pass (rc=0), but rc=$wf_rc"
+  echo "$wf_out"
+  exit 1
+fi
+
+test -s "${LABDIR}/results.json" || { echo "FAIL: missing ${LABDIR}/results.json after scenario run"; exit 1; }
+
+wf_count="$(jq -r '
+  [ .scenarios[]?.steps[]?
+    | select(.type=="wait_for")
+  ] | length
+' "${LABDIR}/results.json" 2>/dev/null || echo 0)"
+
+if [ "${wf_count:-0}" -le 0 ]; then
+  echo "FAIL: expected at least one wait_for step in results.json for ping_test scenario"
+  exit 1
+fi
+
+expected_keys="attempts,duration_ms,error,expected,interval_s,meta,observed,step,succeeded,time_to_first_success_ms,time_to_success_ms,timeout_s,type,verdict,wait_for,wait_type"
+
+bad_keys="$(jq -r '
+  .scenarios[]?.steps[]?
+  | select(.type=="wait_for")
+  | (keys_unsorted | sort | join(","))
+' "${LABDIR}/results.json" 2>/dev/null | sort -u | grep -vxF "$expected_keys" || true)"
+
+if [ -n "$bad_keys" ]; then
+  echo "FAIL: wait_for step key-set mismatch (expected exact canonical set):"
+  echo "expected: $expected_keys"
+  echo "observed unique:"
+  echo "$bad_keys"
+  exit 1
+fi
+
+echo "OK: wait_for step shape stable (${wf_count} steps; canonical key-set)"
+echo
+
 echo "=== 7) Cleanup smoke (netsim cleanup --all) ==="
 
 # 7a) Dry-run must show a plan and exit 0

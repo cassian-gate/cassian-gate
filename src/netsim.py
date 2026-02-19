@@ -3403,6 +3403,34 @@ def cmd_test(args: argparse.Namespace) -> None:
         }
 
         def scen_step(rec: dict) -> None:
+            # wait_for step shape stabilization (representation-only, v1.5):
+            # Ensure wait_for step records have a stable key-set across all paths
+            # (success/fail/not-a-dict/exception) using present-with-null.
+            if isinstance(rec, dict) and rec.get("type") == "wait_for":
+                # Canonical schema = union of keys currently emitted across paths.
+                # (Do not add new meaning-bearing keys.)
+                canonical_keys = (
+                    "type",
+                    "wait_type",
+                    "expected",
+                    "observed",
+                    "verdict",
+                    "duration_ms",
+                    "attempts",
+                    "timeout_s",
+                    "interval_s",
+                    "succeeded",
+                    "time_to_success_ms",
+                    "time_to_first_success_ms",
+                    "meta",
+                    "error",
+                    "wait_for",
+                    "step",
+                )
+                for k in canonical_keys:
+                    if k not in rec:
+                        rec[k] = None
+
             scen_rec["steps"].append(rec)
 
         def _sv(msg: str) -> None:
