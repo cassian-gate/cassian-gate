@@ -42,7 +42,7 @@ from netsim_common import (
 )
 
 from netsim_artifacts import (
-    lab_dir, node_cfg_dir, write_file,
+    lab_dir, node_cfg_dir, write_file, write_json_canonical,
     load_yaml,
     topo_path_for_lab,
 )
@@ -2257,7 +2257,7 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         out = lab_dir(lab) / "results.json"
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(results, indent=2), encoding="utf-8")
+        write_json_canonical(out, results)
         print(f"Wrote: {out}")
 
         summary_path = write_test_summary_artifact(lab, results)
