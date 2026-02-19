@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+import json
 import yaml
 
 from netsim_common import LABS_DIR, TOPO_DIR, die
@@ -71,6 +72,31 @@ def write_file(path: Path, content: str) -> None:
         shutil.rmtree(path)
 
     path.write_text(content, encoding="utf-8")
+
+def write_json_canonical(path: Path, obj: object) -> None:
+    """
+    Canonical JSON serialization for deterministic artifacts.
+
+    Policy (frozen):
+      - UTF-8
+      - Unix newlines
+      - indent=2
+      - recursive key ordering (sort_keys=True)
+      - final newline present (exactly one)
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    # If a previous run created a directory where we expect a file, fix it.
+    if path.exists() and path.is_dir():
+        shutil.rmtree(path)
+
+    s = json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False)
+
+    # Normalize newlines to Unix and enforce exactly one final newline.
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    s = s.rstrip("\n") + "\n"
+
+    path.write_text(s, encoding="utf-8")
 
 def load_yaml(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as f:

@@ -42,7 +42,7 @@ from netsim_common import (
 )
 
 from netsim_artifacts import (
-    lab_dir, node_cfg_dir, write_file,
+    lab_dir, node_cfg_dir, write_file, write_json_canonical,
     load_yaml,
     topo_path_for_lab,
 )
@@ -2257,7 +2257,7 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         out = lab_dir(lab) / "results.json"
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(results, indent=2), encoding="utf-8")
+        write_json_canonical(out, results)
         print(f"Wrote: {out}")
 
         summary_path = write_test_summary_artifact(lab, results)
@@ -5080,7 +5080,8 @@ def cmd_validate(args: argparse.Namespace) -> None:
             "error": error or "",
         }
         if want_json:
-            print(json.dumps(payload, indent=2))
+            # Canonical JSON to stdout (deterministic, diff-friendly).
+            print(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False))
         else:
             if result == "pass":
                 print(f"✅ VALIDATE PASS: {topo_path}")
@@ -5178,7 +5179,9 @@ def cmd_preflight(args: argparse.Namespace) -> None:
         )
 
         if fmt == "json":
-            _preflight_write(out_path, report)
+            # Canonical JSON serialization for deterministic artifacts (advisory output; stable bytes).
+            from netsim_artifacts import write_json_canonical
+            write_json_canonical(out_path, report)
         else:
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(
