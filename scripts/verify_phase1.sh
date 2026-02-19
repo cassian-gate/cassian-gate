@@ -39,7 +39,7 @@ need_cmd docker
 
 # ------------------------------------------------------------------------------
 echo "=== 0) py_compile ==="
-python -m py_compile src/netsim.py src/netsim_tests.py
+python -m py_compile src/netsim.py src/netsim_tests.py src/netsim_artifacts.py
 echo "OK: py_compile"
 echo
 
@@ -148,6 +148,18 @@ $NS preflight "$TOPO" --format json >/dev/null
 test -s artifacts/preflight/preflight.json
 jq -e '.authority=="advisory" and .schema_version=="preflight.v1"' artifacts/preflight/preflight.json >/dev/null
 echo "OK: preflight.json valid"
+# Determinism proof (WI-1):
+# Run the same JSON write twice and require byte-identical output.
+cp -f artifacts/preflight/preflight.json /tmp/preflight.json.run1
+
+rm -f artifacts/preflight/preflight.json 2>/dev/null || true
+$NS preflight "$TOPO" --format json >/dev/null
+test -s artifacts/preflight/preflight.json
+cp -f artifacts/preflight/preflight.json /tmp/preflight.json.run2
+
+diff -u /tmp/preflight.json.run1 /tmp/preflight.json.run2 >/dev/null \
+  && echo "OK: preflight.json deterministic (byte-identical across runs)" \
+  || { echo "FAIL: preflight.json not deterministic across runs"; diff -u /tmp/preflight.json.run1 /tmp/preflight.json.run2 || true; exit 1; }
 echo
 # ------------------------------------------------------------------------------
 echo "=== 4bb) Advisory-only: adapters (fixtures + golden drift guard) ==="
@@ -252,6 +264,53 @@ else
   $NS test vm-smoke >/dev/null
   $NS down vm-smoke >/dev/null
   echo "OK: VM runtime smoke passed (deploy+test+cleanup)"
+  echo "=== 4e) VM SONiC proof + outcomes scenario smoke (supported hosts only) ==="
+
+  # 1) Bring up vm-smoke again briefly and prove it's the SONiC VM image (not FRR).
+  $NS up topologies/vm-smoke.yaml --reconfigure >/dev/null
+
+  # Confirm container image is the SONiC VM image.
+  if ! docker inspect -f '{{.Config.Image}}' clab-vm-smoke-s1 2>/dev/null | grep -Fq "local/sonic-vm"; then
+    echo "FAIL: vm-smoke s1 is not using local/sonic-vm image"
+    docker inspect -f '{{.Name}} {{.Config.Image}}' clab-vm-smoke-s1 2>/dev/null || true
+    exit 1
+  fi
+
+  # Confirm SONiC banner is present (deterministic textual proof).
+  docker exec clab-vm-smoke-s1 sh -lc 'grep -qiE "SONiC|Software for Open Networking in the Cloud" /etc/motd /etc/issue 2>/dev/null' \
+    && echo "OK: SONiC banner present in vm-smoke s1" \
+    || { echo "FAIL: SONiC banner not found in vm-smoke s1"; docker exec clab-vm-smoke-s1 sh -lc 'ls -l /etc/motd /etc/issue; head -n 50 /etc/motd /etc/issue 2>/dev/null || true'; exit 1; }
+
+  $NS down vm-smoke >/dev/null
+
+  # 2) Outcomes VM topology smoke: validate + up + declared tests + scenario list + all scenarios + down.
+  # This also proves scenario plumbing works with a SONiC VM present in the lab.
+  OUT_TOPO="topologies/vm-three-nodes-two-hosts-fw-outcomes.yaml"
+  OUT_LAB="vm-three-nodes-two-hosts-fw-outcomes"
+
+  $NS validate "$OUT_TOPO" >/dev/null
+
+  $NS up "$OUT_TOPO" --reconfigure >/dev/null
+  $NS test "$OUT_LAB" >/dev/null
+
+  scen_list="$($NS test "$OUT_LAB" --list-scenarios 2>/dev/null || true)"
+  echo "$scen_list" | grep -Fq "vm_bounce_interface_s1_eth1_recover" || { echo "FAIL: missing expected scenario vm_bounce_interface_s1_eth1_recover"; echo "$scen_list"; exit 1; }
+  echo "$scen_list" | grep -Fq "vm_bounce_link_fw1_s1_recover"     || { echo "FAIL: missing expected scenario vm_bounce_link_fw1_s1_recover";     echo "$scen_list"; exit 1; }
+
+  # Prove the s1 node in this topology is also the SONiC VM image.
+  if ! docker inspect -f '{{.Config.Image}}' clab-${OUT_LAB}-s1 2>/dev/null | grep -Fq "local/sonic-vm"; then
+    echo "FAIL: outcomes lab s1 is not using local/sonic-vm image"
+    docker inspect -f '{{.Name}} {{.Config.Image}}' clab-${OUT_LAB}-s1 2>/dev/null || true
+    exit 1
+  fi
+  docker exec clab-${OUT_LAB}-s1 sh -lc 'grep -qiE "SONiC|Software for Open Networking in the Cloud" /etc/motd /etc/issue 2>/dev/null' \
+    && echo "OK: SONiC banner present in outcomes s1" \
+    || { echo "FAIL: SONiC banner not found in outcomes s1"; exit 1; }
+
+  $NS test "$OUT_LAB" --all-scenarios >/dev/null
+  $NS down "$OUT_LAB" >/dev/null
+
+  echo "OK: VM SONiC proof + outcomes scenario smoke passed"
 fi
 echo
 
