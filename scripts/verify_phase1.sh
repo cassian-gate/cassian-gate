@@ -276,10 +276,14 @@ else
     exit 1
   fi
 
-  # Confirm SONiC banner is present (deterministic textual proof).
-  docker exec clab-vm-smoke-s1 sh -lc 'grep -qiE "SONiC|Software for Open Networking in the Cloud" /etc/motd /etc/issue 2>/dev/null' \
-    && echo "OK: SONiC banner present in vm-smoke s1" \
-    || { echo "FAIL: SONiC banner not found in vm-smoke s1"; docker exec clab-vm-smoke-s1 sh -lc 'ls -l /etc/motd /etc/issue; head -n 50 /etc/motd /etc/issue 2>/dev/null || true'; exit 1; }
+  # NOTE: /etc/motd and /etc/issue belong to the *container* OS (often Debian),
+  # not the SONiC guest. Prove SONiC VM usage by:
+  #  - image == local/sonic-vm...
+  #  - qemu process is running inside the container
+
+  docker exec clab-vm-smoke-s1 sh -lc 'ps -eo comm,args | grep -E "[q]emu-system|[q]emu-kvm" >/dev/null' \
+    && echo "OK: vm-smoke s1 has a running qemu process (VM runtime active)" \
+    || { echo "FAIL: vm-smoke s1 has no qemu process (expected SONiC VM runtime)"; docker exec clab-vm-smoke-s1 sh -lc 'ps -eo comm,args | head -n 80 || true'; exit 1; }
 
   $NS down vm-smoke >/dev/null
 
@@ -303,9 +307,9 @@ else
     docker inspect -f '{{.Name}} {{.Config.Image}}' clab-${OUT_LAB}-s1 2>/dev/null || true
     exit 1
   fi
-  docker exec clab-${OUT_LAB}-s1 sh -lc 'grep -qiE "SONiC|Software for Open Networking in the Cloud" /etc/motd /etc/issue 2>/dev/null' \
-    && echo "OK: SONiC banner present in outcomes s1" \
-    || { echo "FAIL: SONiC banner not found in outcomes s1"; exit 1; }
+  docker exec clab-${OUT_LAB}-s1 sh -lc 'ps -eo comm,args | grep -E "[q]emu-system|[q]emu-kvm" >/dev/null' \
+    && echo "OK: outcomes s1 has a running qemu process (VM runtime active)" \
+    || { echo "FAIL: outcomes s1 has no qemu process (expected SONiC VM runtime)"; docker exec clab-${OUT_LAB}-s1 sh -lc 'ps -eo comm,args | head -n 80 || true'; exit 1; }
 
   $NS test "$OUT_LAB" --all-scenarios >/dev/null
   $NS down "$OUT_LAB" >/dev/null
