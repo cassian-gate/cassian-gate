@@ -100,6 +100,7 @@ from netsim_tests import (
     _render_scenarios_summary,
     _format_test_summary,
     write_test_summary_artifact,
+    render_gate_result_block,
     _preflight_default_out,
     _preflight_write,
     _preflight_canonical_link_id,
@@ -2262,6 +2263,15 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         summary_path = write_test_summary_artifact(lab, results)
         print(f"Wrote: {summary_path}")
+
+        # Deterministic Gate Result block (presentation-only; derived from already-written results)
+        try:
+            blk = render_gate_result_block(results)
+            if isinstance(blk, str) and blk.strip():
+                print(blk, end="" if blk.endswith("\n") else "\n")
+        except Exception:
+            # Never allow UX formatting to affect gate execution
+            pass
 
         if print_json:
             print(json.dumps(results, indent=2))

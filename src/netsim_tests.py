@@ -2912,6 +2912,149 @@ def _format_test_summary(results: dict) -> str:
 
     return "\n".join(lines) + "\n"
 
+def render_gate_result_block(results: dict) -> str:
+    """
+    Deterministic, presentation-only CLI block derived from already-computed results.
+    Must NOT:
+      - recompute verdicts
+      - mutate results
+      - depend on terminal width or timestamps
+    """
+    lab = str(results.get("lab") or "").strip()
+    summ = results.get("summary", {}) or {}
+    total = int(summ.get("total") or 0)
+
+    scenarios = results.get("scenarios", []) or []
+    scen_total = len(scenarios) if isinstance(scenarios, list) else 0
+
+    res = str(results.get("result") or "unknown").strip().lower()
+    verdict_s = "PASS" if res == "pass" else "FAIL"
+
+    out: list[str] = []
+    out.append("────────────────────────────────────────")
+    out.append("ai-netsim Gate Result")
+    out.append("────────────────────────────────────────")
+    out.append(f"Lab: {lab}")
+    out.append("Mode: authoritative test")
+    out.append(f"Tests executed: {total}")
+    out.append(f"Scenarios executed: {scen_total}")
+    out.append("")
+    out.append(f"RESULT: {verdict_s}")
+
+    # Failed assertions (execution order; no sorting)
+    failed: list[dict] = []
+    tests = results.get("tests", []) or []
+    if isinstance(tests, list):
+        for t in tests:
+            if not isinstance(t, dict):
+                continue
+            if str(t.get("verdict") or "").strip().lower() != "fail":
+                continue
+            failed.append(t)
+
+    if verdict_s == "FAIL":
+        out.append("")
+        out.append("Failed assertions:")
+        if not failed:
+            out.append(" - (none recorded)")
+        else:
+            for t in failed:
+                name = str(t.get("name") or "<unnamed>").strip()
+                exp = t.get("expected")
+                obs = t.get("observed")
+
+                # Evidence: prefer explicit evidence; fall back to error; keep single-line and bounded.
+                ev = t.get("evidence")
+                if not isinstance(ev, str) or not ev.strip():
+                    ev = t.get("error")
+                ev_s = str(ev or "").strip()
+                if "\n" in ev_s:
+                    ev_s = ev_s.splitlines()[0].strip()
+                if len(ev_s) > 160:
+                    ev_s = ev_s[:160] + "…"
+
+                out.append(f" - {name}")
+                out.append(f"   Expected: {exp}")
+                out.append(f"   Observed: {obs}")
+                out.append(f"   Evidence: {ev_s}")
+
+    # Scenario timeline clarity (no durations; recorded order)
+    if scen_total:
+        out.append("")
+        out.append("Scenario timelines:")
+        for s in scenarios:
+            if not isinstance(s, dict):
+                continue
+            sid = str(s.get("id") or "<unknown>").strip()
+            out.append(f"Scenario: {sid}")
+
+            steps = s.get("steps", []) or []
+            if not isinstance(steps, list) or not steps:
+                out.append("  Step 1: (no steps recorded)")
+                continue
+
+            for i, st in enumerate(steps, start=1):
+                if not isinstance(st, dict):
+                    out.append(f"  Step {i}: unknown")
+                    continue
+                stype = str(st.get("type") or "unknown").strip()
+
+                # Build a deterministic, minimal step label
+                label_parts: list[str] = [stype]
+
+                if stype == "run":
+                    tn = st.get("test")
+                    if isinstance(tn, str) and tn.strip():
+                        label_parts.append(tn.strip())
+
+                elif stype == "fault":
+                    action = st.get("action")
+                    if isinstance(action, str) and action.strip():
+                        label_parts.append(action.strip())
+                    a = st.get("a")
+                    a_if = st.get("a_if")
+                    b = st.get("b")
+                    b_if = st.get("b_if")
+                    node = st.get("node")
+                    iface = st.get("if")
+
+                    if isinstance(node, str) and node.strip():
+                        if isinstance(iface, str) and iface.strip():
+                            label_parts.append(f"{node.strip()}:{iface.strip()}")
+                        else:
+                            label_parts.append(node.strip())
+                    elif isinstance(a, str) and a.strip() and isinstance(b, str) and b.strip():
+                        if isinstance(a_if, str) and a_if.strip():
+                            left = f"{a.strip()}:{a_if.strip()}"
+                        else:
+                            left = a.strip()
+                        if isinstance(b_if, str) and b_if.strip():
+                            right = f"{b.strip()}:{b_if.strip()}"
+                        else:
+                            right = b.strip()
+                        label_parts.append(f"{left}<->{right}")
+
+                elif stype == "wait_for":
+                    wtype = st.get("wait_for_type") or st.get("wtype") or st.get("type")
+                    if isinstance(wtype, str) and wtype.strip():
+                        label_parts.append(wtype.strip())
+                    src = st.get("from")
+                    dst = st.get("to") or st.get("to_ip")
+                    if isinstance(src, str) and src.strip() and isinstance(dst, str) and dst.strip():
+                        label_parts.append(f"{src.strip()}->{dst.strip()}")
+                    exp = st.get("expected") or st.get("expect")
+                    if isinstance(exp, str) and exp.strip():
+                        label_parts.append(f"expect={exp.strip()}")
+
+                elif stype == "wait_for_bgp":
+                    node = st.get("node")
+                    if isinstance(node, str) and node.strip():
+                        label_parts.append(f"node={node.strip()}")
+
+                out.append(f"  Step {i}: " + " ".join(label_parts).strip())
+
+    return "\n".join(out).rstrip() + "\n"
+
 def write_test_summary_artifact(lab: str, results: dict) -> Path:
     """
     Non-authoritative, human-scannable summary.
