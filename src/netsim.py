@@ -5160,6 +5160,70 @@ def cmd_validate(args: argparse.Namespace) -> None:
     finally:
         netsim_common._QUIET_DIE = prev_quiet
 
+def cmd_doctor(args: argparse.Namespace) -> None:
+    """
+    Read-only environment readiness checks.
+    Must not mutate environment state.
+    Deterministic output (no timestamps, fixed ordering).
+    Exit non-zero only if critical dependencies are missing.
+    """
+    checks: list[tuple[str, bool, str]] = []
+
+    def _which(name: str) -> bool:
+        return shutil.which(name) is not None
+
+    def _run_ok(cmd: list[str]) -> bool:
+        try:
+            p = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return p.returncode == 0
+        except Exception:
+            return False
+
+    # Critical: docker CLI present
+    docker_cli = _which("docker")
+    checks.append(("docker CLI detected", docker_cli, "critical"))
+
+    # Critical: docker daemon reachable (only if docker CLI exists)
+    docker_daemon = False
+    if docker_cli:
+        docker_daemon = _run_ok(["docker", "info"])
+    checks.append(("docker daemon reachable", docker_daemon, "critical"))
+
+    # Critical: containerlab present
+    clab = _which("containerlab")
+    checks.append(("containerlab detected", clab, "critical"))
+
+    # Non-critical: image presence (report only; do not pull)
+    # These are resolve-time hard defaults in netsim_model.py.
+    image_defaults = [
+        ("FRR image present", "frrouting/frr:latest"),
+        ("nft-fw image present", "ghcr.io/andrew-ai-netsim/nft-fw:latest"),
+        ("host image present", "wbitt/network-multitool:latest"),
+    ]
+    if docker_cli:
+        for label, image in image_defaults:
+            present = _run_ok(["docker", "image", "inspect", image])
+            checks.append((f"{label} ({image})", present, "advisory"))
+    else:
+        for label, image in image_defaults:
+            checks.append((f"{label} ({image})", False, "advisory"))
+
+    # Output (deterministic)
+    print("Environment readiness:")
+    any_critical_fail = False
+    for label, ok, level in checks:
+        if level == "critical" and not ok:
+            any_critical_fail = True
+        mark = "✔" if ok else ("✖" if level == "critical" else "⚠")
+        print(f" {mark} {label}")
+
+    if any_critical_fail:
+        print("✖ environment NOT ready (critical dependency missing)")
+        raise SystemExit(1)
+
+    print("✔ environment ready")
+    raise SystemExit(0)
+
 def cmd_preflight(args: argparse.Namespace) -> None:
     """
     Advisory-only static preflight:
@@ -8173,6 +8237,10 @@ def main() -> None:
     p_val.add_argument("topology", help="Topology YAML filename under ./topologies or a full path")
     p_val.add_argument("--json", action="store_true", help="Emit machine-readable JSON (CI-friendly)")
     p_val.set_defaults(func=cmd_validate)
+
+    # doctor (read-only environment readiness; no mutation)
+    p_doc = sub.add_parser("doctor", help="Read-only environment readiness checks (no mutation)")
+    p_doc.set_defaults(func=cmd_doctor)
 
     # preflight (advisory-only, declared-only, resolve-time)
     p_pre = sub.add_parser("preflight", help="Advisory static preflight (declared-only; no execution)")
