@@ -1,8 +1,9 @@
+````markdown
 # ai-netsim Documentation
 
 **Status:** AUTHORITATIVE  
 **Audience:** Network engineers, platform engineers, CI/CD operators  
-**Scope:** ai-netsim v1 / v1.x documentation set
+**Scope:** ai-netsim v1 / v1.x documentation set  
 
 This repository contains the **authoritative documentation** for **ai-netsim**, a deterministic, CI-first **network change-validation gate**.
 
@@ -10,6 +11,41 @@ These documents define **how ai-netsim is intended to be used**, **what is suppo
 
 If documentation here conflicts with implementation **at the level of intent, scope, or authority**, **the documentation wins**.  
 Implementation bugs are fixed to match documented behavior.
+
+---
+
+## 🚀 First 2 Minutes — See It Work
+
+Before reading the full documentation, verify your environment and run a deterministic gate:
+
+```bash
+netsim doctor
+netsim test examples/dci-failover.yaml
+````
+
+Expected behavior:
+
+* `netsim doctor` verifies your environment (Docker, containerlab, required images).
+* `netsim test examples/dci-failover.yaml` runs an **authoritative clean-state gate**:
+
+  1. Deploys the topology
+  2. Executes declared tests
+  3. Writes artifacts under `labs/clab-<labname>/`
+  4. Tears down the lab
+  5. Returns deterministic exit code
+
+     * `0` = PASS
+     * `1` = FAIL
+
+You can also observe failure behavior:
+
+```bash
+netsim test examples/dci-failover-broken.yaml
+```
+
+This is the intended first experience of ai-netsim.
+
+ai-netsim is designed so that a single command produces a reproducible, CI-safe verdict.
 
 ---
 
@@ -58,7 +94,7 @@ Future versions (v1.5, v2) will introduce **new files**, not overwrite v1 docume
 
 ---
 
-### Document Roles
+## Document Roles
 
 | File                    | Purpose                                       |
 | ----------------------- | --------------------------------------------- |
@@ -73,13 +109,13 @@ Future versions (v1.5, v2) will introduce **new files**, not overwrite v1 docume
 
 Read and trust documents in this order:
 
-1. **Admin Guide**  
+1. **Admin Guide**
    Defines mental model, authority, and correct usage.
 
-2. **Topology Schema Guide**  
+2. **Topology Schema Guide**
    Defines what topology YAML *means* and what is allowed.
 
-3. **CLI Reference**  
+3. **CLI Reference**
    Defines available commands and flags.
 
 This mirrors ai-netsim’s own design:
@@ -122,7 +158,7 @@ This repository is intended to be:
 * linked in CI pipelines
 * cited during incidents and postmortems
 
-It assumes readers already understand networking fundamentals.  
+It assumes readers already understand networking fundamentals.
 It documents **ai-netsim behavior and guarantees**, not networking theory.
 
 ---
@@ -145,4 +181,13 @@ If a change alters authority, scope, or version semantics, it must be **explicit
 
 > **This repository defines how ai-netsim is used, trusted, and kept honest.**
 
+```
+
 ---
+
+If you'd like, I can now:
+
+- Provide a slightly more enterprise-polished version  
+- Or create a **developer-facing README** variant (different audience tone)  
+- Or add a minimal CI example block (GitHub Actions snippet)
+```
