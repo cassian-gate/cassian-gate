@@ -165,30 +165,57 @@ class ContainerRuntime
 
 _CANDIDATE_STDIO_TRUNC = 8_000  # must match previous value exactly
 
-def _print_artifacts_footer_for_lab(lab: str) -> None:
+def _print_artifacts_footer_for_lab(lab_dir: Path) -> None:
     """
-    Deterministic Artifact Footer (v1.5, LOCKED):
-      Artifacts:
-      * labs/<labdir>/results.json (authoritative)
-      * labs/<labdir>/results.summary.txt (human-readable)
+    Deterministic artifact footer (best-effort).
 
-    Rules:
-      - Exactly these 3 lines (no extra context).
-      - No filesystem checks.
-      - Relative paths only (must start with "labs/").
-      - Safe to call from finally blocks; must never raise.
+    Accepts either:
+      - labs/clab-<labname> directory paths
+      - a lab name
+      - a topology path (e.g. examples/foo.yaml) when `netsim test <topology.yaml>` is used
+    and prints the *actual* artifact paths (labs/clab-<labname>/...).
+
+    Presentation-only: must never raise.
     """
     try:
-        lab_s = str(lab or "").strip()
-        if not lab_s:
+        raw = str(lab_dir).strip()
+        if not raw:
             return
 
-        # Canonical artifact dir: labs/clab-<lab> (via lab_dir())
-        adir = lab_dir(lab_s)  # Path(".../labs/clab-<lab>")
-        dname = adir.name      # "clab-<lab>"
-        print("Artifacts:")
-        print(f"* labs/{dname}/results.json (authoritative)")
-        print(f"* labs/{dname}/results.summary.txt (human-readable)")
+        raw_path = Path(raw)
+        dname = raw_path.name
+        dname_l = dname.lower()
+
+        # Default: assume caller gave us a lab name or a labs/* path.
+        adir: Path | None = None
+
+        # If it's already a labs/clab-* dir, use it as-is.
+        if raw.startswith("labs/") or raw.startswith("labs\\"):
+            adir = raw_path
+
+        # If it looks like a topology path (examples/foo.yaml), resolve to lab name and
+        # print labs/clab-<labname>/...
+        if adir is None and ("/" in raw or "\\" in raw or dname_l.endswith((".yaml", ".yml"))):
+            try:
+                topo = load_topology_yaml(raw)
+                lab_name = str(topo.get("name") or Path(raw).stem).strip()
+                if lab_name:
+                    adir = lab_dir(lab_name)  # from netsim_artifacts.py
+            except Exception:
+                adir = None
+
+        # Fallback: treat input as lab name
+        if adir is None:
+            adir = lab_dir(dname)
+
+        p_json = adir / "results.json"
+        p_sum = adir / "results.summary.txt"
+        if p_json.exists() or p_sum.exists():
+            print("Artifacts:")
+            if p_json.exists():
+                print(f"* {p_json} (authoritative)")
+            if p_sum.exists():
+                print(f"* {p_sum} (human-readable)")
     except Exception:
         return
 
@@ -1861,11 +1888,100 @@ def cmd_test(args: argparse.Namespace) -> None:
         )
 
     # ------------------------------------------------------------
-    # v1.x UX hardening: netsim test expects a LAB NAME, not a topology path
-    # Deterministic heuristic only (no filesystem stat).
+    # v2 UX hardening (First 10 Minutes):
+    # Allow: netsim test <topology.yaml> as an authoritative clean-state gate.
+    # Preserve: netsim test <lab-name> behavior (existing lab required).
     # ------------------------------------------------------------
     lab_raw = str(lab or "").strip()
 
+    def _resolve_topology_path(s: str) -> Path | None:
+        s2 = (s or "").strip()
+        if not s2:
+            return None
+
+        # 1) explicit filesystem path
+        p = Path(s2)
+        if p.is_file():
+            return p
+
+        # 2) under repo topologies/
+        p2 = TOPO_DIR / s2
+        if p2.is_file():
+            return p2
+
+        # 3) under repo examples/ (first-10-min UX)
+        p3 = (BASE_DIR / "examples" / s2)
+        if p3.is_file():
+            return p3
+
+        return None
+
+    topo_gate_path = _resolve_topology_path(lab_raw)
+
+    # Gate-style: topology path provided
+    if topo_gate_path is not None:
+        # Pre-validate + resolve to get deterministic lab name
+        topo_preview = load_yaml(topo_gate_path)
+        ensure_valid_topology(topo_preview)
+        resolved_preview = resolve_topology(topo_preview)
+        validate_scenarios(resolved_preview)
+
+        lab_name = str((resolved_preview or {}).get("name") or "").strip()
+        if not lab_name:
+            die(f"Topology missing required 'name': {topo_gate_path}")
+
+        # Run clean-state deploy/provision (equivalent to: netsim up <topo> --reconfigure)
+        cmd_up(argparse.Namespace(topology=str(topo_gate_path), reconfigure=True))
+
+        # Now run tests against the deployed lab name (existing behavior)
+        args2 = argparse.Namespace(**vars(args))
+        args2.lab = lab_name
+
+        exit_code = 0
+        try:
+            cmd_test(args2)
+            return
+        except SystemExit as e:
+            # Preserve exit code from the authoritative test run
+            try:
+                exit_code = int(getattr(e, "code", 1) or 1)
+            except Exception:
+                exit_code = 1
+            raise
+        finally:
+            # Always cleanup after gate-style runs (equivalent to: netsim down <lab>)
+            try:
+                cmd_down(argparse.Namespace(name=lab_name))
+            except SystemExit:
+                # Cleanup best-effort; never mask the test verdict exit code
+                pass
+            finally:
+                if exit_code:
+                    # If we caught a SystemExit above, re-raise is already in-flight.
+                    # If not, no action needed.
+                    pass
+
+    # ------------------------------------------------------------
+    # Existing behavior: lab name required for non-gate runs
+    # ------------------------------------------------------------
+    if not lab_raw:
+        die(
+            "ERROR: missing LAB NAME.\n\n"
+            "Usage:\n"
+            "  netsim test <lab-name> [options]\n"
+            "  netsim test <topology.yaml> [options]\n\n"
+            "Examples:\n"
+            "  netsim up topologies/foo.yaml --reconfigure\n"
+            "  netsim test foo\n\n"
+            "  netsim test examples/dci-failover.yaml\n\n"
+            "Note:\n"
+            "  If you want the baseline-vs-change gate, use:\n"
+            "    netsim test --two-run --two-run-topology <topology.yaml> --candidate-config <dir>\n",
+            code=2,
+        )
+
+    # Optional UX guardrail: path-like strings that do not resolve to a topology file
+    # are treated as misuse (avoid creating labs/ entries like labs/<something>.yaml).
     def _looks_like_topology_path(s: str) -> bool:
         s2 = s.strip()
         s2_l = s2.lower()
@@ -1874,21 +1990,18 @@ def cmd_test(args: argparse.Namespace) -> None:
             or ("\\" in s2)
             or s2_l.endswith(".yaml")
             or s2_l.endswith(".yml")
-            or s2_l.startswith("topologies/")
-            or s2_l.startswith("./")
         )
 
-    if _looks_like_topology_path(lab_raw):
+    if _looks_like_topology_path(lab_raw) and _resolve_topology_path(lab_raw) is None:
         die(
-            "netsim test expects a LAB NAME, not a topology file path.\n\n"
+            "ERROR: netsim test expects either a LAB NAME (existing lab) or a valid topology YAML path.\n\n"
             "You ran:\n"
             f"  netsim test {lab_raw}\n\n"
-            "Try:\n"
-            f"  netsim up {lab_raw}\n"
+            "Try (existing lab mode):\n"
+            "  netsim up <topology.yaml> --reconfigure\n"
             "  netsim test <lab-name>\n\n"
-            "Example:\n"
-            "  netsim up topologies/change-context-hard.yaml\n"
-            "  netsim test change-context-hard\n",
+            "Try (gate mode, clean-state):\n"
+            "  netsim test <topology.yaml>\n",
             code=2,
         )
     # ------------------------------------------------------------
@@ -8342,13 +8455,18 @@ def main() -> None:
     p_status.set_defaults(func=cmd_status)
 
     # test
-    p_test = sub.add_parser("test", help="Run declared tests against an existing lab by name")
+    p_test = sub.add_parser(
+        "test",
+        help="Run tests (lab-name mode) or run an authoritative clean-state gate (topology.yaml mode)",
+    )
     p_test.add_argument(
         "lab",
         nargs="?",
-        help="Lab name (topology 'name', e.g. three-frr-two-hosts-fw-routed). "
-             "Optional when using --two-run (then provide --two-run-topology).",
-    )
+        help="Lab name OR topology file path (.yaml/.yml). "
+            "If a topology path is provided, runs an authoritative clean-state gate "
+            "(up → test → down) using the topology name (or filename stem). "
+            "Optional when using --two-run (then provide --two-run-topology).",
+            )
     p_test.add_argument(
         "--two-run",
         action="store_true",
