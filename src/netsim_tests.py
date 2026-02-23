@@ -2929,6 +2929,7 @@ def render_gate_result_block(results: dict) -> str:
 
     res = str(results.get("result") or "unknown").strip().lower()
     verdict_s = "PASS" if res == "pass" else "FAIL"
+    is_smoke = (verdict_s == "PASS" and total == 0 and scen_total == 0)
 
     out: list[str] = []
     out.append("────────────────────────────────────────")
@@ -2939,7 +2940,11 @@ def render_gate_result_block(results: dict) -> str:
     out.append(f"Tests executed: {total}")
     out.append(f"Scenarios executed: {scen_total}")
     out.append("")
-    out.append(f"RESULT: {verdict_s}")
+    if is_smoke:
+        out.append("RESULT: PASS (SMOKE)")
+        out.append("Note: no tests or scenarios were executed.")
+    else:
+        out.append(f"RESULT: {verdict_s}")
 
     # Failed assertions (execution order; no sorting)
     failed: list[dict] = []
