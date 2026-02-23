@@ -6695,29 +6695,13 @@ def cmd_run(args: argparse.Namespace) -> None:
                 if exit_code is None:
                     record_failure(1)
 
-    # Final reporting + exit behavior (never lie)
+    # Final exit behavior:
+    # cmd_test()/cmd_collect() already emit authoritative summary outputs.
+    # Phase-1 WI-1: avoid emitting a second "result summary" line from cmd_run().
     if exit_code is not None and int(exit_code) != 0:
-        if keep:
-            print(f"❌ RUN FAIL: exit={exit_code} (lab kept by --keep): {lab_name}")
-        elif destroy_always:
-            print(f"❌ RUN FAIL: exit={exit_code} (attempted teardown via --destroy-always): {lab_name}")
-        else:
-            print(f"❌ RUN FAIL: exit={exit_code} (lab kept for debugging): {lab_name}")
         raise SystemExit(int(exit_code))
 
-    # Success messaging (reflect what actually ran)
-    bits: list[str] = ["up"]
-    if do_capture_config:
-        bits.append("capture-config")
-    if do_test:
-        bits.append("test")
-    if do_collect:
-        bits.append("collect")
-
-    if keep:
-        print(f"✅ RUN PASS: " + " + ".join(bits) + f" completed (lab kept): {lab_name}")
-    else:
-        print(f"✅ RUN PASS: " + " + ".join(bits) + f" completed (lab destroyed): {lab_name}")
+    return
 
 # --- Assistive AI (v1: advisory-only, artifact-only, post-exec, BYO-key online optional) ---
 
