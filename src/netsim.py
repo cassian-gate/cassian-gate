@@ -1956,6 +1956,9 @@ def cmd_test(args: argparse.Namespace) -> None:
                 # Cleanup best-effort; never mask the test verdict exit code
                 pass
             finally:
+                # Phase 1 (R2/R5): explicit lifecycle disclosure for gate-style topology runs
+                print("Lab lifecycle: DESTROYED")
+
                 if exit_code:
                     # If we caught a SystemExit above, re-raise is already in-flight.
                     # If not, no action needed.
@@ -6695,9 +6698,17 @@ def cmd_run(args: argparse.Namespace) -> None:
                 if exit_code is None:
                     record_failure(1)
 
-    # Final exit behavior:
-    # cmd_test()/cmd_collect() already emit authoritative summary outputs.
-    # Phase-1 WI-1: avoid emitting a second "result summary" line from cmd_run().
+    # Phase 1 (R2/R5): explicit lifecycle disclosure (deterministic; no runtime inspection)
+    if keep:
+        lifecycle = "RETAINED"
+    elif destroy_always:
+        lifecycle = "DESTROYED"
+    else:
+        # Default run behavior: destroy only on full success; keep lab on failure for debugging.
+        lifecycle = "DESTROYED" if (exit_code is None) else "RETAINED"
+    print(f"Lab lifecycle: {lifecycle}")
+
+    # Final reporting + exit behavior (never lie)
     if exit_code is not None and int(exit_code) != 0:
         raise SystemExit(int(exit_code))
 
