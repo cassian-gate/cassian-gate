@@ -6191,11 +6191,13 @@ def cmd_status(args: argparse.Namespace) -> None:
         die("ERROR: status requires a lab name or topology file", code=2)
 
     lab = raw_lab
+    topo_path = None  # set only when user input is a topology path (for deterministic error context)
     raw_path = Path(raw_lab)
     dname_l = raw_path.name.lower()
 
     # If it looks like a topology path, deterministically derive lab name from YAML.
     if ("/" in raw_lab) or ("\\" in raw_lab) or dname_l.endswith((".yaml", ".yml")):
+        topo_path = raw_lab
         try:
             topo = load_topology_yaml(raw_lab)
         except Exception as e:
@@ -6221,6 +6223,14 @@ def cmd_status(args: argparse.Namespace) -> None:
     old_quiet = netsim_common.QUIET_RUN
     if as_json:
         netsim_common.QUIET_RUN = True
+
+    resolved_path = lab_dir(lab) / "topology.resolved.yaml"
+    if not resolved_path.exists():
+        msg = f"Lab artifacts not found for lab={lab}. Expected: {resolved_path}"
+        if topo_path:
+            msg = f"Topology: {topo_path} (derived lab={lab})\n" + msg
+        msg += "\nHint: Run 'netsim up <topology.yaml>' (or 'netsim run <topology.yaml> --keep') then retry."
+        die(msg, code=2)
 
     try:
         topo = _load_resolved_topology(lab)
@@ -6478,6 +6488,15 @@ def cmd_status(args: argparse.Namespace) -> None:
         # -------------------------
         # Human output (updated)
         # -------------------------
+        topo_arg = str(getattr(args, "lab", "") or "").strip()
+        topo_path = None
+        if topo_arg:
+            p = Path(topo_arg)
+            if ("/" in topo_arg) or ("\\" in topo_arg) or p.name.lower().endswith((".yaml", ".yml")):
+                topo_path = topo_arg
+
+        if topo_path:
+            print(f"Topology: {topo_path}")
         print(f"Lab: {lab}")
         print("Nodes:")
 
@@ -8790,9 +8809,13 @@ def main() -> None:
         ),
     )
     p_test.add_argument(
-    "--list-scenarios",
-    action="store_true",
-    help="List scenarios from labs/clab-<lab>/topology.resolved.yaml (no deploy/execute).",
+        "--list-scenarios",
+        action="store_true",
+        help=(
+            "List scenarios without deploy/execute. "
+            "If given a topology file, scenarios are shown from post-Resolve expansion. "
+            "If given a lab name, requires existing lab artifacts under labs/clab-<lab>/."
+        ),
     )
     # run
     p_run = sub.add_parser("run", help="Ephemeral workflow: up -> test -> collect -> down (CI-friendly)")
