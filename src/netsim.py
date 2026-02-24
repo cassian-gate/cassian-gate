@@ -289,7 +289,7 @@ def load_topology_yaml(arg: str) -> dict[str, Any]:
 def _sha256_file(p: Path) -> str:
     import hashlib
     h = hashlib.sha256()
-    
+
     with p.open("rb") as f:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
@@ -2083,16 +2083,19 @@ def cmd_test(args: argparse.Namespace) -> None:
         adir = lab_dir(lab)
         if not adir.exists():
             die(
-                f"ERROR: lab artifacts not found: {adir}\n"
-                f"Expected: labs/clab-{lab}/\n"
-                f"Tip: run 'netsim test {lab}' (or 'netsim up <topology.yaml>') to create artifacts."
+                f"Lab artifacts not found for lab={lab}. Expected: {adir}/topology.resolved.yaml\n"
+                "Hint: Run 'netsim up <topology.yaml> --reconfigure' then 'netsim test <lab-name>', or run "
+                "'netsim test <topology.yaml>' to create artifacts.",
+                code=2,
             )
 
         rpath = adir / "topology.resolved.yaml"
         if not rpath.exists():
             die(
-                f"ERROR: resolved topology missing: {rpath}\n"
-                "Lab not provisioned / missing artifacts."
+                f"Lab artifacts not found for lab={lab}. Expected: {rpath}\n"
+                "Hint: Run 'netsim up <topology.yaml> --reconfigure' then 'netsim test <lab-name>', or run "
+                "'netsim test <topology.yaml>' to create artifacts.",
+                code=2,
             )
 
         topo = load_yaml(rpath)
@@ -6036,7 +6039,8 @@ def _load_resolved_topology(lab_name: str) -> dict[str, Any]:
         # Phase 3 misuse semantics: missing lab artifacts is a usage error (exit 2),
         # and the message must be deterministic + actionable (no Docker scanning).
         die(
-            f"ERROR: Lab artifacts not found for lab={lab_name}. Expected: {topo_path}",
+            f"Lab artifacts not found for lab={lab_name}. Expected: {topo_path}\n"
+            "Hint: Run 'netsim up <topology.yaml>' (or 'netsim run <topology.yaml> --keep') then retry.",
             code=2,
         )
     return load_yaml(topo_path)
