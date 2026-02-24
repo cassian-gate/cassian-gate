@@ -199,7 +199,7 @@ class ContainerRuntime
 
 _CANDIDATE_STDIO_TRUNC = 8_000  # must match previous value exactly
 
-def _print_artifacts_footer_for_lab(lab_dir: Path) -> None:
+def _print_artifacts_footer_for_lab(lab_input: Path) -> None:
     """
     Deterministic artifact footer (best-effort).
 
@@ -212,7 +212,7 @@ def _print_artifacts_footer_for_lab(lab_dir: Path) -> None:
     Presentation-only: must never raise.
     """
     try:
-        raw = str(lab_dir).strip()
+        raw = str(lab_input).strip()
         if not raw:
             return
 
@@ -4590,7 +4590,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                             fail_or_continue(f"Scenario FAIL: {sid}")
 
         else:
-            # Default behavior: run declared tests (steady-state)
+# Default behavior: run declared tests (steady-state)
             if not declared_tests:
                 results["result"] = "pass"
                 finished_at = time.time()
@@ -4603,7 +4603,14 @@ def cmd_test(args: argparse.Namespace) -> None:
                 print("✅ TEST PASS: nodes running" + (" + BGP OK" if bgp_participants else ""))
                 return
 
+            # Deterministic per-test progress lines (human only; emitted only under --verbose to preserve quiet default)
+            def _tv(msg: str) -> None:
+                if bool(getattr(args, "verbose", False)):
+                    print(msg)
+
             matched = 0
+            exec_idx = 0
+
             for idx, t in enumerate(declared_tests):
                 i = idx + 1
                 test_name = t.get("name") if isinstance(t, dict) else None
@@ -4625,6 +4632,10 @@ def cmd_test(args: argparse.Namespace) -> None:
                         duration_ms=0,
                         error="test entry must be a dict",
                     )
+                    # Deterministic progress: record as executed even if invalid
+                    exec_idx += 1
+                    _tv(f"[TEST START] {exec_idx:03d} {test_name} kind=unknown")
+                    _tv(f"[TEST END]   {exec_idx:03d} {test_name} verdict=FAIL")
                     fail_or_continue(f"tests[{i}]: must be a dict")
                     continue
 
@@ -4640,6 +4651,9 @@ def cmd_test(args: argparse.Namespace) -> None:
                         duration_ms=0,
                         error="has both 'kind' and 'type'",
                     )
+                    exec_idx += 1
+                    _tv(f"[TEST START] {exec_idx:03d} {test_name} kind=unknown")
+                    _tv(f"[TEST END]   {exec_idx:03d} {test_name} verdict=FAIL")
                     fail_or_continue(f"tests[{i}]: has both 'kind' and 'type' (use only 'kind')")
                     continue
 
@@ -4656,6 +4670,9 @@ def cmd_test(args: argparse.Namespace) -> None:
                         duration_ms=0,
                         error="missing 'kind'",
                     )
+                    exec_idx += 1
+                    _tv(f"[TEST START] {exec_idx:03d} {test_name} kind=unknown")
+                    _tv(f"[TEST END]   {exec_idx:03d} {test_name} verdict=FAIL")
                     fail_or_continue(f"tests[{i}]: missing 'kind'")
                     continue
 
@@ -4674,6 +4691,9 @@ def cmd_test(args: argparse.Namespace) -> None:
                         duration_ms=0,
                         error=f"unsupported kind '{kind}'",
                     )
+                    exec_idx += 1
+                    _tv(f"[TEST START] {exec_idx:03d} {test_name} kind={kind}")
+                    _tv(f"[TEST END]   {exec_idx:03d} {test_name} verdict=FAIL")
                     fail_or_continue(f"tests[{i}]: unsupported kind '{kind}' (supported: ping, tcp, bgp_neighbor)")
                     continue
 
@@ -4681,6 +4701,10 @@ def cmd_test(args: argparse.Namespace) -> None:
                     continue
 
                 matched += 1
+                exec_idx += 1
+
+                # Deterministic START line: only stable identifiers (no time, no duration)
+                _tv(f"[TEST START] {exec_idx:03d} {test_name} kind={kind}")
 
                 src = t.get("src")
                 dst = t.get("dst")
@@ -4699,6 +4723,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                             duration_ms=0,
                             error="missing src(on)/prefix",
                         )
+                        _tv(f"[TEST END]   {exec_idx:03d} {test_name} verdict=FAIL")
                         fail_or_continue(f"tests[{i}]: route_prefix requires src(on) + prefix")
                         continue
 
@@ -4716,6 +4741,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                             duration_ms=0,
                             error="missing src/dst(to)",
                         )
+                        _tv(f"[TEST END]   {exec_idx:03d} {test_name} verdict=FAIL")
                         fail_or_continue(f"tests[{i}]: missing src + (dst or to/to_ip)")
                         continue
 
@@ -4733,6 +4759,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                             duration_ms=0,
                             error="missing src/dst (neighbor IPv4 required)",
                         )
+                        _tv(f"[TEST END]   {exec_idx:03d} {test_name} verdict=FAIL")
                         fail_or_continue(f"tests[{i}]: missing src/dst (neighbor IPv4 required)")
                         continue
 
@@ -4748,6 +4775,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                             duration_ms=0,
                             error="dst must be an IPv4 neighbor address",
                         )
+                        _tv(f"[TEST END]   {exec_idx:03d} {test_name} verdict=FAIL")
                         fail_or_continue(f"tests[{i}]: bgp_neighbor dst must be an IPv4 literal")
                         continue
 
@@ -4765,6 +4793,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                             duration_ms=0,
                             error="missing src/dst",
                         )
+                        _tv(f"[TEST END]   {exec_idx:03d} {test_name} verdict=FAIL")
                         fail_or_continue(f"tests[{i}]: missing src/dst")
                         continue
 
@@ -4781,6 +4810,9 @@ def cmd_test(args: argparse.Namespace) -> None:
 
                     r = run_ping_test(test_name=test_name, src=src, dst=dst_label, t=t)
 
+                    verdict_txt = (r.get("verdict") or "fail").upper()
+                    _tv(f"[TEST END]   {exec_idx:03d} {test_name} verdict={verdict_txt}")
+
                     if r.get("verdict") != "pass":
                         dst_ip = None
                         meta = r.get("meta")
@@ -4794,6 +4826,8 @@ def cmd_test(args: argparse.Namespace) -> None:
 
                 if kind == "route_prefix":
                     verdict = run_route_prefix_test(test_name=test_name, src=src, t=t)
+                    verdict_txt = (verdict or "fail").upper()
+                    _tv(f"[TEST END]   {exec_idx:03d} {test_name} verdict={verdict_txt}")
                     if verdict != "pass":
                         fail_or_continue(
                             f"tests[{i}] route_prefix mismatch: on {src} prefix {t.get('prefix')} expected {t.get('expect','pass')}"
@@ -4802,6 +4836,8 @@ def cmd_test(args: argparse.Namespace) -> None:
 
                 if kind == "bgp_neighbor":
                     verdict = run_bgp_neighbor_test(test_name=test_name, src=src, dst=dst, t=t)
+                    verdict_txt = (verdict or "fail").upper()
+                    _tv(f"[TEST END]   {exec_idx:03d} {test_name} verdict={verdict_txt}")
                     if verdict != "pass":
                         fail_or_continue(
                             f"tests[{i}] bgp_neighbor mismatch: {src} -> {dst} expected {t.get('expect','pass')}"
@@ -4809,6 +4845,8 @@ def cmd_test(args: argparse.Namespace) -> None:
                     continue
 
                 verdict = run_tcp_test(test_name=test_name, src=src, dst=dst, t=t)
+                verdict_txt = (verdict or "fail").upper()
+                _tv(f"[TEST END]   {exec_idx:03d} {test_name} verdict={verdict_txt}")
                 if verdict != "pass":
                     port = t.get("port")
                     fail_or_continue(f"tests[{i}] tcp mismatch: {src} -> {dst}:{port} expected {t.get('expect','pass')}")
@@ -4832,8 +4870,30 @@ def cmd_test(args: argparse.Namespace) -> None:
                     error=f"no test matched filters {label}",
                 )
 
-    finally:
-        # Always stop any listeners we started (deterministic cleanup)
+                # Deterministic FAIL path must still write authoritative artifacts + summary header
+                # before exiting (verify_phase1 expects FAIL header after --name DOES_NOT_EXIST).
+                try:
+                    if isinstance(results.get("summary"), dict):
+                        results["summary"]["filtered_by_name"] = filter_name or ""
+                        results["summary"]["filtered_by_kind"] = filter_kind or ""
+                    else:
+                        results["summary"] = {"filtered_by_name": (filter_name or ""), "filtered_by_kind": (filter_kind or "")}
+                except Exception:
+                    pass
+
+                total = len(results.get("tests") or [])
+                failed_count = sum(1 for r in (results.get("tests") or []) if isinstance(r, dict) and r.get("verdict") == "fail")
+                results.setdefault("summary", {})
+                if isinstance(results["summary"], dict):
+                    results["summary"]["total"] = total
+                    results["summary"]["failed"] = failed_count
+                    results["summary"]["passed"] = total - failed_count
+
+                results["result"] = "fail"
+                write_results()
+                fail(f"No test matched filters {label}")
+
+        # Cleanup any tcp listeners we started (deterministic cleanup)
         for dst_node in listeners_started.keys():
             rt.exec(lab, dst_node, ["sh", "-lc", 'pkill -f "nc.*-p" 2>/dev/null || true'], check=False)
 
@@ -4910,6 +4970,10 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         results["result"] = "fail" if results["summary"]["failed"] > 0 else "pass"
         write_results()
+
+    except SystemExit:
+        # Close the try: block deterministically and preserve existing exit semantics.
+        raise
 
     # =============================================================================
     # 5) Success output (human-friendly)

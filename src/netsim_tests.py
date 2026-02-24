@@ -2772,9 +2772,10 @@ def _format_test_summary(results: dict) -> str:
 
     lines: list[str] = []
     lines.append(f"lab: {lab}")
+    # Non-authoritative summary line; result is authoritative in results.json.
     lines.append(f"result: {results.get('result', 'unknown')}")
-    if duration_ms is not None:
-        lines.append(f"duration_ms: {int(duration_ms)}")
+    # Supporting-only summary must be deterministic; duration varies run-to-run.
+    # Authoritative duration remains in results.json; do not duplicate nondeterminism here.
 
     # Keep tests as declared tests summary (Option A)
     lines.append(f"tests: total={total} passed={passed} failed={failed}")
@@ -3159,8 +3160,19 @@ def write_test_summary_artifact(lab: str, results: dict) -> Path:
         "\n"
     )
 
-    # Existing body remains unchanged (shifted down only)
+    # Existing body remains non-authoritative; improve readability only.
+    # Rules:
+    # - Do NOT change deterministic header (first 10 lines validated by verify_phase1.sh)
+    # - Do NOT duplicate summary content
+    # - Do NOT add timestamps/durations
     body = _format_test_summary(results)
+
+    # Deterministic readability normalization (supporting-only):
+    # ensure exactly one blank line between header and body, and ensure body ends with newline.
+    body = (body or "").lstrip("\n")
+    if not body.endswith("\n"):
+        body += "\n"
+
     out.write_text(ci_header + header + body, encoding="utf-8")
     return out
 
