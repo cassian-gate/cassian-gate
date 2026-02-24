@@ -2046,6 +2046,39 @@ def cmd_test(args: argparse.Namespace) -> None:
         if not lab_name:
             die(f"Topology missing required 'name': {topo_gate_path}")
 
+        # Phase 3 (WI-6): list scenarios directly from the resolved topology (no lab artifacts, no runtime).
+        if bool(getattr(args, "list_scenarios", False)):
+            topo = resolved_preview
+            scenarios = topo.get("scenarios") or []
+            if not scenarios:
+                print(f"No scenarios declared for topology '{topo_gate_path}' (lab '{lab_name}').")
+                return
+
+            rows: list[tuple[str, str, int]] = []
+            for s in scenarios:
+                if not isinstance(s, dict):
+                    continue
+                sid = s.get("id")
+                if not isinstance(sid, str) or not sid.strip():
+                    continue
+                desc = s.get("description") or ""
+                if not isinstance(desc, str):
+                    desc = str(desc)
+                steps = s.get("steps") or []
+                steps_n = len(steps) if isinstance(steps, list) else 0
+                rows.append((sid.strip(), desc.strip(), steps_n))
+
+            rows.sort(key=lambda x: x[0])
+
+            print(f"Scenarios for topology '{topo_gate_path}' (lab '{lab_name}'):")
+            print("Note: step counts are from the resolved topology (post-Resolve). Scenarios using 'run: { include: all }' will show expanded steps.")
+            for sid, desc, steps_n in rows:
+                if desc:
+                    print(f"- {sid}: {desc} (steps: {steps_n})")
+                else:
+                    print(f"- {sid}: (steps: {steps_n})")
+            return
+
         # Phase 3 guardrail (P3-D):
         # Candidate-config misuse must fail fast (exit 2) BEFORE any runtime actions / lab artifacts.
         cand_arg = getattr(args, "candidate_config", None)
