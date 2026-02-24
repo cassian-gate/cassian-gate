@@ -1840,7 +1840,8 @@ def cmd_test(args: argparse.Namespace) -> None:
     - Opt-in scenarios:
         * netsim test --scenario <id>
         * netsim test --all-scenarios
-      When a scenario is requested, cmd_test executes ONLY the requested scenario(s).
+    When a scenario is requested, cmd_test executes declared steady-state tests first,
+    then executes the requested scenario(s).
       Scenario steps call existing atomic tests via `run: <test_name>`.
 
     Hard guardrail:
@@ -1956,6 +1957,9 @@ def cmd_test(args: argparse.Namespace) -> None:
                 # Cleanup best-effort; never mask the test verdict exit code
                 pass
             finally:
+                # Phase 1 (R2/R5): explicit lifecycle disclosure for gate-style topology runs
+                print("Lab lifecycle: DESTROYED")
+
                 if exit_code:
                     # If we caught a SystemExit above, re-raise is already in-flight.
                     # If not, no action needed.
@@ -6695,29 +6699,21 @@ def cmd_run(args: argparse.Namespace) -> None:
                 if exit_code is None:
                     record_failure(1)
 
+    # Phase 1 (R2/R5): explicit lifecycle disclosure (deterministic; no runtime inspection)
+    if keep:
+        lifecycle = "RETAINED"
+    elif destroy_always:
+        lifecycle = "DESTROYED"
+    else:
+        # Default run behavior: destroy only on full success; keep lab on failure for debugging.
+        lifecycle = "DESTROYED" if (exit_code is None) else "RETAINED"
+    print(f"Lab lifecycle: {lifecycle}")
+
     # Final reporting + exit behavior (never lie)
     if exit_code is not None and int(exit_code) != 0:
-        if keep:
-            print(f"❌ RUN FAIL: exit={exit_code} (lab kept by --keep): {lab_name}")
-        elif destroy_always:
-            print(f"❌ RUN FAIL: exit={exit_code} (attempted teardown via --destroy-always): {lab_name}")
-        else:
-            print(f"❌ RUN FAIL: exit={exit_code} (lab kept for debugging): {lab_name}")
         raise SystemExit(int(exit_code))
 
-    # Success messaging (reflect what actually ran)
-    bits: list[str] = ["up"]
-    if do_capture_config:
-        bits.append("capture-config")
-    if do_test:
-        bits.append("test")
-    if do_collect:
-        bits.append("collect")
-
-    if keep:
-        print(f"✅ RUN PASS: " + " + ".join(bits) + f" completed (lab kept): {lab_name}")
-    else:
-        print(f"✅ RUN PASS: " + " + ".join(bits) + f" completed (lab destroyed): {lab_name}")
+    return
 
 # --- Assistive AI (v1: advisory-only, artifact-only, post-exec, BYO-key online optional) ---
 
@@ -8497,8 +8493,8 @@ def main() -> None:
              "Directory contract: frr/<node>.conf and/or nft/<node>.nft|.ruleset",
     )
     p_test.set_defaults(func=cmd_test)
-    p_test.add_argument("--scenario", help="Run only this scenario id (scenarios[*].id)")
-    p_test.add_argument("--all-scenarios", action="store_true", help="Run all scenarios after steady-state tests")
+    p_test.add_argument("--scenario", help="Run only this scenario id (scenarios[*].id). Note: skips declared tests")
+    p_test.add_argument("--all-scenarios", action="store_true", help="Run all scenarios. Note: skips declared tests")
     # capture-config (supporting evidence only; exploration feature) - explicitly forbidden in gate-first test
     p_test.add_argument(
         "--capture-config",
