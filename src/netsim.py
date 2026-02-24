@@ -957,9 +957,15 @@ def _candidate_parse_dir_or_die(topo: dict[str, Any], cand_dir: Path) -> list[di
         else:
             _cand_misuse(f"--candidate-config: unknown file at root '{entry.name}' (place under frr/ or nft/)")
 
+    frr_dir_present = False
+    nft_dir_present = False
+    frr_any = False
+    nft_any = False
+
     # frr/
     frr_dir = cand_dir / "frr"
     if frr_dir.exists():
+        frr_dir_present = True
         if not frr_dir.is_dir():
             _cand_misuse(f"--candidate-config: expected directory: {frr_dir}")
         for p in sorted(frr_dir.iterdir(), key=lambda x: x.name):
@@ -983,11 +989,16 @@ def _candidate_parse_dir_or_die(topo: dict[str, Any], cand_dir: Path) -> list[di
                 _cand_misuse(f"--candidate-config: duplicate candidate for node '{node}' type 'frr'")
             seen.add(key)
             saw_any = True
+            frr_any = True
             plan.append({"node": node, "node_type": "frr", "source_path": str(p)})
+
+        if frr_dir_present and not frr_any:
+            _cand_misuse(f"--candidate-config: directory 'frr/' exists but contains no *.conf files")
 
     # nft/
     nft_dir = cand_dir / "nft"
     if nft_dir.exists():
+        nft_dir_present = True
         if not nft_dir.is_dir():
             _cand_misuse(f"--candidate-config: expected directory: {nft_dir}")
         for p in sorted(nft_dir.iterdir(), key=lambda x: x.name):
@@ -1011,7 +1022,11 @@ def _candidate_parse_dir_or_die(topo: dict[str, Any], cand_dir: Path) -> list[di
                 _cand_misuse(f"--candidate-config: duplicate candidate for node '{node}' type 'nft-fw'")
             seen.add(key)
             saw_any = True
+            nft_any = True
             plan.append({"node": node, "node_type": "nft-fw", "source_path": str(p)})
+
+        if nft_dir_present and not nft_any:
+            _cand_misuse(f"--candidate-config: directory 'nft/' exists but contains no *.nft or *.ruleset files")
 
     if not saw_any:
         _cand_misuse(
