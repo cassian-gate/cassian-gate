@@ -904,7 +904,22 @@ def _candidate_parse_dir_or_die(topo: dict[str, Any], cand_dir: Path) -> list[di
       - plan order is stable: sort by node name
     """
     if not cand_dir.exists() or not cand_dir.is_dir():
-        die(f"--candidate-config: directory not found or not a directory: {cand_dir}")
+        # Phase 3 misuse semantics: invalid candidate-config directory is a usage error (exit 2),
+        # and must be educational + deterministic.
+        usage = "\n".join(
+            [
+                "Expected candidate-config structure:",
+                "  <DIR>/frr/<node>.conf",
+                "  <DIR>/nft/<node>.nft",
+                "  <DIR>/nft/<node>.ruleset",
+                "",
+                "Notes:",
+                "  - Gate-only: use 'netsim test <topology.yaml> --candidate-config <DIR>'",
+                "  - Full replacement (no merge)",
+                "  - Supported node types: frr, nft-fw",
+            ]
+        )
+        die(f"ERROR: --candidate-config: directory not found or not a directory: {cand_dir}\n{usage}", code=2)
 
     nodes = topo.get("nodes", []) or []
     nodes_by_name: dict[str, dict[str, Any]] = {}
@@ -917,38 +932,55 @@ def _candidate_parse_dir_or_die(topo: dict[str, Any], cand_dir: Path) -> list[di
     seen: set[tuple[str, str]] = set()
     saw_any = False
 
+    usage = "\n".join(
+        [
+            "Expected candidate-config structure:",
+            "  <DIR>/frr/<node>.conf",
+            "  <DIR>/nft/<node>.nft",
+            "  <DIR>/nft/<node>.ruleset",
+            "",
+            "Notes:",
+            "  - Gate-only: use 'netsim test <topology.yaml> --candidate-config <DIR>'",
+            "  - Full replacement (no merge)",
+            "  - Supported node types: frr, nft-fw",
+        ]
+    )
+
+    def _cand_misuse(msg: str) -> None:
+        die(f"ERROR: {msg}\n{usage}", code=2)
+
     # Reject unknown entries at root for determinism
     for entry in sorted(cand_dir.iterdir(), key=lambda p: p.name):
         if entry.is_dir():
             if entry.name not in allowed_subdirs:
-                die(f"--candidate-config: unknown subdir '{entry.name}' (allowed: frr/, nft/)")
+                _cand_misuse(f"--candidate-config: unknown subdir '{entry.name}' (allowed: frr/, nft/)")
         else:
-            die(f"--candidate-config: unknown file at root '{entry.name}' (place under frr/ or nft/)")
+            _cand_misuse(f"--candidate-config: unknown file at root '{entry.name}' (place under frr/ or nft/)")
 
     # frr/
     frr_dir = cand_dir / "frr"
     if frr_dir.exists():
         if not frr_dir.is_dir():
-            die(f"--candidate-config: expected directory: {frr_dir}")
+            _cand_misuse(f"--candidate-config: expected directory: {frr_dir}")
         for p in sorted(frr_dir.iterdir(), key=lambda x: x.name):
             if p.is_dir():
-                die(f"--candidate-config: unexpected directory under frr/: {p.name}")
+                _cand_misuse(f"--candidate-config: unexpected directory under frr/: {p.name}")
             if p.suffix != ".conf":
-                die(f"--candidate-config: unsupported file under frr/: {p.name} (only .conf allowed)")
+                _cand_misuse(f"--candidate-config: unsupported file under frr/: {p.name} (only .conf allowed)")
             if not _is_within_dir(p, cand_dir):
-                die(f"--candidate-config: path traversal detected for file: frr/{p.name}")
+                _cand_misuse(f"--candidate-config: path traversal detected for file: frr/{p.name}")
             if p.stat().st_size == 0:
-                die(f"--candidate-config: empty candidate file: frr/{p.name}")
+                _cand_misuse(f"--candidate-config: empty candidate file: frr/{p.name}")
 
             node = p.stem
             if node not in nodes_by_name:
-                die(f"--candidate-config: candidate targets unknown node '{node}' (file: frr/{p.name})")
+                _cand_misuse(f"--candidate-config: candidate targets unknown node '{node}' (file: frr/{p.name})")
             if nodes_by_name[node].get("type") != "frr":
-                die(f"--candidate-config: frr/{p.name} targets node '{node}' but node.type is not 'frr'")
+                _cand_misuse(f"--candidate-config: frr/{p.name} targets node '{node}' but node.type is not 'frr'")
 
             key = (node, "frr")
             if key in seen:
-                die(f"--candidate-config: duplicate candidate for node '{node}' type 'frr'")
+                _cand_misuse(f"--candidate-config: duplicate candidate for node '{node}' type 'frr'")
             seen.add(key)
             saw_any = True
             plan.append({"node": node, "node_type": "frr", "source_path": str(p)})
@@ -957,32 +989,32 @@ def _candidate_parse_dir_or_die(topo: dict[str, Any], cand_dir: Path) -> list[di
     nft_dir = cand_dir / "nft"
     if nft_dir.exists():
         if not nft_dir.is_dir():
-            die(f"--candidate-config: expected directory: {nft_dir}")
+            _cand_misuse(f"--candidate-config: expected directory: {nft_dir}")
         for p in sorted(nft_dir.iterdir(), key=lambda x: x.name):
             if p.is_dir():
-                die(f"--candidate-config: unexpected directory under nft/: {p.name}")
+                _cand_misuse(f"--candidate-config: unexpected directory under nft/: {p.name}")
             if p.suffix not in (".nft", ".ruleset"):
-                die(f"--candidate-config: unsupported file under nft/: {p.name} (only .nft or .ruleset allowed)")
+                _cand_misuse(f"--candidate-config: unsupported file under nft/: {p.name} (only .nft or .ruleset allowed)")
             if not _is_within_dir(p, cand_dir):
-                die(f"--candidate-config: path traversal detected for file: nft/{p.name}")
+                _cand_misuse(f"--candidate-config: path traversal detected for file: nft/{p.name}")
             if p.stat().st_size == 0:
-                die(f"--candidate-config: empty candidate file: nft/{p.name}")
+                _cand_misuse(f"--candidate-config: empty candidate file: nft/{p.name}")
 
             node = p.stem
             if node not in nodes_by_name:
-                die(f"--candidate-config: candidate targets unknown node '{node}' (file: nft/{p.name})")
+                _cand_misuse(f"--candidate-config: candidate targets unknown node '{node}' (file: nft/{p.name})")
             if nodes_by_name[node].get("type") != "nft-fw":
-                die(f"--candidate-config: nft/{p.name} targets node '{node}' but node.type is not 'nft-fw'")
+                _cand_misuse(f"--candidate-config: nft/{p.name} targets node '{node}' but node.type is not 'nft-fw'")
 
             key = (node, "nft-fw")
             if key in seen:
-                die(f"--candidate-config: duplicate candidate for node '{node}' type 'nft-fw'")
+                _cand_misuse(f"--candidate-config: duplicate candidate for node '{node}' type 'nft-fw'")
             seen.add(key)
             saw_any = True
             plan.append({"node": node, "node_type": "nft-fw", "source_path": str(p)})
 
     if not saw_any:
-        die(
+        _cand_misuse(
             f"--candidate-config: no recognized candidate inputs found under: {cand_dir} "
             "(expected frr/*.conf and/or nft/*.nft|*.ruleset)"
         )
