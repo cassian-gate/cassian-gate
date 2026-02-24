@@ -66,7 +66,13 @@ def die(msg: str, code: int = 1) -> None:
         # so cmd_validate can capture str(e) and put it into JSON.
         raise SystemExit(str(msg))
 
-    print(f"ERROR: {msg}", file=sys.stderr)
+    # Avoid duplicate "ERROR:" prefix when callers already include it.
+    m = str(msg)
+    if m.lstrip().startswith("ERROR:"):
+        print(m, file=sys.stderr)
+    else:
+        print(f"ERROR: {m}", file=sys.stderr)
+
     raise SystemExit(code)
 
 def fail(msg: str, code: int = 1) -> None:
