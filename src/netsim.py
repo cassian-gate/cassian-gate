@@ -2046,6 +2046,12 @@ def cmd_test(args: argparse.Namespace) -> None:
         if not lab_name:
             die(f"Topology missing required 'name': {topo_gate_path}")
 
+        # Phase 3 guardrail (P3-D):
+        # Candidate-config misuse must fail fast (exit 2) BEFORE any runtime actions / lab artifacts.
+        cand_arg = getattr(args, "candidate_config", None)
+        if cand_arg:
+            _candidate_parse_dir_or_die(resolved_preview, Path(str(cand_arg)))
+
         # Run clean-state deploy/provision (equivalent to: netsim up <topo> --reconfigure)
         cmd_up(argparse.Namespace(topology=str(topo_gate_path), reconfigure=True))
 
