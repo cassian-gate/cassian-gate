@@ -1840,7 +1840,8 @@ def cmd_test(args: argparse.Namespace) -> None:
     - Opt-in scenarios:
         * netsim test --scenario <id>
         * netsim test --all-scenarios
-      When a scenario is requested, cmd_test executes ONLY the requested scenario(s).
+    When a scenario is requested, cmd_test executes declared steady-state tests first,
+    then executes the requested scenario(s).
       Scenario steps call existing atomic tests via `run: <test_name>`.
 
     Hard guardrail:
@@ -8492,8 +8493,8 @@ def main() -> None:
              "Directory contract: frr/<node>.conf and/or nft/<node>.nft|.ruleset",
     )
     p_test.set_defaults(func=cmd_test)
-    p_test.add_argument("--scenario", help="Run only this scenario id (scenarios[*].id)")
-    p_test.add_argument("--all-scenarios", action="store_true", help="Run all scenarios after steady-state tests")
+    p_test.add_argument("--scenario", help="Run only this scenario id (scenarios[*].id). Note: skips declared tests")
+    p_test.add_argument("--all-scenarios", action="store_true", help="Run all scenarios. Note: skips declared tests")
     # capture-config (supporting evidence only; exploration feature) - explicitly forbidden in gate-first test
     p_test.add_argument(
         "--capture-config",

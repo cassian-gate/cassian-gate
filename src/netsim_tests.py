@@ -2940,6 +2940,13 @@ def render_gate_result_block(results: dict) -> str:
     out.append(f"Tests executed: {total}")
     out.append(f"Scenarios executed: {scen_total}")
     out.append("")
+
+    # WI-4: If scenarios ran but declared tests were not counted, be explicit.
+    # This is presentation-only; it does not change what ran or how verdicts are computed.
+    if scen_total > 0 and total == 0:
+        out.append("Note: scenario mode ran; declared tests were skipped (tests executed = 0).")
+        out.append("")
+
     if is_smoke:
         out.append("RESULT: PASS (SMOKE)")
         out.append("Note: no tests or scenarios were executed.")
