@@ -41,6 +41,40 @@ from netsim_common import (
     nodes_by_type,
 )
 
+def _run_containerlab(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess:
+    """
+    Deterministic output routing for containerlab commands.
+
+    - Default (quiet): suppress containerlab INFO spam by capturing output.
+      On failure (when check=True), emit a short deterministic error and stop.
+    - Verbose: preserve current raw streaming behavior (delegates to netsim_common.run).
+    """
+    # Verbose mode => preserve existing behavior exactly (including streaming logs + command echo).
+    if not netsim_common.QUIET_RUN:
+        return run(cmd, check=check)
+
+    # Quiet mode: capture output; never echo the command; never print containerlab INFO on success.
+    cp = subprocess.run(cmd, check=False, capture_output=True, text=True)
+
+    if check and cp.returncode != 0:
+        combined = ((cp.stdout or "") + "\n" + (cp.stderr or "")).strip()
+        tail = ""
+        if combined:
+            lines = combined.splitlines()
+            tail = "\n".join(lines[-12:]).strip()
+
+        msg = (
+            "ERROR: containerlab command failed.\n"
+            f"Command: {shlex.join(cmd)}\n"
+            f"Exit: {cp.returncode}\n"
+        )
+        if tail:
+            msg += f"\nLast output:\n{tail}\n"
+        msg += "\nRe-run with --verbose for full containerlab output.\n"
+        die(msg, code=1)
+
+    return cp
+
 from netsim_artifacts import (
     lab_dir, node_cfg_dir, write_file, write_json_canonical,
     load_yaml,
@@ -5528,14 +5562,14 @@ def cmd_up(args: argparse.Namespace) -> None:
             lab_name = lab_name.strip()
             existing_clab = LABS_DIR / f"{lab_name}.clab.yaml"
             if existing_clab.exists():
-                run(["sudo", "containerlab", "destroy", "-t", str(existing_clab)], check=False)
+                _run_containerlab(["sudo", "containerlab", "destroy", "-t", str(existing_clab)], check=False)
             run(["sudo", "rm", "-rf", str(lab_dir(lab_name))], check=False)
 
     # Generate AFTER destroy/cleanup
     out = write_containerlab_file(topo_path)
 
     # Deploy
-    run(["sudo", "containerlab", "deploy", "-t", str(out)])
+    _run_containerlab(["sudo", "containerlab", "deploy", "-t", str(out)], check=True)
 
     # Derive lab name deterministically from generated file
     lab_name = out.name.replace(".clab.yaml", "")
@@ -5627,7 +5661,7 @@ def cmd_down(args: argparse.Namespace) -> None:
         return
 
     # Destroy via containerlab (authoritative destroy mechanism)
-    run(["sudo", "containerlab", "destroy", "-t", str(out)])
+    _run_containerlab(["sudo", "containerlab", "destroy", "-t", str(out)], check=True)
 
     # Best-effort cleanup of lab artifact dir (may be root-owned due to containerlab)
     run(["sudo", "rm", "-rf", str(lab_dir(lab_name))], check=False)
@@ -8334,6 +8368,11 @@ def main() -> None:
         prog="netsim",
         description="ai-netsim: topo YAML -> containerlab (local MVP)",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print full raw command trace + containerlab logs (debug). Default is quiet gate output.",
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     # gen
@@ -8490,7 +8529,16 @@ def main() -> None:
         "--candidate-config",
         dest="candidate_config",
         help="Apply candidate operational configs from a directory before running tests (gate-only, atomic). "
-             "Directory contract: frr/<node>.conf and/or nft/<node>.nft|.ruleset",
+"Directory contract: frr/<node>.conf and/or nft/<node>.nft|.ruleset",
+    )
+    # Support both forms:
+    #   netsim --verbose test ...
+    #   netsim test ... --verbose
+    p_test.add_argument(
+        "--verbose",
+        action="store_true",
+        dest="verbose",
+        help="Print full raw command trace + containerlab logs (debug). Default is quiet gate output.",
     )
     p_test.set_defaults(func=cmd_test)
     p_test.add_argument("--scenario", help="Run only this scenario id (scenarios[*].id). Note: skips declared tests")
@@ -8533,6 +8581,15 @@ def main() -> None:
     # run
     p_run = sub.add_parser("run", help="Ephemeral workflow: up -> test -> collect -> down (CI-friendly)")
     p_run.add_argument("topology", help="Topology YAML filename under ./topologies or a full path")
+    # Support both forms:
+    #   netsim --verbose run ...
+    #   netsim run ... --verbose
+    p_run.add_argument(
+        "--verbose",
+        action="store_true",
+        dest="verbose",
+        help="Print full raw command trace + containerlab logs (debug). Default is quiet gate output.",
+    )
     p_run.add_argument(
         "--reconfigure",
         action="store_true",
@@ -8606,6 +8663,9 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    old_quiet = netsim_common.QUIET_RUN
+    netsim_common.QUIET_RUN = (not bool(getattr(args, "verbose", False)))
+
     footer_lab = ""
     try:
         # Footer (WI-1a): only for single-lab `netsim test <lab>` executions
@@ -8615,9 +8675,11 @@ def main() -> None:
 
         args.func(args)
     finally:
+        # Restore global quiet flag deterministically (commands may override temporarily)
+        netsim_common.QUIET_RUN = old_quiet
+
         if footer_lab:
             _print_artifacts_footer_for_lab(footer_lab)
-
 
 if __name__ == "__main__":
     main()
