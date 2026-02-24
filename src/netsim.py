@@ -253,9 +253,43 @@ def _print_artifacts_footer_for_lab(lab_input: Path) -> None:
     except Exception:
         return
 
+def load_topology_yaml(arg: str) -> dict[str, Any]:
+    """
+    Deterministic topology loader for CLI ergonomics.
+
+    Resolution order (no Docker scanning):
+      1) explicit filesystem path
+      2) under ./topologies/
+      3) under ./examples/
+
+    Returns a YAML mapping (dict) or raises.
+    """
+    s = str(arg or "").strip()
+    if not s:
+        raise ValueError("empty topology path")
+
+    p = Path(s)
+    if not p.is_file():
+        p2 = TOPO_DIR / s
+        if p2.is_file():
+            p = p2
+        else:
+            p3 = BASE_DIR / "examples" / s
+            if p3.is_file():
+                p = p3
+
+    if not p.is_file():
+        raise FileNotFoundError(f"topology file not found: {s}")
+
+    topo = load_yaml(p) or {}
+    if not isinstance(topo, dict):
+        raise ValueError(f"topology must be a mapping: {p}")
+    return topo
+
 def _sha256_file(p: Path) -> str:
     import hashlib
     h = hashlib.sha256()
+    
     with p.open("rb") as f:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
@@ -5999,7 +6033,12 @@ def _load_resolved_topology(lab_name: str) -> dict[str, Any]:
     lab_dir = LABS_DIR / f"clab-{lab_name}"
     topo_path = lab_dir / "topology.resolved.yaml"
     if not topo_path.is_file():
-        die(f"Resolved topology not found: {topo_path} (is the lab up?)")
+        # Phase 3 misuse semantics: missing lab artifacts is a usage error (exit 2),
+        # and the message must be deterministic + actionable (no Docker scanning).
+        die(
+            f"ERROR: Lab artifacts not found for lab={lab_name}. Expected: {topo_path}",
+            code=2,
+        )
     return load_yaml(topo_path)
 
 def _iter_nodes(topo: dict[str, Any]) -> list[dict[str, Any]]:
@@ -6053,7 +6092,30 @@ def cmd_status(args: argparse.Namespace) -> None:
     """
     import json
     rt = get_runtime()
-    lab = args.lab
+
+    # Phase 3 (P3-A): accept either lab name OR topology path deterministically.
+    # - No Docker scanning.
+    # - Lab name derives ONLY from topology 'name:' (or filename stem fallback, matching footer behavior).
+    raw_lab = str(getattr(args, "lab", "") or "").strip()
+    if not raw_lab:
+        die("ERROR: status requires a lab name or topology file", code=2)
+
+    lab = raw_lab
+    raw_path = Path(raw_lab)
+    dname_l = raw_path.name.lower()
+
+    # If it looks like a topology path, deterministically derive lab name from YAML.
+    if ("/" in raw_lab) or ("\\" in raw_lab) or dname_l.endswith((".yaml", ".yml")):
+        try:
+            topo = load_topology_yaml(raw_lab)
+        except Exception as e:
+            die(f"ERROR: failed to load topology file '{raw_lab}': {e}", code=2)
+
+        derived = str(topo.get("name") or Path(raw_lab).stem).strip()
+        if not derived:
+            die(f"ERROR: topology file '{raw_lab}' has no valid 'name' field (required)", code=2)
+
+        lab = derived
 
     bgp_enabled = bool(getattr(args, "bgp", False))
     bgp_verbose = bool(getattr(args, "bgp_verbose", False))
