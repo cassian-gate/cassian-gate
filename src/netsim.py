@@ -5850,8 +5850,12 @@ def cmd_down(args: argparse.Namespace) -> None:
     # Destroy via containerlab (authoritative destroy mechanism)
     _run_containerlab(["sudo", "containerlab", "destroy", "-t", str(out)], check=True)
 
-    # Best-effort cleanup of lab artifact dir (may be root-owned due to containerlab)
-    run(["sudo", "rm", "-rf", str(lab_dir(lab_name))], check=False)
+    # Artifact policy (v2 gate integrity):
+    # - Runtime teardown must NOT delete labs/clab-<lab> evidence.
+    # - Explicit deletion is handled only by:
+    #     * netsim destroy <lab> --purge-artifacts
+    #     * netsim cleanup --all --yes
+    return
 
 def cmd_destroy(args: argparse.Namespace) -> None:
     """
