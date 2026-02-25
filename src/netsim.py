@@ -5520,7 +5520,28 @@ def cmd_validate(args: argparse.Namespace) -> None:
         cov = build_coverage_model(resolved, topo_path=topo_path)
         write_coverage_artifact(resolved["name"], cov)
 
+        if want_json:
+            payload = {
+                "command": "validate",
+                "result": "pass",
+                "error": "",
+                "schema_version": "1",
+                "topology": str(topo_path),
+            }
+            print(json.dumps(payload, indent=2, sort_keys=True))
+            return  # do not fall through
+
         emit("pass", "")
+        print("Validated: topology schema + resolve + scenarios (no deploy, no runtime, no tests).")
+        print(f"Advisory: wrote coverage to labs/clab-{resolved['name']}/artifacts/coverage/coverage.json")
+        return  # do not fall through
+
+        emit("pass", "")
+        # v2-validate-scope-clarity (text mode only)
+        print("Validated: topology schema + resolve + scenarios (no deploy, no runtime, no tests).")
+        lab = str(resolved.get("name") or "").strip()
+        if lab:
+            print(f"Advisory: wrote coverage to labs/clab-{lab}/artifacts/coverage/coverage.json")
         return  # do not fall through
 
     except SystemExit as e:
