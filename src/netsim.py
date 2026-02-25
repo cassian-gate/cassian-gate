@@ -199,6 +199,30 @@ class ContainerRuntime
 
 _CANDIDATE_STDIO_TRUNC = 8_000  # must match previous value exactly
 
+# Privilege transparency notice (v2-privilege-transparency-notice)
+# Presentation-only: deterministic; must not probe; must not affect exit codes.
+_PRIV_NOTICE_PRINTED = False
+
+def _maybe_print_privilege_notice(template: str) -> None:
+    """
+    Deterministic one-time privilege notice. Must be called immediately before the
+    first privileged subprocess call in a command path.
+    """
+    global _PRIV_NOTICE_PRINTED
+    if _PRIV_NOTICE_PRINTED:
+        return
+    _PRIV_NOTICE_PRINTED = True
+
+    t = (template or "").strip().upper()
+    if t == "B":
+        print("ℹ️ This command may require sudo to destroy lab runtime and/or remove labs/ artifacts.")
+        print("   You may be prompted for your password.")
+        return
+
+    # Default: Template A
+    print("ℹ️ This command may require sudo (containerlab uses elevated privileges for network namespaces).")
+    print("   You may be prompted for your password.")
+
 def _print_artifacts_footer_for_lab(lab_input: Path) -> None:
     """
     Deterministic artifact footer (best-effort).
@@ -5739,6 +5763,9 @@ def cmd_up(args: argparse.Namespace) -> None:
 
     # If --reconfigure: destroy + remove root-owned lab dir AFTER validation passes.
     if getattr(args, "reconfigure", False):
+        # v2-privilege-transparency-notice (Template A): must precede first sudo call in this path
+        _maybe_print_privilege_notice("A")
+
         lab_name: str | None = None
         try:
             lab_name = (resolved_preview or {}).get("name")
@@ -5756,6 +5783,7 @@ def cmd_up(args: argparse.Namespace) -> None:
     out = write_containerlab_file(topo_path)
 
     # Deploy
+    _maybe_print_privilege_notice("A")
     _run_containerlab(["sudo", "containerlab", "deploy", "-t", str(out)], check=True)
 
     # Derive lab name deterministically from generated file
@@ -5848,6 +5876,7 @@ def cmd_down(args: argparse.Namespace) -> None:
         return
 
     # Destroy via containerlab (authoritative destroy mechanism)
+    _maybe_print_privilege_notice("A")
     _run_containerlab(["sudo", "containerlab", "destroy", "-t", str(out)], check=True)
 
     # Artifact policy (v2 gate integrity):
@@ -5936,6 +5965,7 @@ def cmd_destroy(args: argparse.Namespace) -> None:
         report["artifact_purge"]["attempted"] = True
         if artifact_dir.exists():
             did_anything = True
+            _maybe_print_privilege_notice("B")
             cp_rm = run(
                 ["sudo", "rm", "-rf", str(artifact_dir)],
                 check=False,
@@ -6008,6 +6038,9 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
     if not do_exec:
         print("Run with --yes to execute cleanup. (This will destroy runtime state when possible and purge labs/clab-* artifacts.)")
         return
+
+    # v2-privilege-transparency-notice (Template B): cleanup destroys runtime and purges labs/ artifacts
+    _maybe_print_privilege_notice("B")
 
     # Execute: best-effort, deterministic order, never stops on per-lab failure
     failures: list[str] = []
@@ -8911,6 +8944,10 @@ def main() -> None:
 
     footer_lab = ""
     try:
+        # Reset per-invocation privilege notice state deterministically.
+        global _PRIV_NOTICE_PRINTED
+        _PRIV_NOTICE_PRINTED = False
+
         # Footer (WI-1a): only for single-lab `netsim test <lab>` executions
         if str(getattr(args, "cmd", "") or "") == "test":
             if not bool(getattr(args, "two_run", False)) and not bool(getattr(args, "list_scenarios", False)):
