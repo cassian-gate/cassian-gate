@@ -553,6 +553,22 @@ def parse_frr_bgp_summary_neighbors_json(out: str) -> dict[str, dict[str, Any]]:
 
     return res
 
+def _node_index_by_name(topo: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """
+    Deterministic helper: index topo['nodes'] list by name.
+
+    Kept local to netsim_tests to avoid cross-module coupling for read-only
+    derivations used by cmd_status.
+    """
+    idx: dict[str, dict[str, Any]] = {}
+    for n in topo.get("nodes", []) or []:
+        if not isinstance(n, dict):
+            continue
+        name = n.get("name")
+        if isinstance(name, str) and name:
+            idx[name] = n
+    return idx
+
 def derive_expected_bgp_neighbors_from_links(topo: dict[str, Any]) -> dict[str, set[str]]:
     """
     Intent: expected BGP neighbors derived from topology links.
