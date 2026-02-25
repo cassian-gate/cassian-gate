@@ -268,12 +268,31 @@ def _print_artifacts_footer_for_lab(lab_input: Path) -> None:
 
         p_json = adir / "results.json"
         p_sum = adir / "results.summary.txt"
+
+        def rel_labs(p: Path) -> str:
+            """
+            Render relative paths under labs/ for operator discoverability.
+            Best-effort only; never raises; never probes.
+            """
+            try:
+                s = str(p)
+                # Normalize for stable output across platforms.
+                s2 = s.replace("\\", "/")
+                labs_idx = s2.rfind("/labs/")
+                if labs_idx >= 0:
+                    return s2[labs_idx + 1 :]  # keep 'labs/...'
+                if s2.startswith("labs/"):
+                    return s2
+                return s2
+            except Exception:
+                return str(p)
+
         if p_json.exists() or p_sum.exists():
             print("Artifacts:")
             if p_json.exists():
-                print(f"* {p_json} (authoritative)")
+                print(f"* {rel_labs(p_json)} (authoritative)")
             if p_sum.exists():
-                print(f"* {p_sum} (human-readable)")
+                print(f"* {rel_labs(p_sum)} (human-readable)")
     except Exception:
         return
 
