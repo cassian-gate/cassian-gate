@@ -2981,6 +2981,20 @@ def render_gate_result_block(results: dict) -> str:
                 continue
             failed.append(t)
 
+    # WI-1: On PASS, show which tests ran (bounded; deterministic; derived from results["tests"]).
+    # Presentation-only: must not affect verdicts, exit codes, or artifacts.
+    if verdict_s == "PASS" and (not is_smoke) and isinstance(tests, list) and tests:
+        out.append("")
+        out.append("Tests:")
+        cap = 10
+        for t in tests[:cap]:
+            if not isinstance(t, dict):
+                continue
+            name = str(t.get("name") or "<unnamed>").strip() or "<unnamed>"
+            out.append(f" - PASS {name}")
+        if len(tests) > cap:
+            out.append(f" - (+{len(tests) - cap} more)")
+
     if verdict_s == "FAIL":
         out.append("")
         out.append("Failed assertions:")
