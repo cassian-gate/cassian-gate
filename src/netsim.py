@@ -6322,367 +6322,422 @@ def cmd_status(args: argparse.Namespace) -> None:
     if as_json:
         netsim_common.QUIET_RUN = True
 
+    # ------------------------------------------------------------
+    # Truthful status: derive expected nodes deterministically from
+    # local descriptors (resolved-topology preferred, clab-yaml fallback).
+    # Runtime existence is checked later via rt (no containerlab inspect).
+    # ------------------------------------------------------------
+    source = "none"
+    topo = None
+    nodes: list[dict[str, Any]] = []
+
     resolved_path = lab_dir(lab) / "topology.resolved.yaml"
-    if not resolved_path.exists():
-        msg = f"Lab artifacts not found for lab={lab}. Expected: {resolved_path}"
-        if topo_path:
-            msg = f"Topology: {topo_path} (derived lab={lab})\n" + msg
-        msg += "\nHint: Run 'netsim up <topology.yaml>' (or 'netsim run <topology.yaml> --keep') then retry."
-        die(msg, code=2)
+    lab_yaml_path = lab_file_from_name(lab)
 
-    try:
-        topo = _load_resolved_topology(lab)
+    if resolved_path.exists():
+        try:
+            topo = _load_resolved_topology(lab)
+        except Exception as e:
+            die(f"ERROR: failed to load resolved topology '{resolved_path}': {e}", code=2)
         nodes = sorted(_iter_nodes(topo), key=lambda n: str(n.get("name", "")))
+        source = "resolved-topology"
 
-        expected_bgp_by_node = derive_expected_bgp_neighbors_from_links(topo)
-        expected_routes_by_frr = derive_expected_routes_for_frr(topo) if routes_enabled else {}
+    elif lab_yaml_path.exists():
+        # Fallback: generated containerlab YAML exists, but resolved topology does not.
+        # Enumerate expected node names from the clab YAML deterministically.
+        try:
+            names = sorted(parse_lab_nodes(lab), key=lambda s: str(s))
+        except Exception as e:
+            die(f"ERROR: failed to parse lab file '{lab_yaml_path}': {e}", code=2)
+        nodes = [{"name": n, "type": ""} for n in names]
+        source = "clab-yaml"
 
-        def _node_exec(node: str, cmd: list[str]) -> str:
-            cp = rt.exec(lab, node, cmd, check=False, capture_output=True)
-            out = cp.stdout.decode("utf-8", errors="replace") if isinstance(cp.stdout, bytes) else cp.stdout
-            return (out or "").strip()
+    else:
+        # No local descriptor; we can still report lab-level UNKNOWN deterministically.
+        nodes = []
+        source = "none"
 
-        # Deterministic list formatting helper (cap for readability)
-        def _fmt_list_cap(items: list[str], cap: int = 5) -> str:
-            items = sorted(set(str(x) for x in items if str(x)))
-            if not items:
-                return ""
-            if len(items) <= cap:
-                return ", ".join(items)
-            return f"{', '.join(items[:cap])} (+{len(items) - cap} more)"
+    # Expected intent checks are only available when resolved topology exists.
+    expected_bgp_by_node = derive_expected_bgp_neighbors_from_links(topo) if topo else {}
+    expected_routes_by_frr = derive_expected_routes_for_frr(topo) if (topo and routes_enabled) else {}
 
-        def _extend_bgp_reasons(node: str, bgp: dict[str, Any], reasons_list: list[str], cap: int = 5) -> None:
-            if not bgp.get("expected"):
-                return
-            mode = str(bgp.get("parser_mode") or "none")
+    def _node_exec(node: str, cmd: list[str]) -> str:
+        cp = rt.exec(lab, node, cmd, check=False, capture_output=True)
+        out = cp.stdout.decode("utf-8", errors="replace") if isinstance(cp.stdout, bytes) else cp.stdout
+        return (out or "").strip()
 
-            if bgp.get("missing"):
-                reasons_list.append(
-                    f"bgp missing on {node}: {_fmt_list_cap(bgp['missing'], cap)} (parser={mode})"
-                )
-            if bgp.get("down"):
-                reasons_list.append(
-                    f"bgp down on {node}: {_fmt_list_cap(bgp['down'], cap)} (parser={mode})"
-                )
-            if bgp.get("extra"):
-                reasons_list.append(
-                    f"bgp extra on {node}: {_fmt_list_cap(bgp['extra'], cap)} (parser={mode})"
-                )
+    # Deterministic list formatting helper (cap for readability)
+    def _fmt_list_cap(items: list[str], cap: int = 5) -> str:
+        items = sorted(set(str(x) for x in items if str(x)))
+        if not items:
+            return ""
+        if len(items) <= cap:
+            return ", ".join(items)
+        return f"{', '.join(items[:cap])} (+{len(items) - cap} more)"
 
-        def _extend_routes_reasons(node: str, routes: dict[str, Any], reasons_list: list[str], cap: int = 5) -> None:
-            if not routes.get("expected"):
-                return
-            mode = str(routes.get("parser_mode") or "none")
-            if routes.get("missing"):
-                reasons_list.append(
-                    f"routes missing on {node}: {_fmt_list_cap(routes['missing'], cap)} (parser={mode})"
-                )
+    def _extend_bgp_reasons(node: str, bgp: dict[str, Any], reasons_list: list[str], cap: int = 5) -> None:
+        if not bgp.get("expected"):
+            return
+        mode = str(bgp.get("parser_mode") or "none")
 
-        def _extend_container_reasons(
-            down_nodes: list[tuple[str, str]],
-            reasons_list: list[str],
-            cap: int = 5,
-        ) -> None:
-            """
-            down_nodes: [(node_name, container_name), ...]
-            Deterministic, capped reasons for prerequisite failures.
-            """
-            if not down_nodes:
-                return
-            # Deterministic order
-            down_nodes = sorted(set(down_nodes), key=lambda t: (t[0], t[1]))
-            rendered = [f"{n} (container={c})" for (n, c) in down_nodes]
-            reasons_list.append(f"containers not running: {_fmt_list_cap(rendered, cap)}")
+        if bgp.get("missing"):
+            reasons_list.append(
+                f"bgp missing on {node}: {_fmt_list_cap(bgp['missing'], cap)} (parser={mode})"
+            )
+        if bgp.get("down"):
+            reasons_list.append(
+                f"bgp down on {node}: {_fmt_list_cap(bgp['down'], cap)} (parser={mode})"
+            )
+        if bgp.get("extra"):
+            reasons_list.append(
+                f"bgp extra on {node}: {_fmt_list_cap(bgp['extra'], cap)} (parser={mode})"
+            )
 
-        # Counters
-        total_nodes = 0
-        running_nodes = 0
-        exp_total_peers = 0
-        exp_established_peers = 0
-        frr_nodes_with_expected_peers = 0
-        routes_total_prefixes = 0
-        routes_present_prefixes = 0
-        frr_nodes_with_expected_routes = 0
+    def _extend_routes_reasons(node: str, routes: dict[str, Any], reasons_list: list[str], cap: int = 5) -> None:
+        if not routes.get("expected"):
+            return
+        mode = str(routes.get("parser_mode") or "none")
+        if routes.get("missing"):
+            reasons_list.append(
+                f"routes missing on {node}: {_fmt_list_cap(routes['missing'], cap)} (parser={mode})"
+            )
 
-        strict_fail = False
-        reasons: list[str] = []
+    def _extend_container_reasons(
+        down_nodes: list[tuple[str, str]],
+        reasons_list: list[str],
+        cap: int = 5,
+    ) -> None:
+        """
+        down_nodes: [(node_name, container_name), ...]
+        Deterministic, capped reasons for prerequisite failures.
+        """
+        if not down_nodes:
+            return
+        # Deterministic order
+        down_nodes = sorted(set(down_nodes), key=lambda t: (t[0], t[1]))
+        rendered = [f"{n} (container={c})" for (n, c) in down_nodes]
+        reasons_list.append(f"containers not running: {_fmt_list_cap(rendered, cap)}")
 
-        # Track container-down prereq failures deterministically
-        down_containers: list[tuple[str, str]] = []
+    # Counters
+    total_nodes = 0
+    running_nodes = 0
+    exp_total_peers = 0
+    exp_established_peers = 0
+    frr_nodes_with_expected_peers = 0
+    routes_total_prefixes = 0
+    routes_present_prefixes = 0
+    frr_nodes_with_expected_routes = 0
 
-        out_doc: dict[str, Any] = {
-            "schema_version": "1",
-            "lab": lab,
-            "nodes": [],
-            "summary": {},
-            "verdict": "pass",
-            "reasons": [],
-        }
+    strict_fail = False
+    reasons: list[str] = []
 
-        for n in nodes:
-            name = str(n.get("name", "")).strip()
-            ntype = str(n.get("type", "")).strip()
-            if not name:
-                continue
+    # Track container-down prereq failures deterministically
+    down_containers: list[tuple[str, str]] = []
 
-            total_nodes += 1
-            cname = f"clab-{lab}-{name}"
-            running = _container_is_running(cname)
-            if running:
-                running_nodes += 1
-            else:
-                down_containers.append((name, cname))
+    out_doc: dict[str, Any] = {
+        "schema_version": "1",
+        "lab": lab,
+        "nodes": [],
+        "summary": {},
+        "verdict": "pass",
+        "reasons": [],
+    }
 
-            node_rec: dict[str, Any] = {
-                "name": name,
-                "type": ntype,
-                "container": cname,
-                "running": bool(running),
-            }
+    for n in nodes:
+        name = str(n.get("name", "")).strip()
+        ntype = str(n.get("type", "")).strip()
+        if not name:
+            continue
 
-            # Interfaces
-            if running and show_intf:
-                try:
-                    node_rec["interfaces"] = _node_exec(name, ["sh", "-lc", "ip -br a"]).splitlines()
-                except Exception as e:
-                    node_rec["interfaces_error"] = str(e)
+        total_nodes += 1
+        cname = f"clab-{lab}-{name}"
 
-            # BGP
-            if running and bgp_enabled and ntype == "frr":
-                expected = expected_bgp_by_node.get(name, set())
-                bgp_rec: dict[str, Any] = {
-                    "expected": sorted(expected),
-                    "observed": [],
-                    "missing": [],
-                    "down": [],
-                    "extra": [],
-                    "established": [],
-                    "ok": True,
-                    "parser_mode": "none",
-                }
+        # Truthful runtime state (deterministic):
+        # - exists: docker inspect return code (via rt.exists_id)
+        # - running: .State.Running (via rt.is_running_id), only meaningful if exists
+        exists = bool(rt.exists_id(cname))
+        running = bool(rt.is_running_id(cname)) if exists else False
 
-                try:
-                    out_json = _node_exec(name, ["vtysh", "-c", "show bgp summary json"])
-                    observed = parse_frr_bgp_summary_neighbors_json(out_json)
-                    if observed:
-                        bgp_rec["parser_mode"] = "json"
-                    else:
-                        out_text = _node_exec(name, ["vtysh", "-c", "show bgp summary"])
-                        observed = parse_frr_bgp_summary_neighbors(out_text)
-                        bgp_rec["parser_mode"] = "text"
-
-                    cmp = compare_expected_vs_observed_bgp(expected, observed)
-                    bgp_rec.update(cmp)
-
-                    if expected:
-                        frr_nodes_with_expected_peers += 1
-                        exp_total_peers += len(expected)
-                        exp_established_peers += len(cmp["established"])
-
-                    if bgp_verbose and not as_json:
-                        bgp_rec["raw_text"] = _node_exec(name, ["vtysh", "-c", "show bgp summary"])
-
-                    if strict and expected and not bgp_rec["ok"]:
-                        strict_fail = True
-                        _extend_bgp_reasons(name, bgp_rec, reasons)
-
-                except Exception as e:
-                    bgp_rec["error"] = str(e)
-                    bgp_rec["ok"] = False
-                    if strict and expected:
-                        strict_fail = True
-                        reasons.append(
-                            f"bgp error on {name}: {type(e).__name__} (parser={bgp_rec.get('parser_mode','none')})"
-                        )
-
-                node_rec["bgp"] = bgp_rec
-
-            # ROUTES
-            if running and routes_enabled and ntype == "frr":
-                expected_routes = expected_routes_by_frr.get(name, set())
-                routes_rec: dict[str, Any] = {
-                    "expected": sorted(expected_routes),
-                    "observed": [],
-                    "missing": [],
-                    "ok": True,
-                    "parser_mode": "none",
-                }
-
-                try:
-                    rt_json = _node_exec(name, ["vtysh", "-c", "show ip route json"])
-                    observed = parse_frr_show_ip_route_prefixes_json(rt_json)
-                    rt_text = ""
-                    if observed:
-                        routes_rec["parser_mode"] = "json"
-                    else:
-                        rt_text = _node_exec(name, ["vtysh", "-c", "show ip route"])
-                        observed = parse_frr_show_ip_route_prefixes(rt_text)
-                        routes_rec["parser_mode"] = "text"
-
-                    cmp = compare_expected_vs_observed_prefixes(expected_routes, observed)
-                    routes_rec.update(cmp)
-
-                    if expected_routes:
-                        frr_nodes_with_expected_routes += 1
-                        routes_total_prefixes += len(expected_routes)
-                        routes_present_prefixes += len(expected_routes) - len(cmp["missing"])
-
-                    if routes_verbose and not as_json:
-                        routes_rec["raw_text"] = rt_text if routes_rec["parser_mode"] == "text" else rt_json
-
-                    if strict and expected_routes and not routes_rec["ok"]:
-                        strict_fail = True
-                        _extend_routes_reasons(name, routes_rec, reasons)
-
-                except Exception as e:
-                    routes_rec["error"] = str(e)
-                    routes_rec["ok"] = False
-                    if strict and expected_routes:
-                        strict_fail = True
-                        reasons.append(
-                            f"routes error on {name}: {type(e).__name__} (parser={routes_rec.get('parser_mode','none')})"
-                        )
-
-                node_rec["routes"] = routes_rec
-
-            out_doc["nodes"].append(node_rec)
-
-        # NEW: prereq failure => strict_fail + reasons (deterministic)
-        if strict and down_containers:
-            strict_fail = True
-            _extend_container_reasons(down_containers, reasons, cap=5)
-
-        # Summary (always produced)
-        out_doc["summary"] = {
-            "containers_running": {"running": running_nodes, "total": total_nodes}
-        }
-        if bgp_enabled:
-            out_doc["summary"]["bgp_expected_peers"] = {
-                "established": exp_established_peers,
-                "total": exp_total_peers,
-                "frr_nodes_with_expected_peers": frr_nodes_with_expected_peers,
-            }
-        if routes_enabled:
-            out_doc["summary"]["routes_expected_prefixes"] = {
-                "present": routes_present_prefixes,
-                "total": routes_total_prefixes,
-                "frr_nodes_with_expected_routes": frr_nodes_with_expected_routes,
-            }
-
-        if strict_fail:
-            out_doc["verdict"] = "fail"
-            out_doc["reasons"] = sorted(set(reasons))
+        if running:
+            running_nodes += 1
         else:
-            out_doc["verdict"] = "pass"
-            out_doc["reasons"] = []
+            # Keep legacy prereq list for strict reasons (now includes stopped+missing)
+            down_containers.append((name, cname))
 
-        # JSON output mode: no human printing
-        if as_json:
-            print(json.dumps(out_doc, indent=2, sort_keys=True))
-            if strict and strict_fail:
-                raise SystemExit(2)
-            return
+        state = "running" if running else ("stopped" if exists else "missing")
 
-        # -------------------------
-        # Human output (updated)
-        # -------------------------
-        topo_arg = str(getattr(args, "lab", "") or "").strip()
-        topo_path = None
-        if topo_arg:
-            p = Path(topo_arg)
-            if ("/" in topo_arg) or ("\\" in topo_arg) or p.name.lower().endswith((".yaml", ".yml")):
-                topo_path = topo_arg
+        node_rec: dict[str, Any] = {
+            "name": name,
+            "type": ntype,
+            "container": cname,
+            "running": bool(running),
+            "state": state,
+        }
 
-        if topo_path:
-            print(f"Topology: {topo_path}")
-        print(f"Lab: {lab}")
-        print("Nodes:")
+        # Interfaces
+        if running and show_intf:
+            try:
+                node_rec["interfaces"] = _node_exec(name, ["sh", "-lc", "ip -br a"]).splitlines()
+            except Exception as e:
+                node_rec["interfaces_error"] = str(e)
 
-        if not out_doc["nodes"]:
-            print("  (no nodes found in topology.resolved.yaml)")
-            # Even here, honor --summary
-            if show_summary:
-                print(f"Summary: containers {running_nodes}/{total_nodes} running")
-            return
+        # BGP
+        if running and bgp_enabled and ntype == "frr":
+            expected = expected_bgp_by_node.get(name, set())
+            bgp_rec: dict[str, Any] = {
+                "expected": sorted(expected),
+                "observed": [],
+                "missing": [],
+                "down": [],
+                "extra": [],
+                "established": [],
+                "ok": True,
+                "parser_mode": "none",
+            }
 
-        for node_rec in out_doc["nodes"]:
-            name = node_rec["name"]
-            cname = node_rec["container"]
-            running = node_rec["running"]
-            print(f"  - {name:<8} ({cname}) : {'running' if running else 'not running'}")
-
-            if running and show_intf and "interfaces" in node_rec and node_rec["interfaces"]:
-                print("      IF:")
-                for line in node_rec["interfaces"]:
-                    print(f"      {line}")
-
-            if running and bgp_enabled and node_rec.get("type") == "frr":
-                bgp = node_rec.get("bgp") or {}
-                expected = bgp.get("expected") or []
-                pm = str(bgp.get("parser_mode") or "none")
-
-                if not expected:
-                    print("      BGP (none)")
+            try:
+                out_json = _node_exec(name, ["vtysh", "-c", "show bgp summary json"])
+                observed = parse_frr_bgp_summary_neighbors_json(out_json)
+                if observed:
+                    bgp_rec["parser_mode"] = "json"
                 else:
-                    est = len(bgp.get("established") or [])
-                    tot = len(expected)
-                    if bgp.get("ok"):
-                        print(f"      BGP expected {tot} | Established {est}/{tot} (OK, parser={pm})")
-                    else:
-                        print(f"      BGP expected {tot} | Established {est}/{tot} (MISMATCH, parser={pm})")
-                        if bgp.get("missing"):
-                            print(f"      BGP missing: {_fmt_list_cap(bgp['missing'], 8)}")
-                        if bgp.get("down"):
-                            print(f"      BGP down:    {_fmt_list_cap(bgp['down'], 8)}")
-                        if bgp.get("extra"):
-                            print(f"      BGP extra:   {_fmt_list_cap(bgp['extra'], 8)}")
+                    out_text = _node_exec(name, ["vtysh", "-c", "show bgp summary"])
+                    observed = parse_frr_bgp_summary_neighbors(out_text)
+                    bgp_rec["parser_mode"] = "text"
 
-                if bgp_verbose:
-                    raw_text = (bgp.get("raw_text") or "").splitlines()
-                    if raw_text:
-                        print("      --- show bgp summary ---")
-                        for line in raw_text:
-                            print(f"      {line}")
-
-            if running and routes_enabled and node_rec.get("type") == "frr":
-                rts = node_rec.get("routes") or {}
-                expected = rts.get("expected") or []
-                pm = str(rts.get("parser_mode") or "none")
+                cmp = compare_expected_vs_observed_bgp(expected, observed)
+                bgp_rec.update(cmp)
 
                 if expected:
-                    missing = rts.get("missing") or []
-                    present = len(expected) - len(missing)
-                    tot = len(expected)
-                    if rts.get("ok"):
-                        print(f"      ROUTES expected {tot} | Present {present}/{tot} (OK, parser={pm})")
-                    else:
-                        print(f"      ROUTES expected {tot} | Present {present}/{tot} (MISMATCH, parser={pm})")
-                        if missing:
-                            print(f"      ROUTES missing: {_fmt_list_cap(missing, 8)}")
+                    frr_nodes_with_expected_peers += 1
+                    exp_total_peers += len(expected)
+                    exp_established_peers += len(cmp["established"])
 
-                if routes_verbose:
-                    raw_text = (rts.get("raw_text") or "").splitlines()
-                    if raw_text:
-                        print("      --- show ip route ---")
-                        for line in raw_text:
-                            print(f"      {line}")
+                if bgp_verbose and not as_json:
+                    bgp_rec["raw_text"] = _node_exec(name, ["vtysh", "-c", "show bgp summary"])
 
-        # NEW: summary prints reliably when requested
-        if show_summary:
-            parts = [f"containers {running_nodes}/{total_nodes} running"]
-            if bgp_enabled:
-                parts.append(f"BGP expected peers {exp_established_peers}/{exp_total_peers} established")
-                parts.append(f"FRR nodes w/expected peers {frr_nodes_with_expected_peers}")
-            if routes_enabled:
-                parts.append(f"ROUTES expected {routes_present_prefixes}/{routes_total_prefixes} present")
-                parts.append(f"FRR nodes w/expected routes {frr_nodes_with_expected_routes}")
-            print("Summary: " + " | ".join(parts))
+                if strict and expected and not bgp_rec["ok"]:
+                    strict_fail = True
+                    _extend_bgp_reasons(name, bgp_rec, reasons)
 
+            except Exception as e:
+                bgp_rec["error"] = str(e)
+                bgp_rec["ok"] = False
+                if strict and expected:
+                    strict_fail = True
+                    reasons.append(
+                        f"bgp error on {name}: {type(e).__name__} (parser={bgp_rec.get('parser_mode','none')})"
+                    )
+
+            node_rec["bgp"] = bgp_rec
+
+        # ROUTES
+        if running and routes_enabled and ntype == "frr":
+            expected_routes = expected_routes_by_frr.get(name, set())
+            routes_rec: dict[str, Any] = {
+                "expected": sorted(expected_routes),
+                "observed": [],
+                "missing": [],
+                "ok": True,
+                "parser_mode": "none",
+            }
+
+            try:
+                rt_json = _node_exec(name, ["vtysh", "-c", "show ip route json"])
+                observed = parse_frr_show_ip_route_prefixes_json(rt_json)
+                rt_text = ""
+                if observed:
+                    routes_rec["parser_mode"] = "json"
+                else:
+                    rt_text = _node_exec(name, ["vtysh", "-c", "show ip route"])
+                    observed = parse_frr_show_ip_route_prefixes(rt_text)
+                    routes_rec["parser_mode"] = "text"
+
+                cmp = compare_expected_vs_observed_prefixes(expected_routes, observed)
+                routes_rec.update(cmp)
+
+                if expected_routes:
+                    frr_nodes_with_expected_routes += 1
+                    routes_total_prefixes += len(expected_routes)
+                    routes_present_prefixes += len(expected_routes) - len(cmp["missing"])
+
+                if routes_verbose and not as_json:
+                    routes_rec["raw_text"] = rt_text if routes_rec["parser_mode"] == "text" else rt_json
+
+                if strict and expected_routes and not routes_rec["ok"]:
+                    strict_fail = True
+                    _extend_routes_reasons(name, routes_rec, reasons)
+
+            except Exception as e:
+                routes_rec["error"] = str(e)
+                routes_rec["ok"] = False
+                if strict and expected_routes:
+                    strict_fail = True
+                    reasons.append(
+                        f"routes error on {name}: {type(e).__name__} (parser={routes_rec.get('parser_mode','none')})"
+                    )
+
+            node_rec["routes"] = routes_rec
+
+        out_doc["nodes"].append(node_rec)
+
+    # NEW: prereq failure => strict_fail + reasons (deterministic)
+    if strict and down_containers:
+        strict_fail = True
+        _extend_container_reasons(down_containers, reasons, cap=5)
+
+    # Summary (always produced)
+    out_doc["summary"] = {
+        "containers_running": {"running": running_nodes, "total": total_nodes}
+    }
+    if bgp_enabled:
+        out_doc["summary"]["bgp_expected_peers"] = {
+            "established": exp_established_peers,
+            "total": exp_total_peers,
+            "frr_nodes_with_expected_peers": frr_nodes_with_expected_peers,
+        }
+    if routes_enabled:
+        out_doc["summary"]["routes_expected_prefixes"] = {
+            "present": routes_present_prefixes,
+            "total": routes_total_prefixes,
+            "frr_nodes_with_expected_routes": frr_nodes_with_expected_routes,
+        }
+
+    if strict_fail:
+        out_doc["verdict"] = "fail"
+        out_doc["reasons"] = sorted(set(reasons))
+    else:
+        out_doc["verdict"] = "pass"
+        out_doc["reasons"] = []
+
+    # JSON output mode: no human printing
+    if as_json:
+        print(json.dumps(out_doc, indent=2, sort_keys=True))
         if strict and strict_fail:
             raise SystemExit(2)
+        return
 
-    finally:
-        netsim_common.QUIET_RUN = old_quiet
+    # -------------------------
+    # Human output (updated)
+    # -------------------------
+    topo_arg = str(getattr(args, "lab", "") or "").strip()
+    topo_path = None
+    if topo_arg:
+        p = Path(topo_arg)
+        if ("/" in topo_arg) or ("\\" in topo_arg) or p.name.lower().endswith((".yaml", ".yml")):
+            topo_path = topo_arg
+
+    if topo_path:
+        print(f"Topology: {topo_path}")
+    print(f"Lab: {lab}")
+
+    # Lab-level runtime classification (deterministic)
+    states = [str(n.get("state") or "") for n in out_doc.get("nodes", [])]
+    runtime = "UNKNOWN"
+    if not states:
+        runtime = "UNKNOWN"
+    else:
+        missing_n = sum(1 for s in states if s == "missing")
+        running_n = sum(1 for s in states if s == "running")
+        stopped_n = sum(1 for s in states if s == "stopped")
+
+        if missing_n == len(states):
+            runtime = "MISSING"
+        elif running_n == len(states):
+            runtime = "RUNNING"
+        elif running_n == 0 and stopped_n > 0 and missing_n == 0:
+            runtime = "STOPPED"
+        else:
+            runtime = "PARTIAL"
+
+    print(f"Runtime: {runtime}")
+    print(f"Source: {source}")
+
+    if not out_doc["nodes"]:
+        print("Nodes: (none)")
+        # Even here, honor --summary
+        if show_summary:
+            print(f"Summary: containers {running_nodes}/{total_nodes} running")
+        return
+
+    print("Nodes:")
+    for node_rec in out_doc["nodes"]:
+        name = node_rec["name"]
+        cname = node_rec["container"]
+        state = str(node_rec.get("state") or ("running" if node_rec.get("running") else "missing"))
+        print(f"  - {name:<8} ({cname}) : {state}")
+
+        if running and show_intf and "interfaces" in node_rec and node_rec["interfaces"]:
+            print("      IF:")
+            for line in node_rec["interfaces"]:
+                print(f"      {line}")
+
+        if running and bgp_enabled and node_rec.get("type") == "frr":
+            bgp = node_rec.get("bgp") or {}
+            expected = bgp.get("expected") or []
+            pm = str(bgp.get("parser_mode") or "none")
+
+            if not expected:
+                print("      BGP (none)")
+            else:
+                est = len(bgp.get("established") or [])
+                tot = len(expected)
+                if bgp.get("ok"):
+                    print(f"      BGP expected {tot} | Established {est}/{tot} (OK, parser={pm})")
+                else:
+                    print(f"      BGP expected {tot} | Established {est}/{tot} (MISMATCH, parser={pm})")
+                    if bgp.get("missing"):
+                        print(f"      BGP missing: {_fmt_list_cap(bgp['missing'], 8)}")
+                    if bgp.get("down"):
+                        print(f"      BGP down:    {_fmt_list_cap(bgp['down'], 8)}")
+                    if bgp.get("extra"):
+                        print(f"      BGP extra:   {_fmt_list_cap(bgp['extra'], 8)}")
+
+            if bgp_verbose:
+                raw_text = (bgp.get("raw_text") or "").splitlines()
+                if raw_text:
+                    print("      --- show bgp summary ---")
+                    for line in raw_text:
+                        print(f"      {line}")
+
+        if running and routes_enabled and node_rec.get("type") == "frr":
+            rts = node_rec.get("routes") or {}
+            expected = rts.get("expected") or []
+            pm = str(rts.get("parser_mode") or "none")
+
+            if expected:
+                missing = rts.get("missing") or []
+                present = len(expected) - len(missing)
+                tot = len(expected)
+                if rts.get("ok"):
+                    print(f"      ROUTES expected {tot} | Present {present}/{tot} (OK, parser={pm})")
+                else:
+                    print(f"      ROUTES expected {tot} | Present {present}/{tot} (MISMATCH, parser={pm})")
+                    if missing:
+                        print(f"      ROUTES missing: {_fmt_list_cap(missing, 8)}")
+
+            if routes_verbose:
+                raw_text = (rts.get("raw_text") or "").splitlines()
+                if raw_text:
+                    print("      --- show ip route ---")
+                    for line in raw_text:
+                        print(f"      {line}")
+
+    # NEW: summary prints reliably when requested
+    if show_summary:
+        parts = [f"containers {running_nodes}/{total_nodes} running"]
+        if bgp_enabled:
+            parts.append(f"BGP expected peers {exp_established_peers}/{exp_total_peers} established")
+            parts.append(f"FRR nodes w/expected peers {frr_nodes_with_expected_peers}")
+        if routes_enabled:
+            parts.append(f"ROUTES expected {routes_present_prefixes}/{routes_total_prefixes} present")
+            parts.append(f"FRR nodes w/expected routes {frr_nodes_with_expected_routes}")
+        print("Summary: " + " | ".join(parts))
+
+    if strict and strict_fail:
+        raise SystemExit(2)
+
+    netsim_common.QUIET_RUN = old_quiet
 
 def cmd_collect(args: argparse.Namespace) -> None:
     import json
