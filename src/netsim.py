@@ -6275,15 +6275,79 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
 def cmd_exec(args: argparse.Namespace) -> None:
     rt = get_runtime()
 
+    lab = str(getattr(args, "lab", "") or "").strip()
+    node = str(getattr(args, "node", "") or "").strip()
+    if not lab or not node:
+        die("exec requires: <lab> <node>", code=2)
+
+    # Determine valid nodes deterministically from local lab descriptors (no Docker scanning).
+    resolved_path = lab_dir(lab) / "topology.resolved.yaml"
+    lab_yaml_path = lab_file_from_name(lab)
+
+    valid_nodes: list[str] = []
+    if lab_yaml_path.exists():
+        try:
+            valid_nodes = sorted([str(n) for n in parse_lab_nodes(lab) if str(n).strip()])
+        except Exception as e:
+            die(f"ERROR: failed to parse lab file '{lab_yaml_path}': {e}", code=2)
+    elif resolved_path.exists():
+        try:
+            topo = _load_resolved_topology(lab)
+        except Exception as e:
+            die(f"ERROR: failed to load resolved topology '{resolved_path}': {e}", code=2)
+        try:
+            valid_nodes = sorted(
+                [
+                    str(n.get("name")).strip()
+                    for n in _iter_nodes(topo)
+                    if isinstance(n, dict) and isinstance(n.get("name"), str) and str(n.get("name")).strip()
+                ]
+            )
+        except Exception as e:
+            die(f"ERROR: failed to derive nodes from resolved topology '{resolved_path}': {e}", code=2)
+
+    if not valid_nodes:
+        die(
+            f"ERROR: cannot determine valid nodes for lab '{lab}' (missing local lab descriptors)\n"
+            f"Try: netsim status {lab}\n"
+            "Hint: Run 'netsim up <topology.yaml>' (or 'netsim run <topology.yaml> --keep') then retry.",
+            code=2,
+        )
+
+    if node not in valid_nodes:
+        die(
+            f"ERROR: invalid node '{node}' for lab '{lab}'\n"
+            f"Valid nodes: {', '.join(valid_nodes)}\n"
+            f"Try: netsim status {lab}",
+            code=2,
+        )
+
+    # Valid node: ensure runtime container exists (runtime-owned check) to prevent daemon error leakage.
+    if hasattr(rt, "node_id") and hasattr(rt, "exists_id"):
+        node_id = rt.node_id(lab, node)
+        try:
+            if not rt.exists_id(node_id):
+                die(
+                    f"ERROR: lab runtime missing for '{lab}' (container {node_id} not found)\n"
+                    f"Try: netsim status {lab}\n"
+                    "Hint: Run 'netsim up <topology.yaml> --reconfigure' (or 'netsim run <topology.yaml> --keep') then retry.\n"
+                    "If artifacts are stale: netsim cleanup --all --yes",
+                    code=2,
+                )
+        except SystemExit:
+            raise
+        except Exception:
+            # Keep deterministic and actionable without exposing backend exceptions.
+            die(f"ERROR: unable to verify runtime for lab '{lab}' (use 'netsim status {lab}')", code=2)
+
     if not args.command:
         # Interactive shell (runtime decides how)
-        cp = rt.exec(args.lab, args.node, ["bash"], check=False, capture_output=False, interactive=True)
+        cp = rt.exec(lab, node, ["bash"], check=False, capture_output=False, interactive=True)
         return
 
-    cp = rt.exec(args.lab, args.node, args.command, check=False, capture_output=False)
+    cp = rt.exec(lab, node, args.command, check=False, capture_output=False)
     if cp.returncode != 0:
-        die(f"Command failed inside {rt.node_id(args.lab, args.node)} (exit {cp.returncode})",
-            code=cp.returncode)
+        die(f"Command failed inside {rt.node_id(lab, node)} (exit {cp.returncode})", code=cp.returncode)
 
 def cmd_vty(args: argparse.Namespace) -> None:
     rt = get_runtime()
