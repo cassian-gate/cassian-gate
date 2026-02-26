@@ -203,6 +203,23 @@ _CANDIDATE_STDIO_TRUNC = 8_000  # must match previous value exactly
 # Presentation-only: deterministic; must not probe; must not affect exit codes.
 _PRIV_NOTICE_PRINTED = False
 
+# Per-invocation artifact write tracking (WI-1: artifact footer staleness guardrail)
+# Presentation-only: deterministic; must not probe filesystem; must not affect exit codes.
+# Stores normalized (forward-slash) string paths written during *this* invocation only.
+_INVOCATION_WRITTEN_ARTIFACTS: list[str] = []
+
+def _invocation_reset_written_artifacts() -> None:
+    # Deterministic reset at CLI entry.
+    _INVOCATION_WRITTEN_ARTIFACTS.clear()
+
+def _invocation_record_written_artifact(p: Path) -> None:
+    try:
+        s = str(p).replace("\\", "/")
+        _INVOCATION_WRITTEN_ARTIFACTS.append(s)
+    except Exception:
+        # Best-effort only; never raise.
+        return
+
 def _maybe_print_privilege_notice(template: str) -> None:
     """
     Deterministic one-time privilege notice. Must be called immediately before the
@@ -290,14 +307,20 @@ def _print_artifacts_footer_for_lab(lab_input: Path, *, authority_kind: str | No
             except Exception:
                 return str(p)
 
-        if p_json.exists() or p_sum.exists():
+        # WI-1: Never infer artifact existence from filesystem state.
+        # Only disclose artifacts that were recorded as written during *this* invocation.
+        w = [str(x).replace("\\", "/") for x in (_INVOCATION_WRITTEN_ARTIFACTS or [])]
+        wrote_json = any(s.endswith("/results.json") or s.endswith("results.json") for s in w)
+        wrote_sum = any(s.endswith("/results.summary.txt") or s.endswith("results.summary.txt") for s in w)
+
+        if wrote_json or wrote_sum:
             print("Artifacts:")
-            if p_json.exists():
+            if wrote_json:
                 if is_gate:
                     print(f"* {rel_labs(p_json)} (authoritative)")
                 else:
                     print(f"* {rel_labs(p_json)} (supporting evidence; non-authoritative)")
-            if p_sum.exists():
+            if wrote_sum:
                 print(f"* {rel_labs(p_sum)} (human-readable)")
     except Exception:
         return
