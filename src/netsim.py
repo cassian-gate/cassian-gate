@@ -223,7 +223,7 @@ def _maybe_print_privilege_notice(template: str) -> None:
     print("ℹ️ This command may require sudo (containerlab uses elevated privileges for network namespaces).")
     print("   You may be prompted for your password.")
 
-def _print_artifacts_footer_for_lab(lab_input: Path) -> None:
+def _print_artifacts_footer_for_lab(lab_input: Path, *, authority_kind: str | None = None) -> None:
     """
     Deterministic artifact footer (best-effort).
 
@@ -239,6 +239,9 @@ def _print_artifacts_footer_for_lab(lab_input: Path) -> None:
         raw = str(lab_input).strip()
         if not raw:
             return
+
+        ak = str(authority_kind or "").strip().lower()
+        is_gate = ak in ("gate", "authoritative", "topology")
 
         raw_path = Path(raw)
         dname = raw_path.name
@@ -290,7 +293,10 @@ def _print_artifacts_footer_for_lab(lab_input: Path) -> None:
         if p_json.exists() or p_sum.exists():
             print("Artifacts:")
             if p_json.exists():
-                print(f"* {rel_labs(p_json)} (authoritative)")
+                if is_gate:
+                    print(f"* {rel_labs(p_json)} (authoritative)")
+                else:
+                    print(f"* {rel_labs(p_json)} (supporting evidence; non-authoritative)")
             if p_sum.exists():
                 print(f"* {rel_labs(p_sum)} (human-readable)")
     except Exception:
@@ -9069,6 +9075,7 @@ def main() -> None:
     netsim_common.QUIET_RUN = (not bool(getattr(args, "verbose", False)))
 
     footer_lab = ""
+    footer_authority = ""
     try:
         # Reset per-invocation privilege notice state deterministically.
         global _PRIV_NOTICE_PRINTED
@@ -9079,13 +9086,20 @@ def main() -> None:
             if not bool(getattr(args, "two_run", False)) and not bool(getattr(args, "list_scenarios", False)):
                 footer_lab = str(getattr(args, "lab", "") or "").strip()
 
+                # Determine authority kind deterministically for artifact labeling.
+                # Prefer the command handler's explicit report authority; otherwise infer from input shape.
+                footer_authority = str(getattr(args, "_report_authority", "") or "").strip().lower()
+                if not footer_authority:
+                    raw = footer_lab.lower()
+                    footer_authority = "gate" if raw.endswith((".yaml", ".yml")) else "lab"
+
         args.func(args)
     finally:
         # Restore global quiet flag deterministically (commands may override temporarily)
         netsim_common.QUIET_RUN = old_quiet
 
         if footer_lab:
-            _print_artifacts_footer_for_lab(footer_lab)
+            _print_artifacts_footer_for_lab(footer_lab, authority_kind=footer_authority)
 
 if __name__ == "__main__":
     main()
