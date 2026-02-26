@@ -2929,7 +2929,7 @@ def _format_test_summary(results: dict) -> str:
 
     return "\n".join(lines) + "\n"
 
-def render_gate_result_block(results: dict) -> str:
+def render_gate_result_block(results: dict, *, authority_kind: str | None = None) -> str:
     """
     Deterministic, presentation-only CLI block derived from already-computed results.
     Must NOT:
@@ -2948,13 +2948,45 @@ def render_gate_result_block(results: dict) -> str:
     verdict_s = "PASS" if res == "pass" else "FAIL"
     is_smoke = (verdict_s == "PASS" and total == 0 and scen_total == 0)
 
+    ak = str(authority_kind or "gate").strip().lower()
+    if ak in ("gate", "authoritative", "topology"):
+        heading = "ai-netsim Gate Result"
+        authority_line = "Authority: GATE (authoritative)"
+        mode_line = "Mode: gate (clean-state topology)"
+    elif ak in ("run", "explore", "exploration"):
+        heading = "ai-netsim Run Result"
+        authority_line = "Authority: RUN (non-authoritative)"
+        mode_line = "Mode: run (workflow)"
+    else:
+        # default: existing runtime checks against an existing lab
+        heading = "ai-netsim Lab Test Result"
+        authority_line = "Authority: LAB-TEST (non-authoritative)"
+        mode_line = "Mode: lab (existing runtime)"
+
     out: list[str] = []
+    # Split prereq checks from declared tests (presentation-only; results schema unchanged)
+    tests = results.get("tests", []) or []
+    prereqs_executed = 0
+    declared_executed = 0
+    if isinstance(tests, list):
+        for t in tests:
+            if not isinstance(t, dict):
+                continue
+            nm = str(t.get("name") or "").strip().lower()
+            kd = str(t.get("kind") or "").strip().lower()
+            if kd == "prereq" or nm.startswith("prereq:"):
+                prereqs_executed += 1
+            else:
+                declared_executed += 1
+
     out.append("────────────────────────────────────────")
-    out.append("ai-netsim Gate Result")
+    out.append(heading)
     out.append("────────────────────────────────────────")
     out.append(f"Lab: {lab}")
-    out.append("Mode: authoritative test")
-    out.append(f"Tests executed: {total}")
+    out.append(authority_line)
+    out.append(mode_line)
+    out.append(f"Prereqs executed: {prereqs_executed}")
+    out.append(f"Declared tests executed: {declared_executed}")
     out.append(f"Scenarios executed: {scen_total}")
     out.append("")
 
@@ -2997,7 +3029,14 @@ def render_gate_result_block(results: dict) -> str:
 
     if verdict_s == "FAIL":
         out.append("")
-        out.append("Failed assertions:")
+
+        # WI-2: prereq failures must not be presented as test execution.
+        # If prereqs ran but no declared tests ran, label explicitly.
+        fail_hdr = "Failed assertions:"
+        if prereqs_executed > 0 and declared_executed == 0:
+            fail_hdr = "Failed prerequisites:"
+        out.append(fail_hdr)
+
         if not failed:
             out.append(" - (none recorded)")
         else:
