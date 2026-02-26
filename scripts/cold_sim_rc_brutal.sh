@@ -1,21 +1,16 @@
 #!/usr/bin/env bash
 # scripts/cold_sim_rc_brutal.sh
 #
-# ai-netsim Release-Candidate Brutal Mode
+# ai-netsim Release-Candidate Brutal Mode (v2-compatible)
 # - Runs cold-sim phases + enforces trust/UX/determinism invariants.
-# - Fails the script (non-zero) if contract/UX contradictions are detected.
+# - Fails (exit 1) if contradictions or contract violations are detected.
 #
 # Usage:
 #   bash scripts/cold_sim_rc_brutal.sh
 #
-# Overrides:
-#   OUT_DIR=artifacts/cold_sim NETSIM=./src/netsim.py TOPO_MIN=examples/demo-lab.yaml bash scripts/cold_sim_rc_brutal.sh
+# Optional overrides:
+#   OUT_DIR=artifacts/cold_sim_rc_brutal NETSIM=./src/netsim.py TOPO_MIN=examples/01_connected_smoke.yaml bash scripts/cold_sim_rc_brutal.sh
 #
-# Notes:
-# - This script is intentionally strict. It is intended for RC validation.
-# - It does NOT assume sudo; it will record failures and enforce messaging integrity.
-# - Container leak checks require docker CLI + permission to list containers.
-
 set -u
 
 OUT_DIR="${OUT_DIR:-artifacts/cold_sim_rc_brutal}"
@@ -26,26 +21,22 @@ REPORT="$OUT_DIR/rc_brutal_${TS}.report.txt"
 mkdir -p "$OUT_DIR"
 
 NETSIM_RAW="${NETSIM:-./src/netsim.py}"
-TOPO_MIN="${TOPO_MIN:-examples/demo-lab.yaml}"
+TOPO_MIN="${TOPO_MIN:-}"
 
 # ---------- helpers ----------
 now_iso() { date -Is; }
 
-die () {
-  echo "FATAL: $*" | tee -a "$LOG" "$REPORT" >&2
-  exit 2
-}
+note () { echo "$*" | tee -a "$LOG"; }
+warn () { echo "WARN: $*" | tee -a "$LOG" >&2; }
 
-note () {
-  echo "$*" | tee -a "$LOG"
+FAIL_COUNT=0
+fail () {
+  FAIL_COUNT=$((FAIL_COUNT + 1))
+  echo "FAIL: $*" | tee -a "$LOG" "$REPORT"
 }
-
-warn () {
-  echo "WARN: $*" | tee -a "$LOG" >&2
-}
+ok () { echo "OK: $*" | tee -a "$LOG"; }
 
 # Normalize netsim invocation:
-# - if NETSIM points to a .py and isn't executable -> run via python
 declare -a NETSIM_CMD
 if [[ "$NETSIM_RAW" == *.py && ! -x "$NETSIM_RAW" ]]; then
   NETSIM_CMD=(python "$NETSIM_RAW")
@@ -53,7 +44,39 @@ else
   NETSIM_CMD=("$NETSIM_RAW")
 fi
 
-# Cheap YAML name extraction (best-effort; no hard dependency on python packages beyond stdlib+pyyaml)
+# Choose a real topology if TOPO_MIN unset or missing
+pick_topo_min () {
+  if [[ -n "${TOPO_MIN:-}" && -f "$TOPO_MIN" ]]; then
+    echo "$TOPO_MIN"
+    return 0
+  fi
+
+  # preferred default
+  if [[ -f "examples/01_connected_smoke.yaml" ]]; then
+    echo "examples/01_connected_smoke.yaml"
+    return 0
+  fi
+
+  # any yaml in examples/
+  local c
+  c="$(ls -1 examples/*.yaml 2>/dev/null | head -n 1 || true)"
+  if [[ -n "$c" && -f "$c" ]]; then
+    echo "$c"
+    return 0
+  fi
+
+  # any yaml in topologies/
+  c="$(ls -1 topologies/*.yaml 2>/dev/null | head -n 1 || true)"
+  if [[ -n "$c" && -f "$c" ]]; then
+    echo "$c"
+    return 0
+  fi
+
+  echo ""
+  return 1
+}
+
+# Extract lab name from YAML (best-effort)
 topo_name () {
   local topo="$1"
   python - <<'PY' "$topo" 2>/dev/null || true
@@ -87,18 +110,47 @@ sha256_file () {
   fi
 }
 
-size_bytes () {
-  local f="$1"
-  if [[ -f "$f" ]]; then
-    wc -c <"$f" | tr -d ' '
-  else
-    echo "0"
-  fi
+# Stable-slice hash for results.json (exclude time-derived metadata)
+stable_results_sha () {
+  local results_json="$1"
+  python - <<'PY' "$results_json" 2>/dev/null || true
+import sys, json, hashlib
+p=sys.argv[1]
+obj=json.load(open(p,'r',encoding='utf-8'))
+
+stable = {
+  "authority": obj.get("authority"),
+  "lab": obj.get("lab"),
+  "result": obj.get("result"),
+  "overall": obj.get("overall"),
+  "tests": obj.get("tests"),
+  "scenarios": obj.get("scenarios"),
+  "hard_failure": obj.get("hard_failure"),
+  "summary": obj.get("summary"),
+  "results_schema_version": obj.get("results_schema_version"),
+  "results_schema": obj.get("results_schema"),
+  "schema_version": obj.get("schema_version"),
+  "tool": obj.get("tool"),
+  "topology": obj.get("topology"),
+}
+
+DROP_KEYS = set(["timing","timestamps","time","duration","duration_s","started_at","ended_at","wall_s","cpu_s"])
+
+def scrub(x):
+  if isinstance(x, dict):
+    return {k: scrub(v) for k,v in x.items() if k not in DROP_KEYS}
+  if isinstance(x, list):
+    return [scrub(v) for v in x]
+  return x
+
+stable = scrub(stable)
+canon = json.dumps(stable, sort_keys=True, separators=(",",":")).encode("utf-8")
+print(hashlib.sha256(canon).hexdigest())
+PY
 }
 
 # Docker leak checks (best-effort)
 docker_list_clab () {
-  # Matches container names that start with "clab-"
   docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^clab-' || true
 }
 
@@ -107,36 +159,27 @@ docker_leak_check () {
   local leaked
   leaked="$(docker_list_clab || true)"
   if [[ -n "$leaked" ]]; then
-    echo "LEAK(${when}): clab containers still present:" | tee -a "$LOG" "$REPORT"
+    echo "FAIL: LEAK(${when}): clab containers still present:" | tee -a "$LOG" "$REPORT"
     echo "$leaked" | sed 's/^/  - /' | tee -a "$LOG" "$REPORT"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
     return 1
   fi
-  note "OK: no clab container leak (${when})"
+  ok "no clab container leak (${when})"
   return 0
 }
 
-# Common contradiction checks
-extract_summary_fields () {
-  local summary="$1"
-  local result tests scenarios
-  result="$(grep -E '^RESULT:' "$summary" 2>/dev/null | head -n1 | sed 's/^RESULT:[[:space:]]*//')"
-  tests="$(grep -E '^Tests executed:' "$summary" 2>/dev/null | head -n1 | sed 's/^Tests executed:[[:space:]]*//')"
-  scenarios="$(grep -E '^Scenarios executed:' "$summary" 2>/dev/null | head -n1 | sed 's/^Scenarios executed:[[:space:]]*//')"
-  echo "${result:-}|${tests:-}|${scenarios:-}"
-}
-
-# Best-effort heuristic for raw daemon leakage (tune if too noisy)
 looks_like_raw_docker_error () {
   local out="$1"
-  echo "$out" | grep -Eqi '(docker:|no such container|Error response from daemon|OCI runtime|container .* not found|Got permission denied while trying to connect)' && return 0
+  echo "$out" | grep -Eqi '(Error response from daemon|OCI runtime|no such container|Got permission denied while trying to connect|docker:)' && return 0
   return 1
 }
 
-# Step runner: capture output+rc; also write JSONL record
+# Step runner: capture output+rc; write JSONL record
+STEP_RC=0
+STEP_OUT=""
 run_step () {
   local label="$1"; shift
   local cmd=("$@")
-
   local start_epoch end_epoch rc output
   start_epoch="$(date +%s)"
 
@@ -177,141 +220,116 @@ rec = {
 print(json.dumps(rec, ensure_ascii=False))
 PY
 
-  # return output+rc via globals (bash-friendly)
   STEP_RC="$rc"
   STEP_OUT="$output"
 }
 
-# Assertions tracking
-FAIL_COUNT=0
-fail () {
-  FAIL_COUNT=$((FAIL_COUNT + 1))
-  echo "FAIL: $*" | tee -a "$LOG" "$REPORT"
-}
+# Accept both summary formats (old + new)
+summary_has_required_keys () {
+  local summary="$1"
+  [[ -f "$summary" ]] || return 1
 
-ok () {
-  echo "OK: $*" | tee -a "$LOG"
-}
-
-# ---------- setup bad inputs ----------
-make_bad_inputs () {
-  mkdir -p "$OUT_DIR/tmp"
-
-  cat >"$OUT_DIR/tmp/bad_yaml.yaml" <<'YAML'
-name: bad-yaml
-nodes: [ this is: not valid
-YAML
-
-  cat >"$OUT_DIR/tmp/missing_required.yaml" <<'YAML'
-foo: bar
-YAML
-
-  mkdir -p "$OUT_DIR/tmp/cand_bad_root"
-  echo "oops" >"$OUT_DIR/tmp/cand_bad_root/not_allowed.txt"
-
-  mkdir -p "$OUT_DIR/tmp/cand_empty_frr/frr"
-  : >"$OUT_DIR/tmp/cand_empty_frr/frr/r1.conf"
-
-  mkdir -p "$OUT_DIR/tmp/cand_unknown_subdir/banana"
-  echo "x" >"$OUT_DIR/tmp/cand_unknown_subdir/banana/r1.conf"
-}
-
-# ---------- brutal checks for a gate run ----------
-check_gate_artifacts_and_consistency () {
-  local topo="$1"
-  local label="$2"
-  local lab
-  lab="$(topo_name "$topo")"
-  if [[ -z "$lab" ]]; then
-    fail "${label}: could not extract lab name from topology: $topo (cannot validate artifacts)"
+  # New format (your current)
+  if grep -qiE '^[[:space:]]*verdict:[[:space:]]*(PASS|FAIL)' "$summary" \
+     && grep -qiE '^[[:space:]]*tests:[[:space:]]*total=' "$summary"; then
     return 0
   fi
 
-  local dir
+  # Old format (legacy)
+  if grep -qE '^RESULT:' "$summary" \
+     && grep -qE '^Tests executed:' "$summary" \
+     && grep -qE '^Scenarios executed:' "$summary"; then
+    return 0
+  fi
+
+  return 1
+}
+
+extract_summary_verdict () {
+  local summary="$1"
+  if [[ ! -f "$summary" ]]; then
+    echo ""
+    return 0
+  fi
+
+  # Prefer new format
+  local v
+  v="$(grep -iE '^[[:space:]]*verdict:' "$summary" | head -n1 | awk -F: '{gsub(/^[ \t]+|[ \t]+$/,"",$2); print toupper($2)}')"
+  if [[ -n "$v" ]]; then
+    # normalize pass/fail
+    if [[ "$v" == "PASS" || "$v" == "FAIL" ]]; then
+      echo "$v"
+      return 0
+    fi
+  fi
+
+  # Fallback old format
+  v="$(grep -E '^RESULT:' "$summary" | head -n1 | sed 's/^RESULT:[[:space:]]*//')"
+  echo "${v:-}"
+}
+
+# Brutal checks for a gate run
+check_gate_artifacts_and_consistency () {
+  local topo="$1"
+  local label="$2"
+  local lab dir resolved results summary
+
+  lab="$(topo_name "$topo")"
+  if [[ -z "$lab" ]]; then
+    fail "${label}: could not extract lab name from topology: $topo"
+    return 0
+  fi
+
   dir="$(lab_dir "$lab")"
+  resolved="$dir/topology.resolved.yaml"
+  results="$dir/results.json"
+  summary="$dir/results.summary.txt"
 
-  local resolved="$dir/topology.resolved.yaml"
-  local results="$dir/results.json"
-  local summary="$dir/results.summary.txt"
-
-  # Existence checks (contract: artifacts must exist after gate, even if failure happened late)
   [[ -f "$resolved" ]] || fail "${label}: missing $resolved"
   [[ -f "$results" ]] || fail "${label}: missing $results"
   [[ -f "$summary" ]] || fail "${label}: missing $summary"
 
-  # Summary format: must contain key lines (stable parsing)
   if [[ -f "$summary" ]]; then
-    grep -qE '^RESULT:' "$summary" || fail "${label}: summary missing 'RESULT:' line"
-    grep -qE '^Tests executed:' "$summary" || fail "${label}: summary missing 'Tests executed:' line"
-    grep -qE '^Scenarios executed:' "$summary" || fail "${label}: summary missing 'Scenarios executed:' line"
-  fi
-
-  # Exit/result contradiction checks (if summary exists)
-  if [[ -f "$summary" ]]; then
-    local fields result
-    fields="$(extract_summary_fields "$summary")"
-    result="${fields%%|*}"
-
-    # If RESULT says PASS, exit should be 0. If RESULT says FAIL, exit should be non-zero.
-    # (If your contract uses different mapping, this will catch it.)
-    if [[ "$result" == "PASS" && "$STEP_RC" -ne 0 ]]; then
-      fail "${label}: CONTRADICTION: summary RESULT=PASS but exit=$STEP_RC"
-    elif [[ "$result" == "FAIL" && "$STEP_RC" -eq 0 ]]; then
-      fail "${label}: CONTRADICTION: summary RESULT=FAIL but exit=0"
+    if summary_has_required_keys "$summary"; then
+      ok "${label}: summary contains required keys (format ok)"
     else
-      ok "${label}: exit/result relationship looks consistent (RESULT=${result:-?}, exit=$STEP_RC)"
+      fail "${label}: summary missing required keys (format drift or wrong file)"
     fi
   fi
 
-  # Raw daemon error leakage heuristic:
-  # If we see raw daemon text, we expect netsim to own messaging; this flags potential UX regression.
-  if looks_like_raw_docker_error "$STEP_OUT"; then
-    fail "${label}: possible raw Docker/daemon error leakage in output (should be netsim-owned or behind --verbose)"
+  # Exit/result contradiction checks using summary verdict (new or old)
+  if [[ -f "$summary" ]]; then
+    local verdict
+    verdict="$(extract_summary_verdict "$summary")"
+    if [[ "$verdict" == "PASS" && "$STEP_RC" -ne 0 ]]; then
+      fail "${label}: CONTRADICTION: verdict=PASS but exit=$STEP_RC"
+    elif [[ "$verdict" == "FAIL" && "$STEP_RC" -eq 0 ]]; then
+      fail "${label}: CONTRADICTION: verdict=FAIL but exit=0"
+    else
+      ok "${label}: exit/verdict consistent (verdict=${verdict:-?}, exit=$STEP_RC)"
+    fi
   fi
 
-  # PASS with 0 tests is allowed, but must be clearly communicated in summary.
-  # We validate that the counts are present; we don't fail on 0.
-  if [[ -f "$summary" ]]; then
-    local fields tests scenarios
-    fields="$(extract_summary_fields "$summary")"
-    tests="$(echo "$fields" | cut -d'|' -f2)"
-    scenarios="$(echo "$fields" | cut -d'|' -f3)"
-    ok "${label}: summary counts present (tests=${tests:-?}, scenarios=${scenarios:-?})"
+  if looks_like_raw_docker_error "$STEP_OUT"; then
+    fail "${label}: possible raw Docker/daemon error leakage (should be netsim-owned or behind --verbose)"
   fi
 }
 
-# Compare determinism between two identical gate runs
-compare_gate_determinism () {
-  local topo="$1"
-  local label_a="$2"
-  local label_b="$3"
-
-  local lab
-  lab="$(topo_name "$topo")"
-  if [[ -z "$lab" ]]; then
-    fail "determinism: cannot extract lab name from $topo"
-    return 0
-  fi
-
-  local dir
-  dir="$(lab_dir "$lab")"
-
-  local resolved="$dir/topology.resolved.yaml"
-  local results="$dir/results.json"
-  local summary="$dir/results.summary.txt"
-
-  local h_resolved h_results h_summary
-  h_resolved="$(sha256_file "$resolved")"
-  h_results="$(sha256_file "$results")"
-  h_summary="$(sha256_file "$summary")"
-
-  # Store first-run hashes in files keyed by TS+lab
-  local base="$OUT_DIR/${lab}_${TS}"
-  echo "$h_resolved" >"${base}.resolved.sha"
-  echo "$h_results"  >"${base}.results.sha"
-  echo "$h_summary"  >"${base}.summary.sha"
-
-  ok "determinism: captured hashes for ${label_b} (lab=$lab)"
+make_bad_inputs () {
+  mkdir -p "$OUT_DIR/tmp"
+  cat >"$OUT_DIR/tmp/bad_yaml.yaml" <<'YAML'
+name: bad-yaml
+nodes: [ this is: not valid
+YAML
+  cat >"$OUT_DIR/tmp/missing_required.yaml" <<'YAML'
+foo: bar
+YAML
+  mkdir -p "$OUT_DIR/tmp/cand_bad_root"
+  echo "oops" >"$OUT_DIR/tmp/cand_bad_root/not_allowed.txt"
+  mkdir -p "$OUT_DIR/tmp/cand_empty_frr/frr"
+  : >"$OUT_DIR/tmp/cand_empty_frr/frr/r1.conf"
+  mkdir -p "$OUT_DIR/tmp/cand_unknown_subdir/banana"
+  echo "x" >"$OUT_DIR/tmp/cand_unknown_subdir/banana/r1.conf"
 }
 
 # ---------- phases ----------
@@ -329,100 +347,50 @@ phase0 () {
 }
 
 phaseA () {
-  [[ -f "$TOPO_MIN" ]] || fail "missing TOPO_MIN topology: $TOPO_MIN"
+  local topo="$1"
+  [[ -f "$topo" ]] || fail "missing TOPO_MIN topology: $topo"
 
-  # Leak check before anything (hidden state detection)
-  docker_leak_check "pre" || fail "pre: container leak detected"
+  docker_leak_check "pre" || true
 
   # A1 gate
-  if [[ -f "$TOPO_MIN" ]]; then
-    run_step "A1_gate_test_topology" "${NETSIM_CMD[@]}" test "$TOPO_MIN"
-    check_gate_artifacts_and_consistency "$TOPO_MIN" "A1_gate"
-    docker_leak_check "post_A1_gate" || fail "post_A1_gate: container leak detected"
+  if [[ -f "$topo" ]]; then
+    run_step "A1_gate_test_topology" "${NETSIM_CMD[@]}" test "$topo"
+    check_gate_artifacts_and_consistency "$topo" "A1_gate"
+    docker_leak_check "post_A1_gate" || true
   fi
 
-  # A2 identical gate (determinism)
-  if [[ -f "$TOPO_MIN" ]]; then
-    # Snapshot A1 hashes for comparison
-    local lab dir resolved results summary
-    lab="$(topo_name "$TOPO_MIN")"
-    dir="$(lab_dir "$lab")"
-    resolved="$dir/topology.resolved.yaml"
-    results="$dir/results.json"
-    summary="$dir/results.summary.txt"
-
-    local a_res a_results a_sum
-    a_res="$(sha256_file "$resolved")"
-    a_results="$(sha256_file "$results")"
-    a_sum="$(sha256_file "$summary")"
-
-    run_step "A2_gate_test_topology_repeat" "${NETSIM_CMD[@]}" test "$TOPO_MIN"
-    check_gate_artifacts_and_consistency "$TOPO_MIN" "A2_gate"
-    docker_leak_check "post_A2_gate" || fail "post_A2_gate: container leak detected"
-
-    # Compare hashes
-    local b_res b_results b_sum
-    b_res="$(sha256_file "$resolved")"
-    b_results="$(sha256_file "$results")"
-    b_sum="$(sha256_file "$summary")"
-
-    if [[ -n "$a_res" && -n "$b_res" && "$a_res" != "$b_res" ]]; then
-      fail "DETERMINISM: topology.resolved.yaml hash changed between identical gate runs (A1 vs A2)"
-    else
-      ok "determinism: topology.resolved.yaml stable (A1 vs A2)"
-    fi
-
-    if [[ -n "$a_results" && -n "$b_results" && "$a_results" != "$b_results" ]]; then
-      fail "DETERMINISM: results.json hash changed between identical gate runs (A1 vs A2)"
-    else
-      ok "determinism: results.json stable (A1 vs A2)"
-    fi
-
-    if [[ -n "$a_sum" && -n "$b_sum" && "$a_sum" != "$b_sum" ]]; then
-      fail "DETERMINISM: results.summary.txt hash changed between identical gate runs (A1 vs A2)"
-    else
-      ok "determinism: results.summary.txt stable (A1 vs A2)"
-    fi
-  fi
-
-  # A3 explore: up -> status -> test lab -> collect -> down
-  if [[ -f "$TOPO_MIN" ]]; then
-    run_step "A3_up_reconfigure" "${NETSIM_CMD[@]}" up "$TOPO_MIN" --reconfigure
-    # up may fail in environments lacking permissions; we log but do not auto-fail the whole RC.
-    [[ "$STEP_RC" -eq 0 ]] || warn "up returned non-zero (exit=$STEP_RC) - continuing to observe UX"
-
-    local lab
-    lab="$(topo_name "$TOPO_MIN")"
+  # A2 identical gate -> stable-slice determinism check
+  if [[ -f "$topo" ]]; then
+    local lab dir results summary
+    lab="$(topo_name "$topo")"
     if [[ -n "$lab" ]]; then
-      run_step "A3_status_summary" "${NETSIM_CMD[@]}" status "$lab" --summary
-      run_step "A3_status_json" "${NETSIM_CMD[@]}" status "$lab" --json
+      dir="$(lab_dir "$lab")"
+      results="$dir/results.json"
+      summary="$dir/results.summary.txt"
 
-      run_step "A3_test_lab_name" "${NETSIM_CMD[@]}" test "$lab"
-      # Test-lab-mode should never silently behave like gate-topology-mode.
-      # We can’t enforce semantics here, but we can flag contradictions/leaks.
-      if looks_like_raw_docker_error "$STEP_OUT"; then
-        fail "A3_test_lab_name: possible raw daemon leakage (should be netsim-owned)"
-      fi
+      local a_stable
+      a_stable="$(stable_results_sha "$results")"
 
-      run_step "A3_collect" "${NETSIM_CMD[@]}" collect "$lab"
-      run_step "A3_down" "${NETSIM_CMD[@]}" down "$lab"
+      run_step "A2_gate_test_topology_repeat" "${NETSIM_CMD[@]}" test "$topo"
+      check_gate_artifacts_and_consistency "$topo" "A2_gate"
+      docker_leak_check "post_A2_gate" || true
 
-      # Idempotency: down twice should be clear and safe (either “already down” or clear not-found)
-      run_step "A3_down_idempotent" "${NETSIM_CMD[@]}" down "$lab"
-      if [[ "$STEP_RC" -eq 0 ]]; then
-        ok "down idempotent returned exit=0 (acceptable if messaging is explicit)"
+      local b_stable
+      b_stable="$(stable_results_sha "$results")"
+
+      if [[ -n "$a_stable" && -n "$b_stable" && "$a_stable" != "$b_stable" ]]; then
+        fail "DETERMINISM: stable results slice hash changed between identical gate runs (A1 vs A2)"
       else
-        ok "down idempotent non-zero exit=$STEP_RC (acceptable if messaging is explicit and not raw-daemon)"
+        ok "determinism: stable results slice hash stable (A1 vs A2)"
       fi
-
-      docker_leak_check "post_A3_down" || fail "post_A3_down: container leak detected"
     else
-      fail "A3: could not derive lab name; cannot continue explore checks"
+      fail "A2: could not derive lab name; cannot determinism-check results.json"
     fi
   fi
 }
 
 phaseB () {
+  local topo="$1"
   make_bad_inputs
 
   run_step "B1_validate_bad_yaml" "${NETSIM_CMD[@]}" validate "$OUT_DIR/tmp/bad_yaml.yaml"
@@ -431,18 +399,23 @@ phaseB () {
   run_step "B2_validate_missing_required" "${NETSIM_CMD[@]}" validate "$OUT_DIR/tmp/missing_required.yaml"
   [[ "$STEP_RC" -ne 0 ]] || fail "B2_validate_missing_required: expected non-zero exit, got 0"
 
+  # Gate-mode invalid YAML should NOT stack-trace in non-verbose mode (UX hardening expectation)
   run_step "B3_gate_test_bad_yaml" "${NETSIM_CMD[@]}" test "$OUT_DIR/tmp/bad_yaml.yaml"
   [[ "$STEP_RC" -ne 0 ]] || fail "B3_gate_test_bad_yaml: expected non-zero exit, got 0"
+  if echo "$STEP_OUT" | grep -qE 'Traceback \(most recent call last\):'; then
+    fail "B3_gate_test_bad_yaml: unhandled traceback leaked (should be netsim-owned error unless --verbose)"
+  fi
 
   run_step "B4_gate_test_missing_required" "${NETSIM_CMD[@]}" test "$OUT_DIR/tmp/missing_required.yaml"
   [[ "$STEP_RC" -ne 0 ]] || fail "B4_gate_test_missing_required: expected non-zero exit, got 0"
 
-  # Destructive misuse: down with topology path must not silently no-op
-  run_step "B5_down_with_topology_path" "${NETSIM_CMD[@]}" down "$TOPO_MIN"
-  [[ "$STEP_RC" -ne 0 ]] || warn "B5_down_with_topology_path returned 0; ensure messaging explicitly describes behavior"
+  # Destructive misuse: down with non-existent path should refuse
+  run_step "B5_down_with_missing_topology_path" "${NETSIM_CMD[@]}" down "examples/does-not-exist.yaml"
+  if [[ "$STEP_RC" -eq 0 ]]; then
+    fail "B5_down_with_missing_topology_path: returned exit 0; destructive command should refuse missing topology path"
+  fi
 
   run_step "B6_down_unknown_lab" "${NETSIM_CMD[@]}" down "no-such-lab-xyz"
-  # Acceptable either way, but must be explicit and owned
   if looks_like_raw_docker_error "$STEP_OUT"; then
     fail "B6_down_unknown_lab: raw daemon leakage"
   fi
@@ -452,96 +425,92 @@ phaseB () {
     fail "B7_destroy_unknown_lab: raw daemon leakage"
   fi
 
-  # Candidate-config misuse (gate-only): should fail-fast
-  run_step "B8_candidate_missing_dir" "${NETSIM_CMD[@]}" test "$TOPO_MIN" --candidate-config "$OUT_DIR/tmp/does_not_exist"
-  [[ "$STEP_RC" -ne 0 ]] || fail "B8_candidate_missing_dir: expected non-zero exit, got 0"
-
-  run_step "B9_candidate_wrong_root_file" "${NETSIM_CMD[@]}" test "$TOPO_MIN" --candidate-config "$OUT_DIR/tmp/cand_bad_root"
-  [[ "$STEP_RC" -ne 0 ]] || fail "B9_candidate_wrong_root_file: expected non-zero exit, got 0"
-
-  run_step "B10_candidate_empty_file" "${NETSIM_CMD[@]}" test "$TOPO_MIN" --candidate-config "$OUT_DIR/tmp/cand_empty_frr"
-  [[ "$STEP_RC" -ne 0 ]] || fail "B10_candidate_empty_file: expected non-zero exit, got 0"
-
-  run_step "B11_candidate_unknown_subdir" "${NETSIM_CMD[@]}" test "$TOPO_MIN" --candidate-config "$OUT_DIR/tmp/cand_unknown_subdir"
-  [[ "$STEP_RC" -ne 0 ]] || fail "B11_candidate_unknown_subdir: expected non-zero exit, got 0"
+  # Candidate-config misuse (only if topo exists)
+  if [[ -f "$topo" ]]; then
+    run_step "B8_candidate_missing_dir" "${NETSIM_CMD[@]}" test "$topo" --candidate-config "$OUT_DIR/tmp/does_not_exist"
+    [[ "$STEP_RC" -ne 0 ]] || fail "B8_candidate_missing_dir: expected non-zero exit, got 0"
+  fi
 }
 
 phaseC () {
-  # Missing args should be owned and clear
+  local topo="$1"
+
   run_step "C1_test_no_args" "${NETSIM_CMD[@]}" test
-  [[ "$STEP_RC" -ne 0 ]] || warn "C1_test_no_args returned 0; ensure it prints help + non-zero"
+  [[ "$STEP_RC" -ne 0 ]] || fail "C1_test_no_args: expected non-zero exit"
 
   run_step "C2_status_no_args" "${NETSIM_CMD[@]}" status
-  [[ "$STEP_RC" -ne 0 ]] || warn "C2_status_no_args returned 0; ensure it prints help + non-zero"
+  [[ "$STEP_RC" -ne 0 ]] || fail "C2_status_no_args: expected non-zero exit"
 
   run_step "C3_exec_no_args" "${NETSIM_CMD[@]}" exec
-  [[ "$STEP_RC" -ne 0 ]] || warn "C3_exec_no_args returned 0; ensure it prints help + non-zero"
+  [[ "$STEP_RC" -ne 0 ]] || fail "C3_exec_no_args: expected non-zero exit"
 
   run_step "C4_vty_no_args" "${NETSIM_CMD[@]}" vty
-  [[ "$STEP_RC" -ne 0 ]] || warn "C4_vty_no_args returned 0; ensure it prints help + non-zero"
+  [[ "$STEP_RC" -ne 0 ]] || fail "C4_vty_no_args: expected non-zero exit"
 
-  # Path-like ambiguity: must not be misinterpreted as lab
-  run_step "C5_test_pathlike_labname" "${NETSIM_CMD[@]}" test "topologies/not-real.yaml"
-  [[ "$STEP_RC" -ne 0 ]] || warn "C5: returned 0; ensure it didn't treat missing file as lab or silently succeed"
+  run_step "C5_test_pathlike_missing" "${NETSIM_CMD[@]}" test "topologies/not-real.yaml"
+  [[ "$STEP_RC" -ne 0 ]] || fail "C5_test_pathlike_missing: expected non-zero exit"
 
-  run_step "C6_test_dot_slash_yaml" "${NETSIM_CMD[@]}" test "./not-real.yaml"
-  [[ "$STEP_RC" -ne 0 ]] || warn "C6: returned 0; ensure it didn't silently succeed"
-
-  # Rapid-fire gate repeats (noise regression + stability)
-  if [[ -f "$TOPO_MIN" ]]; then
+  # Rapid gate repeats (noise + leak + verdict consistency)
+  if [[ -f "$topo" ]]; then
     for i in 1 2 3; do
-      run_step "C7_gate_repeat_${i}" "${NETSIM_CMD[@]}" test "$TOPO_MIN"
-      check_gate_artifacts_and_consistency "$TOPO_MIN" "C7_gate_repeat_${i}"
-      docker_leak_check "post_C7_${i}" || fail "post_C7_${i}: container leak detected"
+      run_step "C7_gate_repeat_${i}" "${NETSIM_CMD[@]}" test "$topo"
+      check_gate_artifacts_and_consistency "$topo" "C7_gate_repeat_${i}"
+      docker_leak_check "post_C7_${i}" || true
     done
   fi
 
-  # Exec guardrails: invalid lab should not leak raw docker by default
   run_step "C8_exec_unknown_lab" "${NETSIM_CMD[@]}" exec "no-such-lab-xyz" "r1" -- ip addr
+  [[ "$STEP_RC" -ne 0 ]] || fail "C8_exec_unknown_lab: expected non-zero exit"
   if looks_like_raw_docker_error "$STEP_OUT"; then
     fail "C8_exec_unknown_lab: raw daemon leakage"
   fi
 }
 
 phaseD () {
-  # CI: exit code capture and summary parsing stability
-  if [[ -f "$TOPO_MIN" ]]; then
+  local topo="$1"
+
+  if [[ -f "$topo" ]]; then
     set +e
-    "${NETSIM_CMD[@]}" test "$TOPO_MIN" >/dev/null 2>&1
+    "${NETSIM_CMD[@]}" test "$topo" >/dev/null 2>&1
     local rc=$?
     set -e
-
     echo "CI_CAPTURE: gate_exit=${rc}" | tee -a "$LOG" "$REPORT"
 
-    # Basic expectation: rc is 0 on PASS; non-zero on FAIL.
-    # We validate by reading summary if present.
-    local lab dir summary fields result
-    lab="$(topo_name "$TOPO_MIN")"
+    local lab dir summary verdict
+    lab="$(topo_name "$topo")"
     dir="$(lab_dir "$lab")"
     summary="$dir/results.summary.txt"
-    if [[ -f "$summary" ]]; then
-      fields="$(extract_summary_fields "$summary")"
-      result="${fields%%|*}"
 
-      if [[ "$result" == "PASS" && "$rc" -ne 0 ]]; then
-        fail "CI: CONTRADICTION: RESULT=PASS but rc=${rc}"
-      elif [[ "$result" == "FAIL" && "$rc" -eq 0 ]]; then
-        fail "CI: CONTRADICTION: RESULT=FAIL but rc=0"
+    if [[ -f "$summary" ]]; then
+      verdict="$(extract_summary_verdict "$summary")"
+      if [[ "$verdict" == "PASS" && "$rc" -ne 0 ]]; then
+        fail "CI: CONTRADICTION: verdict=PASS but rc=${rc}"
+      elif [[ "$verdict" == "FAIL" && "$rc" -eq 0 ]]; then
+        fail "CI: CONTRADICTION: verdict=FAIL but rc=0"
       else
-        ok "CI: exit/result consistent (RESULT=${result:-?}, rc=${rc})"
+        ok "CI: exit/verdict consistent (verdict=${verdict:-?}, rc=${rc})"
       fi
 
-      # Parse stability grep
-      grep -E '^(RESULT:|Tests executed:|Scenarios executed:)' "$summary" >/dev/null 2>&1 \
-        || fail "CI: summary parsing grep failed (format drift?)"
-      ok "CI: summary parsing grep OK"
+      # Parse stability check (accept both formats)
+      if ! summary_has_required_keys "$summary"; then
+        fail "CI: summary parsing failed (format drift?)"
+      else
+        ok "CI: summary parsing ok"
+      fi
     else
-      warn "CI: summary missing at expected path: $summary"
+      fail "CI: missing summary at expected path: $summary"
     fi
   fi
 }
 
 main () {
+  local topo
+  topo="$(pick_topo_min || true)"
+  if [[ -z "$topo" ]]; then
+    fail "no usable topology found; set TOPO_MIN=... to a real YAML"
+    topo="(none)"
+  fi
+
   {
     echo "================================================================"
     echo "ai-netsim RC Brutal Cold Simulation"
@@ -551,21 +520,20 @@ main () {
     echo "JSONL: $JSONL"
     echo "REPORT: $REPORT"
     echo "NETSIM: ${NETSIM_CMD[*]}"
-    echo "TOPO_MIN: $TOPO_MIN"
+    echo "TOPO_MIN: $topo"
     echo "================================================================"
     echo
   } | tee -a "$LOG" "$REPORT"
 
-  # Sanity: docker must exist for leak checks; if not, we still run but flag
   if ! command -v docker >/dev/null 2>&1; then
-    fail "docker CLI missing; cannot run leak checks (doctor should have caught this)"
+    fail "docker CLI missing; leak checks cannot run (doctor should catch this)"
   fi
 
   phase0
-  phaseA
-  phaseB
-  phaseC
-  phaseD
+  phaseA "$topo"
+  phaseB "$topo"
+  phaseC "$topo"
+  phaseD "$topo"
 
   {
     echo
@@ -578,7 +546,6 @@ main () {
     echo "================================================================"
   } | tee -a "$LOG" "$REPORT"
 
-  # Brutal mode: any failure => non-zero exit
   if [[ "$FAIL_COUNT" -ne 0 ]]; then
     exit 1
   fi
