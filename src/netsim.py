@@ -19,6 +19,7 @@ import sys
 import time
 import shutil
 import json
+import selectors
 import ipaddress
 import re
 import hashlib
@@ -41,6 +42,34 @@ from netsim_common import (
     nodes_by_type,
 )
 
+# ---------------------------------------------------------------------
+# Verbose containerlab banner noise filter (v2-verbose-containerlab-upgrade-banner-noise)
+# - Line-based, deterministic, allowlist-only suppression
+# - Applies ONLY to verbose printing of containerlab output
+# ---------------------------------------------------------------------
+
+# Static allowlist of suppressible banner substrings (lowercased, line-based).
+_CONTAINERLAB_BANNER_SUBSTRINGS: tuple[str, ...] = (
+    "a new version of containerlab is available",
+    "upgrade available",
+    "consider upgrading",
+    "you are running an older version",
+)
+
+def _filter_containerlab_line(line: str) -> str | None:
+    """
+    Return None to suppress a known non-fatal banner line, else return the original line.
+    Deterministic, line-based, allowlist-only.
+    """
+    s = (line or "")
+    low = s.strip().lower()
+    if not low:
+        return s  # preserve empty/whitespace lines as-is
+    for sub in _CONTAINERLAB_BANNER_SUBSTRINGS:
+        if sub in low:
+            return None
+    return s
+
 def _run_containerlab(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess:
     """
     Deterministic output routing for containerlab commands.
@@ -49,9 +78,58 @@ def _run_containerlab(cmd: list[str], *, check: bool = True) -> subprocess.Compl
       On failure (when check=True), emit a short deterministic error and stop.
     - Verbose: preserve current raw streaming behavior (delegates to netsim_common.run).
     """
-    # Verbose mode => preserve existing behavior exactly (including streaming logs + command echo).
+    # Verbose mode: stream containerlab stdout/stderr, filtering only known non-fatal banners.
+    # Command echo must remain transparent.
     if not netsim_common.QUIET_RUN:
-        return run(cmd, check=check)
+        print("+", " ".join(cmd))
+
+        p = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+
+        sel = selectors.DefaultSelector()
+        assert p.stdout is not None
+        assert p.stderr is not None
+        sel.register(p.stdout, selectors.EVENT_READ, data=("stdout",))
+        sel.register(p.stderr, selectors.EVENT_READ, data=("stderr",))
+
+        # Stream line-by-line; deterministic per-stream ordering; suppress allowlisted banner lines only.
+        while sel.get_map():
+            for key, _ in sel.select():
+                f = key.fileobj
+                line = f.readline()
+                if line == "":
+                    try:
+                        sel.unregister(f)
+                    except Exception:
+                        pass
+                    try:
+                        f.close()
+                    except Exception:
+                        pass
+                    continue
+
+                out = _filter_containerlab_line(line)
+                if out is None:
+                    continue
+
+                # Preserve separation (stdout vs stderr) to avoid hiding real errors.
+                if key.data and key.data[0] == "stderr":
+                    print(out, end="", file=sys.stderr)
+                else:
+                    print(out, end="")
+
+        rc = p.wait()
+        cp = subprocess.CompletedProcess(cmd, rc)
+
+        if check and rc != 0:
+            raise subprocess.CalledProcessError(rc, cmd)
+
+        return cp
 
     # Quiet mode: capture output; never echo the command; never print containerlab INFO on success.
     cp = subprocess.run(cmd, check=False, capture_output=True, text=True)
