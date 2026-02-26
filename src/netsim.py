@@ -5892,7 +5892,9 @@ def cmd_down(args: argparse.Namespace) -> None:
     topo_path = (TOPO_DIR / raw) if not Path(raw).is_file() else Path(raw)
 
     lab_name: str
+    used_topology = False
     if topo_path.suffix in (".yaml", ".yml") and topo_path.exists():
+        used_topology = True
         topo_doc = load_yaml(topo_path) or {}
         lab_name = str((topo_doc.get("name") or "").strip())
         if not lab_name:
@@ -5907,17 +5909,24 @@ def cmd_down(args: argparse.Namespace) -> None:
         if not lab_name:
             die("down requires a non-empty lab name")
 
+    # Target clarity (quiet mode included)
+    if used_topology:
+        print(f"Topology: {topo_path}")
+    print(f"Lab: {lab_name}")
+
     out = lab_file_from_name(lab_name)
 
     # Idempotent behavior (default):
     # If the generated containerlab file is missing, treat this as "already down".
     if not out.exists():
-        print(f"INFO: no lab to destroy (file not found): {out}")
+        print(f"INFO: nothing to do for lab '{lab_name}' (missing: {out})")
         return
 
     # Destroy via containerlab (authoritative destroy mechanism)
+    print("Action: destroy runtime")
     _maybe_print_privilege_notice("A")
     _run_containerlab(["sudo", "containerlab", "destroy", "-t", str(out)], check=True)
+    print(f"OK  {lab_name}: destroyed")
 
     # Artifact policy (v2 gate integrity):
     # - Runtime teardown must NOT delete labs/clab-<lab> evidence.
@@ -5941,16 +5950,26 @@ def cmd_destroy(args: argparse.Namespace) -> None:
     """
     raw = str(getattr(args, "name", "") or "").strip()
     if not raw:
-        die("destroy requires a non-empty lab name")
+        die("destroy requires a lab name or a topology filename (.yaml)")
 
-    # Tolerate accidental ".yaml" suffix (treat as lab name)
-    if raw.endswith(".yaml") or raw.endswith(".yml"):
-        lab_name = Path(raw).stem.strip()
+    # Mirror cmd_up/cmd_down resolution: accept either a real path or a name under topologies/
+    topo_path = (TOPO_DIR / raw) if not Path(raw).is_file() else Path(raw)
+
+    lab_name: str
+    if topo_path.suffix in (".yaml", ".yml") and topo_path.exists():
+        topo_doc = load_yaml(topo_path) or {}
+        lab_name = str((topo_doc.get("name") or "").strip())
+        if not lab_name:
+            die(f"Topology '{topo_path}' has no valid 'name' field (required).")
     else:
-        lab_name = raw
+        # Treat as lab name; tolerate accidental ".yaml" suffix
+        if raw.endswith(".yaml") or raw.endswith(".yml"):
+            lab_name = Path(raw).stem.strip()
+        else:
+            lab_name = raw
 
-    if not lab_name:
-        die("destroy requires a non-empty lab name")
+        if not lab_name:
+            die("destroy requires a non-empty lab name")
 
     clab_yaml = lab_file_from_name(lab_name)
     artifact_dir = lab_dir(lab_name)
@@ -5968,18 +5987,20 @@ def cmd_destroy(args: argparse.Namespace) -> None:
         "failures": failures,
     }
 
-    did_anything = False
+    # Target clarity (quiet mode included)
+    # Note: we deliberately mirror cmd_down semantics: topology-path resolution is determined above.
+    # If the input was a topology file path, we print it; otherwise we print only Lab.
+    if topo_path.suffix in (".yaml", ".yml") and topo_path.exists():
+        print(f"Topology: {topo_path}")
+    print(f"Lab: {lab_name}")
 
-    # Step 1: runtime teardown (only if we have the generated .clab.yaml; we do NOT scan Docker)
+    did_anything = False
     if clab_yaml.exists():
+        print("Action: destroy runtime")
         did_anything = True
         report["runtime_destroy"]["attempted"] = True
-        cp = run(
-            ["sudo", "containerlab", "destroy", "-t", str(clab_yaml)],
-            check=False,
-            capture_output=True,
-        )
-
+        _maybe_print_privilege_notice("A")
+        cp = _run_containerlab(["sudo", "containerlab", "destroy", "-t", str(clab_yaml)], check=False)
         if cp.returncode == 0:
             report["runtime_destroy"]["status"] = "succeeded"
             print(f"OK  {lab_name}: destroyed")
@@ -6044,7 +6065,7 @@ def cmd_destroy(args: argparse.Namespace) -> None:
         die("destroy: one or more actions failed", code=1)
 
     if not did_anything:
-        print(f"INFO: nothing to do for lab '{lab_name}'")
+        print(f"INFO: nothing to do for lab '{lab_name}' (missing: {clab_yaml})")
         return
 
 def cmd_cleanup(args: argparse.Namespace) -> None:
