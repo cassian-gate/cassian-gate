@@ -2964,13 +2964,29 @@ def render_gate_result_block(results: dict, *, authority_kind: str | None = None
         mode_line = "Mode: lab (existing runtime)"
 
     out: list[str] = []
+    # Split prereq checks from declared tests (presentation-only; results schema unchanged)
+    tests = results.get("tests", []) or []
+    prereqs_executed = 0
+    declared_executed = 0
+    if isinstance(tests, list):
+        for t in tests:
+            if not isinstance(t, dict):
+                continue
+            nm = str(t.get("name") or "").strip().lower()
+            kd = str(t.get("kind") or "").strip().lower()
+            if kd == "prereq" or nm.startswith("prereq:"):
+                prereqs_executed += 1
+            else:
+                declared_executed += 1
+
     out.append("────────────────────────────────────────")
     out.append(heading)
     out.append("────────────────────────────────────────")
     out.append(f"Lab: {lab}")
     out.append(authority_line)
     out.append(mode_line)
-    out.append(f"Tests executed: {total}")
+    out.append(f"Prereqs executed: {prereqs_executed}")
+    out.append(f"Declared tests executed: {declared_executed}")
     out.append(f"Scenarios executed: {scen_total}")
     out.append("")
 
@@ -3013,7 +3029,14 @@ def render_gate_result_block(results: dict, *, authority_kind: str | None = None
 
     if verdict_s == "FAIL":
         out.append("")
-        out.append("Failed assertions:")
+
+        # WI-2: prereq failures must not be presented as test execution.
+        # If prereqs ran but no declared tests ran, label explicitly.
+        fail_hdr = "Failed assertions:"
+        if prereqs_executed > 0 and declared_executed == 0:
+            fail_hdr = "Failed prerequisites:"
+        out.append(fail_hdr)
+
         if not failed:
             out.append(" - (none recorded)")
         else:
