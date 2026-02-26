@@ -2614,10 +2614,16 @@ def cmd_test(args: argparse.Namespace) -> None:
         out = lab_dir(lab) / "results.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         write_json_canonical(out, results)
-        print(f"Wrote: {out}")
+        _invocation_record_written_artifact(out)
 
         summary_path = write_test_summary_artifact(lab, results)
-        print(f"Wrote: {summary_path}")
+        _invocation_record_written_artifact(summary_path)
+
+        # Legacy "Wrote:" lines are noisy/duplicative in quiet mode.
+        # Keep them only for --verbose.
+        if bool(getattr(args, "verbose", False)):
+            print(f"Wrote: {out}")
+            print(f"Wrote: {summary_path}")
 
         # Deterministic Gate Result block (presentation-only; derived from already-written results)
         try:
