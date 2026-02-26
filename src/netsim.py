@@ -2077,6 +2077,13 @@ def cmd_test(args: argparse.Namespace) -> None:
 
     topo_gate_path = _resolve_topology_path(lab_raw)
 
+    # WI-1: result-block authority kind is derived deterministically from invocation shape.
+    # - topology path => gate (authoritative)
+    # - lab name      => lab (non-authoritative)
+    # Callers (e.g., cmd_run) may explicitly override via args._report_authority.
+    if getattr(args, "_report_authority", None) is None:
+        setattr(args, "_report_authority", "gate" if topo_gate_path is not None else "lab")
+
     # Gate-style: topology path provided
     if topo_gate_path is not None:
         # Pre-validate + resolve to get deterministic lab name
@@ -2134,6 +2141,8 @@ def cmd_test(args: argparse.Namespace) -> None:
         # Now run tests against the deployed lab name (existing behavior)
         args2 = argparse.Namespace(**vars(args))
         args2.lab = lab_name
+        # Reporting context only (presentation; does not affect verdicts/exit codes)
+        setattr(args2, "_report_authority", "gate")
 
         exit_code = 0
         try:
@@ -2583,7 +2592,8 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         # Deterministic Gate Result block (presentation-only; derived from already-written results)
         try:
-            blk = render_gate_result_block(results)
+            rk = getattr(args, "_report_authority", None)
+            blk = render_gate_result_block(results, authority_kind=rk)
             if isinstance(blk, str) and blk.strip():
                 print(blk, end="" if blk.endswith("\n") else "\n")
         except Exception:
@@ -7082,7 +7092,7 @@ def cmd_run(args: argparse.Namespace) -> None:
             # 2) test (optional)
             if do_test:
                 try:
-                    cmd_test(argparse.Namespace(lab=lab_name))
+                    cmd_test(argparse.Namespace(lab=lab_name, _report_authority="run"))
                 except SystemExit as e:
                     record_failure(getattr(e, "code", 1))
                 except Exception:

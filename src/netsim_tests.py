@@ -2929,7 +2929,7 @@ def _format_test_summary(results: dict) -> str:
 
     return "\n".join(lines) + "\n"
 
-def render_gate_result_block(results: dict) -> str:
+def render_gate_result_block(results: dict, *, authority_kind: str | None = None) -> str:
     """
     Deterministic, presentation-only CLI block derived from already-computed results.
     Must NOT:
@@ -2948,12 +2948,28 @@ def render_gate_result_block(results: dict) -> str:
     verdict_s = "PASS" if res == "pass" else "FAIL"
     is_smoke = (verdict_s == "PASS" and total == 0 and scen_total == 0)
 
+    ak = str(authority_kind or "gate").strip().lower()
+    if ak in ("gate", "authoritative", "topology"):
+        heading = "ai-netsim Gate Result"
+        authority_line = "Authority: GATE (authoritative)"
+        mode_line = "Mode: gate (clean-state topology)"
+    elif ak in ("run", "explore", "exploration"):
+        heading = "ai-netsim Run Result"
+        authority_line = "Authority: RUN (non-authoritative)"
+        mode_line = "Mode: run (workflow)"
+    else:
+        # default: existing runtime checks against an existing lab
+        heading = "ai-netsim Lab Test Result"
+        authority_line = "Authority: LAB-TEST (non-authoritative)"
+        mode_line = "Mode: lab (existing runtime)"
+
     out: list[str] = []
     out.append("────────────────────────────────────────")
-    out.append("ai-netsim Gate Result")
+    out.append(heading)
     out.append("────────────────────────────────────────")
     out.append(f"Lab: {lab}")
-    out.append("Mode: authoritative test")
+    out.append(authority_line)
+    out.append(mode_line)
     out.append(f"Tests executed: {total}")
     out.append(f"Scenarios executed: {scen_total}")
     out.append("")
