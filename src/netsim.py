@@ -5891,6 +5891,71 @@ def cmd_up(args: argparse.Namespace) -> None:
     # 5) FRR provisioning
     configure_frr_interfaces_from_topology(rt, lab_name, topo)
 
+    # ---------------------------------------------------------------------
+    # Up success confirmation (v2-up-command-success-confirmation)
+    # ---------------------------------------------------------------------
+
+    # Expected nodes: derived deterministically from resolved topology (declared order; de-dupe)
+    node_names: list[str] = []
+    for n in topo.get("nodes", []) or []:
+        if not isinstance(n, dict):
+            continue
+        nm = n.get("name")
+        if isinstance(nm, str) and nm.strip():
+            nm = nm.strip()
+            if nm not in node_names:
+                node_names.append(nm)
+
+    runtime_line = f"Runtime: not verified (use 'netsim status {lab_name}')"
+    try:
+        total = len(node_names)
+        # Runtime summary is best-effort; must not add retries or waits.
+        if total > 0 and hasattr(rt, "node_id") and hasattr(rt, "exists_id"):
+            running = 0
+            stopped = 0
+            missing = 0
+
+            for node in node_names:
+                node_id = rt.node_id(lab_name, node)
+
+                # exists?
+                if not rt.exists_id(node_id):
+                    missing += 1
+                    continue
+
+                # running?
+                is_run = False
+                if hasattr(rt, "is_running_id"):
+                    is_run = bool(rt.is_running_id(node_id))
+                elif hasattr(rt, "is_running"):
+                    is_run = bool(rt.is_running(lab_name, node))
+
+                if is_run:
+                    running += 1
+                else:
+                    stopped += 1
+
+            if missing == 0 and stopped == 0 and running == total:
+                runtime_line = f"Runtime: RUNNING ({running}/{total})"
+            else:
+                runtime_line = (
+                    f"Runtime: PARTIAL ({running}/{total} running; {missing}/{total} missing; {stopped}/{total} stopped)"
+                )
+    except Exception:
+        runtime_line = f"Runtime: UNKNOWN (use 'netsim status {lab_name}')"
+
+    print("────────────────────────────────────────")
+    print("ai-netsim Up Result")
+    print("────────────────────────────────────────")
+    print(f"Lab: {lab_name}")
+    print("RESULT: UP OK")
+    print(runtime_line)
+    print("Next:")
+    print(f"  netsim status {lab_name}")
+    print(f"  netsim test {lab_name}")
+    print(f"  netsim exec {lab_name} <node>")
+    print(f"  netsim down {lab_name}")
+    
 def cmd_down(args: argparse.Namespace) -> None:
     """
     Destroy a lab deterministically.
