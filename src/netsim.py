@@ -2255,9 +2255,6 @@ def cmd_test(args: argparse.Namespace) -> None:
         if cand_arg:
             _candidate_parse_dir_or_die(resolved_preview, Path(str(cand_arg)))
 
-        # Run clean-state deploy/provision (equivalent to: netsim up <topo> --reconfigure)
-        cmd_up(argparse.Namespace(topology=str(topo_gate_path), reconfigure=True))
-
         # Now run tests against the deployed lab name (existing behavior)
         args2 = argparse.Namespace(**vars(args))
         args2.lab = lab_name
@@ -2265,16 +2262,156 @@ def cmd_test(args: argparse.Namespace) -> None:
         setattr(args2, "_report_authority", "gate")
 
         exit_code = 0
+
+        def _gate_write_hard_failure_results(*, phase: str, err: str, code: int) -> None:
+            # Gate-mode hard failure MUST still emit authoritative artifacts (results.json + summary).
+            # Deterministic, additive-only envelope. No runtime dependency.
+            try:
+                now = time.time()
+            except Exception:
+                now = 0.0
+
+            results: dict = {
+                "result": "fail",
+                "tests": [],
+                "scenarios": [],
+                "events": [],
+                "hard_failure": {
+                    "occurred": True,
+                    "phase": str(phase or ""),
+                    "error": ("ERROR: " + str(err).strip()) if str(err).strip() and not str(err).strip().startswith("ERROR:") else str(err).strip(),
+                },
+                "summary": {
+                    "started_at": now,
+                    "finished_at": now,
+                    "duration_ms": 0,
+                    "total": 0,
+                    "passed": 0,
+                    "failed": 0,
+                },
+            }
+
+            # Collect-time schema stabilization (best-effort; additive-only)
+            try:
+                _finalize_results_schema(
+                    results=results,
+                    command="test",
+                    topo_name=str(lab_name),
+                    lab_name=str(lab_name),
+                    phase="collect",
+                )
+            except Exception:
+                pass
+
+            # Deterministic schema floor (additive-only)
+            try:
+                results.setdefault("results_schema", "results.v1")
+                results.setdefault("results_schema_version", "1.0.0")
+                results.setdefault("tool", "ai-netsim")
+                results.setdefault("command", "test")
+
+                topo_obj = results.get("topology")
+                if not isinstance(topo_obj, dict):
+                    topo_obj = {}
+                    results["topology"] = topo_obj
+                topo_obj.setdefault("name", str(lab_name))
+
+                lab_obj = results.get("lab_obj")
+                if not isinstance(lab_obj, dict):
+                    lab_obj = {}
+                    results["lab_obj"] = lab_obj
+                lab_obj.setdefault("name", str(lab_name))
+
+                auth = results.get("authority")
+                if not isinstance(auth, dict):
+                    auth = {}
+                    results["authority"] = auth
+                auth.setdefault("verdict_source", "tests")
+                se = auth.get("supporting_evidence")
+                if not isinstance(se, list):
+                    auth["supporting_evidence"] = []
+
+                overall = results.get("overall")
+                if not isinstance(overall, dict):
+                    overall = {}
+                    results["overall"] = overall
+                overall.setdefault("expected", "pass")
+                overall["observed"] = "fail"
+                overall["verdict"] = "fail"
+                overall.setdefault("phase", "collect")
+                overall.setdefault("exit_code", int(code) if int(code) else 1)
+            except Exception:
+                pass
+
+            out = lab_dir(lab_name) / "results.json"
+            try:
+                out.parent.mkdir(parents=True, exist_ok=True)
+                write_json_canonical(out, results)
+                _invocation_record_written_artifact(out)
+
+                summary_path = write_test_summary_artifact(lab_name, results)
+                _invocation_record_written_artifact(summary_path)
+
+                # Fail closed if either artifact missing (gate authority)
+                if not out.exists():
+                    die(f"ERROR: gate hard failure artifact write failed (missing results.json): {out}", code=1)
+                if not summary_path.exists():
+                    die(f"ERROR: gate hard failure artifact write failed (missing results.summary.txt): {summary_path}", code=1)
+
+                # Present deterministic gate result block (best-effort)
+                try:
+                    blk = render_gate_result_block(results, authority_kind="gate")
+                    if isinstance(blk, str) and blk.strip():
+                        print(blk, end="" if blk.endswith("\n") else "\n")
+                except Exception:
+                    pass
+            except SystemExit:
+                raise
+            except Exception as e:
+                die(f"ERROR: gate hard failure artifact write failed: {e}", code=1)
+
+        gate_phase = "deploy"
         try:
-            cmd_test(args2)
-            return
+            # Run clean-state deploy/provision (equivalent to: netsim up <topo> --reconfigure)
+            cmd_up(argparse.Namespace(topology=str(topo_gate_path), reconfigure=True))
+
+            # If we got here, deploy/provision completed; any further SystemExit is a test-stage failure.
+            gate_phase = "test"
+
+            try:
+                cmd_test(args2)
+                return
+            except SystemExit as e:
+                # Preserve exit code from the authoritative test run
+                try:
+                    exit_code = int(getattr(e, "code", 1) or 1)
+                except Exception:
+                    exit_code = 1
+                raise
+
         except SystemExit as e:
-            # Preserve exit code from the authoritative test run
+            # If a hard failure occurs, we must still emit gate artifacts.
             try:
                 exit_code = int(getattr(e, "code", 1) or 1)
             except Exception:
                 exit_code = 1
+
+            # Best-effort: render a gate-style hard failure record under the derived lab name.
+            # Phase must reflect whether failure happened during deploy/provision or during test execution.
+            try:
+                _gate_write_hard_failure_results(
+                    phase=str(gate_phase),
+                    err=str(getattr(netsim_common, "LAST_ERROR_MSG", "") or "gate failed"),
+                    code=exit_code,
+                )
+            except SystemExit:
+                # Preserve original exit semantics (do not mask the upstream exit code path).
+                pass
+            except Exception:
+                pass
+
             raise
+
         finally:
             # Always cleanup after gate-style runs (equivalent to: netsim down <lab>)
             try:
@@ -2287,8 +2424,6 @@ def cmd_test(args: argparse.Namespace) -> None:
                 print("Lab lifecycle: DESTROYED")
 
                 if exit_code:
-                    # If we caught a SystemExit above, re-raise is already in-flight.
-                    # If not, no action needed.
                     pass
 
     # ------------------------------------------------------------
@@ -2703,12 +2838,25 @@ def cmd_test(args: argparse.Namespace) -> None:
             pass
 
         out = lab_dir(lab) / "results.json"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        write_json_canonical(out, results)
-        _invocation_record_written_artifact(out)
+        try:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            write_json_canonical(out, results)
+            _invocation_record_written_artifact(out)
 
-        summary_path = write_test_summary_artifact(lab, results)
-        _invocation_record_written_artifact(summary_path)
+            summary_path = write_test_summary_artifact(lab, results)
+            _invocation_record_written_artifact(summary_path)
+
+            # Fail-closed enforcement (gate authority):
+            # If either authoritative artifact is missing/unwritten, treat as hard failure.
+            if not out.exists():
+                die(f"ERROR: gate artifact write failed (missing results.json): {out}", code=1)
+            if not summary_path.exists():
+                die(f"ERROR: gate artifact write failed (missing results.summary.txt): {summary_path}", code=1)
+
+        except SystemExit:
+            raise
+        except Exception as e:
+            die(f"ERROR: gate artifact write failed: {e}", code=1)
 
         # Legacy "Wrote:" lines are noisy/duplicative in quiet mode.
         # Keep them only for --verbose.

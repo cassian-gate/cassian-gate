@@ -61,6 +61,12 @@ LAST_ERROR_MSG: str | None = None
 
 def die(msg: str, code: int = 1) -> None:
     global _QUIET_DIE
+    global LAST_ERROR_MSG
+
+    # Record last netsim-owned error message deterministically for gate artifact emission.
+    # This MUST be set even in quiet mode (where we raise SystemExit(str(msg))).
+    LAST_ERROR_MSG = str(msg).strip()
+
     if _QUIET_DIE:
         # IMPORTANT: raise with the MESSAGE (string), not the int code
         # so cmd_validate can capture str(e) and put it into JSON.
@@ -81,6 +87,11 @@ def fail(msg: str, code: int = 1) -> None:
     Mirrors die() behavior but uses FAIL: prefix.
     """
     global _QUIET_DIE
+    global LAST_ERROR_MSG
+
+    # Record last netsim-owned failure message deterministically for gate artifact emission.
+    LAST_ERROR_MSG = str(msg).strip()
+
     if _QUIET_DIE:
         # Same contract as die(): raise with the MESSAGE so callers can capture it deterministically.
         raise SystemExit(str(msg))
