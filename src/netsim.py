@@ -6089,6 +6089,19 @@ def cmd_down(args: argparse.Namespace) -> None:
     if not raw:
         die("down requires a lab name or a topology filename (.yaml)")
 
+    raw_path = Path(raw)
+    raw_lower = raw_path.name.lower()
+
+    # Path-like input must never be reinterpreted as a lab name.
+    # (contains path separators, explicit relative prefixes, or looks like a topology filename)
+    path_like = (
+        ("/" in raw)
+        or ("\\" in raw)
+        or raw.startswith("./")
+        or raw.startswith("../")
+        or raw_lower.endswith((".yaml", ".yml"))
+    )
+
     # Mirror cmd_up resolution: accept either a real path or a name under topologies/
     topo_path = (TOPO_DIR / raw) if not Path(raw).is_file() else Path(raw)
 
@@ -6101,6 +6114,9 @@ def cmd_down(args: argparse.Namespace) -> None:
         if not lab_name:
             die(f"Topology '{topo_path}' has no valid 'name' field (required).")
     else:
+        if path_like:
+            die(f"ERROR: topology path not found: '{raw}' (refusing to interpret as lab name)", code=2)
+
         # Treat as lab name; tolerate accidental ".yaml" suffix
         if raw.endswith(".yaml") or raw.endswith(".yml"):
             lab_name = Path(raw).stem.strip()
