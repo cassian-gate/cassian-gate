@@ -134,7 +134,20 @@ stable = {
   "topology": obj.get("topology"),
 }
 
-DROP_KEYS = set(["timing","timestamps","time","duration","duration_s","started_at","ended_at","wall_s","cpu_s"])
+# Drop volatile/time-derived/host-path metadata keys from the stable hash.
+# Keep verdict-bearing semantics (expected/observed/verdict/evidence) intact.
+DROP_KEYS = set([
+  # general timing/timestamps
+  "timing","timestamps","time","duration","duration_s","duration_ms",
+  "started_at","ended_at","finished_at","created_at","generated_at",
+  "wall_s","cpu_s",
+
+  # filesystem/time-derived evidence
+  "resolved_topology_mtime",
+
+  # host/path-derived (can vary across machines/paths)
+  "resolved_topology_path","artifacts_dir","lab_dir","work_dir",
+])
 
 def scrub(x):
   if isinstance(x, dict):
