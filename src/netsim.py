@@ -2194,10 +2194,23 @@ def cmd_test(args: argparse.Namespace) -> None:
     # Gate-style: topology path provided
     if topo_gate_path is not None:
         # Pre-validate + resolve to get deterministic lab name
-        topo_preview = load_yaml(topo_gate_path)
-        ensure_valid_topology(topo_preview)
-        resolved_preview = resolve_topology(topo_preview)
-        validate_scenarios(resolved_preview)
+        try:
+            topo_preview = load_yaml(topo_gate_path)
+            ensure_valid_topology(topo_preview)
+            resolved_preview = resolve_topology(topo_preview)
+            validate_scenarios(resolved_preview)
+        except Exception as e:
+            # Quiet mode must not leak raw Python tracebacks for user-input YAML errors.
+            # Use existing invalid-input convention (v2): deterministic non-zero exit (prefer 2).
+            msg = str(e).strip()
+            if msg:
+                print(f"ERROR: invalid YAML: {topo_gate_path}: {msg}")
+            else:
+                print(f"ERROR: invalid YAML: {topo_gate_path}")
+            if bool(getattr(args, "verbose", False)):
+                import traceback  # local import to avoid global import impact
+                traceback.print_exc()
+            raise SystemExit(2)
 
         lab_name = str((resolved_preview or {}).get("name") or "").strip()
         if not lab_name:
