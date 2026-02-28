@@ -2380,6 +2380,22 @@ def cmd_test(args: argparse.Namespace) -> None:
 
             try:
                 cmd_test(args2)
+
+                # Fail closed if authoritative artifacts missing (gate authority).
+                # This applies to the PASS path as well; cmd_test() is responsible for writing them,
+                # but gate mode must not exit successfully without them.
+                try:
+                    out = lab_dir(lab_name) / "results.json"
+                    summ = lab_dir(lab_name) / "results.summary.txt"
+                    if not out.exists():
+                        die(f"ERROR: gate artifact missing after test (results.json): {out}", code=1)
+                    if not summ.exists():
+                        die(f"ERROR: gate artifact missing after test (results.summary.txt): {summ}", code=1)
+                except SystemExit:
+                    raise
+                except Exception as e:
+                    die(f"ERROR: gate artifact validation failed after test: {e}", code=1)
+
                 return
             except SystemExit as e:
                 # Preserve exit code from the authoritative test run
