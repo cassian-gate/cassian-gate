@@ -2370,10 +2370,12 @@ def cmd_test(args: argparse.Namespace) -> None:
             except Exception as e:
                 die(f"ERROR: gate hard failure artifact write failed: {e}", code=1)
 
+        print("MODE: GATE | AUTHORITATIVE: YES | CLEAN-STATE: YES | DESTROY: YES | LIFECYCLE: RESOLVE>GENERATE>DEPLOY>PROVISION>TEST>COLLECT>DESTROY")
+
         gate_phase = "deploy"
         try:
             # Run clean-state deploy/provision (equivalent to: netsim up <topo> --reconfigure)
-            cmd_up(argparse.Namespace(topology=str(topo_gate_path), reconfigure=True))
+            cmd_up(argparse.Namespace(topology=str(topo_gate_path), reconfigure=True, _from_gate=True))
 
             # If we got here, deploy/provision completed; any further SystemExit is a test-stage failure.
             gate_phase = "test"
@@ -6228,17 +6230,18 @@ def cmd_up(args: argparse.Namespace) -> None:
     except Exception:
         runtime_line = f"Runtime: UNKNOWN (use 'netsim status {lab_name}')"
 
-    print("────────────────────────────────────────")
-    print("ai-netsim Up Result")
-    print("────────────────────────────────────────")
-    print(f"Lab: {lab_name}")
-    print("RESULT: UP OK")
-    print(runtime_line)
-    print("Next:")
-    print(f"  netsim status {lab_name}")
-    print(f"  netsim test {lab_name}")
-    print(f"  netsim exec {lab_name} <node>")
-    print(f"  netsim down {lab_name}")
+    if not bool(getattr(args, "_from_gate", False)):
+        print("────────────────────────────────────────")
+        print("ai-netsim Up Result")
+        print("────────────────────────────────────────")
+        print(f"Lab: {lab_name}")
+        print("RESULT: UP OK")
+        print(runtime_line)
+        print("Next:")
+        print(f"  netsim status {lab_name}")
+        print(f"  netsim test {lab_name}")
+        print(f"  netsim exec {lab_name} <node>")
+        print(f"  netsim down {lab_name}")
     
 def cmd_down(args: argparse.Namespace) -> None:
     """
