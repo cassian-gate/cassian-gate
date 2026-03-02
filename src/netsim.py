@@ -3127,10 +3127,13 @@ def cmd_test(args: argparse.Namespace) -> None:
         ev_s = str(ev or "").strip()
         if "\n" in ev_s:
             ev_s = ev_s.splitlines()[0].strip()
-        if len(ev_s) > 200:
-            ev_s = ev_s[:200] + "…"
 
-        return f'FAIL: {name} | expected={exp} observed={obs} evidence="{ev_s}"'
+        # WI-2 (Set 6): bounded, deterministic evidence excerpt for quiet-mode ERROR line.
+        if len(ev_s) > 120:
+            ev_s = ev_s[:120] + "…"
+
+        # NOTE: die() will prefix "ERROR: " in gate mode; do not embed "ERROR:" here.
+        return f'test={name} expected={exp} observed={obs} evidence="{ev_s}"'
 
     def fail_or_continue(msg: str) -> None:
         # WI-2: Prefer a structured FAIL line derived from the last recorded failing test.
