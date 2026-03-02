@@ -286,6 +286,10 @@ _PRIV_NOTICE_PRINTED = False
 # Stores normalized (forward-slash) string paths written during *this* invocation only.
 _INVOCATION_WRITTEN_ARTIFACTS: list[str] = []
 
+# WI-1: ensure artifact path block is printed at most once per CLI invocation.
+# Presentation-only: deterministic; must not affect exit codes.
+_INVOCATION_ARTIFACT_BLOCK_PRINTED = False
+
 def _invocation_reset_written_artifacts() -> None:
     # Deterministic reset at CLI entry.
     _INVOCATION_WRITTEN_ARTIFACTS.clear()
@@ -391,15 +395,25 @@ def _print_artifacts_footer_for_lab(lab_input: Path, *, authority_kind: str | No
         wrote_json = any(s.endswith("/results.json") or s.endswith("results.json") for s in w)
         wrote_sum = any(s.endswith("/results.summary.txt") or s.endswith("results.summary.txt") for s in w)
 
-        if wrote_json or wrote_sum:
+        # WI-1: print the artifact path block at most once per invocation (even if called twice).
+        global _INVOCATION_ARTIFACT_BLOCK_PRINTED
+        if (wrote_json or wrote_sum) and (not _INVOCATION_ARTIFACT_BLOCK_PRINTED):
+            _INVOCATION_ARTIFACT_BLOCK_PRINTED = True
+
             print("Artifacts:")
-            if wrote_json:
-                if is_gate:
-                    print(f"* {rel_labs(p_json)} (authoritative)")
-                else:
+
+            # Gate format (Set 3): exact two-line paths, no bullets, no annotations.
+            if is_gate:
+                if wrote_json:
+                    print(f"{rel_labs(p_json)}")
+                if wrote_sum:
+                    print(f"{rel_labs(p_sum)}")
+            else:
+                # Non-gate (existing UX preserved)
+                if wrote_json:
                     print(f"* {rel_labs(p_json)} (supporting evidence; non-authoritative)")
-            if wrote_sum:
-                print(f"* {rel_labs(p_sum)} (human-readable)")
+                if wrote_sum:
+                    print(f"* {rel_labs(p_sum)} (human-readable)")
     except Exception:
         return
 
@@ -2363,6 +2377,19 @@ def cmd_test(args: argparse.Namespace) -> None:
                     blk = render_gate_result_block(results, authority_kind="gate")
                     if isinstance(blk, str) and blk.strip():
                         print(blk, end="" if blk.endswith("\n") else "\n")
+
+                    # WI-1: On gate FAIL, surface authoritative artifact paths (relative; exactly once).
+                    # Presentation-only; does not affect artifacts, schema, verdict, or exit code.
+                    res = str(results.get("result") or "fail").strip().lower()
+                    if res != "pass":
+                        # Mark printed so the end-of-invocation artifact footer cannot duplicate.
+                        global _INVOCATION_ARTIFACT_BLOCK_PRINTED
+                        _INVOCATION_ARTIFACT_BLOCK_PRINTED = True
+
+                        rel_root = f"labs/clab-{lab_name}"
+                        print("Artifacts:")
+                        print(f"{rel_root}/results.json")
+                        print(f"{rel_root}/results.summary.txt")
                 except Exception:
                     pass
             except SystemExit:
@@ -2414,19 +2441,26 @@ def cmd_test(args: argparse.Namespace) -> None:
             except Exception:
                 exit_code = 1
 
-            # Best-effort: render a gate-style hard failure record under the derived lab name.
-            # Phase must reflect whether failure happened during deploy/provision or during test execution.
-            try:
-                _gate_write_hard_failure_results(
-                    phase=str(gate_phase),
-                    err=str(getattr(netsim_common, "LAST_ERROR_MSG", "") or "gate failed"),
-                    code=exit_code,
-                )
-            except SystemExit:
-                # Preserve original exit semantics (do not mask the upstream exit code path).
-                pass
-            except Exception:
-                pass
+            # IMPORTANT (WI-1): only emit a synthetic "hard failure" record when we are NOT in the test stage
+            # (deploy/provision/runtime faults) OR when upstream uses the hard-failure exit band.
+            # Normal test-stage failures (exit=1) already have authoritative results written by cmd_test()
+            # and MUST NOT be duplicated.
+            should_emit_hard_failure = (str(gate_phase) != "test") or (int(exit_code) == 2)
+
+            if should_emit_hard_failure:
+                # Best-effort: render a gate-style hard failure record under the derived lab name.
+                # Phase must reflect whether failure happened during deploy/provision or during test execution.
+                try:
+                    _gate_write_hard_failure_results(
+                        phase=str(gate_phase),
+                        err=str(getattr(netsim_common, "LAST_ERROR_MSG", "") or "gate failed"),
+                        code=exit_code,
+                    )
+                except SystemExit:
+                    # Preserve original exit semantics (do not mask the upstream exit code path).
+                    pass
+                except Exception:
+                    pass
 
             raise
 
@@ -2888,6 +2922,43 @@ def cmd_test(args: argparse.Namespace) -> None:
             blk = render_gate_result_block(results, authority_kind=rk)
             if isinstance(blk, str) and blk.strip():
                 print(blk, end="" if blk.endswith("\n") else "\n")
+
+            # WI-1: On gate FAIL, surface authoritative artifact paths (relative; exactly once).
+            # Presentation-only; does not affect artifacts, schema, verdict, or exit code.
+            res = str(results.get("result") or "fail").strip().lower()
+            if res != "pass":
+                # Mark printed so the end-of-invocation artifact footer cannot duplicate.
+                global _INVOCATION_ARTIFACT_BLOCK_PRINTED
+                _INVOCATION_ARTIFACT_BLOCK_PRINTED = True
+
+                rel_root = f"labs/clab-{lab}"
+                print("Artifacts:")
+                print(f"{rel_root}/results.json")
+                print(f"{rel_root}/results.summary.txt")
+
+            # WI-3: Stable summary block (presentation-only; fixed key order; CI-friendly).
+            # Must not alter artifacts or verdicts; derived from already-written results.
+            try:
+                summ = results.get("summary", {}) or {}
+                total = int(summ.get("total") or 0)
+                passed = int(summ.get("passed") or 0)
+                failed = int(summ.get("failed") or 0)
+                skipped = int(summ.get("skipped") or 0)
+
+                # Exit is presentation-only: mirrors gate exit bands (0/1/2).
+                r = str(results.get("result") or "").strip().lower()
+                exit_code = 0 if r == "pass" else 1
+                hf = results.get("hard_failure") or {}
+                if isinstance(hf, dict) and bool(hf.get("occurred")):
+                    exit_code = 2
+
+                print(f"TOTAL: {total}")
+                print(f"PASS: {passed}")
+                print(f"FAIL: {failed}")
+                print(f"SKIP: {skipped}")
+                print(f"EXIT: {exit_code}")
+            except Exception:
+                pass
         except Exception:
             # Never allow UX formatting to affect gate execution
             pass
@@ -2898,9 +2969,42 @@ def cmd_test(args: argparse.Namespace) -> None:
     # Use module-level retry_until() (authoritative)
     # (Do not re-define it here; keep behavior consistent everywhere.)
 
+    def _format_fail_line_from_testrec(rec: dict) -> str:
+        """
+        WI-2: Deterministic single-line FAIL message for gate output.
+        Presentation-only. Must not change verdicts, artifacts, or exit codes.
+        """
+        name = str(rec.get("name") or "<unnamed>").strip() or "<unnamed>"
+        exp = str(rec.get("expected") or "").strip()
+        obs = str(rec.get("observed") or "").strip()
+
+        # Evidence: prefer explicit evidence string; fall back to error (single-line).
+        ev = rec.get("evidence")
+        if not isinstance(ev, str) or not ev.strip():
+            ev = rec.get("error")
+        ev_s = str(ev or "").strip()
+        if "\n" in ev_s:
+            ev_s = ev_s.splitlines()[0].strip()
+        if len(ev_s) > 200:
+            ev_s = ev_s[:200] + "…"
+
+        return f'FAIL: {name} | expected={exp} observed={obs} evidence="{ev_s}"'
+
     def fail_or_continue(msg: str) -> None:
+        # WI-2: Prefer a structured FAIL line derived from the last recorded failing test.
+        # This avoids ambiguous ad-hoc messages and guarantees test id + expected/observed + evidence.
+        try:
+            tests_list = results.get("tests", []) or []
+            if isinstance(tests_list, list) and tests_list:
+                last = tests_list[-1]
+                if isinstance(last, dict) and str(last.get("verdict") or "").strip().lower() == "fail":
+                    msg = _format_fail_line_from_testrec(last)
+        except Exception:
+            pass
+
         if keep_going:
-            print(f"ERROR: {msg}")
+            # Keep legacy prefix under keep-going mode, but content is now structured.
+            print(f"{msg}")
             return
         die(msg)
 
@@ -5359,7 +5463,15 @@ def cmd_test(args: argparse.Namespace) -> None:
 
                 results["result"] = "fail"
                 write_results()
-                fail(f"No test matched filters {label}")
+
+                # WI-2: stable, test-id-scoped FAIL line (single-line; deterministic; bounded evidence).
+                # Note: fail() prints "FAIL: <msg>" so we do NOT double-prefix.
+                ev_s = f"no test matched filters {label}"
+                if "\n" in ev_s:
+                    ev_s = ev_s.splitlines()[0].strip()
+                if len(ev_s) > 200:
+                    ev_s = ev_s[:200] + "…"
+                fail(f'filter:no-match | expected=pass observed=fail evidence="{ev_s}"')
 
         # Cleanup any tcp listeners we started (deterministic cleanup)
         for dst_node in listeners_started.keys():
