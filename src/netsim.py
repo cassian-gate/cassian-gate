@@ -6613,7 +6613,11 @@ def cmd_destroy(args: argparse.Namespace) -> None:
     try:
         report_path = LABS_DIR / "_cleanup" / f"destroy-{lab_name}.json"
         write_file(report_path, json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
-        print(f"Wrote: {report_path}")
+
+        # WI-2: Quiet mode must not print absolute filesystem paths.
+        # Keep legacy "Wrote:" line only for --verbose (presentation-only).
+        if bool(getattr(args, "verbose", False)):
+            print(f"Wrote: {report_path}")
     except Exception as e:
         failures.append(f"destroy report write failed: {e}")
         print(f"WARN: destroy report write failed: {e}")
