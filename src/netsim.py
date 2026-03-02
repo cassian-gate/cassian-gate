@@ -2935,6 +2935,30 @@ def cmd_test(args: argparse.Namespace) -> None:
                 print("Artifacts:")
                 print(f"{rel_root}/results.json")
                 print(f"{rel_root}/results.summary.txt")
+
+            # WI-3: Stable summary block (presentation-only; fixed key order; CI-friendly).
+            # Must not alter artifacts or verdicts; derived from already-written results.
+            try:
+                summ = results.get("summary", {}) or {}
+                total = int(summ.get("total") or 0)
+                passed = int(summ.get("passed") or 0)
+                failed = int(summ.get("failed") or 0)
+                skipped = int(summ.get("skipped") or 0)
+
+                # Exit is presentation-only: mirrors gate exit bands (0/1/2).
+                r = str(results.get("result") or "").strip().lower()
+                exit_code = 0 if r == "pass" else 1
+                hf = results.get("hard_failure") or {}
+                if isinstance(hf, dict) and bool(hf.get("occurred")):
+                    exit_code = 2
+
+                print(f"TOTAL: {total}")
+                print(f"PASS: {passed}")
+                print(f"FAIL: {failed}")
+                print(f"SKIP: {skipped}")
+                print(f"EXIT: {exit_code}")
+            except Exception:
+                pass
         except Exception:
             # Never allow UX formatting to affect gate execution
             pass
