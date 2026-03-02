@@ -19,42 +19,43 @@ nodes:
       eth1: 192.168.1.1/24
       eth2: 192.168.2.1/24
     allow_icmp: true
-    allow_tcp: [443]
+    allow_tcp: [8443]
 
 links:
   - endpoints: ["h1:eth1", "fw1:eth1"]
   - endpoints: ["h2:eth1", "fw1:eth2"]
 
 tests:
-  # Now the listener runs on h2/h1 (multitool), NOT on fw1.
-  - name: h1_tcp_443_to_h2_pass
+  # PASS cases: allowed port 8443
+  - name: h1_tcp_8443_to_h2_pass
     kind: tcp
     src: h1
     dst: h2
-    port: 443
+    port: 8443
     listener: true
     expect: pass
 
-  - name: h1_tcp_22_to_h2_fail
+  - name: h2_tcp_8443_to_h1_pass
+    kind: tcp
+    src: h2
+    dst: h1
+    port: 8443
+    listener: true
+    expect: pass
+
+  # FAIL cases: blocked port 2222 (unprivileged)
+  - name: h1_tcp_2222_to_h2_fail
     kind: tcp
     src: h1
     dst: h2
-    port: 22
+    port: 2222
     listener: true
     expect: fail
 
-  - name: h2_tcp_443_to_h1_pass
+  - name: h2_tcp_2222_to_h1_fail
     kind: tcp
     src: h2
     dst: h1
-    port: 443
-    listener: true
-    expect: pass
-
-  - name: h2_tcp_22_to_h1_fail
-    kind: tcp
-    src: h2
-    dst: h1
-    port: 22
+    port: 2222
     listener: true
     expect: fail
