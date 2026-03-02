@@ -2272,14 +2272,67 @@ def cmd_test(args: argparse.Namespace) -> None:
     # Gate-style: topology path provided
     if topo_gate_path is not None:
         # Pre-validate + resolve to get deterministic lab name
+        # MUST establish a deterministic lab dir even if YAML/Resolve fails (WI-1).
+        resolved_preview = None
+        lab_name = ""
+
         try:
             topo_preview = load_yaml(topo_gate_path)
             ensure_valid_topology(topo_preview)
             resolved_preview = resolve_topology(topo_preview)
             validate_scenarios(resolved_preview)
+
+            lab_name = str((resolved_preview or {}).get("name") or "").strip()
+            if not lab_name:
+                die(f"Topology missing required 'name': {topo_gate_path}")
+
+        except SystemExit as e:
+            # If we already resolved a name, preserve gate hard-failure behavior downstream.
+            # Otherwise, emit fallback artifacts under a deterministic name derived from the input path.
+            if lab_name:
+                raise
+
+            raw = str(topo_gate_path)
+            # Deterministic, stable slug: based only on input path string bytes.
+            h = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:12]
+            lab_name = f"unknown-{h}"
+
+            # Quiet mode: keep existing UX line shape.
+            msg = str(e).strip()
+            if msg:
+                print(f"ERROR: invalid YAML: {topo_gate_path}: {msg}")
+            else:
+                print(f"ERROR: invalid YAML: {topo_gate_path}")
+
+            # Best-effort: emit authoritative artifacts for this gate failure.
+            try:
+                _gate_write_hard_failure_results(
+                    phase="resolve",
+                    err=msg or "invalid input",
+                    code=int(getattr(e, "code", 2) or 2),
+                )
+            except Exception:
+                pass
+
+            raise
+
         except Exception as e:
-            # Quiet mode must not leak raw Python tracebacks for user-input YAML errors.
-            # Use existing invalid-input convention (v2): deterministic non-zero exit (prefer 2).
+            if lab_name:
+                # Name exists; preserve existing invalid-input UX + downstream hard-failure path.
+                msg = str(e).strip()
+                if msg:
+                    print(f"ERROR: invalid YAML: {topo_gate_path}: {msg}")
+                else:
+                    print(f"ERROR: invalid YAML: {topo_gate_path}")
+                if bool(getattr(args, "verbose", False)):
+                    import traceback  # local import to avoid global import impact
+                    traceback.print_exc()
+                raise SystemExit(2)
+
+            raw = str(topo_gate_path)
+            h = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:12]
+            lab_name = f"unknown-{h}"
+
             msg = str(e).strip()
             if msg:
                 print(f"ERROR: invalid YAML: {topo_gate_path}: {msg}")
@@ -2288,11 +2341,17 @@ def cmd_test(args: argparse.Namespace) -> None:
             if bool(getattr(args, "verbose", False)):
                 import traceback  # local import to avoid global import impact
                 traceback.print_exc()
-            raise SystemExit(2)
 
-        lab_name = str((resolved_preview or {}).get("name") or "").strip()
-        if not lab_name:
-            die(f"Topology missing required 'name': {topo_gate_path}")
+            try:
+                _gate_write_hard_failure_results(
+                    phase="resolve",
+                    err=msg or "invalid input",
+                    code=2,
+                )
+            except Exception:
+                pass
+
+            raise SystemExit(2)
 
         # Phase 3 (WI-6): list scenarios directly from the resolved topology (no lab artifacts, no runtime).
         if bool(getattr(args, "list_scenarios", False)):
@@ -2480,10 +2539,18 @@ def cmd_test(args: argparse.Namespace) -> None:
                 try:
                     out = lab_dir(lab_name) / "results.json"
                     summ = lab_dir(lab_name) / "results.summary.txt"
-                    if not out.exists():
-                        die(f"ERROR: gate artifact missing after test (results.json): {out}", code=1)
-                    if not summ.exists():
-                        die(f"ERROR: gate artifact missing after test (results.summary.txt): {summ}", code=1)
+                    if (not out.exists()) or (not summ.exists()):
+                        # Fail closed: attempt deterministic fallback emission, then exit non-zero.
+                        try:
+                            _gate_write_hard_failure_results(
+                                phase="collect",
+                                err="ARTIFACT INTEGRITY FAILURE: results.* missing after test; emitted fallback results",
+                                code=1,
+                            )
+                            print(f"ARTIFACT INTEGRITY FAILURE: emitted fallback results under labs/clab-{lab_name}/ (exit unchanged)")
+                        except Exception:
+                            pass
+                        die("ERROR: gate artifact integrity failure (missing results.*)", code=1)
                 except SystemExit:
                     raise
                 except Exception as e:
@@ -2496,6 +2563,26 @@ def cmd_test(args: argparse.Namespace) -> None:
                     exit_code = int(getattr(e, "code", 1) or 1)
                 except Exception:
                     exit_code = 1
+
+                # WI-1: gate must still emit results.* on FAIL.
+                # If cmd_test() failed before Collect, we must force deterministic fallback artifacts
+                # under labs/clab-<lab>/ before teardown, without changing exit semantics.
+                try:
+                    out = lab_dir(lab_name) / "results.json"
+                    summ = lab_dir(lab_name) / "results.summary.txt"
+                    if (not out.exists()) or (not summ.exists()):
+                        try:
+                            _gate_write_hard_failure_results(
+                                phase="test",
+                                err=str(getattr(netsim_common, "LAST_ERROR_MSG", "") or "gate test failed"),
+                                code=exit_code,
+                            )
+                        except Exception:
+                            pass
+                except Exception:
+                    # Do not mask the original verdict/exit code.
+                    pass
+
                 raise
 
         except SystemExit as e:
