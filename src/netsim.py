@@ -2945,9 +2945,42 @@ def cmd_test(args: argparse.Namespace) -> None:
     # Use module-level retry_until() (authoritative)
     # (Do not re-define it here; keep behavior consistent everywhere.)
 
+    def _format_fail_line_from_testrec(rec: dict) -> str:
+        """
+        WI-2: Deterministic single-line FAIL message for gate output.
+        Presentation-only. Must not change verdicts, artifacts, or exit codes.
+        """
+        name = str(rec.get("name") or "<unnamed>").strip() or "<unnamed>"
+        exp = str(rec.get("expected") or "").strip()
+        obs = str(rec.get("observed") or "").strip()
+
+        # Evidence: prefer explicit evidence string; fall back to error (single-line).
+        ev = rec.get("evidence")
+        if not isinstance(ev, str) or not ev.strip():
+            ev = rec.get("error")
+        ev_s = str(ev or "").strip()
+        if "\n" in ev_s:
+            ev_s = ev_s.splitlines()[0].strip()
+        if len(ev_s) > 200:
+            ev_s = ev_s[:200] + "…"
+
+        return f'FAIL: {name} | expected={exp} observed={obs} evidence="{ev_s}"'
+
     def fail_or_continue(msg: str) -> None:
+        # WI-2: Prefer a structured FAIL line derived from the last recorded failing test.
+        # This avoids ambiguous ad-hoc messages and guarantees test id + expected/observed + evidence.
+        try:
+            tests_list = results.get("tests", []) or []
+            if isinstance(tests_list, list) and tests_list:
+                last = tests_list[-1]
+                if isinstance(last, dict) and str(last.get("verdict") or "").strip().lower() == "fail":
+                    msg = _format_fail_line_from_testrec(last)
+        except Exception:
+            pass
+
         if keep_going:
-            print(f"ERROR: {msg}")
+            # Keep legacy prefix under keep-going mode, but content is now structured.
+            print(f"{msg}")
             return
         die(msg)
 
@@ -5406,7 +5439,15 @@ def cmd_test(args: argparse.Namespace) -> None:
 
                 results["result"] = "fail"
                 write_results()
-                fail(f"No test matched filters {label}")
+
+                # WI-2: stable, test-id-scoped FAIL line (single-line; deterministic; bounded evidence).
+                # Note: fail() prints "FAIL: <msg>" so we do NOT double-prefix.
+                ev_s = f"no test matched filters {label}"
+                if "\n" in ev_s:
+                    ev_s = ev_s.splitlines()[0].strip()
+                if len(ev_s) > 200:
+                    ev_s = ev_s[:200] + "…"
+                fail(f'filter:no-match | expected=pass observed=fail evidence="{ev_s}"')
 
         # Cleanup any tcp listeners we started (deterministic cleanup)
         for dst_node in listeners_started.keys():
