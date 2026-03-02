@@ -322,6 +322,70 @@ def _maybe_print_privilege_notice(template: str) -> None:
     print("ℹ️ This command may require sudo (containerlab uses elevated privileges for network namespaces).")
     print("   You may be prompted for your password.")
 
+def _maybe_print_privilege_notice(template: str) -> None:
+    """
+    Deterministic one-time privilege notice. Must be called immediately before the
+    first privileged subprocess call in a command path.
+    """
+    global _PRIV_NOTICE_PRINTED
+    if _PRIV_NOTICE_PRINTED:
+        return
+    _PRIV_NOTICE_PRINTED = True
+
+    t = (template or "").strip().upper()
+    if t == "B":
+        print("ℹ️ This command may require sudo to destroy lab runtime and/or remove labs/ artifacts.")
+        print("   You may be prompted for your password.")
+        return
+
+    # Default: Template A
+    print("ℹ️ This command may require sudo (containerlab uses elevated privileges for network namespaces).")
+    print("   You may be prompted for your password.")
+
+
+def _preflight_privilege_notice_for_args(args: argparse.Namespace) -> None:
+    """
+    Output-hygiene only (WI-1):
+      - Print privilege notice at most once per invocation
+      - Print only during deterministic CLI preflight (before any command output)
+      - Never print after an error path (post-error calls become no-ops via the flag)
+
+    Must not probe or attempt to detect real sudo usage.
+    """
+    try:
+        cmd = str(getattr(args, "cmd", "") or "").strip().lower()
+        if not cmd:
+            return
+
+        # Commands that never invoke privileged runtime paths directly.
+        if cmd in ("validate", "gen", "preflight", "adapt", "ai", "exec", "status", "vty"):
+            return
+
+        # cleanup: privileged only when executing
+        if cmd == "cleanup":
+            if bool(getattr(args, "all", False)) and bool(getattr(args, "yes", False)):
+                _maybe_print_privilege_notice("B")
+            return
+
+        # destroy: privileged when containerlab destroy or rm -rf are attempted
+        if cmd == "destroy":
+            if bool(getattr(args, "purge_artifacts", False)):
+                _maybe_print_privilege_notice("B")
+            else:
+                _maybe_print_privilege_notice("A")
+            return
+
+        # down / up / run may require sudo for containerlab namespaces.
+        if cmd in ("down", "up", "run"):
+            _maybe_print_privilege_notice("A")
+            return
+
+        # test is not expected to require sudo (lab already exists).
+        return
+    except Exception:
+        # Presentation-only best-effort.
+        return
+
 def _print_artifacts_footer_for_lab(lab_input: Path, *, authority_kind: str | None = None) -> None:
     """
     Deterministic artifact footer (best-effort).
@@ -9624,6 +9688,9 @@ def main() -> None:
         # Reset per-invocation privilege notice state deterministically.
         global _PRIV_NOTICE_PRINTED
         _PRIV_NOTICE_PRINTED = False
+
+        # Output hygiene (WI-1): privilege notice is preflight-only (before any command output).
+        _preflight_privilege_notice_for_args(args)
 
         # Footer (WI-1a): only for single-lab `netsim test <lab>` executions
         if str(getattr(args, "cmd", "") or "") == "test":
