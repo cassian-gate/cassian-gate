@@ -464,16 +464,15 @@ def _print_artifacts_footer_for_lab(lab_input: Path, *, authority_kind: str | No
         if (wrote_json or wrote_sum) and (not _INVOCATION_ARTIFACT_BLOCK_PRINTED):
             _INVOCATION_ARTIFACT_BLOCK_PRINTED = True
 
-            print("Artifacts:")
-
-            # Gate format (Set 3): exact two-line paths, no bullets, no annotations.
+            # WI-1 (Set 6): stable single-line artifact root for gate failures.
             if is_gate:
-                if wrote_json:
-                    print(f"{rel_labs(p_json)}")
-                if wrote_sum:
-                    print(f"{rel_labs(p_sum)}")
+                rel_root = rel_labs(adir).replace("\\", "/")
+                if not rel_root.endswith("/"):
+                    rel_root += "/"
+                print(f"Artifacts: {rel_root}")
             else:
                 # Non-gate (existing UX preserved)
+                print("Artifacts:")
                 if wrote_json:
                     print(f"* {rel_labs(p_json)} (supporting evidence; non-authoritative)")
                 if wrote_sum:
@@ -2501,18 +2500,14 @@ def cmd_test(args: argparse.Namespace) -> None:
                     if isinstance(blk, str) and blk.strip():
                         print(blk, end="" if blk.endswith("\n") else "\n")
 
-                    # WI-1: On gate FAIL, surface authoritative artifact paths (relative; exactly once).
+                    # WI-1 (Set 6): defer artifact path surfacing to the end-of-invocation footer.
                     # Presentation-only; does not affect artifacts, schema, verdict, or exit code.
                     res = str(results.get("result") or "fail").strip().lower()
                     if res != "pass":
-                        # Mark printed so the end-of-invocation artifact footer cannot duplicate.
-                        global _INVOCATION_ARTIFACT_BLOCK_PRINTED
-                        _INVOCATION_ARTIFACT_BLOCK_PRINTED = True
-
-                        rel_root = f"labs/clab-{lab_name}"
-                        print("Artifacts:")
-                        print(f"{rel_root}/results.json")
-                        print(f"{rel_root}/results.summary.txt")
+                        # Do not print artifact paths here.
+                        # main() finally calls _print_artifacts_footer_for_lab(), which prints a single
+                        # stable `Artifacts: labs/clab-<lab>/` line exactly once per invocation.
+                        pass
                 except Exception:
                     pass
             except SystemExit:
@@ -3074,18 +3069,14 @@ def cmd_test(args: argparse.Namespace) -> None:
             if isinstance(blk, str) and blk.strip():
                 print(blk, end="" if blk.endswith("\n") else "\n")
 
-            # WI-1: On gate FAIL, surface authoritative artifact paths (relative; exactly once).
+            # WI-1 (Set 6): defer artifact path surfacing to the end-of-invocation footer
+            # (main() finally calls _print_artifacts_footer_for_lab for gate-mode invocations).
             # Presentation-only; does not affect artifacts, schema, verdict, or exit code.
             res = str(results.get("result") or "fail").strip().lower()
             if res != "pass":
-                # Mark printed so the end-of-invocation artifact footer cannot duplicate.
-                global _INVOCATION_ARTIFACT_BLOCK_PRINTED
-                _INVOCATION_ARTIFACT_BLOCK_PRINTED = True
-
-                rel_root = f"labs/clab-{lab}"
-                print("Artifacts:")
-                print(f"{rel_root}/results.json")
-                print(f"{rel_root}/results.summary.txt")
+                # Ensure any earlier/inner attempts do not print duplicate blocks.
+                # We intentionally do NOT print here (footer prints once, at the end).
+                pass
 
             # WI-3: Stable summary block (presentation-only; fixed key order; CI-friendly).
             # Must not alter artifacts or verdicts; derived from already-written results.
@@ -3136,10 +3127,13 @@ def cmd_test(args: argparse.Namespace) -> None:
         ev_s = str(ev or "").strip()
         if "\n" in ev_s:
             ev_s = ev_s.splitlines()[0].strip()
-        if len(ev_s) > 200:
-            ev_s = ev_s[:200] + "…"
 
-        return f'FAIL: {name} | expected={exp} observed={obs} evidence="{ev_s}"'
+        # WI-2 (Set 6): bounded, deterministic evidence excerpt for quiet-mode ERROR line.
+        if len(ev_s) > 120:
+            ev_s = ev_s[:120] + "…"
+
+        # NOTE: die() will prefix "ERROR: " in gate mode; do not embed "ERROR:" here.
+        return f'test={name} expected={exp} observed={obs} evidence="{ev_s}"'
 
     def fail_or_continue(msg: str) -> None:
         # WI-2: Prefer a structured FAIL line derived from the last recorded failing test.
@@ -9783,7 +9777,7 @@ def main() -> None:
         # Output hygiene (WI-1): privilege notice is preflight-only (before any command output).
         _preflight_privilege_notice_for_args(args)
 
-        # Footer (WI-1a): only for single-lab `netsim test <lab>` executions
+        # Footer (WI-1a): gate-mode-only artifact footer (netsim test <topology.yaml>)
         if str(getattr(args, "cmd", "") or "") == "test":
             if not bool(getattr(args, "two_run", False)) and not bool(getattr(args, "list_scenarios", False)):
                 footer_lab = str(getattr(args, "lab", "") or "").strip()
@@ -9794,6 +9788,11 @@ def main() -> None:
                 if not footer_authority:
                     raw = footer_lab.lower()
                     footer_authority = "gate" if raw.endswith((".yaml", ".yml")) else "lab"
+
+                # WI-1 (Set 6): only gate mode must emit the stable Artifacts footer.
+                if footer_authority != "gate":
+                    footer_lab = ""
+                    footer_authority = ""
 
         args.func(args)
     finally:

@@ -3242,7 +3242,56 @@ def write_test_summary_artifact(lab: str, results: dict) -> Path:
     if not body.endswith("\n"):
         body += "\n"
 
-    out.write_text(ci_header + header + body, encoding="utf-8")
+    # -----------------------------
+    # Stable summary keys (v2) — additive only
+    # -----------------------------
+    # Must not change CI header ordering/format (verify_phase1.sh validates it).
+    # Must remain deterministic: no timestamps, no container IDs, no random tokens.
+    tests = results.get("tests", []) or []
+    scenarios = results.get("scenarios", []) or []
+
+    tests_executed = len(tests) if isinstance(tests, list) else 0
+    scenarios_executed = len(scenarios) if isinstance(scenarios, list) else 0
+
+    failures = 0
+    fail_lines: list[str] = []
+
+    if isinstance(tests, list):
+        for t in tests:
+            if not isinstance(t, dict):
+                continue
+            if str(t.get("verdict") or "").strip().lower() == "fail":
+                failures += 1
+                name = str(t.get("name") or "<unnamed>").strip()
+                exp = str((t.get("expected") or "")).strip().lower() or "unknown"
+                obs = str((t.get("observed") or "")).strip().lower() or "unknown"
+                fail_lines.append(f"FAIL: test={name} expected={exp} observed={obs}")
+
+    if isinstance(scenarios, list):
+        for s in scenarios:
+            if not isinstance(s, dict):
+                continue
+            if str(s.get("verdict") or "").strip().lower() == "fail":
+                failures += 1
+                sid = str(s.get("id") or "<unnamed>").strip()
+                exp = str((s.get("expected") or "")).strip().lower() or "unknown"
+                obs = str((s.get("observed") or "")).strip().lower() or "unknown"
+                fail_lines.append(f"FAIL: scenario={sid} expected={exp} observed={obs}")
+
+    stable_keys = (
+        "\n"
+        "=== STABLE SUMMARY KEYS (v2) ===\n"
+        f"RESULT: {verdict_s}\n"
+        f"Lab: {lab}\n"
+        f"Artifacts: {artifact_root}\n"
+        f"Tests executed: {tests_executed}\n"
+        f"Scenarios executed: {scenarios_executed}\n"
+        f"Failures: {failures}\n"
+    )
+    if fail_lines:
+        stable_keys += "\n" + "\n".join(fail_lines) + "\n"
+
+    out.write_text(ci_header + header + body + stable_keys, encoding="utf-8")
     return out
 
 # -------------------------
