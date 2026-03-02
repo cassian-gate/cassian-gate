@@ -304,48 +304,23 @@ def _invocation_record_written_artifact(p: Path) -> None:
 
 def _maybe_print_privilege_notice(template: str) -> None:
     """
-    Deterministic one-time privilege notice. Must be called immediately before the
-    first privileged subprocess call in a command path.
+    Output-hygiene only (Set 7 / WI-1).
+
+    Deterministic one-time privilege notice.
+    Must be emitted at most once per CLI invocation.
     """
     global _PRIV_NOTICE_PRINTED
     if _PRIV_NOTICE_PRINTED:
         return
     _PRIV_NOTICE_PRINTED = True
 
-    t = (template or "").strip().upper()
-    if t == "B":
-        print("ℹ️ This command may require sudo to destroy lab runtime and/or remove labs/ artifacts.")
-        print("   You may be prompted for your password.")
-        return
-
-    # Default: Template A
-    print("ℹ️ This command may require sudo (containerlab uses elevated privileges for network namespaces).")
-    print("   You may be prompted for your password.")
-
-def _maybe_print_privilege_notice(template: str) -> None:
-    """
-    Deterministic one-time privilege notice. Must be called immediately before the
-    first privileged subprocess call in a command path.
-    """
-    global _PRIV_NOTICE_PRINTED
-    if _PRIV_NOTICE_PRINTED:
-        return
-    _PRIV_NOTICE_PRINTED = True
-
-    t = (template or "").strip().upper()
-    if t == "B":
-        print("ℹ️ This command may require sudo to destroy lab runtime and/or remove labs/ artifacts.")
-        print("   You may be prompted for your password.")
-        return
-
-    # Default: Template A
-    print("ℹ️ This command may require sudo (containerlab uses elevated privileges for network namespaces).")
-    print("   You may be prompted for your password.")
-
+    # Exact stable wording (quiet/verbose): do not vary by template.
+    print("NOTICE: This run may require sudo for container networking.")
 
 def _preflight_privilege_notice_for_args(args: argparse.Namespace) -> None:
     """
-    Output-hygiene only (WI-1):
+    Output-hygiene only (Set 7 / WI-1):
+
       - Print privilege notice at most once per invocation
       - Print only during deterministic CLI preflight (before any command output)
       - Never print after an error path (post-error calls become no-ops via the flag)
@@ -361,26 +336,24 @@ def _preflight_privilege_notice_for_args(args: argparse.Namespace) -> None:
         if cmd in ("validate", "gen", "preflight", "adapt", "ai", "exec", "status", "vty"):
             return
 
-        # cleanup: privileged only when executing
-        if cmd == "cleanup":
-            if bool(getattr(args, "all", False)) and bool(getattr(args, "yes", False)):
-                _maybe_print_privilege_notice("B")
-            return
-
-        # destroy: privileged when containerlab destroy or rm -rf are attempted
-        if cmd == "destroy":
-            if bool(getattr(args, "purge_artifacts", False)):
-                _maybe_print_privilege_notice("B")
-            else:
+        # Gate-style `test <topology.yaml>` destroys/deploys and will attempt sudo.
+        if cmd == "test":
+            lab = str(getattr(args, "lab", "") or "").strip()
+            if lab.lower().endswith((".yaml", ".yml")):
                 _maybe_print_privilege_notice("A")
             return
 
-        # down / up / run may require sudo for containerlab namespaces.
-        if cmd in ("down", "up", "run"):
+        # cleanup: privileged only when actually executing destructive action
+        if cmd == "cleanup":
+            if bool(getattr(args, "all", False)) and bool(getattr(args, "yes", False)):
+                _maybe_print_privilege_notice("A")
+            return
+
+        # destroy / down / up / run may require sudo for containerlab namespaces and teardown.
+        if cmd in ("destroy", "down", "up", "run"):
             _maybe_print_privilege_notice("A")
             return
 
-        # test is not expected to require sudo (lab already exists).
         return
     except Exception:
         # Presentation-only best-effort.
@@ -9770,11 +9743,12 @@ def main() -> None:
     footer_lab = ""
     footer_authority = ""
     try:
-        # Reset per-invocation privilege notice state deterministically.
+        # Deterministic per-invocation resets (presentation-only).
         global _PRIV_NOTICE_PRINTED
         _PRIV_NOTICE_PRINTED = False
+        _invocation_reset_written_artifacts()
 
-        # Output hygiene (WI-1): privilege notice is preflight-only (before any command output).
+        # Output hygiene (Set 7 / WI-1): privilege notice is preflight-only (before any command output).
         _preflight_privilege_notice_for_args(args)
 
         # Footer (WI-1a): gate-mode-only artifact footer (netsim test <topology.yaml>)
