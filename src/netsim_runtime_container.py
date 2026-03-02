@@ -527,7 +527,13 @@ def write_containerlab_file(topo_path: Path) -> Path:
     with out_path.open("w", encoding="utf-8") as f:
         yaml.safe_dump(clab, f, sort_keys=False)
 
-    print(f"Wrote: {out_path}")
+    # WI-2 (v2-gate-no-absolute-path-wrote-lines-in-quiet):
+    # - Quiet mode must not print absolute paths.
+    # - Verbose mode may print full paths for debugging.
+    import netsim_common
+    if not netsim_common.QUIET_RUN:
+        print(f"Wrote: {out_path}")
+
     return out_path
 
 # -------------------------
