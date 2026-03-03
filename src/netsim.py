@@ -304,10 +304,14 @@ def _invocation_record_written_artifact(p: Path) -> None:
 
 def _maybe_print_privilege_notice(template: str) -> None:
     """
-    Output-hygiene only (Set 7 / WI-1).
+    Privilege transparency hygiene (Set 9 / WI-1).
 
-    Deterministic one-time privilege notice.
-    Must be emitted at most once per CLI invocation.
+    Deterministic one-time privilege notice:
+      - Must be emitted at most once per CLI invocation
+      - Must be emitted ONLY immediately before an actually-invoked privileged subprocess
+        (e.g., ["sudo", ...])
+
+    Must not probe or attempt to detect real sudo usage.
     """
     global _PRIV_NOTICE_PRINTED
     if _PRIV_NOTICE_PRINTED:
@@ -316,81 +320,6 @@ def _maybe_print_privilege_notice(template: str) -> None:
 
     # Exact stable wording (quiet/verbose): do not vary by template.
     print("NOTICE: This run may require sudo for container networking.")
-
-def _preflight_privilege_notice_for_args(args: argparse.Namespace) -> None:
-    """
-    Output-hygiene only (Set 7 / WI-1):
-
-      - Print privilege notice at most once per invocation
-      - Print only during deterministic CLI preflight (before any command output)
-      - Never print after an error path (post-error calls become no-ops via the flag)
-
-    Must not probe or attempt to detect real sudo usage.
-    """
-    try:
-        cmd = str(getattr(args, "cmd", "") or "").strip().lower()
-        if not cmd:
-            return
-
-        # Commands that never invoke privileged runtime paths directly.
-        if cmd in ("validate", "gen", "preflight", "adapt", "ai", "exec", "status", "vty"):
-            return
-
-        # Gate-style `test <topology.yaml>` destroys/deploys and will attempt sudo.
-        if cmd == "test":
-            lab = str(getattr(args, "lab", "") or "").strip()
-            if lab.lower().endswith((".yaml", ".yml")):
-                _maybe_print_privilege_notice("A")
-            return
-
-        # cleanup: privileged only when actually executing destructive action
-        if cmd == "cleanup":
-            if bool(getattr(args, "all", False)) and bool(getattr(args, "yes", False)):
-                _maybe_print_privilege_notice("A")
-            return
-
-        # destroy / down / up / run may require sudo for containerlab namespaces and teardown.
-        #
-        # WI-8.1 (Set 8): privilege notice must be truthful.
-        # - For down/destroy unknown-lab NO-OP, do NOT print the notice (no privileged action will occur).
-        # - Deterministic, no probing: only check the single descriptor path labs/<lab>.clab.yaml.
-        if cmd in ("destroy", "down", "up", "run"):
-            if cmd in ("destroy", "down"):
-                try:
-                    raw = str(getattr(args, "name", "") or "").strip()
-                    if raw:
-                        p = Path(raw)
-                        raw_lower = p.name.lower()
-
-                        # If user gave a topology filename and it exists, resolve lab name from it deterministically.
-                        topo_path = (TOPO_DIR / raw) if not Path(raw).is_file() else Path(raw)
-                        lab_name = ""
-                        if topo_path.suffix in (".yaml", ".yml") and topo_path.exists():
-                            topo_doc = load_yaml(topo_path) or {}
-                            lab_name = str((topo_doc.get("name") or "").strip())
-                        else:
-                            # Otherwise treat as lab name; tolerate accidental ".yaml/.yml" suffix.
-                            if raw_lower.endswith((".yaml", ".yml")):
-                                lab_name = Path(raw).stem.strip()
-                            else:
-                                lab_name = raw
-
-                        if lab_name:
-                            out = lab_file_from_name(lab_name)
-                            if out.exists():
-                                _maybe_print_privilege_notice("A")
-                    return
-                except Exception:
-                    # Presentation-only best-effort; default to no notice.
-                    return
-
-            _maybe_print_privilege_notice("A")
-            return
-
-        return
-    except Exception:
-        # Presentation-only best-effort.
-        return
 
 def _print_artifacts_footer_for_lab(lab_input: Path, *, authority_kind: str | None = None) -> None:
     """
@@ -9852,9 +9781,6 @@ def main() -> None:
         global _PRIV_NOTICE_PRINTED
         _PRIV_NOTICE_PRINTED = False
         _invocation_reset_written_artifacts()
-
-        # Output hygiene (Set 7 / WI-1): privilege notice is preflight-only (before any command output).
-        _preflight_privilege_notice_for_args(args)
 
         # Footer (WI-1a): gate-mode-only artifact footer (netsim test <topology.yaml>)
         if str(getattr(args, "cmd", "") or "") == "test":
