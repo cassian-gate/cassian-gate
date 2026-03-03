@@ -2938,6 +2938,25 @@ def render_gate_result_block(results: dict, *, authority_kind: str | None = None
       - depend on terminal width or timestamps
     """
     lab = str(results.get("lab") or "").strip()
+    if not lab:
+        try:
+            lab_obj = results.get("lab_obj")
+            if isinstance(lab_obj, dict):
+                lab = str(lab_obj.get("name") or "").strip()
+        except Exception:
+            pass
+    if not lab:
+        try:
+            topo_obj = results.get("topology")
+            if isinstance(topo_obj, dict):
+                lab = str(topo_obj.get("name") or "").strip()
+        except Exception:
+            pass
+    if not lab:
+        lab = "(unknown — could not parse topology name)"
+
+    topo_path = str(results.get("topology_path") or "").strip()
+
     summ = results.get("summary", {}) or {}
     total = int(summ.get("total") or 0)
 
@@ -2982,13 +3001,72 @@ def render_gate_result_block(results: dict, *, authority_kind: str | None = None
     out.append("────────────────────────────────────────")
     out.append(heading)
     out.append("────────────────────────────────────────")
-    out.append(f"Lab: {lab}")
+
+    # Identity (must never be blank)
+    lab_disp = lab if lab else "(unknown — could not parse topology name)"
+    out.append(f"Lab: {lab_disp}")
+
+    # Topology path (only when invoked with a topology path; presentation-only)
+    topo_path = results.get("topology_path")
+    if isinstance(topo_path, str) and topo_path.strip():
+        out.append(f"Topology: {topo_path.strip()}")
+
     out.append(authority_line)
     out.append(mode_line)
     out.append(f"Prereqs executed: {prereqs_executed}")
     out.append(f"Declared tests executed: {declared_executed}")
     out.append(f"Scenarios executed: {scen_total}")
     out.append("")
+
+    # Hard-failure clarity (phase + reason + executed/skipped) for early failures.
+    hf = results.get("hard_failure") or {}
+    if isinstance(hf, dict) and bool(hf.get("occurred")):
+        ph_raw = str(hf.get("phase") or "").strip().lower()
+        ph_map = {
+            "resolve": "RESOLVE",
+            "validate": "RESOLVE",
+            "generate": "GENERATE",
+            "deploy": "DEPLOY",
+            "provision": "PROVISION",
+            "test": "TEST",
+            "collect": "COLLECT",
+            "destroy": "DESTROY",
+        }
+        ph = ph_map.get(ph_raw, ph_raw.upper() if ph_raw else "")
+        if ph:
+            out.append(f"Failure phase: {ph}")
+
+        err = str(hf.get("error") or "").strip()
+        if err.startswith("ERROR:"):
+            err = err[len("ERROR:"):].lstrip()
+        if err:
+            if "\n" in err:
+                err = err.splitlines()[0].strip()
+            out.append(f"Reason: {err}")
+
+        # Executed vs skipped (deterministic, presentation-only)
+        exec_s = ""
+        if ph == "RESOLVE":
+            exec_s = "Execution: resolve/validate only (generate/deploy/provision/test skipped)"
+        elif ph == "GENERATE":
+            exec_s = "Execution: resolve+generate attempted; generate failed (deploy/provision/test skipped)"
+        elif ph == "DEPLOY":
+            exec_s = "Execution: resolve+generate attempted; deploy failed (provision/test skipped)"
+        elif ph == "PROVISION":
+            exec_s = "Execution: resolve+generate+deploy succeeded; provision failed (test skipped)"
+        elif ph == "TEST":
+            exec_s = "Execution: full lifecycle through test (collect+destroy still executed)"
+        elif ph:
+            exec_s = "Execution: fail-fast (later phases skipped)"
+        if exec_s:
+            out.append(exec_s)
+
+        out.append("")
+    else:
+        # If tests ran (PASS/FAIL), we can state full lifecycle through test for gate-mode.
+        if str(authority_kind or "").strip().lower() in ("gate", "authoritative", "topology"):
+            out.append("Execution: full lifecycle through test (collect+destroy still executed)")
+            out.append("")
 
     # WI-4: If scenarios ran but declared tests were not counted, be explicit.
     # This is presentation-only; it does not change what ran or how verdicts are computed.

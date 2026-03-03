@@ -2330,10 +2330,13 @@ def cmd_test(args: argparse.Namespace) -> None:
             _candidate_parse_dir_or_die(resolved_preview, Path(str(cand_arg)))
 
         # Now run tests against the deployed lab name (existing behavior)
+        # Now run tests against the deployed lab name (existing behavior)
         args2 = argparse.Namespace(**vars(args))
         args2.lab = lab_name
         # Reporting context only (presentation; does not affect verdicts/exit codes)
         setattr(args2, "_report_authority", "gate")
+        # WI-B: Preserve user-invoked topology path for Gate Result identity (presentation-only).
+        setattr(args2, "_report_topology_path", str(topo_gate_path))
 
         exit_code = 0
 
@@ -2350,6 +2353,8 @@ def cmd_test(args: argparse.Namespace) -> None:
                 "tests": [],
                 "scenarios": [],
                 "events": [],
+                # WI-B: Gate identity completeness for pathlike invocations (presentation-only).
+                "topology_path": str(topo_gate_path),
                 "hard_failure": {
                     "occurred": True,
                     "phase": str(phase or ""),
@@ -2535,9 +2540,20 @@ def cmd_test(args: argparse.Namespace) -> None:
                 # Best-effort: render a gate-style hard failure record under the derived lab name.
                 # Phase must reflect whether failure happened during deploy/provision or during test execution.
                 try:
+                    err_msg = str(getattr(netsim_common, "LAST_ERROR_MSG", "") or "gate failed").strip()
+                    phase_report = str(gate_phase or "").strip().lower()
+
+                    # WI (Gate failure clarity): map netsim-owned resolve-time validation/coverage failures
+                    # to RESOLVE, even if they occur during the gate-style cmd_up() path.
+                    # Deterministic: purely string-based on netsim-owned error messages; no probing.
+                    if phase_report == "deploy":
+                        em = err_msg.lower()
+                        if em.startswith("coverage:") or em.startswith("schema:") or em.startswith("invalid yaml:") or em.startswith("topology "):
+                            phase_report = "resolve"
+
                     _gate_write_hard_failure_results(
-                        phase=str(gate_phase),
-                        err=str(getattr(netsim_common, "LAST_ERROR_MSG", "") or "gate failed"),
+                        phase=str(phase_report),
+                        err=err_msg or "gate failed",
                         code=exit_code,
                     )
                 except SystemExit:
