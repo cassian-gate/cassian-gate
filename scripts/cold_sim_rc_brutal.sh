@@ -380,6 +380,34 @@ YAML
   cat >"$OUT_DIR/tmp/missing_required.yaml" <<'YAML'
 foo: bar
 YAML
+
+  # Candidate-config wrong structure (dir exists, but does not match required layout)
+  # Expected: netsim-owned failure, non-zero exit, no traceback, no raw daemon leakage.
+  mkdir -p "$OUT_DIR/tmp/bad_candidate_structure"
+  # Intentionally wrong: missing required frr/<node>.conf and nft/<node>.nft structure
+  echo "placeholder" >"$OUT_DIR/tmp/bad_candidate_structure/README.txt"
+
+  # Scenario schema misuse: invalid scenario step key (must be rejected deterministically)
+  # Keep topology otherwise minimally valid (name/nodes/links exist).
+  cat >"$OUT_DIR/tmp/bad_scenario_unknown_step.yaml" <<'YAML'
+name: bad-scenario-unknown-step
+
+nodes:
+  - name: r1
+    type: frr
+  - name: r2
+    type: frr
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+
+scenarios:
+  - id: s1
+    steps:
+      - bogus_wait_for_bgp:
+          node: r1
+          timeout: 1
+YAML
 }
 
 # ---------- phases ----------
@@ -469,6 +497,23 @@ phaseB () {
   if [[ -f "$topo" ]]; then
     run_step "B8_candidate_missing_dir" "${NETSIM_CMD[@]}" test "$topo" --candidate-config "$OUT_DIR/tmp/does_not_exist"
     [[ "$STEP_RC" -ne 0 ]] || fail "B8_candidate_missing_dir: expected non-zero exit, got 0"
+
+    # Candidate-config wrong structure (dir exists)
+    run_step "B9_candidate_wrong_structure" "${NETSIM_CMD[@]}" test "$topo" --candidate-config "$OUT_DIR/tmp/bad_candidate_structure"
+    [[ "$STEP_RC" -ne 0 ]] || fail "B9_candidate_wrong_structure: expected non-zero exit, got 0"
+    if echo "$STEP_OUT" | grep -qE 'Traceback \(most recent call last\):'; then
+      fail "B9_candidate_wrong_structure: traceback leaked (should be netsim-owned error unless --verbose)"
+    fi
+    if looks_like_raw_docker_error "$STEP_OUT"; then
+      fail "B9_candidate_wrong_structure: raw daemon leakage"
+    fi
+  fi
+
+  # Scenario schema misuse: unknown step key must be rejected deterministically.
+  run_step "B10_gate_test_bad_scenario_unknown_step" "${NETSIM_CMD[@]}" test "$OUT_DIR/tmp/bad_scenario_unknown_step.yaml"
+  [[ "$STEP_RC" -ne 0 ]] || fail "B10_gate_test_bad_scenario_unknown_step: expected non-zero exit, got 0"
+  if echo "$STEP_OUT" | grep -qE 'Traceback \(most recent call last\):'; then
+    fail "B10_gate_test_bad_scenario_unknown_step: traceback leaked (should be netsim-owned error unless --verbose)"
   fi
 }
 
@@ -480,6 +525,13 @@ phaseC () {
 
   run_step "C2_status_no_args" "${NETSIM_CMD[@]}" status
   [[ "$STEP_RC" -ne 0 ]] || fail "C2_status_no_args: expected non-zero exit"
+
+  # Status unknown lab (first-run engineers try this immediately)
+  run_step "C2b_status_unknown_lab" "${NETSIM_CMD[@]}" status "no-such-lab-xyz"
+  [[ "$STEP_RC" -ne 0 ]] || fail "C2b_status_unknown_lab: expected non-zero exit"
+  if looks_like_raw_docker_error "$STEP_OUT"; then
+    fail "C2b_status_unknown_lab: raw daemon leakage"
+  fi
 
   run_step "C3_exec_no_args" "${NETSIM_CMD[@]}" exec
   [[ "$STEP_RC" -ne 0 ]] || fail "C3_exec_no_args: expected non-zero exit"
