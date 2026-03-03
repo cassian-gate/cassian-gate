@@ -3124,6 +3124,41 @@ def cmd_test(args: argparse.Namespace) -> None:
             # Keep legacy prefix under keep-going mode, but content is now structured.
             print(f"{msg}")
             return
+
+        # WI-2: Fail-fast test failures must still finalize + write authoritative artifacts
+        # so the Gate Result block reflects executed tests (no "Declared tests executed: 0"
+        # when a declared test actually ran).
+        try:
+            tests_list = results.get("tests", []) or []
+            if isinstance(tests_list, list):
+                total = len(tests_list)
+                passed = 0
+                failed = 0
+                skipped = 0
+                for tr in tests_list:
+                    if not isinstance(tr, dict):
+                        continue
+                    v = str(tr.get("verdict") or "").strip().lower()
+                    if v == "pass":
+                        passed += 1
+                    elif v == "fail":
+                        failed += 1
+                    elif v == "skip":
+                        skipped += 1
+
+                results.setdefault("summary", {})
+                if isinstance(results.get("summary"), dict):
+                    results["summary"]["total"] = total
+                    results["summary"]["passed"] = passed
+                    results["summary"]["failed"] = failed
+                    results["summary"]["skipped"] = skipped
+
+            results["result"] = "fail"
+            write_results()
+        except Exception:
+            # Never allow finalization to mask the original failure signal
+            pass
+
         die(msg)
 
     def node_ip_or_die(node_name: str) -> str:
