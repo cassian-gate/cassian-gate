@@ -7421,8 +7421,9 @@ def cmd_status(args: argparse.Namespace) -> None:
         if ("/" in topo_arg) or ("\\" in topo_arg) or p.name.lower().endswith((".yaml", ".yml")):
             topo_path = topo_arg
 
-    if topo_path:
-        print(f"Topology: {topo_path}")
+    print("────────────────────────────────────────")
+    print("ai-netsim Status")
+    print("────────────────────────────────────────")
     print(f"Lab: {lab}")
 
     # Lab-level runtime classification (deterministic)
@@ -7444,15 +7445,46 @@ def cmd_status(args: argparse.Namespace) -> None:
         else:
             runtime = "PARTIAL"
 
+    # Result block (stable ordering)
+    # Allowed: OK | STOPPED | UNKNOWN
+    if runtime == "RUNNING":
+        result = "OK"
+    elif runtime in ("STOPPED", "MISSING"):
+        result = "STOPPED"
+    else:
+        result = "UNKNOWN"
+
+    print(f"RESULT: {result}")
     print(f"Runtime: {runtime}")
     print(f"Source: {source}")
 
+    # Optional topology hint (informational only)
+    if topo_path:
+        print(f"Topology: {topo_path}")
+
     if not out_doc["nodes"]:
         print("Nodes: (none)")
-        # Even here, honor --summary
         if show_summary:
             print(f"Summary: containers {running_nodes}/{total_nodes} running")
+        print("Next:")
+        if topo_path:
+            print(f"  netsim test {topo_path}  (gate)")
+        else:
+            print("  netsim test <topology.yaml>  (gate)")
         return
+
+    print("Next:")
+    if result == "OK":
+        print(f"  netsim test {lab}  (lab mode)")
+        print(f"  netsim exec {lab} <node> -- <cmd...>")
+        print(f"  netsim down {lab}")
+    else:
+        if topo_path:
+            print(f"  netsim test {topo_path}  (gate)")
+            print(f"  netsim up {topo_path} --reconfigure")
+        else:
+            print("  netsim test <topology.yaml>  (gate)")
+        print(f"  netsim status {lab}")
 
     print("Nodes:")
     for node_rec in out_doc["nodes"]:
