@@ -6839,7 +6839,14 @@ def cmd_exec(args: argparse.Namespace) -> None:
     lab = str(getattr(args, "lab", "") or "").strip()
     node = str(getattr(args, "node", "") or "").strip()
     if not lab or not node:
-        die("exec requires: <lab> <node>", code=2)
+        die(
+            "ERROR: missing required arguments.\n"
+            "Usage:\n"
+            "  netsim exec <lab-name> <node> -- <cmd...>\n"
+            "Next:\n"
+            "  Run: netsim status <lab-name>  (to list nodes)",
+            code=2,
+        )
 
     # Determine valid nodes deterministically from local lab descriptors (no Docker scanning).
     resolved_path = lab_dir(lab) / "topology.resolved.yaml"
@@ -6913,8 +6920,21 @@ def cmd_exec(args: argparse.Namespace) -> None:
 def cmd_vty(args: argparse.Namespace) -> None:
     rt = get_runtime()
 
+    lab = str(getattr(args, "lab", "") or "").strip()
+    node = str(getattr(args, "node", "") or "").strip()
+    command = str(getattr(args, "command", "") or "").strip()
+    if not lab or not node or not command:
+        die(
+            "ERROR: missing required arguments.\n"
+            "Usage:\n"
+            '  netsim vty <lab-name> <node> "<command>"\n'
+            "Next:\n"
+            "  Run: netsim status <lab-name>  (to list nodes)",
+            code=2,
+        )
+
     # command is provided as a single string; e.g. "show bgp summary"
-    cp = vty(rt, args.lab, args.node, args.command)
+    cp = vty(rt, lab, node, command)
 
     # vtysh prints errors to stdout typically; just show output
     sys.stdout.write(cp.stdout or "")
@@ -6992,7 +7012,15 @@ def cmd_status(args: argparse.Namespace) -> None:
     # - Lab name derives ONLY from topology 'name:' (or filename stem fallback, matching footer behavior).
     raw_lab = str(getattr(args, "lab", "") or "").strip()
     if not raw_lab:
-        die("ERROR: status requires a lab name or topology file", code=2)
+        die(
+            "ERROR: missing LAB NAME.\n"
+            "Usage:\n"
+            "  netsim status <lab-name>\n"
+            "Next:\n"
+            "  If you have a topology: netsim test <topology.yaml>  (gate)\n"
+            "  If you already deployed: netsim status <lab-name>",
+            code=2,
+        )
 
     lab = raw_lab
     topo_path = None  # set only when user input is a topology path (for deterministic error context)
@@ -9563,8 +9591,9 @@ def main() -> None:
 
     # exec
     p_exec = sub.add_parser("exec", help="Exec a command inside a node container; if no command, open bash")
-    p_exec.add_argument("lab", help="Lab name (topology 'name')")
-    p_exec.add_argument("node", help="Node name (e.g. r1)")
+    # Make positionals optional at parse-time so quiet-mode misuse is netsim-owned (no argparse dumps).
+    p_exec.add_argument("lab", nargs="?", help="Lab name (topology 'name')")
+    p_exec.add_argument("node", nargs="?", help="Node name (e.g. r1)")
     p_exec.add_argument("command", nargs=argparse.REMAINDER, help="Command to run inside container")
     p_exec.set_defaults(func=cmd_exec)
 
@@ -9575,14 +9604,16 @@ def main() -> None:
 
     # vty
     p_vty = sub.add_parser("vty", help="Run a vtysh command easily")
-    p_vty.add_argument("lab", help="Lab name (topology 'name')")
-    p_vty.add_argument("node", help="Node name (e.g. r1)")
-    p_vty.add_argument("command", help='vtysh command as one string, e.g. "show bgp summary"')
+    # Make positionals optional at parse-time so quiet-mode misuse is netsim-owned (no argparse dumps).
+    p_vty.add_argument("lab", nargs="?", help="Lab name (topology 'name')")
+    p_vty.add_argument("node", nargs="?", help="Node name (e.g. r1)")
+    p_vty.add_argument("command", nargs="?", help='vtysh command as one string, e.g. "show bgp summary"')
     p_vty.set_defaults(func=cmd_vty)
 
     # status
     p_status = sub.add_parser("status", help="Show lab status (containers + optional BGP summary)")
-    p_status.add_argument("lab", help="Lab name (topology 'name')")
+    # Make positional optional at parse-time so quiet-mode misuse is netsim-owned (no argparse dumps).
+    p_status.add_argument("lab", nargs="?", help="Lab name (topology 'name')")
     p_status.add_argument("--bgp", action="store_true", help="Include 'show bgp summary' for FRR nodes")
     p_status.add_argument("--bgp-verbose", action="store_true", help="Print full 'show bgp summary' output")
     p_status.add_argument("--strict", action="store_true", help="Exit non-zero if any FRR peers are not Established")
