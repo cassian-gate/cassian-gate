@@ -1068,23 +1068,19 @@ def _candidate_parse_dir_or_die(topo: dict[str, Any], cand_dir: Path) -> list[di
       - file must be non-empty (size > 0)
       - plan order is stable: sort by node name
     """
-    if not cand_dir.exists() or not cand_dir.is_dir():
-        # Phase 3 misuse semantics: invalid candidate-config directory is a usage error (exit 2),
-        # and must be educational + deterministic.
-        usage = "\n".join(
-            [
-                "Expected candidate-config structure:",
-                "  <DIR>/frr/<node>.conf",
-                "  <DIR>/nft/<node>.nft",
-                "  <DIR>/nft/<node>.ruleset",
-                "",
-                "Notes:",
-                "  - Gate-only: use 'netsim test <topology.yaml> --candidate-config <DIR>'",
-                "  - Full replacement (no merge)",
-                "  - Supported node types: frr, nft-fw",
-            ]
+    if not cand_dir.exists():
+        die(
+            f"ERROR: Candidate config directory not found: {cand_dir}\n"
+            "Expected: a directory containing candidate configuration files.",
+            code=2,
         )
-        die(f"ERROR: --candidate-config: directory not found or not a directory: {cand_dir}\n{usage}", code=2)
+
+    if not cand_dir.is_dir():
+        die(
+            f"ERROR: Candidate config directory not found: {cand_dir}\n"
+            "Expected: a directory containing candidate configuration files.",
+            code=2,
+        )
 
     nodes = topo.get("nodes", []) or []
     nodes_by_name: dict[str, dict[str, Any]] = {}
@@ -1097,30 +1093,24 @@ def _candidate_parse_dir_or_die(topo: dict[str, Any], cand_dir: Path) -> list[di
     seen: set[tuple[str, str]] = set()
     saw_any = False
 
-    usage = "\n".join(
-        [
-            "Expected candidate-config structure:",
-            "  <DIR>/frr/<node>.conf",
-            "  <DIR>/nft/<node>.nft",
-            "  <DIR>/nft/<node>.ruleset",
-            "",
-            "Notes:",
-            "  - Gate-only: use 'netsim test <topology.yaml> --candidate-config <DIR>'",
-            "  - Full replacement (no merge)",
-            "  - Supported node types: frr, nft-fw",
-        ]
-    )
-
-    def _cand_misuse(msg: str) -> None:
-        die(f"ERROR: {msg}\n{usage}", code=2)
+    def _cand_misuse_invalid_structure() -> None:
+        die(
+            f"ERROR: Candidate config directory structure invalid: {cand_dir}\n"
+            "Expected structure:\n"
+            "  <dir>/\n"
+            "    <node-name>/\n"
+            "      <config-files>\n"
+            "See operator cheat sheet for exact structure.",
+            code=2,
+        )
 
     # Reject unknown entries at root for determinism
     for entry in sorted(cand_dir.iterdir(), key=lambda p: p.name):
         if entry.is_dir():
             if entry.name not in allowed_subdirs:
-                _cand_misuse(f"--candidate-config: unknown subdir '{entry.name}' (allowed: frr/, nft/)")
+                _cand_misuse_invalid_structure()
         else:
-            _cand_misuse(f"--candidate-config: unknown file at root '{entry.name}' (place under frr/ or nft/)")
+            _cand_misuse_invalid_structure()
 
     frr_dir_present = False
     nft_dir_present = False
@@ -1194,9 +1184,10 @@ def _candidate_parse_dir_or_die(topo: dict[str, Any], cand_dir: Path) -> list[di
             _cand_misuse(f"--candidate-config: directory 'nft/' exists but contains no *.nft or *.ruleset files")
 
     if not saw_any:
-        _cand_misuse(
-            f"--candidate-config: no recognized candidate inputs found under: {cand_dir} "
-            "(expected frr/*.conf and/or nft/*.nft|*.ruleset)"
+        die(
+            f"ERROR: Candidate config directory is empty: {cand_dir}\n"
+            "Expected: at least one configuration file inside the directory.",
+            code=2,
         )
 
     plan.sort(key=lambda r: r["node"])
