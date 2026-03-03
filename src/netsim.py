@@ -6876,9 +6876,21 @@ def cmd_exec(args: argparse.Namespace) -> None:
 
     if not valid_nodes:
         die(
-            f"ERROR: cannot determine valid nodes for lab '{lab}' (missing local lab descriptors)\n"
-            f"Try: netsim status {lab}\n"
-            "Hint: Run 'netsim up <topology.yaml>' (or 'netsim run <topology.yaml> --keep') then retry.",
+            "ERROR: lab '"
+            + str(lab)
+            + "' not found locally (missing lab descriptors)\n"
+            "Expected:\n"
+            "  labs/"
+            + str(lab)
+            + ".clab.yaml\n"
+            "  labs/clab-"
+            + str(lab)
+            + "/topology.resolved.yaml\n"
+            "Next:\n"
+            "  Gate mode: netsim test <topology.yaml>\n"
+            "  Lab mode:  netsim up <topology.yaml> --reconfigure\n"
+            "Hint:\n"
+            "  Use: netsim status <lab-name>",
             code=2,
         )
 
