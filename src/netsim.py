@@ -350,7 +350,40 @@ def _preflight_privilege_notice_for_args(args: argparse.Namespace) -> None:
             return
 
         # destroy / down / up / run may require sudo for containerlab namespaces and teardown.
+        #
+        # WI-8.1 (Set 8): privilege notice must be truthful.
+        # - For down/destroy unknown-lab NO-OP, do NOT print the notice (no privileged action will occur).
+        # - Deterministic, no probing: only check the single descriptor path labs/<lab>.clab.yaml.
         if cmd in ("destroy", "down", "up", "run"):
+            if cmd in ("destroy", "down"):
+                try:
+                    raw = str(getattr(args, "name", "") or "").strip()
+                    if raw:
+                        p = Path(raw)
+                        raw_lower = p.name.lower()
+
+                        # If user gave a topology filename and it exists, resolve lab name from it deterministically.
+                        topo_path = (TOPO_DIR / raw) if not Path(raw).is_file() else Path(raw)
+                        lab_name = ""
+                        if topo_path.suffix in (".yaml", ".yml") and topo_path.exists():
+                            topo_doc = load_yaml(topo_path) or {}
+                            lab_name = str((topo_doc.get("name") or "").strip())
+                        else:
+                            # Otherwise treat as lab name; tolerate accidental ".yaml/.yml" suffix.
+                            if raw_lower.endswith((".yaml", ".yml")):
+                                lab_name = Path(raw).stem.strip()
+                            else:
+                                lab_name = raw
+
+                        if lab_name:
+                            out = lab_file_from_name(lab_name)
+                            if out.exists():
+                                _maybe_print_privilege_notice("A")
+                    return
+                except Exception:
+                    # Presentation-only best-effort; default to no notice.
+                    return
+
             _maybe_print_privilege_notice("A")
             return
 
@@ -6558,18 +6591,32 @@ def cmd_down(args: argparse.Namespace) -> None:
         if not lab_name:
             die("down requires a non-empty lab name")
 
-    # Target clarity (quiet mode included)
-    if used_topology:
-        print(f"Topology: {topo_path}")
-    print(f"Lab: {lab_name}")
-
     out = lab_file_from_name(lab_name)
 
     # Idempotent behavior (default):
     # If the generated containerlab file is missing, treat this as "already down".
+    #
+    # WI-8.1 (Set 8): destructive NO-OP must be explicit and unambiguous.
     if not out.exists():
-        print(f"INFO: nothing to do for lab '{lab_name}' (missing: {out})")
+        strict = bool(getattr(args, "strict", False))
+
+        if strict:
+            print(f"ERROR: lab '{lab_name}' not found")
+
+        print("────────────────────────────────────────")
+        print("ai-netsim Down Result")
+        print("────────────────────────────────────────")
+        print(f"LAB DESCRIPTOR: labs/{lab_name}.clab.yaml")
+        print("RESULT: NO-OP (lab not found)")
+
+        if strict:
+            raise SystemExit(2)
         return
+
+    # Target clarity (quiet mode included)
+    if used_topology:
+        print(f"Topology: {topo_path}")
+    print(f"Lab: {lab_name}")
 
     # Destroy via containerlab (authoritative destroy mechanism)
     print("Action: destroy runtime")
@@ -6636,15 +6683,15 @@ def cmd_destroy(args: argparse.Namespace) -> None:
         "failures": failures,
     }
 
-    # Target clarity (quiet mode included)
-    # Note: we deliberately mirror cmd_down semantics: topology-path resolution is determined above.
-    # If the input was a topology file path, we print it; otherwise we print only Lab.
-    if topo_path.suffix in (".yaml", ".yml") and topo_path.exists():
-        print(f"Topology: {topo_path}")
-    print(f"Lab: {lab_name}")
-
     did_anything = False
     if clab_yaml.exists():
+        # Target clarity (quiet mode included)
+        # Note: we deliberately mirror cmd_down semantics: topology-path resolution is determined above.
+        # If the input was a topology file path, we print it; otherwise we print only Lab.
+        if topo_path.suffix in (".yaml", ".yml") and topo_path.exists():
+            print(f"Topology: {topo_path}")
+        print(f"Lab: {lab_name}")
+
         print("Action: destroy runtime")
         did_anything = True
         report["runtime_destroy"]["attempted"] = True
@@ -6718,7 +6765,20 @@ def cmd_destroy(args: argparse.Namespace) -> None:
         die("destroy: one or more actions failed", code=1)
 
     if not did_anything:
-        print(f"INFO: nothing to do for lab '{lab_name}' (missing: {clab_yaml})")
+        # WI-8.1 (Set 8): destructive NO-OP must be explicit and unambiguous.
+        strict = bool(getattr(args, "strict", False))
+
+        if strict:
+            print(f"ERROR: lab '{lab_name}' not found")
+
+        print("────────────────────────────────────────")
+        print("ai-netsim Destroy Result")
+        print("────────────────────────────────────────")
+        print(f"LAB DESCRIPTOR: labs/{lab_name}.clab.yaml")
+        print("RESULT: NO-OP (lab not found)")
+
+        if strict:
+            raise SystemExit(2)
         return
 
 def cmd_cleanup(args: argparse.Namespace) -> None:
@@ -9532,11 +9592,21 @@ def main() -> None:
     # down
     p_down = sub.add_parser("down", help="Destroy a deployed lab by name")
     p_down.add_argument("name", help="Lab name (topology 'name')")
+    p_down.add_argument(
+        "--strict",
+        action="store_true",
+        help="Usage error (exit 2) if lab is not found (still emits RESULT: NO-OP).",
+    )
     p_down.set_defaults(func=cmd_down)
 
     # destroy (explicit ops; does not delete artifacts by default)
     p_destroy = sub.add_parser("destroy", help="Destroy a lab runtime; keep artifacts unless --purge-artifacts")
     p_destroy.add_argument("name", help="Lab name (topology 'name')")
+    p_destroy.add_argument(
+        "--strict",
+        action="store_true",
+        help="Usage error (exit 2) if lab is not found (still emits RESULT: NO-OP).",
+    )
     p_destroy.add_argument(
         "--purge-artifacts",
         dest="purge_artifacts",
