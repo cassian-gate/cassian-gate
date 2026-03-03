@@ -405,6 +405,9 @@ def _print_artifacts_footer_for_lab(lab_input: Path, *, authority_kind: str | No
                 if not rel_root.endswith("/"):
                     rel_root += "/"
                 print(f"Artifacts: {rel_root}")
+                print("  - topology.resolved.yaml")
+                print("  - results.json")
+                print("  - results.summary.txt")
             else:
                 # Non-gate (existing UX preserved)
                 print("Artifacts:")
@@ -3003,6 +3006,17 @@ def cmd_test(args: argparse.Namespace) -> None:
             blk = render_gate_result_block(results, authority_kind=rk)
             if isinstance(blk, str) and blk.strip():
                 print(blk, end="" if blk.endswith("\n") else "\n")
+
+            # WI-11.2: Zero-test PASS clarification (presentation-only; gate-mode only).
+            try:
+                summ = results.get("summary", {}) or {}
+                total = int(summ.get("total") or 0)
+                scenarios = results.get("scenarios", []) or []
+                scen_total = len(scenarios) if isinstance(scenarios, list) else 0
+                if total == 0 and scen_total == 0:
+                    print("NOTE: No tests/scenarios declared — PASS means deploy/provision succeeded only.")
+            except Exception:
+                pass
 
             # WI-1 (Set 6): defer artifact path surfacing to the end-of-invocation footer
             # (main() finally calls _print_artifacts_footer_for_lab for gate-mode invocations).
@@ -6150,9 +6164,19 @@ def cmd_doctor(args: argparse.Namespace) -> None:
 
     if any_critical_fail:
         print("✖ environment NOT ready (critical dependency missing)")
+        print("Gate-critical dependencies:")
+        print("  - docker daemon reachable")
+        print("  - containerlab available")
+        print("Advisory checks:")
+        print("  - images present locally (no pull performed)")
         raise SystemExit(1)
 
     print("✔ environment ready")
+    print("Gate-critical dependencies:")
+    print("  - docker daemon reachable")
+    print("  - containerlab available")
+    print("Advisory checks:")
+    print("  - images present locally (no pull performed)")
     raise SystemExit(0)
 
 def cmd_preflight(args: argparse.Namespace) -> None:
