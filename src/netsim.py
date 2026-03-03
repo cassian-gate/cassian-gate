@@ -6598,11 +6598,19 @@ def cmd_down(args: argparse.Namespace) -> None:
     #
     # WI-8.1 (Set 8): destructive NO-OP must be explicit and unambiguous.
     if not out.exists():
+        strict = bool(getattr(args, "strict", False))
+
+        if strict:
+            print(f"ERROR: lab '{lab_name}' not found")
+
         print("────────────────────────────────────────")
         print("ai-netsim Down Result")
         print("────────────────────────────────────────")
         print(f"LAB DESCRIPTOR: labs/{lab_name}.clab.yaml")
         print("RESULT: NO-OP (lab not found)")
+
+        if strict:
+            raise SystemExit(2)
         return
 
     # Target clarity (quiet mode included)
@@ -6758,11 +6766,19 @@ def cmd_destroy(args: argparse.Namespace) -> None:
 
     if not did_anything:
         # WI-8.1 (Set 8): destructive NO-OP must be explicit and unambiguous.
+        strict = bool(getattr(args, "strict", False))
+
+        if strict:
+            print(f"ERROR: lab '{lab_name}' not found")
+
         print("────────────────────────────────────────")
         print("ai-netsim Destroy Result")
         print("────────────────────────────────────────")
         print(f"LAB DESCRIPTOR: labs/{lab_name}.clab.yaml")
         print("RESULT: NO-OP (lab not found)")
+
+        if strict:
+            raise SystemExit(2)
         return
 
 def cmd_cleanup(args: argparse.Namespace) -> None:
@@ -9576,11 +9592,21 @@ def main() -> None:
     # down
     p_down = sub.add_parser("down", help="Destroy a deployed lab by name")
     p_down.add_argument("name", help="Lab name (topology 'name')")
+    p_down.add_argument(
+        "--strict",
+        action="store_true",
+        help="Usage error (exit 2) if lab is not found (still emits RESULT: NO-OP).",
+    )
     p_down.set_defaults(func=cmd_down)
 
     # destroy (explicit ops; does not delete artifacts by default)
     p_destroy = sub.add_parser("destroy", help="Destroy a lab runtime; keep artifacts unless --purge-artifacts")
     p_destroy.add_argument("name", help="Lab name (topology 'name')")
+    p_destroy.add_argument(
+        "--strict",
+        action="store_true",
+        help="Usage error (exit 2) if lab is not found (still emits RESULT: NO-OP).",
+    )
     p_destroy.add_argument(
         "--purge-artifacts",
         dest="purge_artifacts",
