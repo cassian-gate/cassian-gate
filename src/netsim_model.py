@@ -966,6 +966,82 @@ def resolve_topology(topo: dict) -> dict:
         fabric["evpn"] = dict(evpn_norm)
 
     # ----------------------------
+    # 0b) Deterministic host<->nft-fw link ipv4 synthesis (explicit intent precedence)
+    #
+    # If the user omits link.ipv4 for a host<->nft-fw point-to-point link, but declares:
+    #   - host: ip + gw
+    #   - nft-fw: interfaces[<ifname>]
+    # then synthesize link.ipv4 deterministically in Resolve, preserving endpoint order.
+    #
+    # Fail-fast (no silent defaults):
+    #   - host has ip/gw but fw.interfaces[if] missing -> die
+    #   - fw.interfaces[if] present but host.ip missing -> die
+    # ----------------------------
+    nodes_by_name = {}
+    for n in (resolved.get("nodes") or []):
+        if isinstance(n, dict):
+            nm = n.get("name")
+            if isinstance(nm, str) and nm:
+                nodes_by_name[nm] = n
+
+    for link in (resolved.get("links") or []):
+        if not isinstance(link, dict):
+            continue
+        if link.get("ipv4"):
+            continue  # explicit link intent always wins
+        eps = link.get("endpoints") or []
+        if not (isinstance(eps, list) and len(eps) == 2):
+            continue
+
+        def _split(ep: str):
+            if not (isinstance(ep, str) and ":" in ep):
+                return None, None
+            return ep.split(":", 1)
+
+        a_ep, b_ep = eps
+        a_node, a_if = _split(a_ep)
+        b_node, b_if = _split(b_ep)
+        if not a_node or not b_node:
+            continue
+
+        a = nodes_by_name.get(a_node) or {}
+        b = nodes_by_name.get(b_node) or {}
+        a_type = str(a.get("type") or "").strip().lower()
+        b_type = str(b.get("type") or "").strip().lower()
+
+        def _synth(host_node: str, host_if: str, host_rec: dict, fw_node: str, fw_if: str, fw_rec: dict):
+            hip = host_rec.get("ip")
+            hgw = host_rec.get("gw")
+            fw_intfs = fw_rec.get("interfaces") or {}
+            fip = fw_intfs.get(fw_if) if isinstance(fw_intfs, dict) else None
+
+            host_has = isinstance(hip, str) and hip.strip() and isinstance(hgw, str) and hgw.strip()
+            fw_has = isinstance(fip, str) and fip.strip()
+
+            if host_has and not fw_has:
+                die(
+                    f"Topology invalid: link {host_node}:{host_if} <-> {fw_node}:{fw_if}: "
+                    f"host has ip/gw but {fw_node}.interfaces missing '{fw_if}'"
+                )
+            if fw_has and not (isinstance(hip, str) and hip.strip()):
+                die(
+                    f"Topology invalid: link {host_node}:{host_if} <-> {fw_node}:{fw_if}: "
+                    f"{fw_node}.interfaces has '{fw_if}' but host '{host_node}' is missing node.ip"
+                )
+
+            if host_has and fw_has:
+                # Preserve the original endpoint order for link['ipv4']
+                if eps[0].startswith(host_node + ":"):
+                    link["ipv4"] = [hip.strip(), fip.strip()]
+                else:
+                    link["ipv4"] = [fip.strip(), hip.strip()]
+
+        if a_type == "host" and b_type == "nft-fw":
+            _synth(a_node, a_if, a, b_node, b_if, b)
+        elif b_type == "host" and a_type == "nft-fw":
+            _synth(b_node, b_if, b, a_node, a_if, a)
+
+    # ----------------------------
     # 1) Auto-address point-to-point links (10.0.0.0/16, sequential /31s)
     # ----------------------------
     next_host = 0  # host index inside 10.0.0.0/16

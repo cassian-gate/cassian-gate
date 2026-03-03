@@ -662,11 +662,11 @@ def configure_hosts_from_topology(rt: "Runtime", lab_name: str, topo: dict) -> N
         ip2 = ips[1]  # e.g. 192.168.1.1/24
 
         # Host on side 1?
-        if node_type.get(n1) == "host" and node_type.get(n2) in ("frr", "linux"):
+        if node_type.get(n1) == "host" and node_type.get(n2) in ("frr", "linux", "nft-fw"):
             host_configure(rt, lab_name, n1, if1, ip1, ip2.split("/")[0])
 
         # Host on side 2?
-        if node_type.get(n2) == "host" and node_type.get(n1) in ("frr", "linux"):
+        if node_type.get(n2) == "host" and node_type.get(n1) in ("frr", "linux", "nft-fw"):
             host_configure(rt, lab_name, n2, if2, ip2, ip1.split("/")[0])
 
 def host_configure(rt: "Runtime", lab_name: str, host: str, iface: str, ip_cidr: str, gw: str) -> None:
