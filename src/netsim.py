@@ -9929,7 +9929,19 @@ def main() -> None:
                     footer_lab = ""
                     footer_authority = ""
 
-        args.func(args)
+        try:
+            args.func(args)
+        except SystemExit:
+            raise
+        except Exception as e:
+            # Quiet mode must never leak raw Python exception class names or tracebacks.
+            # Verbose mode preserves the current raw traceback behavior.
+            if bool(getattr(args, "verbose", False)):
+                raise
+            msg = str(e).strip()
+            if not msg:
+                msg = "unexpected error"
+            die(f"ERROR: {msg}", code=1)
     finally:
         # Restore global quiet flag deterministically (commands may override temporarily)
         netsim_common.QUIET_RUN = old_quiet
