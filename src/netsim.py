@@ -2592,14 +2592,14 @@ def cmd_test(args: argparse.Namespace) -> None:
 
     if _looks_like_topology_path(lab_raw) and _resolve_topology_path(lab_raw) is None:
         die(
-            "ERROR: netsim test expects either a LAB NAME (existing lab) or a valid topology YAML path.\n\n"
-            "You ran:\n"
-            f"  netsim test {lab_raw}\n\n"
-            "Try (existing lab mode):\n"
-            "  netsim up <topology.yaml> --reconfigure\n"
-            "  netsim test <lab-name>\n\n"
-            "Try (gate mode, clean-state):\n"
-            "  netsim test <topology.yaml>\n",
+            "ERROR: topology path not found: "
+            + str(lab_raw)
+            + "\n"
+            "Detected:\n"
+            "  looks like a topology path (contains '/' or ends with .yaml/.yml)\n"
+            "Next:\n"
+            "  Gate mode: netsim test <topology.yaml>\n"
+            "  Lab mode:  netsim up <topology.yaml> --reconfigure ; netsim test <lab-name>",
             code=2,
         )
     # ------------------------------------------------------------
