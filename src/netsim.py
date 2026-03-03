@@ -7127,6 +7127,30 @@ def cmd_status(args: argparse.Namespace) -> None:
         nodes = []
         source = "none"
 
+    # v2-status-unknown-lab-nonzero-and-notfound-result:
+    # If no local lab descriptors exist, status MUST be truthful:
+    # - RESULT: NOT FOUND
+    # - Exit code: 2
+    # - No Docker probing / no partial runtime block
+    #
+    # Important: do NOT use die() here because it prepends "ERROR:" which breaks the
+    # status block contract. This is a deterministic usage result block + exit code.
+    if source == "none":
+        expected_clab = f"labs/{lab}.clab.yaml"
+        sys.stdout.write(
+            "────────────────────────────────────────\n"
+            "ai-netsim Status\n"
+            "────────────────────────────────────────\n"
+            f"Lab: {lab}\n"
+            "RESULT: NOT FOUND\n"
+            "Reason: No lab descriptor found locally.\n"
+            "Expected:\n"
+            f"  {expected_clab}\n"
+            "Next:\n"
+            "  netsim test <topology.yaml>\n"
+        )
+        raise SystemExit(2)
+
     # Expected intent checks are only available when resolved topology exists.
     expected_bgp_by_node = derive_expected_bgp_neighbors_from_links(topo) if topo else {}
     expected_routes_by_frr = derive_expected_routes_for_frr(topo) if (topo and routes_enabled) else {}
