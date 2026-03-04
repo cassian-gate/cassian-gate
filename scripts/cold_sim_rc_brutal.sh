@@ -529,6 +529,9 @@ phaseC () {
   # Status unknown lab (first-run engineers try this immediately)
   run_step "C2b_status_unknown_lab" "${NETSIM_CMD[@]}" status "no-such-lab-xyz"
   [[ "$STEP_RC" -ne 0 ]] || fail "C2b_status_unknown_lab: expected non-zero exit"
+  if ! echo "$STEP_OUT" | grep -Eq 'RESULT:[[:space:]]*NOT[[:space:]]+FOUND'; then
+    fail "C2b_status_unknown_lab: missing netsim-owned NOT FOUND marker (expected 'RESULT: NOT FOUND')"
+  fi
   if looks_like_raw_docker_error "$STEP_OUT"; then
     fail "C2b_status_unknown_lab: raw daemon leakage"
   fi
