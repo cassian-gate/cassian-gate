@@ -7994,7 +7994,8 @@ def _ai_resolve_lab_and_dir(arg: str) -> tuple[str, str]:
     else:
         lab = arg.strip()
         if not lab:
-            print("ERROR: lab name is empty.", file=sys.stderr)            sys.exit(2)
+            print("ERROR: lab name is empty.", file=sys.stderr)            
+            sys.exit(2)
 
     return lab, os.path.join("labs", f"clab-{lab}")
 
@@ -8604,14 +8605,14 @@ def _ai_finalize_and_emit(command_name: str, bundle: dict[str, Any], args) -> No
     print(f"ai_status: {out.get('ai_status')}")
 
     if out.get("ai_error"):
-        print(f"ai_error: {out.get('ai_error')}")
+        print(f"ERROR: {out.get('ai_error')}")
 
     if out.get("model_used"):
         print(f"model_used: {out.get('model_used')}")
 
     if out.get("ai_output"):
         if _ai_contains_forbidden_correctness_language(out["ai_output"]):
-            print("warning: AI output contained correctness/safety language. Treat as advisory and prove via tests.")
+            print("WARN: AI output contained correctness/safety language. Treat as advisory and prove via tests.")
         _render_ai_output_text(out["ai_output"])
 
 def _ai_explain_change_sections(bundle: dict[str, Any]) -> dict[str, Any]:
