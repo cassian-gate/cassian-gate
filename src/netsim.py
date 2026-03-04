@@ -6107,6 +6107,8 @@ def cmd_validate(args: argparse.Namespace) -> None:
         if want_json:
             emit("fail", msg)
             raise SystemExit(1)
+
+        # Set C: netsim-owned failure surface. Never print Python tracebacks by default.
         die(msg)
 
     finally:
