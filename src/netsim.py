@@ -6674,7 +6674,7 @@ def cmd_destroy(args: argparse.Namespace) -> None:
                 report["runtime_destroy"]["status"] = "failed"
                 report["runtime_destroy"]["detail"] = summary
                 failures.append(f"runtime destroy failed: {summary}")
-                print(f"WARN {lab_name}: destroy failed: {summary}")
+                print(f"WARN: {lab_name}: destroy failed: {summary}")
     else:
         report["runtime_destroy"]["detail"] = f"missing {clab_yaml.name} (no runtime destroy attempted)"
 
@@ -6699,7 +6699,7 @@ def cmd_destroy(args: argparse.Namespace) -> None:
                 report["artifact_purge"]["status"] = "failed"
                 report["artifact_purge"]["detail"] = summary_rm
                 failures.append(f"artifact purge failed: {summary_rm}")
-                print(f"WARN {lab_name}: artifact purge failed: {summary_rm}")
+                print(f"WARN: {lab_name}: artifact purge failed: {summary_rm}")
         else:
             report["artifact_purge"]["status"] = "skipped"
             report["artifact_purge"]["detail"] = "artifacts absent"
@@ -6814,7 +6814,7 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
                     summary = combined.splitlines()[-1].strip() if combined else f"exit {cp.returncode}"
                     lab_entry["runtime_destroy"]["status"] = "failed"
                     lab_entry["runtime_destroy"]["detail"] = summary
-                    print(f"WARN {lab}: destroy failed: {summary}")
+                    print(f"WARN: {lab}: destroy failed: {summary}")
                     failures.append(f"{lab}: runtime destroy failed: {summary}")
         else:
             lab_entry["runtime_destroy"]["detail"] = f"missing {clab_yaml.name} (no runtime destroy attempted)"
@@ -6834,7 +6834,7 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
             summary_rm = combined_rm.splitlines()[-1].strip() if combined_rm else f"exit {cp_rm.returncode}"
             lab_entry["artifact_purge"]["status"] = "failed"
             lab_entry["artifact_purge"]["detail"] = summary_rm
-            print(f"WARN {lab}: artifact purge failed: {summary_rm}")
+            print(f"WARN: {lab}: artifact purge failed: {summary_rm}")
             failures.append(f"{lab}: artifact purge failed: {summary_rm}")
 
         report_labs.append(lab_entry)
