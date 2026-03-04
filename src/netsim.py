@@ -1068,23 +1068,19 @@ def _candidate_parse_dir_or_die(topo: dict[str, Any], cand_dir: Path) -> list[di
       - file must be non-empty (size > 0)
       - plan order is stable: sort by node name
     """
-    if not cand_dir.exists() or not cand_dir.is_dir():
-        # Phase 3 misuse semantics: invalid candidate-config directory is a usage error (exit 2),
-        # and must be educational + deterministic.
-        usage = "\n".join(
-            [
-                "Expected candidate-config structure:",
-                "  <DIR>/frr/<node>.conf",
-                "  <DIR>/nft/<node>.nft",
-                "  <DIR>/nft/<node>.ruleset",
-                "",
-                "Notes:",
-                "  - Gate-only: use 'netsim test <topology.yaml> --candidate-config <DIR>'",
-                "  - Full replacement (no merge)",
-                "  - Supported node types: frr, nft-fw",
-            ]
+    if not cand_dir.exists():
+        die(
+            f"ERROR: Candidate config directory not found: {cand_dir}\n"
+            "Expected: a directory containing candidate configuration files.",
+            code=2,
         )
-        die(f"ERROR: --candidate-config: directory not found or not a directory: {cand_dir}\n{usage}", code=2)
+
+    if not cand_dir.is_dir():
+        die(
+            f"ERROR: Candidate config directory not found: {cand_dir}\n"
+            "Expected: a directory containing candidate configuration files.",
+            code=2,
+        )
 
     nodes = topo.get("nodes", []) or []
     nodes_by_name: dict[str, dict[str, Any]] = {}
@@ -1097,30 +1093,24 @@ def _candidate_parse_dir_or_die(topo: dict[str, Any], cand_dir: Path) -> list[di
     seen: set[tuple[str, str]] = set()
     saw_any = False
 
-    usage = "\n".join(
-        [
-            "Expected candidate-config structure:",
-            "  <DIR>/frr/<node>.conf",
-            "  <DIR>/nft/<node>.nft",
-            "  <DIR>/nft/<node>.ruleset",
-            "",
-            "Notes:",
-            "  - Gate-only: use 'netsim test <topology.yaml> --candidate-config <DIR>'",
-            "  - Full replacement (no merge)",
-            "  - Supported node types: frr, nft-fw",
-        ]
-    )
-
-    def _cand_misuse(msg: str) -> None:
-        die(f"ERROR: {msg}\n{usage}", code=2)
+    def _cand_misuse_invalid_structure() -> None:
+        die(
+            f"ERROR: Candidate config directory structure invalid: {cand_dir}\n"
+            "Expected structure:\n"
+            "  <dir>/\n"
+            "    <node-name>/\n"
+            "      <config-files>\n"
+            "See operator cheat sheet for exact structure.",
+            code=2,
+        )
 
     # Reject unknown entries at root for determinism
     for entry in sorted(cand_dir.iterdir(), key=lambda p: p.name):
         if entry.is_dir():
             if entry.name not in allowed_subdirs:
-                _cand_misuse(f"--candidate-config: unknown subdir '{entry.name}' (allowed: frr/, nft/)")
+                _cand_misuse_invalid_structure()
         else:
-            _cand_misuse(f"--candidate-config: unknown file at root '{entry.name}' (place under frr/ or nft/)")
+            _cand_misuse_invalid_structure()
 
     frr_dir_present = False
     nft_dir_present = False
@@ -1194,9 +1184,10 @@ def _candidate_parse_dir_or_die(topo: dict[str, Any], cand_dir: Path) -> list[di
             _cand_misuse(f"--candidate-config: directory 'nft/' exists but contains no *.nft or *.ruleset files")
 
     if not saw_any:
-        _cand_misuse(
-            f"--candidate-config: no recognized candidate inputs found under: {cand_dir} "
-            "(expected frr/*.conf and/or nft/*.nft|*.ruleset)"
+        die(
+            f"ERROR: Candidate config directory is empty: {cand_dir}\n"
+            "Expected: at least one configuration file inside the directory.",
+            code=2,
         )
 
     plan.sort(key=lambda r: r["node"])
@@ -6116,6 +6107,8 @@ def cmd_validate(args: argparse.Namespace) -> None:
         if want_json:
             emit("fail", msg)
             raise SystemExit(1)
+
+        # Set C: netsim-owned failure surface. Never print Python tracebacks by default.
         die(msg)
 
     finally:
@@ -6681,7 +6674,7 @@ def cmd_destroy(args: argparse.Namespace) -> None:
                 report["runtime_destroy"]["status"] = "failed"
                 report["runtime_destroy"]["detail"] = summary
                 failures.append(f"runtime destroy failed: {summary}")
-                print(f"WARN {lab_name}: destroy failed: {summary}")
+                print(f"WARN: {lab_name}: destroy failed: {summary}")
     else:
         report["runtime_destroy"]["detail"] = f"missing {clab_yaml.name} (no runtime destroy attempted)"
 
@@ -6706,7 +6699,7 @@ def cmd_destroy(args: argparse.Namespace) -> None:
                 report["artifact_purge"]["status"] = "failed"
                 report["artifact_purge"]["detail"] = summary_rm
                 failures.append(f"artifact purge failed: {summary_rm}")
-                print(f"WARN {lab_name}: artifact purge failed: {summary_rm}")
+                print(f"WARN: {lab_name}: artifact purge failed: {summary_rm}")
         else:
             report["artifact_purge"]["status"] = "skipped"
             report["artifact_purge"]["detail"] = "artifacts absent"
@@ -6821,7 +6814,7 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
                     summary = combined.splitlines()[-1].strip() if combined else f"exit {cp.returncode}"
                     lab_entry["runtime_destroy"]["status"] = "failed"
                     lab_entry["runtime_destroy"]["detail"] = summary
-                    print(f"WARN {lab}: destroy failed: {summary}")
+                    print(f"WARN: {lab}: destroy failed: {summary}")
                     failures.append(f"{lab}: runtime destroy failed: {summary}")
         else:
             lab_entry["runtime_destroy"]["detail"] = f"missing {clab_yaml.name} (no runtime destroy attempted)"
@@ -6841,7 +6834,7 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
             summary_rm = combined_rm.splitlines()[-1].strip() if combined_rm else f"exit {cp_rm.returncode}"
             lab_entry["artifact_purge"]["status"] = "failed"
             lab_entry["artifact_purge"]["detail"] = summary_rm
-            print(f"WARN {lab}: artifact purge failed: {summary_rm}")
+            print(f"WARN: {lab}: artifact purge failed: {summary_rm}")
             failures.append(f"{lab}: artifact purge failed: {summary_rm}")
 
         report_labs.append(lab_entry)
@@ -7996,12 +7989,12 @@ def _ai_resolve_lab_and_dir(arg: str) -> tuple[str, str]:
             topo = yaml.safe_load(f) or {}
         lab = str((topo.get("name") or "").strip())
         if not lab:
-            print("AI usage error: topology must define 'name' to resolve lab.", file=sys.stderr)
+            print("ERROR: topology must define 'name' to resolve lab.", file=sys.stderr)
             sys.exit(2)
     else:
         lab = arg.strip()
         if not lab:
-            print("AI usage error: lab name is empty.", file=sys.stderr)
+            print("ERROR: lab name is empty.", file=sys.stderr)            
             sys.exit(2)
 
     return lab, os.path.join("labs", f"clab-{lab}")
@@ -8115,31 +8108,31 @@ def _ai_validate_output_schema(out: Any) -> tuple[bool, str]:
 
     summary = out.get("summary")
     if not isinstance(summary, str):
-        return (False, "AI output schema error: 'summary' must be a string")
+        return (False, "ERROR: AI output 'summary' must be a string")
 
     findings = out.get("findings", [])
     if findings is None:
         findings = []
     if not isinstance(findings, list):
-        return (False, "AI output schema error: 'findings' must be a list")
+        return (False, "ERROR: AI output 'findings' must be a list")
 
     for i, f in enumerate(findings):
         if not isinstance(f, dict):
-            return (False, f"AI output schema error: findings[{i}] must be an object")
+            return (False, f"ERROR: AI output findings[{i}] must be an object")
         for k in ("title", "evidence", "suggestion"):
             if k not in f or not isinstance(f.get(k), str):
-                return (False, f"AI output schema error: findings[{i}].{k} must be a string")
+                return (False, f"ERROR: AI output findings[{i}].{k} must be a string")
 
     nxt = out.get("suggested_next_tests")
     if nxt is not None:
         if not isinstance(nxt, list):
-            return (False, "AI output schema error: 'suggested_next_tests' must be a list")
+            return (False, "ERROR: AI output 'suggested_next_tests' must be a list")
         for i, item in enumerate(nxt):
             if not isinstance(item, dict):
-                return (False, f"AI output schema error: suggested_next_tests[{i}] must be an object")
+                return (False, f"ERROR: AI output suggested_next_tests[{i}] must be an object")
             for k in ("id", "title", "why", "yaml"):
                 if k not in item or not isinstance(item.get(k), str):
-                    return (False, f"AI output schema error: suggested_next_tests[{i}].{k} must be a string")
+                    return (False, f"ERROR: AI output suggested_next_tests[{i}].{k} must be a string")
 
     return (True, "")
 
@@ -8612,14 +8605,14 @@ def _ai_finalize_and_emit(command_name: str, bundle: dict[str, Any], args) -> No
     print(f"ai_status: {out.get('ai_status')}")
 
     if out.get("ai_error"):
-        print(f"ai_error: {out.get('ai_error')}")
+        print(f"ERROR: {out.get('ai_error')}")
 
     if out.get("model_used"):
         print(f"model_used: {out.get('model_used')}")
 
     if out.get("ai_output"):
         if _ai_contains_forbidden_correctness_language(out["ai_output"]):
-            print("warning: AI output contained correctness/safety language. Treat as advisory and prove via tests.")
+            print("WARN: AI output contained correctness/safety language. Treat as advisory and prove via tests.")
         _render_ai_output_text(out["ai_output"])
 
 def _ai_explain_change_sections(bundle: dict[str, Any]) -> dict[str, Any]:
@@ -8771,7 +8764,7 @@ def cmd_ai_explain(args) -> None:
 
     if missing and strict:
         print(
-            f"AI usage error: missing required artifacts in {labdir}: {', '.join(missing)}",
+            f"ERROR: missing required artifacts in {labdir}: {', '.join(missing)}",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -9176,17 +9169,17 @@ def _ai_load_adapters(paths: list[str], command_name: str) -> dict[str, Any]:
     for p in norm_paths:
         pp = Path(p)
         if not pp.exists():
-            print(f"AI usage error: adapter not found: {pp}", file=sys.stderr)
+            print(f"ERROR: adapter not found: {pp}", file=sys.stderr)
             sys.exit(2)
         if not pp.is_file():
-            print(f"AI usage error: adapter is not a file: {pp}", file=sys.stderr)
+            print(f"ERROR: adapter is not a file: {pp}", file=sys.stderr)
             sys.exit(2)
 
         try:
             with pp.open("r", encoding="utf-8") as f:
                 obj = json.load(f)
         except Exception as e:
-            print(f"AI usage error: failed to read adapter JSON {pp}: {e!s}", file=sys.stderr)
+            print(f"ERROR: failed to read adapter JSON {pp}: {e!s}", file=sys.stderr)
             sys.exit(2)
 
         # Minimal schema sanity (advisory-only)
@@ -9360,7 +9353,7 @@ def cmd_ai_review(args) -> None:
 
     topo_path = Path(args.topology)
     if not topo_path.exists():
-        print(f"AI usage error: topology not found: {topo_path}", file=sys.stderr)
+        print(f"ERROR: topology not found: {topo_path}", file=sys.stderr)
         sys.exit(2)
 
     with topo_path.open("r", encoding="utf-8") as f:
@@ -9938,7 +9931,19 @@ def main() -> None:
                     footer_lab = ""
                     footer_authority = ""
 
-        args.func(args)
+        try:
+            args.func(args)
+        except SystemExit:
+            raise
+        except Exception as e:
+            # Quiet mode must never leak raw Python exception class names or tracebacks.
+            # Verbose mode preserves the current raw traceback behavior.
+            if bool(getattr(args, "verbose", False)):
+                raise
+            msg = str(e).strip()
+            if not msg:
+                msg = "unexpected error"
+            die(f"ERROR: {msg}", code=1)
     finally:
         # Restore global quiet flag deterministically (commands may override temporarily)
         netsim_common.QUIET_RUN = old_quiet
