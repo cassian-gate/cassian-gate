@@ -6082,11 +6082,6 @@ def cmd_validate(args: argparse.Namespace) -> None:
             return  # do not fall through
 
         emit("pass", "")
-        print("Validated: topology schema + resolve + scenarios (no deploy, no runtime, no tests).")
-        print(f"Advisory: wrote coverage to labs/clab-{resolved['name']}/artifacts/coverage/coverage.json")
-        return  # do not fall through
-
-        emit("pass", "")
         # v2-validate-scope-clarity (text mode only)
         print("Validated: topology schema + resolve + scenarios (no deploy, no runtime, no tests).")
         lab = str(resolved.get("name") or "").strip()
