@@ -8108,31 +8108,31 @@ def _ai_validate_output_schema(out: Any) -> tuple[bool, str]:
 
     summary = out.get("summary")
     if not isinstance(summary, str):
-        return (False, "AI output schema error: 'summary' must be a string")
+        return (False, "ERROR: AI output 'summary' must be a string")
 
     findings = out.get("findings", [])
     if findings is None:
         findings = []
     if not isinstance(findings, list):
-        return (False, "AI output schema error: 'findings' must be a list")
+        return (False, "ERROR: AI output 'findings' must be a list")
 
     for i, f in enumerate(findings):
         if not isinstance(f, dict):
-            return (False, f"AI output schema error: findings[{i}] must be an object")
+            return (False, f"ERROR: AI output findings[{i}] must be an object")
         for k in ("title", "evidence", "suggestion"):
             if k not in f or not isinstance(f.get(k), str):
-                return (False, f"AI output schema error: findings[{i}].{k} must be a string")
+                return (False, f"ERROR: AI output findings[{i}].{k} must be a string")
 
     nxt = out.get("suggested_next_tests")
     if nxt is not None:
         if not isinstance(nxt, list):
-            return (False, "AI output schema error: 'suggested_next_tests' must be a list")
+            return (False, "ERROR: AI output 'suggested_next_tests' must be a list")
         for i, item in enumerate(nxt):
             if not isinstance(item, dict):
-                return (False, f"AI output schema error: suggested_next_tests[{i}] must be an object")
+                return (False, f"ERROR: AI output suggested_next_tests[{i}] must be an object")
             for k in ("id", "title", "why", "yaml"):
                 if k not in item or not isinstance(item.get(k), str):
-                    return (False, f"AI output schema error: suggested_next_tests[{i}].{k} must be a string")
+                    return (False, f"ERROR: AI output suggested_next_tests[{i}].{k} must be a string")
 
     return (True, "")
 
