@@ -7989,13 +7989,12 @@ def _ai_resolve_lab_and_dir(arg: str) -> tuple[str, str]:
             topo = yaml.safe_load(f) or {}
         lab = str((topo.get("name") or "").strip())
         if not lab:
-            print("AI usage error: topology must define 'name' to resolve lab.", file=sys.stderr)
+            print("ERROR: topology must define 'name' to resolve lab.", file=sys.stderr)
             sys.exit(2)
     else:
         lab = arg.strip()
         if not lab:
-            print("AI usage error: lab name is empty.", file=sys.stderr)
-            sys.exit(2)
+            print("ERROR: lab name is empty.", file=sys.stderr)            sys.exit(2)
 
     return lab, os.path.join("labs", f"clab-{lab}")
 
@@ -8764,7 +8763,7 @@ def cmd_ai_explain(args) -> None:
 
     if missing and strict:
         print(
-            f"AI usage error: missing required artifacts in {labdir}: {', '.join(missing)}",
+            f"ERROR: missing required artifacts in {labdir}: {', '.join(missing)}",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -9169,17 +9168,17 @@ def _ai_load_adapters(paths: list[str], command_name: str) -> dict[str, Any]:
     for p in norm_paths:
         pp = Path(p)
         if not pp.exists():
-            print(f"AI usage error: adapter not found: {pp}", file=sys.stderr)
+            print(f"ERROR: adapter not found: {pp}", file=sys.stderr)
             sys.exit(2)
         if not pp.is_file():
-            print(f"AI usage error: adapter is not a file: {pp}", file=sys.stderr)
+            print(f"ERROR: adapter is not a file: {pp}", file=sys.stderr)
             sys.exit(2)
 
         try:
             with pp.open("r", encoding="utf-8") as f:
                 obj = json.load(f)
         except Exception as e:
-            print(f"AI usage error: failed to read adapter JSON {pp}: {e!s}", file=sys.stderr)
+            print(f"ERROR: failed to read adapter JSON {pp}: {e!s}", file=sys.stderr)
             sys.exit(2)
 
         # Minimal schema sanity (advisory-only)
@@ -9353,7 +9352,7 @@ def cmd_ai_review(args) -> None:
 
     topo_path = Path(args.topology)
     if not topo_path.exists():
-        print(f"AI usage error: topology not found: {topo_path}", file=sys.stderr)
+        print(f"ERROR: topology not found: {topo_path}", file=sys.stderr)
         sys.exit(2)
 
     with topo_path.open("r", encoding="utf-8") as f:
