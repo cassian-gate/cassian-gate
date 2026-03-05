@@ -6680,6 +6680,10 @@ def cmd_replay(args: argparse.Namespace) -> None:
             if src_core != rep_core:
                 die("ERROR: Replay determinism verification failed (verdict core differs)", code=1)
 
+        # WI-5: Gate-mode replay must emit the deterministic Artifacts footer, same as `netsim test`.
+        # NOTE: main() prints the footer for `test`, but replay is a different command path.
+        _print_artifacts_footer_for_lab(replay_name, authority_kind="gate")
+
         return
 
     # Non-gate replay: deploy/provision using the resolved topology artifact; keep lab running.
