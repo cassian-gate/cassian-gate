@@ -6527,8 +6527,16 @@ def cmd_replay(args: argparse.Namespace) -> None:
 
     p_resolved = src_dir / "topology.resolved.yaml"
     p_results = src_dir / "results.json"
+    p_summary = src_dir / "results.summary.txt"
 
-    if (not p_resolved.exists()) or (not p_resolved.is_file()) or (not p_results.exists()) or (not p_results.is_file()):
+    if (
+        (not p_resolved.exists())
+        or (not p_resolved.is_file())
+        or (not p_results.exists())
+        or (not p_results.is_file())
+        or (not p_summary.exists())
+        or (not p_summary.is_file())
+    ):
         die("ERROR: Replay artifacts invalid or incomplete", code=2)
 
     # Minimal stable banner (quiet-mode safe).
