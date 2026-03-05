@@ -6522,21 +6522,64 @@ def cmd_replay(args: argparse.Namespace) -> None:
         die("ERROR: Replay artifacts invalid or incomplete", code=2)
 
     src_dir = Path(src)
+
+    # Deterministic path normalization:
+    # If called from a non-repo CWD, accept artifact paths relative to repo root.
+    if (not src_dir.exists()) and (not src_dir.is_absolute()):
+        repo_root = Path(__file__).resolve().parent.parent
+        alt = (repo_root / src_dir).resolve()
+        if alt.exists() and alt.is_dir():
+            src_dir = alt
+
     if (not src_dir.exists()) or (not src_dir.is_dir()):
         die("ERROR: Replay artifacts invalid or incomplete", code=2)
 
     p_resolved = src_dir / "topology.resolved.yaml"
     p_results = src_dir / "results.json"
-    p_summary = src_dir / "results.summary.txt"
 
+    # Replay dependencies (authoritative inputs) are ONLY:
+    #   - topology.resolved.yaml
+    #   - results.json
+    # results.summary.txt is non-authoritative and MUST NOT be required.
     if (
         (not p_resolved.exists())
         or (not p_resolved.is_file())
         or (not p_results.exists())
         or (not p_results.is_file())
-        or (not p_summary.exists())
-        or (not p_summary.is_file())
     ):
+        die("ERROR: Replay artifacts invalid or incomplete", code=2)
+
+    # WI-6: Replay must refuse non-artifact directories deterministically (before any runtime work).
+    # Identity check: results.json must be a valid ai-netsim results payload (schema-stable keys only).
+    import json
+
+    try:
+        src_results = json.loads(p_results.read_text(encoding="utf-8"))
+    except Exception:
+        die("ERROR: Replay artifacts invalid or incomplete", code=2)
+
+    if not isinstance(src_results, dict):
+        die("ERROR: Replay artifacts invalid or incomplete", code=2)
+
+    # These keys are present in current authoritative results.json (v2) and are stable identity markers.
+    # Require schema identity fields to exist (do not hard-bind to local constants; artifact may come from
+    # a compatible build that still produces valid replay inputs).
+    rs = src_results.get("results_schema")
+    rsv = src_results.get("results_schema_version")
+    if (not isinstance(rs, str)) or (not rs.strip()):
+        die("ERROR: Replay artifacts invalid or incomplete", code=2)
+    if (not isinstance(rsv, str)) or (not rsv.strip()):
+        die("ERROR: Replay artifacts invalid or incomplete", code=2)
+
+    if not str(src_results.get("lab") or "").strip():
+        die("ERROR: Replay artifacts invalid or incomplete", code=2)
+
+    # Additional stable-shape guardrails (present in current artifacts) to reject random JSON:
+    if not isinstance(src_results.get("overall"), dict):
+        die("ERROR: Replay artifacts invalid or incomplete", code=2)
+
+    cmd = src_results.get("command")
+    if (not isinstance(cmd, str)) or (not cmd.strip()):
         die("ERROR: Replay artifacts invalid or incomplete", code=2)
 
     # Minimal stable banner (quiet-mode safe).
