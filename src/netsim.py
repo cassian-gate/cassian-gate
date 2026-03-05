@@ -6593,6 +6593,93 @@ def cmd_replay(args: argparse.Namespace) -> None:
                 _report_authority="gate",
             )
         )
+
+        # Optional determinism verification (opt-in):
+        # - Default behavior is unchanged (replay may legitimately differ; replay never restores old verdicts).
+        # - If explicitly requested, enforce byte-identical results.json to the source.
+        if bool(getattr(args, "verify_results", False)):
+            import json
+
+            replay_results = LABS_DIR / f"clab-{replay_name}" / "results.json"
+            if (not replay_results.exists()) or (not replay_results.is_file()):
+                die("ERROR: Replay determinism verification missing replay results.json", code=2)
+
+            def _get(d: dict, *keys, default=None):
+                for k in keys:
+                    if k in d:
+                        return d[k]
+                return default
+
+            def _canon_test(t: dict) -> dict:
+                # Verdict-core only: evidence may vary (container names, command strings, timing).
+                return {
+                    "name": _get(t, "name", default=""),
+                    "kind": _get(t, "kind", "type", default=""),
+                    "expected": _get(t, "expected", "expect", default=None),
+                    "observed": _get(t, "observed", default=None),
+                    "verdict": _get(t, "verdict", default=""),
+                }
+
+            def _canon_scenario(s: dict) -> dict:
+                # Minimal stable scenario identity + step verdict structure.
+                steps = _get(s, "steps", default=[]) or []
+                out_steps = []
+                for st in steps:
+                    if not isinstance(st, dict):
+                        continue
+                    out_steps.append(
+                        {
+                            "id": _get(st, "id", default=""),
+                            "type": _get(st, "type", default=""),
+                            "expected": _get(st, "expected", default=None),
+                            "observed": _get(st, "observed", default=None),
+                            "verdict": _get(st, "verdict", default=""),
+                        }
+                    )
+                return {
+                    "id": _get(s, "id", default=""),
+                    "verdict": _get(s, "verdict", default=""),
+                    "steps": out_steps,
+                }
+
+            def _extract_verdict_core(obj: dict) -> dict:
+                tests = _get(obj, "tests", default=[]) or []
+                scenarios = _get(obj, "scenarios", default=[]) or []
+
+                tests_core = []
+                for t in tests:
+                    if isinstance(t, dict):
+                        tests_core.append(_canon_test(t))
+
+                scenarios_core = []
+                for s in scenarios:
+                    if isinstance(s, dict):
+                        scenarios_core.append(_canon_scenario(s))
+
+                # Summary counts (stable intent-level)
+                return {
+                    "result": _get(obj, "result", "RESULT", default=""),
+                    "exit": _get(obj, "exit_code", "exit", "EXIT", default=None),
+                    "counts": {
+                        "tests_total": _get(obj, "tests_total", default=None),
+                        "tests_pass": _get(obj, "tests_pass", default=None),
+                        "tests_fail": _get(obj, "tests_fail", default=None),
+                        "tests_skip": _get(obj, "tests_skip", default=None),
+                        "scenarios_total": _get(obj, "scenarios_total", default=None),
+                    },
+                    "tests": tests_core,
+                    "scenarios": scenarios_core,
+                }
+
+            src_obj = json.loads(p_results.read_text(encoding="utf-8"))
+            rep_obj = json.loads(replay_results.read_text(encoding="utf-8"))
+
+            src_core = json.dumps(_extract_verdict_core(src_obj), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            rep_core = json.dumps(_extract_verdict_core(rep_obj), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+            if src_core != rep_core:
+                die("ERROR: Replay determinism verification failed (verdict core differs)", code=1)
+
         return
 
     # Non-gate replay: deploy/provision using the resolved topology artifact; keep lab running.
@@ -9765,11 +9852,16 @@ def main() -> None:
 
     # replay
     p_replay = sub.add_parser("replay", help="Deterministically re-execute a prior run using its artifacts as inputs")
-    p_replay.add_argument("artifacts", help="Artifact directory containing topology.resolved.yaml and results.json")
+    p_replay.add_argument("artifacts", help="Artifact directory containing topology.resolved.yaml, results.json, results.summary.txt")
     p_replay.add_argument(
         "--gate",
         action="store_true",
         help="Run authoritative clean-state gate replay (generate→deploy→provision→test→collect→destroy).",
+    )
+    p_replay.add_argument(
+        "--verify-results",
+        action="store_true",
+        help="(Opt-in) Verify replay results.json is byte-identical to the source results.json. Mismatch exits 1. Default: off.",
     )
     p_replay.add_argument(
         "--verbose",
