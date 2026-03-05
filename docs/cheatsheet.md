@@ -12,11 +12,11 @@ ai-netsim is a:
 
 Execution is:
 
-- deterministic  
-- reproducible  
-- artifact-backed  
-- CI-safe  
-- non-heuristic  
+- deterministic
+- reproducible
+- artifact-backed
+- CI-safe
+- non-heuristic
 
 ---
 
@@ -24,18 +24,18 @@ Execution is:
 
 ai-netsim **IS**
 
-- a network change validation gate  
-- a deterministic execution engine  
-- a CI pipeline safety check  
-- a behavior validation system  
+- a network change validation gate
+- a deterministic execution engine
+- a CI pipeline safety check
+- a behavior validation system
 
 ai-netsim **IS NOT**
 
-- a general network lab builder  
-- a chaos framework  
-- a retry system  
-- a configuration merge engine  
-- an AI decision system  
+- a general network lab builder
+- a chaos framework
+- a retry system
+- a configuration merge engine
+- an AI decision system
 
 ---
 
@@ -53,6 +53,7 @@ netsim preflight <topology.yaml>
 
 ```bash
 netsim test <topology.yaml>
+netsim replay <artifacts-dir>
 netsim run <topology.yaml>
 netsim up <topology.yaml>
 netsim down <lab>
@@ -146,6 +147,80 @@ Meaning:
 > Deployment succeeded (SMOKE validation only)
 
 No routing or connectivity validation occurred.
+
+---
+
+## netsim replay — Re-run a previous test deterministically
+
+Replay re-executes a previous ai-netsim run using the **exact artifacts** that produced the original result.
+
+This verifies that the result is **reproducible and deterministic**.
+
+### Inputs
+
+Replay consumes artifacts from a previous run:
+
+```
+topology.resolved.yaml
+results.json
+```
+
+These artifacts are treated as **authoritative inputs**.
+
+### Example
+
+Run a test:
+
+```
+netsim test topologies/rc_cold_baseline.yaml
+```
+
+Artifacts are created:
+
+```
+labs/clab-rc-cold-baseline/
+```
+
+Replay the same run:
+
+```
+netsim replay labs/clab-rc-cold-baseline --gate
+```
+
+ai-netsim will:
+
+1. Load the resolved topology from the artifacts
+2. Create a temporary replay lab
+3. Re-run the full lifecycle
+
+```
+GENERATE → DEPLOY → PROVISION → TEST → COLLECT → DESTROY
+```
+
+### Verify deterministic results
+
+You can also confirm the replay produces identical results:
+
+```
+netsim replay labs/clab-rc-cold-baseline --gate --verify-results
+```
+
+If the results differ, replay exits with:
+
+```
+exit code: 1
+```
+
+### When to use replay
+
+Replay is useful when you want to confirm that a result is **not accidental**.
+
+Common scenarios:
+
+* validating CI pipeline determinism
+* verifying network change simulations
+* reproducing previous test results
+* debugging unexpected behavior
 
 ---
 
@@ -614,6 +689,12 @@ Run validation gate:
 
 ```bash
 netsim test topology.yaml
+```
+
+Replay a previous gate deterministically:
+
+```bash
+netsim replay labs/clab-<lab> --gate
 ```
 
 Explore a lab interactively:
