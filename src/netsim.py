@@ -9899,7 +9899,7 @@ def main() -> None:
 
     # replay
     p_replay = sub.add_parser("replay", help="Deterministically re-execute a prior run using its artifacts as inputs")
-    p_replay.add_argument("artifacts", help="Artifact directory containing topology.resolved.yaml, results.json, results.summary.txt")
+    p_replay.add_argument("artifacts", help="Artifact directory containing topology.resolved.yaml, results.json")
     p_replay.add_argument(
         "--gate",
         action="store_true",
