@@ -9839,7 +9839,14 @@ def cmd_ai_coach(args) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="netsim",
-        description="ai-netsim: topo YAML -> containerlab (local MVP)",
+        description="ai-netsim: deterministic network change validation gate",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "Quick help:\n"
+            "  netsim test <topology.yaml>              (authoritative gate)\n"
+            "  netsim replay <artifact-dir> --gate      (authoritative replay)\n"
+            "  netsim replay -h                         (replay options)\n"
+        ),
     )
     parser.add_argument(
         "--verbose",
@@ -9898,8 +9905,14 @@ def main() -> None:
     p_up.set_defaults(func=cmd_up)
 
     # replay
-    p_replay = sub.add_parser("replay", help="Deterministically re-execute a prior run using its artifacts as inputs")
-    p_replay.add_argument("artifacts", help="Artifact directory containing topology.resolved.yaml, results.json")
+    p_replay = sub.add_parser(
+        "replay",
+        help="Deterministically re-execute a prior run using its artifacts as authoritative inputs",
+    )
+    p_replay.add_argument(
+        "artifacts",
+        help="Artifact directory containing topology.resolved.yaml and results.json (authoritative inputs)",
+    )
     p_replay.add_argument(
         "--gate",
         action="store_true",
@@ -9908,7 +9921,7 @@ def main() -> None:
     p_replay.add_argument(
         "--verify-results",
         action="store_true",
-        help="(Opt-in) Verify replay results.json is byte-identical to the source results.json. Mismatch exits 1. Default: off.",
+        help="(Opt-in) Verify replay results match the source verdict core (semantic equivalence). Mismatch exits 1. Default: off.",
     )
     p_replay.add_argument(
         "--verbose",
