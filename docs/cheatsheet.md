@@ -1,38 +1,104 @@
-# ai-netsim v78 — Operator Cheat Sheet v2
+Yes — what I pasted is **Markdown**.
 
-*(Authoritative & UX-Hardened)*
+A couple quick notes:
 
-> This document defines the **user-facing execution contract** for ai-netsim (snapshot v78).
-> It reflects implemented behavior only.
-> This is the authoritative reference for user validation and operator use.
+* The leading `#`, `##`, `---`, fenced code blocks ```bash, and tables are all standard **.md**.
+* The weird-looking bits like ``` id="..." inside some code fences are **not standard Markdown** and you should remove them. Those came from the chat UI (they’re not useful in a repo file).
 
----
+If you want the **clean, repo-ready** Markdown, here it is again **without any `id="..."` noise**:
 
-# 1️⃣ Core Philosophy
+````markdown
+# ai-netsim v79 — Operator Cheat Sheet
+
+*(Authoritative Operator Reference)*
+
+This document defines the **user-facing execution contract** for ai-netsim.
+
+It reflects **implemented CLI behavior only**.
 
 ai-netsim is a:
 
-> **Deterministic network change validation gate**
+> **Deterministic Network Change Validation Gate**
 
-It is **not**:
+Execution is:
 
-* A general lab builder
-* A chaos engine
-* A retry framework
-* A config merge tool
-* An AI decision system
-
-Execution must be:
-
-* Explicit
-* Deterministic
-* Reproducible
-* Artifact-backed
-* Non-heuristic
+- deterministic  
+- reproducible  
+- artifact-backed  
+- CI-safe  
+- non-heuristic  
 
 ---
 
-# 2️⃣ Two Execution Modes (CRITICAL)
+# 1️⃣ What ai-netsim Is (and Is Not)
+
+ai-netsim **IS**
+
+- a network change validation gate  
+- a deterministic execution engine  
+- a CI pipeline safety check  
+- a behavior validation system  
+
+ai-netsim **IS NOT**
+
+- a general network lab builder  
+- a chaos framework  
+- a retry system  
+- a configuration merge engine  
+- an AI decision system  
+
+---
+
+# 2️⃣ Command Index
+
+### Environment
+
+```bash
+netsim doctor
+netsim validate <topology.yaml>
+netsim preflight <topology.yaml>
+````
+
+### Execution (Validation)
+
+```bash
+netsim test <topology.yaml>
+netsim run <topology.yaml>
+netsim up <topology.yaml>
+netsim down <lab>
+netsim destroy <lab>
+netsim cleanup --all
+```
+
+### Inspection
+
+```bash
+netsim status <lab>
+netsim exec <lab> <node>
+netsim vty <lab> <node> "<command>"
+netsim collect <lab>
+```
+
+### DevOps Integration
+
+```bash
+netsim adapt terraform
+netsim adapt ansible
+```
+
+### AI Assistance (optional / advisory only)
+
+```bash
+netsim ai explain
+netsim ai review
+netsim ai coach
+```
+
+AI **never affects execution or verdicts**.
+
+---
+
+# 3️⃣ Two Execution Modes (CRITICAL)
 
 Understanding this distinction is mandatory.
 
@@ -46,8 +112,6 @@ Command:
 netsim test <topology.yaml>
 ```
 
-This is the **validation gate**.
-
 Gate mode automatically performs:
 
 1. Clean-state destroy (if needed)
@@ -56,31 +120,30 @@ Gate mode automatically performs:
 4. Execute tests
 5. Collect artifacts
 6. Destroy lab
-7. Exit with deterministic code
 
-You do **NOT** run `netsim up` first.
+Returns deterministic exit codes.
 
-Gate mode owns the full lifecycle.
+Gate mode is used for:
 
-Use Gate Mode for:
-
-* Production validation
+* production validation
 * CI pipelines
-* Change validation
-* Baseline vs candidate comparison
+* change validation
+* baseline vs candidate comparison
+
+You **do NOT run `netsim up` first**.
+
+Gate mode owns the lifecycle.
 
 ---
 
-### 🔍 Important: PASS with 0 tests
+### PASS with 0 tests
 
-If a topology contains:
+If the topology contains:
 
-* No `tests`
-* No `scenarios`
+* no `tests`
+* no `scenarios`
 
-Gate mode validates only that the lab deploys successfully.
-
-You will see:
+Output:
 
 ```
 Tests executed: 0
@@ -88,83 +151,80 @@ Scenarios executed: 0
 RESULT: PASS
 ```
 
-This means:
+Meaning:
 
-> Lab deployed successfully (SMOKE validation only).
+> Deployment succeeded (SMOKE validation only)
 
-It does **not** validate routing or traffic behavior.
+No routing or connectivity validation occurred.
 
 ---
 
 ## 🔷 Exploration Mode (Non-Authoritative)
 
-Exploration mode is for interactive debugging and inspection.
+Used for **interactive debugging and inspection**.
 
-There are two primary approaches.
+Two approaches exist.
 
 ---
 
-### Option A — run (up + test + collect)
+### Option A — `run`
 
 ```bash
 netsim run <topology.yaml>
 ```
 
-⚠️ By default, `run` **destroys the lab at the end**.
+This performs:
 
-To keep the lab running:
+```
+up → test → collect → destroy
+```
+
+By default the lab is destroyed.
+
+Keep the lab running:
 
 ```bash
 netsim run <topology.yaml> --keep
 ```
 
-Use this when you want:
-
-* Quick deploy + validation
-* Optional lab retention
-
 ---
 
-### Option B — Explicit Up / Down
+### Option B — Explicit Lifecycle
 
 ```bash
-netsim up <topology.yaml> --reconfigure
-netsim status <lab-name>
-netsim test <lab-name>
-netsim down <lab-name>
+netsim up <topology.yaml>
+netsim status <lab>
+netsim test <lab>
+netsim down <lab>
 ```
-
-This gives full manual control.
 
 Use this when you want:
 
-* Persistent lab
-* Manual inspection
-* Iterative debugging
+* persistent labs
+* manual inspection
+* iterative debugging
 
 ---
 
-## 🔥 Lifecycle Comparison
+## Lifecycle Comparison
 
-| Feature                | Gate Mode | Exploration Mode               |
-| ---------------------- | --------- | ------------------------------ |
-| Clean-state enforced   | Yes       | Optional                       |
-| Auto destroy           | Yes       | Only if `run` without `--keep` |
-| CI-safe                | Yes       | No                             |
-| Interactive inspection | No        | Yes                            |
-| Authoritative verdict  | Yes       | No                             |
-
----
-
-# 3️⃣ Topology vs Lab Name (Very Important)
-
-Many commands take different inputs.
+| Feature                | Gate Mode | Exploration |
+| ---------------------- | --------- | ----------- |
+| Clean-state enforced   | Yes       | Optional    |
+| Auto destroy           | Yes       | Optional    |
+| CI-safe                | Yes       | No          |
+| Interactive inspection | No        | Yes         |
+| Authoritative verdict  | Yes       | No          |
 
 ---
 
-## Commands That Take a **Topology File**
+# 4️⃣ Topology vs Lab Name
 
-These expect a YAML file path:
+Many commands accept **different inputs**.
+
+---
+
+## Commands That Use a Topology File
 
 ```bash
 netsim gen <topology.yaml>
@@ -177,30 +237,28 @@ netsim test <topology.yaml>
 
 ---
 
-## Commands That Take a **Lab Name**
-
-These expect the `name:` defined inside the topology:
+## Commands That Use a Lab Name
 
 ```bash
-netsim status <lab-name>
-netsim exec <lab-name> <node>
-netsim vty <lab-name> <node> "<command>"
-netsim collect <lab-name>
-netsim down <lab-name>
-netsim destroy <lab-name>
+netsim status <lab>
+netsim exec <lab> <node>
+netsim vty <lab> <node>
+netsim collect <lab>
+netsim down <lab>
+netsim destroy <lab>
 ```
 
 ---
 
-### 🔍 Where does lab name come from?
+### Where does lab name come from?
 
-It is defined in your topology:
+Defined inside topology:
 
 ```yaml
 name: demo-lab
 ```
 
-You will also see it printed during execution:
+Displayed during execution:
 
 ```
 Lab: demo-lab
@@ -208,9 +266,9 @@ Lab: demo-lab
 
 ---
 
-# 4️⃣ Topology Authoring
+# 5️⃣ Topology Authoring
 
-ai-netsim consumes YAML.
+ai-netsim consumes **YAML topology definitions**.
 
 ---
 
@@ -222,6 +280,7 @@ name: demo-lab
 nodes:
   - name: r1
     type: frr
+
   - name: r2
     type: frr
 
@@ -256,9 +315,9 @@ Optional:
 
 ---
 
-# 5️⃣ Nodes
+# 6️⃣ Nodes
 
-Supported types (v78):
+Supported node types:
 
 | Type     | Description       |
 | -------- | ----------------- |
@@ -269,40 +328,20 @@ Supported types (v78):
 
 ---
 
-## FRR
+# 7️⃣ Links
 
-Optional:
-
-```yaml
-asn: 65001
-router_id: 1.1.1.1
-frr_mode: generated | preconfigured
-```
-
-Default: `generated`
-
-If multi-hop ping expects pass:
-
-All FRR nodes must use:
-
-```yaml
-frr_mode: preconfigured
-```
-
----
-
-# 6️⃣ Links
+Example:
 
 ```yaml
 - endpoints: ["r1:eth1", "r2:eth1"]
   ipv4: ["10.0.0.0/31", "10.0.0.1/31"]
 ```
 
-If `ipv4` omitted:
+If `ipv4` is omitted:
 
-* `/31` auto-assigned sequentially.
+* `/31` addresses auto-assigned
 
-Auto-assigned addresses appear in:
+View assigned addresses:
 
 ```
 labs/clab-<lab>/topology.resolved.yaml
@@ -310,9 +349,9 @@ labs/clab-<lab>/topology.resolved.yaml
 
 ---
 
-# 7️⃣ Tests
+# 8️⃣ Tests
 
-Each test requires:
+Required fields:
 
 * `name`
 * `kind`
@@ -326,20 +365,7 @@ Supported kinds:
 
 ---
 
-## 🔍 Node Name vs IP in dst
-
-When `dst` is a node name:
-
-* ai-netsim resolves to the appropriate interface IP.
-* Resolution must be unambiguous.
-
-For clarity and operator confidence:
-
-> Prefer explicit IP addresses (`dst: 10.0.0.1`) when validating connectivity.
-
----
-
-## ping Example
+## Ping Example
 
 ```yaml
 - name: r1_to_r2
@@ -352,7 +378,7 @@ For clarity and operator confidence:
 
 ---
 
-## tcp Example
+## TCP Example
 
 ```yaml
 - name: tcp_test
@@ -366,25 +392,27 @@ For clarity and operator confidence:
 
 ---
 
-# 8️⃣ Scenarios
+# 9️⃣ Scenarios (Failure Choreography)
 
-Scenarios define ordered failure choreography.
+Scenarios define **ordered fault injection sequences**.
 
----
-
-## Example
+Example:
 
 ```yaml
 scenarios:
   - id: failover
     steps:
+
       - run: r1_to_r2
+
       - fault:
           link_down:
             endpoints: ["r1:eth1", "r2:eth1"]
+
       - wait_for_bgp:
           node: r1
           timeout: 30
+
       - run: r1_to_r2
 ```
 
@@ -399,23 +427,20 @@ scenarios:
 * `wait_for_bgp`
 
 No implicit retries.
-No implicit convergence waits.
 Timeout = failure.
 
 ---
 
-# 9️⃣ Candidate Configuration (Gate Only)
+# 🔟 Candidate Configuration (Gate Only)
+
+Apply candidate changes during validation.
 
 ```bash
-netsim test <topology.yaml> --candidate-config <dir>
+netsim test <topology.yaml> \
+  --candidate-config <dir>
 ```
 
-Supported node types:
-
-* frr
-* nft-fw
-
-Directory structure:
+Directory layout:
 
 ```
 <dir>/
@@ -425,19 +450,19 @@ Directory structure:
 
 Rules:
 
-* Full replacement only
-* No merge
-* Atomic
-* Failure aborts gate
+* full replacement
+* no merge
+* atomic apply
+* failure aborts gate
 
 ---
 
-# 🔟 status Command
+# 1️⃣1️⃣ Status Command
 
-Used to inspect a running lab.
+Inspect running labs.
 
 ```bash
-netsim status <lab-name>
+netsim status <lab>
 ```
 
 Useful options:
@@ -445,6 +470,9 @@ Useful options:
 * `--summary`
 * `--interfaces`
 * `--bgp`
+* `--bgp-verbose`
+* `--routes`
+* `--routes-verbose`
 * `--json`
 * `--strict`
 
@@ -454,15 +482,110 @@ Example:
 netsim status demo-lab --summary
 ```
 
-If lab is not deployed:
+---
 
-* status will report an error.
+# 1️⃣2️⃣ Cleanup & Lab Management
+
+Destroy a running lab:
+
+```bash
+netsim down <lab>
+```
+
+Force destroy + artifact purge:
+
+```bash
+netsim destroy <lab> --purge-artifacts
+```
+
+Clean up abandoned labs:
+
+```bash
+netsim cleanup --all
+netsim cleanup --all --yes
+```
+
+Dry-run occurs unless `--yes` is provided.
 
 ---
 
-# 1️⃣1️⃣ Artifacts
+# 1️⃣3️⃣ DevOps Integration
 
-Located under:
+Generate adapter artifacts.
+
+---
+
+## Terraform
+
+```bash
+netsim adapt terraform \
+  --plan plan.json
+```
+
+Input:
+
+```
+terraform show -json
+```
+
+---
+
+## Ansible
+
+```bash
+netsim adapt ansible \
+  --dir rendered_configs/
+```
+
+Adapters are **advisory only**.
+
+---
+
+# 1️⃣4️⃣ AI Assistance (Optional)
+
+AI is **assistive only**.
+
+It never affects:
+
+* execution
+* verdicts
+* exit codes
+
+---
+
+## Explain Failures
+
+```bash
+netsim ai explain <target>
+```
+
+Explains failure causes using artifacts.
+
+---
+
+## Review Test Coverage
+
+```bash
+netsim ai review <topology.yaml>
+```
+
+Suggests missing tests.
+
+---
+
+## Coaching
+
+```bash
+netsim ai coach
+```
+
+Provides general guidance.
+
+---
+
+# 1️⃣5️⃣ Artifacts
+
+Artifacts are written to:
 
 ```
 labs/clab-<lab-name>/
@@ -479,34 +602,84 @@ Key files:
 
 ## topology.resolved.yaml
 
-This file contains:
+Contains the **fully expanded deterministic model** used for execution.
 
-* Fully expanded topology
-* Auto-assigned IP addresses
-* Resolved defaults
-* Normalized execution input
+Includes:
 
-It represents the exact deterministic model used for execution.
+* resolved defaults
+* auto IP assignments
+* normalized topology
 
 ---
 
-# 1️⃣2️⃣ First 10 Minutes
+# 1️⃣6️⃣ Common Operator Tasks
+
+Validate a topology:
+
+```bash
+netsim validate topology.yaml
+```
+
+Run validation gate:
+
+```bash
+netsim test topology.yaml
+```
+
+Explore a lab interactively:
+
+```bash
+netsim run topology.yaml --keep
+netsim status <lab>
+netsim exec <lab> r1
+```
+
+Clean up labs:
+
+```bash
+netsim cleanup --all --yes
+```
+
+Run scenario testing:
+
+```bash
+netsim test topology.yaml --all-scenarios
+```
+
+---
+
+# 1️⃣7️⃣ Exit Codes
+
+| Code | Meaning                |
+| ---- | ---------------------- |
+| 0    | PASS                   |
+| 1    | Test failure           |
+| 2    | Usage / contract error |
+
+---
+
+# 1️⃣8️⃣ First 10 Minutes
+
+Recommended onboarding workflow:
 
 ```bash
 netsim doctor
-netsim validate <topology.yaml>
-netsim test <topology.yaml>
+netsim validate topology.yaml
+netsim test topology.yaml
 ```
 
-If you want to inspect the lab:
+For exploration:
 
 ```bash
-netsim run <topology.yaml> --keep
-netsim status <lab-name>
+netsim run topology.yaml --keep
+netsim status <lab>
 ```
 
 ---
 
-# End of v78 Operator Contract (v2 UX-Hardened)
+# End of ai-netsim v79 Operator Cheat Sheet
 
----
+```
+
+If you want, I can also produce a **diff-focused edit list** (section-by-section “replace this with that”) so you can apply it cleanly in your docs without eyeballing.
+```
