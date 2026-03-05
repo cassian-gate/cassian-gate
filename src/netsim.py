@@ -9905,8 +9905,14 @@ def main() -> None:
     p_up.set_defaults(func=cmd_up)
 
     # replay
-    p_replay = sub.add_parser("replay", help="Deterministically re-execute a prior run using its artifacts as inputs")
-    p_replay.add_argument("artifacts", help="Artifact directory containing topology.resolved.yaml, results.json")
+    p_replay = sub.add_parser(
+        "replay",
+        help="Deterministically re-execute a prior run using its artifacts as authoritative inputs",
+    )
+    p_replay.add_argument(
+        "artifacts",
+        help="Artifact directory containing topology.resolved.yaml and results.json (authoritative inputs)",
+    )
     p_replay.add_argument(
         "--gate",
         action="store_true",
