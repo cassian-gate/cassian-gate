@@ -508,17 +508,35 @@ def write_containerlab_file(topo_path: Path) -> Path:
     topo = load_yaml(topo_path)
     ensure_valid_topology(topo)
 
-    resolved = resolve_topology(topo)
+    # Deterministic Replay support:
+    # If the user explicitly provides a resolved topology artifact, treat it as authoritative input
+    # and SKIP resolve. This preserves lifecycle order and semantics while enabling exact re-exec.
+    is_resolved_input = (topo_path.name == "topology.resolved.yaml")
+
     from netsim_tests import validate_scenarios
-    validate_scenarios(resolved)
 
-    # Advisory-only coverage model (declared-only, resolve-time)
-    cov = build_coverage_model(resolved, topo_path=topo_path)
-    write_coverage_artifact(resolved["name"], cov)
+    if is_resolved_input:
+        resolved = topo
+        validate_scenarios(resolved)
 
-    # Store both: original + resolved
-    write_file(lab_dir(topo["name"]) / "topology.yaml", yaml.safe_dump(topo, sort_keys=False))
-    write_file(lab_dir(topo["name"]) / "topology.resolved.yaml", yaml.safe_dump(resolved, sort_keys=False))
+        # Advisory-only coverage model (declared-only, resolve-time)
+        cov = build_coverage_model(resolved, topo_path=topo_path)
+        write_coverage_artifact(resolved["name"], cov)
+
+        # Store both: original + resolved (best-effort; original not available in replay)
+        write_file(lab_dir(resolved["name"]) / "topology.yaml", yaml.safe_dump(resolved, sort_keys=False))
+        write_file(lab_dir(resolved["name"]) / "topology.resolved.yaml", yaml.safe_dump(resolved, sort_keys=False))
+    else:
+        resolved = resolve_topology(topo)
+        validate_scenarios(resolved)
+
+        # Advisory-only coverage model (declared-only, resolve-time)
+        cov = build_coverage_model(resolved, topo_path=topo_path)
+        write_coverage_artifact(resolved["name"], cov)
+
+        # Store both: original + resolved
+        write_file(lab_dir(topo["name"]) / "topology.yaml", yaml.safe_dump(topo, sort_keys=False))
+        write_file(lab_dir(topo["name"]) / "topology.resolved.yaml", yaml.safe_dump(resolved, sort_keys=False))
 
     clab = topo_to_containerlab(resolved)
 

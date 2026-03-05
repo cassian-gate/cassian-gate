@@ -1,13 +1,3 @@
-Yes — what I pasted is **Markdown**.
-
-A couple quick notes:
-
-* The leading `#`, `##`, `---`, fenced code blocks ```bash, and tables are all standard **.md**.
-* The weird-looking bits like ``` id="..." inside some code fences are **not standard Markdown** and you should remove them. Those came from the chat UI (they’re not useful in a repo file).
-
-If you want the **clean, repo-ready** Markdown, here it is again **without any `id="..."` noise**:
-
-````markdown
 # ai-netsim v79 — Operator Cheat Sheet
 
 *(Authoritative Operator Reference)*
@@ -678,8 +668,3 @@ netsim status <lab>
 ---
 
 # End of ai-netsim v79 Operator Cheat Sheet
-
-```
-
-If you want, I can also produce a **diff-focused edit list** (section-by-section “replace this with that”) so you can apply it cleanly in your docs without eyeballing.
-```

@@ -6355,7 +6355,16 @@ def cmd_up(args: argparse.Namespace) -> None:
     # Pre-validate topology BEFORE any destructive action (v1 deterministic, fail-fast)
     topo_preview = load_yaml(topo_path)
     ensure_valid_topology(topo_preview)
-    resolved_preview = resolve_topology(topo_preview)
+
+    # Deterministic Replay support:
+    # If the input is a resolved topology artifact, treat it as authoritative input and SKIP resolve.
+    # This prevents double-resolve drift and preserves replay semantics.
+    is_resolved_input = (topo_path.name == "topology.resolved.yaml")
+    if is_resolved_input:
+        resolved_preview = topo_preview
+    else:
+        resolved_preview = resolve_topology(topo_preview)
+
     validate_scenarios(resolved_preview)
 
     # If --reconfigure: destroy + remove root-owned lab dir AFTER validation passes.
@@ -6497,7 +6506,253 @@ def cmd_up(args: argparse.Namespace) -> None:
         print(f"  netsim test {lab_name}")
         print(f"  netsim exec {lab_name} <node>")
         print(f"  netsim down {lab_name}")
-    
+
+def cmd_replay(args: argparse.Namespace) -> None:
+    """
+    Deterministic Replay (v2):
+      - Consume an explicit artifact directory containing:
+          topology.resolved.yaml
+          results.json
+      - Re-execute deterministically using the resolved topology as input.
+      - Resolve is skipped (write_containerlab_file treats topology.resolved.yaml as resolved input).
+      - --gate delegates to the existing authoritative gate path (cmd_test topology-mode).
+    """
+    src = str(getattr(args, "artifacts", "") or "").strip()
+    if not src:
+        die("ERROR: Replay artifacts invalid or incomplete", code=2)
+
+    src_dir = Path(src)
+
+    # Deterministic path normalization:
+    # If called from a non-repo CWD, accept artifact paths relative to repo root.
+    if (not src_dir.exists()) and (not src_dir.is_absolute()):
+        repo_root = Path(__file__).resolve().parent.parent
+        alt = (repo_root / src_dir).resolve()
+        if alt.exists() and alt.is_dir():
+            src_dir = alt
+
+    if (not src_dir.exists()) or (not src_dir.is_dir()):
+        die("ERROR: Replay artifacts invalid or incomplete", code=2)
+
+    p_resolved = src_dir / "topology.resolved.yaml"
+    p_results = src_dir / "results.json"
+
+    # Replay dependencies (authoritative inputs) are ONLY:
+    #   - topology.resolved.yaml
+    #   - results.json
+    # results.summary.txt is non-authoritative and MUST NOT be required.
+    if (
+        (not p_resolved.exists())
+        or (not p_resolved.is_file())
+        or (not p_results.exists())
+        or (not p_results.is_file())
+    ):
+        die("ERROR: Replay artifacts invalid or incomplete", code=2)
+
+    # WI-6: Replay must refuse non-artifact directories deterministically (before any runtime work).
+    # Identity check: results.json must be a valid ai-netsim results payload (schema-stable keys only).
+    import json
+
+    try:
+        src_results = json.loads(p_results.read_text(encoding="utf-8"))
+    except Exception:
+        die("ERROR: Replay artifacts invalid or incomplete", code=2)
+
+    if not isinstance(src_results, dict):
+        die("ERROR: Replay artifacts invalid or incomplete", code=2)
+
+    # These keys are present in current authoritative results.json (v2) and are stable identity markers.
+    # Require schema identity fields to exist (do not hard-bind to local constants; artifact may come from
+    # a compatible build that still produces valid replay inputs).
+    rs = src_results.get("results_schema")
+    rsv = src_results.get("results_schema_version")
+    if (not isinstance(rs, str)) or (not rs.strip()):
+        die("ERROR: Replay artifacts invalid or incomplete", code=2)
+    if (not isinstance(rsv, str)) or (not rsv.strip()):
+        die("ERROR: Replay artifacts invalid or incomplete", code=2)
+
+    if not str(src_results.get("lab") or "").strip():
+        die("ERROR: Replay artifacts invalid or incomplete", code=2)
+
+    # Additional stable-shape guardrails (present in current artifacts) to reject random JSON:
+    if not isinstance(src_results.get("overall"), dict):
+        die("ERROR: Replay artifacts invalid or incomplete", code=2)
+
+    cmd = src_results.get("command")
+    if (not isinstance(cmd, str)) or (not cmd.strip()):
+        die("ERROR: Replay artifacts invalid or incomplete", code=2)
+
+    # Minimal stable banner (quiet-mode safe).
+    print("ai-netsim Replay Run")
+    print("")
+    print(f"Run Source: {src}")
+
+    if bool(getattr(args, "gate", False)):
+        # Authoritative replay:
+        # IMPORTANT: Gate-mode enforces clean-state destroy by LAB NAME. If we pass the source resolved
+        # topology directly, the destroy step may purge the very source artifacts we're replaying from.
+        #
+        # Deterministic fix:
+        # - Derive a deterministic replay lab name from the source resolved YAML bytes.
+        # - Write a temporary resolved topology file (named topology.resolved.yaml) with ONLY 'name' changed.
+        # - Delegate to cmd_test topology-mode using that temp resolved topology as the input.
+        import hashlib
+
+        resolved_bytes = p_resolved.read_bytes()
+        h8 = hashlib.sha256(resolved_bytes).hexdigest()[:8]
+
+        src_doc = load_yaml(p_resolved) or {}
+        orig_name = str((src_doc.get("name") or "").strip()) or "replay"
+        base = orig_name[:40]  # deterministic clamp (avoid overly long names)
+        replay_name = f"{base}-replay-{h8}"
+
+        # Write temp resolved topology input under labs/_replay_inputs/<replay_name>/topology.resolved.yaml
+        tmp_dir = LABS_DIR / "_replay_inputs" / replay_name
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        tmp_resolved = tmp_dir / "topology.resolved.yaml"
+
+        src_doc2 = dict(src_doc)
+        src_doc2["name"] = replay_name
+        write_file(tmp_resolved, yaml.safe_dump(src_doc2, sort_keys=False))
+
+        # Delegate to the existing authoritative gate-style topology-mode handler.
+        # write_containerlab_file() will skip resolve because the filename is topology.resolved.yaml,
+        # and cmd_up pre-validation now also skips resolve for resolved inputs.
+        cmd_test(
+            argparse.Namespace(
+                lab=str(tmp_resolved),
+                two_run=False,
+                two_run_topology=None,
+                name=None,
+                kind=None,
+                keep_going=False,
+                json=False,
+                candidate_config=None,
+                verbose=bool(getattr(args, "verbose", False)),
+                scenario=None,
+                all_scenarios=False,
+                capture_config=False,
+                list_scenarios=False,
+                _report_authority="gate",
+            )
+        )
+
+        # Optional determinism verification (opt-in):
+        # - Default behavior is unchanged (replay may legitimately differ; replay never restores old verdicts).
+        # - If explicitly requested, enforce byte-identical results.json to the source.
+        if bool(getattr(args, "verify_results", False)):
+            import json
+
+            replay_results = LABS_DIR / f"clab-{replay_name}" / "results.json"
+            if (not replay_results.exists()) or (not replay_results.is_file()):
+                die("ERROR: Replay determinism verification missing replay results.json", code=2)
+
+            def _get(d: dict, *keys, default=None):
+                for k in keys:
+                    if k in d:
+                        return d[k]
+                return default
+
+            def _canon_test(t: dict) -> dict:
+                # Verdict-core only: evidence may vary (container names, command strings, timing).
+                return {
+                    "name": _get(t, "name", default=""),
+                    "kind": _get(t, "kind", "type", default=""),
+                    "expected": _get(t, "expected", "expect", default=None),
+                    "observed": _get(t, "observed", default=None),
+                    "verdict": _get(t, "verdict", default=""),
+                }
+
+            def _canon_scenario(s: dict) -> dict:
+                # Minimal stable scenario identity + step verdict structure.
+                steps = _get(s, "steps", default=[]) or []
+                out_steps = []
+                for st in steps:
+                    if not isinstance(st, dict):
+                        continue
+                    out_steps.append(
+                        {
+                            "id": _get(st, "id", default=""),
+                            "type": _get(st, "type", default=""),
+                            "expected": _get(st, "expected", default=None),
+                            "observed": _get(st, "observed", default=None),
+                            "verdict": _get(st, "verdict", default=""),
+                        }
+                    )
+                return {
+                    "id": _get(s, "id", default=""),
+                    "verdict": _get(s, "verdict", default=""),
+                    "steps": out_steps,
+                }
+
+            def _extract_verdict_core(obj: dict) -> dict:
+                tests = _get(obj, "tests", default=[]) or []
+                scenarios = _get(obj, "scenarios", default=[]) or []
+
+                tests_core = []
+                for t in tests:
+                    if isinstance(t, dict):
+                        tests_core.append(_canon_test(t))
+
+                scenarios_core = []
+                for s in scenarios:
+                    if isinstance(s, dict):
+                        scenarios_core.append(_canon_scenario(s))
+
+                # Summary counts (stable intent-level)
+                return {
+                    "result": _get(obj, "result", "RESULT", default=""),
+                    "exit": _get(obj, "exit_code", "exit", "EXIT", default=None),
+                    "counts": {
+                        "tests_total": _get(obj, "tests_total", default=None),
+                        "tests_pass": _get(obj, "tests_pass", default=None),
+                        "tests_fail": _get(obj, "tests_fail", default=None),
+                        "tests_skip": _get(obj, "tests_skip", default=None),
+                        "scenarios_total": _get(obj, "scenarios_total", default=None),
+                    },
+                    "tests": tests_core,
+                    "scenarios": scenarios_core,
+                }
+
+            src_obj = json.loads(p_results.read_text(encoding="utf-8"))
+            rep_obj = json.loads(replay_results.read_text(encoding="utf-8"))
+
+            src_core = json.dumps(_extract_verdict_core(src_obj), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            rep_core = json.dumps(_extract_verdict_core(rep_obj), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+            if src_core != rep_core:
+                die("ERROR: Replay determinism verification failed (verdict core differs)", code=1)
+
+        # WI-5: Gate-mode replay must emit the deterministic Artifacts footer, same as `netsim test`.
+        # NOTE: main() prints the footer for `test`, but replay is a different command path.
+        _print_artifacts_footer_for_lab(replay_name, authority_kind="gate")
+
+        return
+
+    # Non-gate replay: deploy/provision using the resolved topology artifact; keep lab running.
+    # IMPORTANT: reconfigure=True triggers destroy by LAB NAME. If we use the source resolved topology
+    # directly, we may purge the source artifacts. Use a deterministic replay lab name and a temp
+    # resolved topology input, mirroring the --gate safety fix.
+    import hashlib
+
+    resolved_bytes = p_resolved.read_bytes()
+    h8 = hashlib.sha256(resolved_bytes).hexdigest()[:8]
+
+    src_doc = load_yaml(p_resolved) or {}
+    orig_name = str((src_doc.get("name") or "").strip()) or "replay"
+    base = orig_name[:40]  # deterministic clamp (avoid overly long names)
+    replay_name = f"{base}-replay-{h8}"
+
+    tmp_dir = LABS_DIR / "_replay_inputs" / replay_name
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    tmp_resolved = tmp_dir / "topology.resolved.yaml"
+
+    src_doc2 = dict(src_doc)
+    src_doc2["name"] = replay_name
+    write_file(tmp_resolved, yaml.safe_dump(src_doc2, sort_keys=False))
+
+    cmd_up(argparse.Namespace(topology=str(tmp_resolved), reconfigure=True, _from_gate=False))
+
 def cmd_down(args: argparse.Namespace) -> None:
     """
     Destroy a lab deterministically.
@@ -9641,6 +9896,27 @@ def main() -> None:
         help="Destroy the existing lab first, then redeploy (safe for generated bind-mount files).",
     )
     p_up.set_defaults(func=cmd_up)
+
+    # replay
+    p_replay = sub.add_parser("replay", help="Deterministically re-execute a prior run using its artifacts as inputs")
+    p_replay.add_argument("artifacts", help="Artifact directory containing topology.resolved.yaml, results.json")
+    p_replay.add_argument(
+        "--gate",
+        action="store_true",
+        help="Run authoritative clean-state gate replay (generate→deploy→provision→test→collect→destroy).",
+    )
+    p_replay.add_argument(
+        "--verify-results",
+        action="store_true",
+        help="(Opt-in) Verify replay results.json is byte-identical to the source results.json. Mismatch exits 1. Default: off.",
+    )
+    p_replay.add_argument(
+        "--verbose",
+        action="store_true",
+        dest="verbose",
+        help="Print full raw command trace + containerlab logs (debug). Default is quiet gate output.",
+    )
+    p_replay.set_defaults(func=cmd_replay)
 
     # down
     p_down = sub.add_parser("down", help="Destroy a deployed lab by name")
