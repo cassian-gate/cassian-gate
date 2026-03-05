@@ -6596,8 +6596,28 @@ def cmd_replay(args: argparse.Namespace) -> None:
         return
 
     # Non-gate replay: deploy/provision using the resolved topology artifact; keep lab running.
-    # Enforce clean-state by reconfigure=True.
-    cmd_up(argparse.Namespace(topology=str(p_resolved), reconfigure=True, _from_gate=False))
+    # IMPORTANT: reconfigure=True triggers destroy by LAB NAME. If we use the source resolved topology
+    # directly, we may purge the source artifacts. Use a deterministic replay lab name and a temp
+    # resolved topology input, mirroring the --gate safety fix.
+    import hashlib
+
+    resolved_bytes = p_resolved.read_bytes()
+    h8 = hashlib.sha256(resolved_bytes).hexdigest()[:8]
+
+    src_doc = load_yaml(p_resolved) or {}
+    orig_name = str((src_doc.get("name") or "").strip()) or "replay"
+    base = orig_name[:40]  # deterministic clamp (avoid overly long names)
+    replay_name = f"{base}-replay-{h8}"
+
+    tmp_dir = LABS_DIR / "_replay_inputs" / replay_name
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    tmp_resolved = tmp_dir / "topology.resolved.yaml"
+
+    src_doc2 = dict(src_doc)
+    src_doc2["name"] = replay_name
+    write_file(tmp_resolved, yaml.safe_dump(src_doc2, sort_keys=False))
+
+    cmd_up(argparse.Namespace(topology=str(tmp_resolved), reconfigure=True, _from_gate=False))
 
 def cmd_down(args: argparse.Namespace) -> None:
     """
