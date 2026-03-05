@@ -6355,7 +6355,16 @@ def cmd_up(args: argparse.Namespace) -> None:
     # Pre-validate topology BEFORE any destructive action (v1 deterministic, fail-fast)
     topo_preview = load_yaml(topo_path)
     ensure_valid_topology(topo_preview)
-    resolved_preview = resolve_topology(topo_preview)
+
+    # Deterministic Replay support:
+    # If the input is a resolved topology artifact, treat it as authoritative input and SKIP resolve.
+    # This prevents double-resolve drift and preserves replay semantics.
+    is_resolved_input = (topo_path.name == "topology.resolved.yaml")
+    if is_resolved_input:
+        resolved_preview = topo_preview
+    else:
+        resolved_preview = resolve_topology(topo_preview)
+
     validate_scenarios(resolved_preview)
 
     # If --reconfigure: destroy + remove root-owned lab dir AFTER validation passes.
@@ -6497,7 +6506,91 @@ def cmd_up(args: argparse.Namespace) -> None:
         print(f"  netsim test {lab_name}")
         print(f"  netsim exec {lab_name} <node>")
         print(f"  netsim down {lab_name}")
-    
+
+def cmd_replay(args: argparse.Namespace) -> None:
+    """
+    Deterministic Replay (v2):
+      - Consume an explicit artifact directory containing:
+          topology.resolved.yaml
+          results.json
+      - Re-execute deterministically using the resolved topology as input.
+      - Resolve is skipped (write_containerlab_file treats topology.resolved.yaml as resolved input).
+      - --gate delegates to the existing authoritative gate path (cmd_test topology-mode).
+    """
+    src = str(getattr(args, "artifacts", "") or "").strip()
+    if not src:
+        die("ERROR: Replay artifacts invalid or incomplete", code=2)
+
+    src_dir = Path(src)
+    if (not src_dir.exists()) or (not src_dir.is_dir()):
+        die("ERROR: Replay artifacts invalid or incomplete", code=2)
+
+    p_resolved = src_dir / "topology.resolved.yaml"
+    p_results = src_dir / "results.json"
+
+    if (not p_resolved.exists()) or (not p_resolved.is_file()) or (not p_results.exists()) or (not p_results.is_file()):
+        die("ERROR: Replay artifacts invalid or incomplete", code=2)
+
+    # Minimal stable banner (quiet-mode safe).
+    print("ai-netsim Replay Run")
+    print("")
+    print(f"Run Source: {src}")
+
+    if bool(getattr(args, "gate", False)):
+        # Authoritative replay:
+        # IMPORTANT: Gate-mode enforces clean-state destroy by LAB NAME. If we pass the source resolved
+        # topology directly, the destroy step may purge the very source artifacts we're replaying from.
+        #
+        # Deterministic fix:
+        # - Derive a deterministic replay lab name from the source resolved YAML bytes.
+        # - Write a temporary resolved topology file (named topology.resolved.yaml) with ONLY 'name' changed.
+        # - Delegate to cmd_test topology-mode using that temp resolved topology as the input.
+        import hashlib
+
+        resolved_bytes = p_resolved.read_bytes()
+        h8 = hashlib.sha256(resolved_bytes).hexdigest()[:8]
+
+        src_doc = load_yaml(p_resolved) or {}
+        orig_name = str((src_doc.get("name") or "").strip()) or "replay"
+        base = orig_name[:40]  # deterministic clamp (avoid overly long names)
+        replay_name = f"{base}-replay-{h8}"
+
+        # Write temp resolved topology input under labs/_replay_inputs/<replay_name>/topology.resolved.yaml
+        tmp_dir = LABS_DIR / "_replay_inputs" / replay_name
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        tmp_resolved = tmp_dir / "topology.resolved.yaml"
+
+        src_doc2 = dict(src_doc)
+        src_doc2["name"] = replay_name
+        write_file(tmp_resolved, yaml.safe_dump(src_doc2, sort_keys=False))
+
+        # Delegate to the existing authoritative gate-style topology-mode handler.
+        # write_containerlab_file() will skip resolve because the filename is topology.resolved.yaml,
+        # and cmd_up pre-validation now also skips resolve for resolved inputs.
+        cmd_test(
+            argparse.Namespace(
+                lab=str(tmp_resolved),
+                two_run=False,
+                two_run_topology=None,
+                name=None,
+                kind=None,
+                keep_going=False,
+                json=False,
+                candidate_config=None,
+                verbose=bool(getattr(args, "verbose", False)),
+                scenario=None,
+                all_scenarios=False,
+                capture_config=False,
+                list_scenarios=False,
+                _report_authority="gate",
+            )
+        )
+        return
+
+    # Non-gate replay: deploy/provision using the resolved topology artifact; keep lab running.
+    # Enforce clean-state by reconfigure=True.
+    cmd_up(argparse.Namespace(topology=str(p_resolved), reconfigure=True, _from_gate=False))
+
 def cmd_down(args: argparse.Namespace) -> None:
     """
     Destroy a lab deterministically.
@@ -9641,6 +9734,22 @@ def main() -> None:
         help="Destroy the existing lab first, then redeploy (safe for generated bind-mount files).",
     )
     p_up.set_defaults(func=cmd_up)
+
+    # replay
+    p_replay = sub.add_parser("replay", help="Deterministically re-execute a prior run using its artifacts as inputs")
+    p_replay.add_argument("artifacts", help="Artifact directory containing topology.resolved.yaml and results.json")
+    p_replay.add_argument(
+        "--gate",
+        action="store_true",
+        help="Run authoritative clean-state gate replay (generate→deploy→provision→test→collect→destroy).",
+    )
+    p_replay.add_argument(
+        "--verbose",
+        action="store_true",
+        dest="verbose",
+        help="Print full raw command trace + containerlab logs (debug). Default is quiet gate output.",
+    )
+    p_replay.set_defaults(func=cmd_replay)
 
     # down
     p_down = sub.add_parser("down", help="Destroy a deployed lab by name")
