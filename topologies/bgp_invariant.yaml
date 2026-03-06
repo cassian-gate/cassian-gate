@@ -1,0 +1,18 @@
+name: bgp-invariant
+
+nodes:
+  - name: r1
+    type: frr
+  - name: r2
+    type: frr
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+
+tests:
+  - name: inv_bgp_up_r1_to_10_0_0_2
+    kind: invariant
+    type: bgp_session_up
+    node: r1
+    neighbor: 10.0.0.2
+    expect: pass
