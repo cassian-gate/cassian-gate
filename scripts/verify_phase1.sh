@@ -482,6 +482,74 @@ fi
 echo "OK: wait_for step shape stable (${wf_count} steps; canonical key-set)"
 echo
 
+echo "=== 6d) Invariant gate + replay determinism ==="
+
+INV_TOPO="route_present_missing.yaml"
+INV_LAB="route-present-missing"
+INV_LABDIR="labs/clab-${INV_LAB}"
+
+# Clean any prior artifacts for deterministic comparison
+rm -rf "${INV_LABDIR}" 2>/dev/null || true
+
+# 1) Authoritative gate run must PASS without external candidate-config context
+set +e
+inv_out="$($NS test "$INV_TOPO" 2>&1)"
+inv_rc=$?
+set -e
+if [ "$inv_rc" -ne 0 ]; then
+  echo "FAIL: expected invariant gate run to pass (rc=0), but rc=$inv_rc"
+  echo "$inv_out"
+  exit 1
+fi
+
+test -s "${INV_LABDIR}/results.json" || { echo "FAIL: missing ${INV_LABDIR}/results.json after invariant gate run"; exit 1; }
+test -s "${INV_LABDIR}/topology.resolved.yaml" || { echo "FAIL: missing ${INV_LABDIR}/topology.resolved.yaml after invariant gate run"; exit 1; }
+
+jq -e '
+  .result=="pass"
+  and ([.tests[]? | select(.name=="inv_route_present_r1_10_10_10_0_24" and .kind=="invariant" and .verdict=="pass")] | length) == 1
+  and ([.tests[]? | select(.name=="inv_route_absent_r1_10_20_20_0_24" and .kind=="invariant" and .verdict=="pass")] | length) == 1
+' "${INV_LABDIR}/results.json" >/dev/null || {
+  echo "FAIL: invariant gate results.json missing expected invariant PASS entries"
+  jq '.tests' "${INV_LABDIR}/results.json" 2>/dev/null || true
+  exit 1
+}
+echo "OK: invariant gate PASS recorded"
+
+cp -f "${INV_LABDIR}/results.json" /tmp/route_present_missing.results.run1.json
+
+# 2) Replay must PASS and --verify-results must confirm deterministic equality
+set +e
+replay_out="$($NS replay "${INV_LABDIR}" --gate --verify-results 2>&1)"
+replay_rc=$?
+set -e
+if [ "$replay_rc" -ne 0 ]; then
+  echo "FAIL: expected invariant replay to pass with --verify-results (rc=0), but rc=$replay_rc"
+  echo "$replay_out"
+  exit 1
+fi
+
+test -s "${INV_LABDIR}/results.json" || { echo "FAIL: missing ${INV_LABDIR}/results.json after replay"; exit 1; }
+
+jq -e '
+  .result=="pass"
+  and ([.tests[]? | select(.name=="inv_route_present_r1_10_10_10_0_24" and .kind=="invariant" and .verdict=="pass")] | length) == 1
+  and ([.tests[]? | select(.name=="inv_route_absent_r1_10_20_20_0_24" and .kind=="invariant" and .verdict=="pass")] | length) == 1
+' "${INV_LABDIR}/results.json" >/dev/null || {
+  echo "FAIL: replay results.json missing expected invariant PASS entries"
+  jq '.tests' "${INV_LABDIR}/results.json" 2>/dev/null || true
+  exit 1
+}
+echo "OK: invariant replay PASS recorded"
+
+cp -f "${INV_LABDIR}/results.json" /tmp/route_present_missing.results.replay.json
+
+diff -u /tmp/route_present_missing.results.run1.json /tmp/route_present_missing.results.replay.json >/dev/null \
+  && echo "OK: invariant replay results.json deterministic (byte-identical)" \
+  || { echo "FAIL: invariant replay results.json drift"; diff -u /tmp/route_present_missing.results.run1.json /tmp/route_present_missing.results.replay.json || true; exit 1; }
+
+echo
+
 echo "=== 7) Cleanup smoke (netsim cleanup --all) ==="
 
 # 7a) Dry-run must show a plan and exit 0
