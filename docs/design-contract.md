@@ -1,58 +1,101 @@
 # ai-netsim Design Contract (Authoritative)
 
-**Version:** v1.1
+**Version:** v1.2
 **Status:** LOCKED
 **Scope:** Applies to v1 and all future versions unless explicitly amended
 
-This document defines the **non-negotiable behavior** of ai-netsim.
+This document defines the **non-negotiable behavioral guarantees** of ai-netsim.
 
-Its purpose is to ensure ai-netsim remains a **deterministic, auditable, CI-safe validation gate**, even as features expand (including AI-assisted capabilities).
+Its purpose is to ensure ai-netsim remains a:
 
-If a change conflicts with this contract, the change **must be redesigned**, **explicitly deferred**, or **placed behind a clearly named opt-in flag** that preserves default behavior.
+* deterministic
+* auditable
+* replay-stable
+* CI-safe network validation gate
+
+even as features expand.
+
+If any change conflicts with this contract, the change **must be redesigned, deferred, or gated behind an explicit opt-in mechanism** that preserves default behavior.
 
 ---
 
-# 1) Repo structure & sources of truth
+# 1) Repository structure & sources of truth
 
-## Authoritative inputs (source of truth)
+## Authoritative inputs
 
-* `topologies/*.yaml`
-  User-declared **intent**: nodes, links, addressing, tests, scenarios, expectations.
+The following are the **only inputs allowed to influence validation outcomes**:
 
-* `src/`
-  Execution engine, resolvers, generators, runtime adapters, test semantics.
+```
+topologies/*.yaml
+src/*
+```
 
-**Contract rule:**
-Only these inputs may change validation outcomes.
+### topologies/
+
+User-declared **network intent**, including:
+
+* nodes
+* links
+* addressing
+* tests
+* scenarios
+* expectations
+
+### src/
+
+Execution engine implementation:
+
+* resolvers
+* generators
+* runtime adapters
+* test semantics
+
+**Contract rule**
+
+Only changes to these locations may change validation results.
 
 ---
 
 ## Generated outputs (never authoritative)
 
-* `labs/**`
-* `labs/*.clab.yaml`
-* `labs/**/topology.resolved.yaml`
-* `labs/**/results.json`
-* `labs/**/results.summary.txt`
-* any logs, pcaps, or evidence artifacts
+Generated artifacts include:
 
-**Contract rule:**
-Editing anything under `labs/` is unsupported and has undefined behavior.
+```
+labs/**
+labs/*.clab.yaml
+labs/**/topology.resolved.yaml
+labs/**/results.json
+labs/**/results.summary.txt
+logs / pcaps / evidence
+```
 
-The only supported way to change outcomes is by editing:
+Editing these artifacts is **unsupported and undefined behavior**.
 
-* `topologies/`
-* `src/`
+Validation outcomes must only change through:
+
+```
+topologies/
+src/
+```
 
 ---
 
 ## Runtime components
 
-* `images/**` (e.g. `images/nft-fw/Dockerfile`)
-* Container images define runtime behavior
-* ai-netsim **orchestrates**, it does not emulate device logic internally
+Runtime behavior may be defined by:
 
-Developer tooling (`.venv/`, `.vscode/`) must never be required for correctness.
+```
+images/**
+```
+
+Examples:
+
+```
+images/frr/
+images/nft-fw/
+```
+
+ai-netsim **orchestrates execution**, it does not emulate device logic internally.
 
 ---
 
@@ -60,25 +103,29 @@ Developer tooling (`.venv/`, `.vscode/`) must never be required for correctness.
 
 ## Determinism (non-negotiable)
 
-Given:
+Given identical:
 
-* identical topology YAML
-* identical code version
-* identical container images (tags or digests)
-* identical declared timeouts
+* topology YAML
+* code version
+* container images
+* declared timeouts
 
-ai-netsim **must produce**:
+ai-netsim **must produce identical outcomes**:
 
 * identical resolved topology
 * identical generated configs
-* identical test & scenario verdicts
+* identical test results
+* identical scenario verdicts
 
-**Contract rule:**
+Forbidden behavior:
 
-* No hidden randomness
-* No heuristic retries
-* No time-based guessing
-* All retries, waits, and timeouts must be explicit and recorded
+* randomness
+* heuristic retries
+* adaptive timing
+* hidden backoff logic
+* nondeterministic ordering
+
+All waits, retries, and timing behaviors must be **explicit and recorded**.
 
 ---
 
@@ -86,227 +133,337 @@ ai-netsim **must produce**:
 
 ai-netsim must **never**:
 
-* guess user intent
-* silently auto-fix misconfigurations
-* mutate requested design outside Resolve
+* guess intent
+* auto-fix configuration
+* mutate user design outside Resolve
 
-Defaults are allowed **only if**:
+Defaults are allowed **only when**:
 
-* applied during **Resolve**
-* documented
+* applied during Resolve
 * visible in `topology.resolved.yaml`
+* deterministic
 
 ---
 
 ## Auditability
 
-Each run must produce:
+Every execution must produce a **stable artifact directory** containing:
 
-* a stable artifact directory under `labs/`
-* a machine-readable `results.json`
-* artifacts sufficient to reproduce and explain outcomes
+```
+topology.resolved.yaml
+results.json
+results.summary.txt
+```
+
+Artifacts must be sufficient to:
+
+* reproduce results
+* diagnose failures
+* explain outcomes
 
 ---
 
 # 3) Execution lifecycle (fixed order)
 
-ai-netsim executes strictly in this order:
+The lifecycle is **strictly ordered**.
 
-1. **Resolve**
+```
+resolve → generate → deploy → provision → test → collect → destroy
+```
 
-   * Validate schema and intent
-   * Apply defaults
-   * Expand scenarios
-   * Emit `topology.resolved.yaml`
+No feature may introduce additional phases.
 
-2. **Generate**
+---
 
-   * Generate containerlab topology
-   * Generate per-node configs
-   * Generate provisioning artifacts
+## Resolve
 
-3. **Deploy**
+* validate schema
+* apply defaults
+* expand packs
+* expand scenarios
+* emit `topology.resolved.yaml`
 
-   * Deploy via runtime backend
-   * Verify containers exist and are running
+---
 
-4. **Provision**
+## Generate
 
-   * Apply host addressing
-   * Apply firewall rules
-   * Apply **runtime configuration owned by the image or backend**
-   * Perform deterministic readiness checks
+* containerlab topology
+* per-node configuration
+* provisioning artifacts
 
-> ai-netsim does **not** own routing intent or correctness in v1.
-> Routing may exist via preconfigured images or user exploration, but is never inferred or validated here.
+---
 
-5. **Test**
+## Deploy
 
-   * Execute atomic tests
-   * Execute scenarios (if declared)
-   * No hidden remediation
+* deploy runtime environment
+* verify containers running
 
-6. **Collect**
+---
 
-   * Write authoritative `results.json`
-   * Write non-authoritative summaries/evidence
+## Provision
 
-7. **Destroy**
+* apply host addressing
+* apply firewall configuration
+* apply runtime configuration
+* deterministic readiness checks
 
-   * Tear down lab deterministically
-   * No leaked containers or processes
+ai-netsim **does not infer routing intent**.
 
-**Contract rule:**
-Later phases must not mutate artifacts from earlier phases.
+---
+
+## Test
+
+* execute atomic tests
+* execute scenarios
+* no hidden remediation
+
+---
+
+## Collect
+
+* write `results.json`
+* write summaries and evidence
+
+---
+
+## Destroy
+
+* deterministic teardown
+* no leaked containers
 
 ---
 
 # 4) Gate-first UX (LOCKED)
 
-## `netsim test` (authoritative)
+## netsim test
 
-* Always starts from a **clean state**
-* Destroys any existing lab
-* Executes deterministically
-* Returns a **binary verdict**
-* Produces authoritative artifacts
+Authoritative validation.
 
-## `netsim run` (non-authoritative)
+Behavior:
 
-* Explicitly exploratory
-* No guarantees
-* Never used for CI gating
-
-**Contract rule:**
-Gate semantics must never be bypassed or softened.
+* clean-state execution
+* deterministic lifecycle
+* binary verdict
+* CI-safe exit codes
 
 ---
 
-# 5) Scenario contract (v1)
+## netsim run
 
-## Scenarios are
+Exploration mode.
 
-* Optional
-* Explicit
-* Ordered
-* Deterministic
-* Fail-fast on ambiguity
+Behavior:
+
+* non-authoritative
+* supports iterative experimentation
+* never used for CI gating
 
 ---
 
-## Scenario steps
+# 5) Scenario contract
 
-Each step must contain **exactly one** action:
+Scenarios model **deterministic event sequences**.
 
-* `run`
-* `fault`
-* `wait_for`
-* `wait_for_bgp`
+Scenarios are:
+
+* explicit
+* ordered
+* deterministic
+* replay-stable
+* fail-fast on ambiguity
+
+---
+
+## Scenario step structure
+
+Each step must contain **exactly one action**.
+
+Example:
+
+```yaml
+steps:
+  - run:
+      command: ping hostA hostB
+```
 
 Unknown keys are rejected.
 
-No additional top-level scenario actions are permitted unless the contract is amended.
+---
+
+## Scenario action extensibility
+
+Scenario actions are **extensible**.
+
+The contract does **not freeze a fixed action list**.
+
+Instead, every action must satisfy the following requirements.
 
 ---
 
-## Fault semantics
+## Scenario action requirements
 
-Fault steps represent **deterministic environment changes** applied during scenario execution.
+All scenario actions must be:
 
-Examples include:
+### Explicit
 
-* `link_down`
-* `link_up`
-* `node_down`
-* `node_up`
-* `interface_down`
-* `interface_up`
+Required parameters must be declared.
 
-Fault actions must satisfy:
-
-* deterministic behavior
-* explicit targets
-* explicit parameters
-* deterministic cleanup
+No implicit targets.
 
 ---
 
-## Grey Failure Simulation (Deterministic Fault Variants)
+### Deterministic
 
-Grey failures represent **deterministic partial degradations** of network behavior.
+The same step must always produce the same effect.
 
-Grey failures are implemented as **subtypes of the `fault` action**, not as new scenario actions.
+Forbidden:
 
-Examples of grey failure variants include:
+* randomness
+* adaptive behavior
+* probabilistic operations
 
-* packet loss
-* latency insertion
-* bandwidth limitation
-* prefix blackhole
+---
 
-Example conceptual syntax:
+### Replay-stable
 
-```yaml
-action: fault
-type: packet_loss
-target: link:leaf1-spine1
-loss_percent: 5
+Scenario steps must behave identically when replayed.
+
+Replay must reproduce:
+
+* actions
+* timing
+* outcomes
+
+---
+
+### Artifact-recorded
+
+Actions affecting network state or evidence must be recorded in:
+
+```
+results.json
 ```
 
-Grey failures must satisfy all of the following contract rules:
+---
 
-* parameters must be explicit
-* degradation must be deterministic
-* degradation must be reversible
-* degradation must be recorded in `results.json`
-* degradation must be replay-stable
-* degradation must not persist outside the scenario step
+### Fail-fast on ambiguity
 
-Grey failures must **never introduce randomness**.
+If an action cannot be resolved unambiguously, execution must stop.
 
-Examples of forbidden behaviors:
+Example:
 
-* probabilistic jitter
-* adaptive congestion behavior
-* uncontrolled packet drops
-* background degradation not tied to scenario steps
-
-Grey failure injection affects **execution environment only**.
-
-Test verdict authority remains exclusively with atomic tests.
+```
+ERROR: ambiguous link target
+```
 
 ---
 
-## Convergence semantics
+# 6) Scenario action categories
 
-* Global prechecks apply to default tests
-* Scenarios skip global prechecks by default
-* `wait_for_bgp` is authoritative inside scenarios
-* All convergence waits are explicit and recorded
+Actions typically fall into one of the following deterministic classes.
 
----
-
-# 6) Test contract
-
-## Supported atomic test types
-
-* `ping`
-* `tcp`
-* `bgp_neighbor`
-* `invariant` (routing invariant evaluation)
-
-No other atomic test types are permitted unless explicitly added via contract amendment.
+These categories describe **behavioral expectations**, not a fixed list.
 
 ---
 
-## Required test result fields
+## Execution actions
+
+Execute commands within nodes.
+
+Examples:
+
+```
+run
+```
+
+---
+
+## Fault / degradation actions
+
+Introduce deterministic environmental changes.
+
+Examples:
+
+```
+link_down
+link_up
+interface_down
+interface_up
+packet_loss
+latency
+bandwidth_cap
+prefix_blackhole
+```
+
+Grey failures are deterministic degradations implemented within this class.
+
+Fault actions must be **reversible and explicitly scoped**.
+
+---
+
+## Convergence actions
+
+Wait for deterministic conditions.
+
+Examples:
+
+```
+wait
+wait_for
+wait_for_bgp
+```
+
+All waits must declare:
+
+```
+timeout
+expected condition
+```
+
+---
+
+## Evidence capture actions
+
+Capture runtime evidence.
+
+Examples:
+
+```
+pcap_start
+pcap_stop
+```
+
+Evidence capture must **not influence verdicts directly**.
+
+---
+
+# 7) Test contract
+
+Atomic tests remain the **primary authority for validation**.
+
+Supported test classes include:
+
+```
+ping
+tcp
+bgp_neighbor
+invariant
+```
+
+Additional deterministic tests may be added through contract amendment.
+
+---
+
+## Required test fields
 
 Each test must record:
 
-* `expected`
-* `observed`
-* `verdict`
-* `evidence`
+```
+expected
+observed
+verdict
+evidence
+```
 
 ---
 
@@ -325,100 +482,112 @@ observed: fail
 verdict: pass
 ```
 
-Blocked traffic counts as **success** when failure is expected.
+---
+
+# 8) Routing invariant contract
+
+Routing invariants provide **deterministic routing intent validation**.
+
+Invariants execute during the **TEST phase**.
+
+Invariant results appear as **standard test results**.
+
+Example:
+
+```
+kind: invariant
+type: bgp_session_up
+```
+
+Invariant evaluation must be:
+
+* deterministic
+* binary
+* replay-stable
 
 ---
 
-## Timeouts & retries
+# 9) AI contract (authoritative boundary)
 
-* Explicit
-* Deterministic
-* Recorded in artifacts
+AI features are **assistive only**.
 
----
+AI may:
 
-# 7) Failure policy
+* explain results
+* analyze artifacts
+* suggest improvements
 
-## Hard failures (stop execution)
+AI may **never**:
 
-* Deploy failure
-* Provision failure
-* Invalid topology/schema
-* Runtime execution failure
+* influence verdicts
+* modify topology
+* execute lifecycle steps
+* alter artifacts
 
-Must report:
+AI must always operate on:
 
-* phase
-* node/test
-* actionable reason
-
----
-
-## Test failures
-
-* Normal outcome
-* Recorded
-* Do not crash the engine unless configured
+```
+topology.resolved.yaml
+results.json
+```
 
 ---
 
-# 8) AI contract (authoritative boundary)
+# 10) Model vs runtime backend
 
-AI in ai-netsim is **assistive only**.
+Topology model must remain **runtime-agnostic**.
 
-AI commands:
+Backends implement execution:
 
-* are post-execution
-* consume artifacts only
-* are explicitly invoked
-* never affect verdicts
-* never affect exit codes
-* never mutate state
+```
+containerlab (current)
+vm runtime (future)
+```
 
-**Contract rule:**
-Tests and scenarios are the sole authority.
+Backend logic must not leak into topology schema.
 
 ---
 
-# 9) Model vs backend (future-proofing)
+# 11) Security & hygiene
 
-* Topology model is runtime-agnostic
-* Backends (containerlab today, VM later) implement execution
-* Backend-specific logic must not leak into schema
+Required guarantees:
 
----
-
-# 10) Security & hygiene
-
-* No shell injection
-* No implicit network access
-* Clean teardown
-* No leaked listeners or processes
+* no shell injection
+* no implicit network access
+* deterministic teardown
+* no leaked processes
 
 ---
 
-# 11) Change control
+# 12) Change control
 
-Every change must answer **yes** to:
+Every change must satisfy:
 
-1. Deterministic?
-2. Auditable?
-3. Inputs authoritative?
-4. Outputs generated?
-5. Negative tests preserved?
+1. Deterministic
+2. Auditable
+3. Inputs authoritative
+4. Outputs generated
+5. Replay-stable
 
-If **any answer is no**, the change is invalid unless explicitly gated.
+If any answer is **no**, the change is invalid unless explicitly gated.
 
 ---
 
-# 12) Explicit non-goals (LOCKED)
+# 13) Explicit non-goals (LOCKED)
 
-* No AI-driven pass/fail
-* No auto-remediation
-* No lab-first workflows
-* No nondeterministic behavior
-* No silent intent mutation
-* No probabilistic gating
+ai-netsim will **never become**:
+
+* a lab platform
+* a chaos engine
+* a heuristic validator
+* an AI decision system
+
+Forbidden:
+
+* AI-driven pass/fail
+* auto-remediation
+* probabilistic validation
+* silent configuration mutation
 
 ---
 
@@ -428,8 +597,9 @@ This document is **authoritative**.
 
 If implementation, documentation, or AI suggestions conflict with this contract:
 
-* the contract wins
-* the change must be redesigned or deferred
+**the contract wins.**
+
+Changes must be redesigned or deferred.
 
 ---
 
