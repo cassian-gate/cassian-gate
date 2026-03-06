@@ -3626,6 +3626,208 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         return verdict
 
+    def run_invariant_test(*, test_name: str, src: str, t: dict, record_fn=record_test) -> str:
+        inv_type = str(t.get("type") or "").strip().lower()
+        expected = str(t.get("expect") or "pass").strip().lower()
+        if expected not in ("pass", "fail"):
+            expected = "pass"
+
+        start = time.time()
+
+        if inv_type == "bgp_session_up":
+            neighbor = str(t.get("dst") or "").strip()
+            if not neighbor or not is_ip_literal(neighbor):
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst=neighbor,
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="bgp_session_up requires neighbor/dst as an IPv4 literal",
+                    evidence={"reason": "invalid_neighbor_ip"},
+                    meta={"type": inv_type, "neighbor": neighbor},
+                )
+                return "fail"
+
+            timeout_s = int(t.get("timeout") or 30)
+            interval_s = int(t.get("interval") or 1)
+
+            def attempt():
+                cp = rt.exec(
+                    lab,
+                    src,
+                    ["vtysh", "-c", "show bgp summary json"],
+                    check=False,
+                    capture_output=True,
+                )
+
+                if isinstance(cp, str):
+                    out = cp
+                    rc = None
+                else:
+                    out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
+                    if isinstance(out, (bytes, bytearray)):
+                        try:
+                            out = out.decode("utf-8", errors="replace")
+                        except Exception:
+                            out = str(out)
+                    rc = getattr(cp, "returncode", None)
+
+                peers = parse_frr_bgp_summary_neighbors_json(str(out or ""))
+                if not isinstance(peers, dict):
+                    peers = {}
+
+                cmp = compare_expected_vs_observed_bgp({neighbor}, peers)
+                ok = bool(cmp.get("ok"))
+                payload = {
+                    "rc": rc,
+                    "cmp": cmp,
+                    "peers": peers,
+                }
+                return ok, payload
+
+            if expected == "pass" and timeout_s > 0:
+                def try_once():
+                    ok, payload = attempt()
+                    return ok, payload
+
+                ok, last_payload, attempts, dur_ms = retry_until(timeout_s, interval_s, try_once)
+                payload = last_payload or {}
+            else:
+                ok, payload = attempt()
+                attempts = 1
+                dur_ms = int((time.time() - start) * 1000)
+
+            cmp = payload.get("cmp") if isinstance(payload, dict) else None
+            if not isinstance(cmp, dict):
+                cmp = compare_expected_vs_observed_bgp({neighbor}, {})
+
+            rc = payload.get("rc") if isinstance(payload, dict) else None
+
+            observed = "pass" if bool(cmp.get("ok")) else "fail"
+            verdict = "pass" if observed == expected else "fail"
+
+            record_fn(
+                name=test_name,
+                kind="invariant",
+                src=src,
+                dst=neighbor,
+                expected=expected,
+                observed=observed,
+                verdict=verdict,
+                duration_ms=int(dur_ms),
+                error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
+                evidence={
+                    "cmd": "vtysh -c 'show bgp summary json'",
+                    "rc": rc,
+                    "expected_neighbors": list(cmp.get("expected") or []),
+                    "observed_neighbors": list(cmp.get("observed") or []),
+                    "missing_neighbors": list(cmp.get("missing") or []),
+                    "down_neighbors": list(cmp.get("down") or []),
+                },
+                meta={
+                    "type": inv_type,
+                    "neighbor": neighbor,
+                    "present_in_summary": neighbor in set(cmp.get("observed") or []),
+                    "established": neighbor in set(cmp.get("established") or []),
+                    "attempts": attempts,
+                    "timeout_s": timeout_s,
+                    "retry_interval_s": interval_s,
+                },
+            )
+            return verdict
+
+        if inv_type in ("route_present", "route_absent"):
+            prefix = str(t.get("prefix") or "").strip()
+            if not prefix:
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error=f"{inv_type} requires prefix",
+                    evidence={"reason": "missing_prefix"},
+                    meta={"type": inv_type, "prefix": prefix},
+                )
+                return "fail"
+
+            norm_prefix = _normalize_prefix(prefix) or prefix
+
+            cp = rt.exec(
+                lab,
+                src,
+                ["vtysh", "-c", "show ip route json"],
+                check=False,
+                capture_output=True,
+            )
+
+            if isinstance(cp, str):
+                out = cp
+                rc = None
+            else:
+                out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
+                if isinstance(out, (bytes, bytearray)):
+                    try:
+                        out = out.decode("utf-8", errors="replace")
+                    except Exception:
+                        out = str(out)
+                rc = getattr(cp, "returncode", None)
+
+            observed_prefixes = parse_frr_show_ip_route_prefixes_json(str(out or ""))
+            present = norm_prefix in set(observed_prefixes or [])
+
+            if inv_type == "route_present":
+                observed = "pass" if present else "fail"
+            else:
+                observed = "pass" if not present else "fail"
+
+            verdict = "pass" if observed == expected else "fail"
+
+            record_fn(
+                name=test_name,
+                kind="invariant",
+                src=src,
+                dst="",
+                expected=expected,
+                observed=observed,
+                verdict=verdict,
+                duration_ms=int((time.time() - start) * 1000),
+                error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
+                evidence={
+                    "cmd": "vtysh -c 'show ip route json'",
+                    "rc": rc,
+                },
+                meta={
+                    "type": inv_type,
+                    "prefix": norm_prefix,
+                    "present": bool(present),
+                    "observed_prefix_count": len(set(observed_prefixes or [])),
+                },
+            )
+            return verdict
+
+        record_fn(
+            name=test_name,
+            kind="invariant",
+            src=src,
+            dst=str(t.get("dst") or ""),
+            expected=expected,
+            observed="fail",
+            verdict="fail",
+            duration_ms=0,
+            error=f"unsupported invariant type '{inv_type}'",
+            evidence={"reason": "unsupported_invariant_type"},
+            meta={"type": inv_type},
+        )
+        return "fail"
+
     def run_named_test(ref: str, *, scenario_ctx: tuple[str, int] | None = None) -> str:
         """
         Execute a declared atomic test by name (used by scenarios).
@@ -3641,6 +3843,59 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         src = t.get("src")
         dst = t.get("dst")
+
+        if kind == "invariant":
+            inv_type = str(t.get("type") or "").strip().lower()
+            if not src:
+                record_test(
+                    name=ref,
+                    kind="invariant",
+                    src=src or "",
+                    dst=dst or "",
+                    expected=str(t.get("expect") or "pass"),
+                    observed="fail",
+                    verdict="fail",
+                    evidence={"reason": "missing_src"},
+                    duration_ms=0,
+                    error="missing node/src",
+                    meta={"type": inv_type},
+                )
+                return "fail"
+
+            if inv_type == "bgp_session_up":
+                if not dst or not isinstance(dst, str) or not is_ip_literal(dst.strip()):
+                    record_test(
+                        name=ref,
+                        kind="invariant",
+                        src=src or "",
+                        dst=str(dst) if dst is not None else "",
+                        expected=str(t.get("expect") or "pass"),
+                        observed="fail",
+                        verdict="fail",
+                        evidence={"reason": "invalid_neighbor_ip"},
+                        duration_ms=0,
+                        error="bgp_session_up requires neighbor/dst as an IPv4 literal",
+                        meta={"type": inv_type},
+                    )
+                    return "fail"
+
+            elif inv_type in ("route_present", "route_absent"):
+                prefix = t.get("prefix")
+                if not isinstance(prefix, str) or not prefix.strip():
+                    record_test(
+                        name=ref,
+                        kind="invariant",
+                        src=src or "",
+                        dst="",
+                        expected=str(t.get("expect") or "pass"),
+                        observed="fail",
+                        verdict="fail",
+                        evidence={"reason": "missing_prefix"},
+                        duration_ms=0,
+                        error=f"{inv_type} requires prefix",
+                        meta={"type": inv_type},
+                    )
+                    return "fail"
 
         if kind == "ping":
             if not src or not (dst or t.get("to") or t.get("to_ip")):
@@ -5348,22 +5603,28 @@ def cmd_test(args: argparse.Namespace) -> None:
                     continue
 
                 if "kind" in t and "type" in t:
-                    record_test(
-                        name=test_name,
-                        kind="unknown",
-                        src=t.get("src") or "",
-                        dst=t.get("dst") or "",
-                        expected="pass",
-                        observed="fail",
-                        verdict="fail",
-                        duration_ms=0,
-                        error="has both 'kind' and 'type'",
-                    )
-                    exec_idx += 1
-                    _tv(f"[TEST START] {exec_idx:03d} {test_name} kind=unknown")
-                    _tv(f"[TEST END]   {exec_idx:03d} {test_name} verdict=FAIL")
-                    fail_or_continue(f"tests[{i}]: has both 'kind' and 'type' (use only 'kind')")
-                    continue
+                    kind_raw = str(t.get("kind") or "").strip().lower()
+                    # v2 invariant reservation:
+                    #   kind: invariant
+                    #   type: <invariant subtype>
+                    # This combination is valid and already normalized during resolve.
+                    if kind_raw != "invariant":
+                        record_test(
+                            name=test_name,
+                            kind="unknown",
+                            src=t.get("src") or "",
+                            dst=t.get("dst") or "",
+                            expected="pass",
+                            observed="fail",
+                            verdict="fail",
+                            duration_ms=0,
+                            error="has both 'kind' and 'type'",
+                        )
+                        exec_idx += 1
+                        _tv(f"[TEST START] {exec_idx:03d} {test_name} kind=unknown")
+                        _tv(f"[TEST END]   {exec_idx:03d} {test_name} verdict=FAIL")
+                        fail_or_continue(f"tests[{i}]: has both 'kind' and 'type' (use only 'kind')")
+                        continue
 
                 kind = t.get("kind") or t.get("type")
                 if not kind:
@@ -5387,7 +5648,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 src = t.get("src")
                 dst = t.get("dst")
 
-                if kind not in ("ping", "tcp", "bgp_neighbor", "route_prefix"):
+                if kind not in ("ping", "tcp", "bgp_neighbor", "route_prefix", "invariant"):
                     record_test(
                         name=test_name,
                         kind=str(kind),
@@ -5402,7 +5663,10 @@ def cmd_test(args: argparse.Namespace) -> None:
                     exec_idx += 1
                     _tv(f"[TEST START] {exec_idx:03d} {test_name} kind={kind}")
                     _tv(f"[TEST END]   {exec_idx:03d} {test_name} verdict=FAIL")
-                    fail_or_continue(f"tests[{i}]: unsupported kind '{kind}' (supported: ping, tcp, bgp_neighbor)")
+                    fail_or_continue(
+                        f"tests[{i}]: unsupported kind '{kind}' "
+                        f"(supported: ping, tcp, bgp_neighbor, route_prefix, invariant)"
+                    )
                     continue
 
                 if filter_kind and kind != filter_kind:
@@ -5540,6 +5804,22 @@ def cmd_test(args: argparse.Namespace) -> None:
                         fail_or_continue(
                             f"tests[{i}] route_prefix mismatch: on {src} prefix {t.get('prefix')} expected {t.get('expect','pass')}"
                         )
+                    continue
+
+                if kind == "invariant":
+                    verdict = run_invariant_test(test_name=test_name, src=src, t=t)
+                    verdict_txt = (verdict or "fail").upper()
+                    _tv(f"[TEST END]   {exec_idx:03d} {test_name} verdict={verdict_txt}")
+                    if verdict != "pass":
+                        inv_type = str(t.get("type") or "").strip().lower()
+                        if inv_type == "bgp_session_up":
+                            fail_or_continue(
+                                f"tests[{i}] invariant {inv_type} mismatch: {src} -> {dst} expected {t.get('expect','pass')}"
+                            )
+                        else:
+                            fail_or_continue(
+                                f"tests[{i}] invariant {inv_type} mismatch: on {src} prefix {t.get('prefix')} expected {t.get('expect','pass')}"
+                            )
                     continue
 
                 if kind == "bgp_neighbor":

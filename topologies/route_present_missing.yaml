@@ -1,0 +1,25 @@
+name: route-present-missing
+
+nodes:
+  - name: r1
+    type: frr
+  - name: r2
+    type: frr
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+
+tests:
+  - name: inv_route_present_r1_10_10_10_0_24
+    kind: invariant
+    type: route_present
+    node: r1
+    prefix: 10.10.10.0/24
+    expect: fail
+
+  - name: inv_route_absent_r1_10_20_20_0_24
+    kind: invariant
+    type: route_absent
+    node: r1
+    prefix: 10.20.20.0/24
+    expect: pass

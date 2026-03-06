@@ -1077,11 +1077,97 @@ def resolve_topology(topo: dict) -> dict:
         if not isinstance(t, dict):
             die(f"tests[{i}]: must be a dict")
 
-        if "kind" in t and "type" in t:
-            die(f"tests[{i}]: has both 'kind' and 'type' (use only 'kind')")
+        kind_raw = t.get("kind")
+        type_raw = t.get("type")
 
-        if "type" in t and "kind" not in t:
-            t["kind"] = t.pop("type")
+        # v2 routing invariants reserve:
+        #   kind: invariant
+        #   type: <invariant subtype>
+        # For all other tests, legacy type->kind aliasing remains unchanged.
+        if kind_raw is not None:
+            kind_norm = str(kind_raw).strip().lower()
+            t["kind"] = kind_norm
+        else:
+            kind_norm = ""
+
+        if kind_norm == "invariant":
+            if type_raw is None:
+                die(f"tests[{i}]: invariant test requires 'type'")
+            inv_type = str(type_raw).strip().lower()
+            if not inv_type:
+                die(f"tests[{i}]: invariant test requires non-empty 'type'")
+            if inv_type not in ("bgp_session_up", "route_present", "route_absent"):
+                die(
+                    f"tests[{i}]: invariant.type unsupported ({inv_type!r}) "
+                    f"(supported: bgp_session_up, route_present, route_absent)"
+                )
+            t["type"] = inv_type
+        else:
+            if "kind" in t and "type" in t:
+                die(f"tests[{i}]: has both 'kind' and 'type' (use only 'kind')")
+
+            if "type" in t and "kind" not in t:
+                t["kind"] = str(t.pop("type")).strip().lower()
+
+        # ----------------------------
+        # v2: invariant alias normalization + schema validation (resolve-time only)
+        # Canonical form:
+        #   kind: invariant
+        #   type: bgp_session_up|route_present|route_absent
+        #   node: <node name>
+        # Normalized aliases:
+        #   node -> src
+        #   neighbor -> dst   (bgp_session_up only)
+        # ----------------------------
+        if (t.get("kind") or "").strip() == "invariant":
+            ctx = f"tests[{i}] ({t.get('name', '<unnamed>')})"
+
+            if "node" in t and "src" in t:
+                a = str(t.get("node") or "").strip()
+                b = str(t.get("src") or "").strip()
+                if a and b and a != b:
+                    die(f"{ctx}: 'node' and 'src' disagree ({a!r} vs {b!r})")
+
+            if "src" not in t and "node" in t:
+                t["src"] = t.get("node")
+
+            inv_type = str(t.get("type") or "").strip().lower()
+            src = t.get("src")
+            if not isinstance(src, str) or not src.strip():
+                die(f"{ctx}: invariant test requires 'node/src' as a node name")
+
+            exp = t.get("expect")
+            if exp is None:
+                exp = "pass"
+            exp_s = str(exp).strip().lower()
+            if exp_s not in ("pass", "fail"):
+                die(f"{ctx}: invariant.expect must be pass|fail if provided")
+            t["expect"] = exp_s
+
+            if inv_type in ("route_present", "route_absent"):
+                pfx = t.get("prefix")
+                if not isinstance(pfx, str) or not pfx.strip():
+                    die(f"{ctx}: {inv_type} requires 'prefix' as CIDR (e.g. 10.0.0.0/24)")
+                try:
+                    _ = ipaddress.ip_network(pfx.strip(), strict=False)
+                except Exception:
+                    die(f"{ctx}: {inv_type}.prefix must be a valid CIDR (e.g. 10.0.0.0/24)")
+
+            elif inv_type == "bgp_session_up":
+                if "neighbor" in t and "dst" in t:
+                    a = str(t.get("neighbor") or "").strip()
+                    b = str(t.get("dst") or "").strip()
+                    if a and b and a != b:
+                        die(f"{ctx}: 'neighbor' and 'dst' disagree ({a!r} vs {b!r})")
+
+                if "dst" not in t and "neighbor" in t:
+                    t["dst"] = t.get("neighbor")
+
+                dst = t.get("dst")
+                if not isinstance(dst, str) or not dst.strip():
+                    die(f"{ctx}: bgp_session_up requires 'neighbor/dst' as an IPv4 literal")
+                if not is_ip_literal(dst.strip()):
+                    die(f"{ctx}: bgp_session_up neighbor/dst must be an IPv4 literal")
 
         # ----------------------------
         # v1.5: route_prefix alias normalization
