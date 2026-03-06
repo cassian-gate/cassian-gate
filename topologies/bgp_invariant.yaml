@@ -8,6 +8,7 @@ nodes:
 
 links:
   - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["10.0.0.1/30", "10.0.0.2/30"]
 
 tests:
   - name: inv_bgp_up_r1_to_10_0_0_2
