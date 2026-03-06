@@ -15,7 +15,7 @@ tests:
     type: route_present
     node: r1
     prefix: 10.10.10.0/24
-    expect: pass
+    expect: fail
 
   - name: inv_route_absent_r1_10_20_20_0_24
     kind: invariant
