@@ -4197,18 +4197,107 @@ def cmd_test(args: argparse.Namespace) -> None:
         meta includes restored_routes for link_up/interface_up
         """
 
+        def _must_ok(cp: subprocess.CompletedProcess, what: str) -> None:
+            if cp.returncode != 0:
+                raise ValueError(what)
+
         def _iface_down(node: str, iface: str) -> None:
             key = (node, iface)
             fault_state_routes_v4[key] = _snapshot_v4_via_routes(node, iface)
-            rt.exec(lab, node, ["ip", "link", "set", "dev", str(iface), "down"], check=False)
+            cp = rt.exec(
+                lab,
+                node,
+                ["ip", "link", "set", "dev", str(iface), "down"],
+                check=False,
+            )
+            _must_ok(cp, f"failed to set link down on {node}:{iface}")
 
         def _iface_up(node: str, iface: str) -> int:
-            rt.exec(lab, node, ["ip", "link", "set", "dev", str(iface), "up"], check=False)
+            cp = rt.exec(
+                lab,
+                node,
+                ["ip", "link", "set", "dev", str(iface), "up"],
+                check=False,
+            )
+            _must_ok(cp, f"failed to set link up on {node}:{iface}")
             key = (node, iface)
             routes = fault_state_routes_v4.get(key) or []
             if routes:
                 _restore_v4_routes(node, routes)
             return len(routes)
+
+        def _iface_netem_loss(node: str, iface: str, loss_percent: int) -> None:
+            cp = rt.exec(
+                lab,
+                node,
+                ["tc", "qdisc", "replace", "dev", str(iface), "root", "netem", "loss", f"{loss_percent}%"],
+                check=False,
+            )
+            _must_ok(cp, f"failed to apply packet loss on {node}:{iface}")
+
+        def _iface_netem_delay(node: str, iface: str, latency_ms: int) -> None:
+            cp = rt.exec(
+                lab,
+                node,
+                ["tc", "qdisc", "replace", "dev", str(iface), "root", "netem", "delay", f"{latency_ms}ms"],
+                check=False,
+            )
+            _must_ok(cp, f"failed to apply latency on {node}:{iface}")
+
+        def _iface_tbf(node: str, iface: str, bandwidth_mbps: int) -> None:
+            cp = rt.exec(
+                lab,
+                node,
+                [
+                    "tc",
+                    "qdisc",
+                    "replace",
+                    "dev",
+                    str(iface),
+                    "root",
+                    "tbf",
+                    "rate",
+                    f"{bandwidth_mbps}mbit",
+                    "burst",
+                    "32kbit",
+                    "latency",
+                    "400ms",
+                ],
+                check=False,
+            )
+            _must_ok(cp, f"failed to apply bandwidth cap on {node}:{iface}")
+
+        def _resolve_link_or_interface_targets(
+            action: str,
+            spec: dict[str, Any],
+        ) -> tuple[list[tuple[str, str]], str]:
+            node = str(spec.get("node") or "").strip()
+            iface = str(spec.get("if") or spec.get("iface") or spec.get("interface") or "").strip()
+
+            a = str(spec.get("a") or "").strip()
+            b = str(spec.get("b") or "").strip()
+            a_if_req = spec.get("a_if")
+            b_if_req = spec.get("b_if")
+
+            has_iface_target = bool(node or iface)
+            has_link_target = bool(a or b or a_if_req or b_if_req)
+
+            if has_iface_target and has_link_target:
+                raise ValueError(f"{action}: target is ambiguous (choose node+if OR a/b link form)")
+
+            if has_iface_target:
+                if not node or not iface:
+                    raise ValueError(f"{action}: requires node + if")
+                return [(node, iface)], f"{node}:{iface}"
+
+            if not a or not b:
+                raise ValueError(f"{action}: requires a,b")
+
+            a_if, b_if = _find_link_interfaces(a, b, a_if=a_if_req, b_if=b_if_req)
+            if not a_if or not b_if:
+                raise ValueError(f"{action}: could not determine interfaces for link {a}<->{b}")
+
+            return [(a, a_if), (b, b_if)], f"{a}:{a_if}<->{b}:{b_if}"
 
         # ----------------------------
         # link_down / link_up
@@ -4222,7 +4311,6 @@ def cmd_test(args: argparse.Namespace) -> None:
             if not a or not b:
                 raise ValueError(f"{action}: requires a,b")
 
-            # Optional explicit interface disambiguation (validated earlier in validate_scenarios)
             a_if_req = spec.get("a_if")
             b_if_req = spec.get("b_if")
 
@@ -4256,6 +4344,62 @@ def cmd_test(args: argparse.Namespace) -> None:
 
             r = _iface_up(node, str(iface))
             return action, f"{node}:{iface}", {"restored_routes": r}
+
+        # ----------------------------
+        # packet_loss / latency / bandwidth_cap
+        # ----------------------------
+        if "packet_loss" in fault:
+            spec = fault.get("packet_loss") or {}
+            loss = spec.get("loss_percent")
+            if loss is None:
+                loss = spec.get("loss")
+            if not isinstance(loss, int) or loss < 0 or loss > 100:
+                raise ValueError("invalid packet loss value")
+
+            targets, label = _resolve_link_or_interface_targets("packet_loss", spec)
+            for node, iface in targets:
+                _iface_netem_loss(node, iface, loss)
+            return "packet_loss", label, {"loss_percent": loss}
+
+        if "latency" in fault:
+            spec = fault.get("latency") or {}
+            latency_ms = spec.get("latency_ms")
+            if not isinstance(latency_ms, int) or latency_ms < 0:
+                raise ValueError("invalid latency value")
+
+            targets, label = _resolve_link_or_interface_targets("latency", spec)
+            for node, iface in targets:
+                _iface_netem_delay(node, iface, latency_ms)
+            return "latency", label, {"latency_ms": latency_ms}
+
+        if "bandwidth_cap" in fault:
+            spec = fault.get("bandwidth_cap") or {}
+            bandwidth_mbps = spec.get("bandwidth_mbps")
+            if not isinstance(bandwidth_mbps, int) or bandwidth_mbps < 1:
+                raise ValueError("invalid bandwidth cap value")
+
+            targets, label = _resolve_link_or_interface_targets("bandwidth_cap", spec)
+            for node, iface in targets:
+                _iface_tbf(node, iface, bandwidth_mbps)
+            return "bandwidth_cap", label, {"bandwidth_mbps": bandwidth_mbps}
+
+        if "prefix_blackhole" in fault:
+            spec = fault.get("prefix_blackhole") or {}
+            node = str(spec.get("node") or "").strip()
+            prefix = str(spec.get("prefix") or "").strip()
+            if not node:
+                raise ValueError("prefix_blackhole: requires node")
+            if not prefix:
+                raise ValueError("prefix_blackhole: requires prefix")
+
+            cp = rt.exec(
+                lab,
+                node,
+                ["ip", "route", "replace", "blackhole", prefix],
+                check=False,
+            )
+            _must_ok(cp, f"failed to install blackhole route {prefix} on {node}")
+            return "prefix_blackhole", f"{node}:{prefix}", {"prefix": prefix}
 
         # ----------------------------
         # node_stop / node_start (future primitives)
@@ -4706,6 +4850,54 @@ def cmd_test(args: argparse.Namespace) -> None:
                         f"[scenario {sid}] {step_idx:02d}. fault action={action} target={target}{note} -> PASS ({dur_ms}ms)"
                     )
 
+                except SystemExit as e:
+                    dur_ms = int((time.time() - step_started) * 1000)
+                    err = f"fault step failed (exit={e.code})"
+                    scen_step({
+                        "type": "fault",
+                        "verdict": "fail",
+                        "duration_ms": dur_ms,
+                        "error": err,
+                        "fault": fault,
+                        "step": step_idx,
+                    })
+                    _sv(f"[scenario {sid}] {step_idx:02d}. fault -> FAIL ({err})")
+
+                    record_event_scenario_fault(
+                        scenario_id=sid,
+                        step_index=step_idx,
+                        verdict="fail",
+                        duration_ms=dur_ms,
+                        error=err,
+                        meta={"action": "error", "target": "", "fault": fault},
+                    )
+
+                    raise
+
+                except ValueError as e:
+                    dur_ms = int((time.time() - step_started) * 1000)
+                    err = str(e)
+                    scen_step({
+                        "type": "fault",
+                        "verdict": "fail",
+                        "duration_ms": dur_ms,
+                        "error": err,
+                        "fault": fault,
+                        "step": step_idx,
+                    })
+                    _sv(f"[scenario {sid}] {step_idx:02d}. fault -> FAIL ({err})")
+
+                    record_event_scenario_fault(
+                        scenario_id=sid,
+                        step_index=step_idx,
+                        verdict="fail",
+                        duration_ms=dur_ms,
+                        error=err,
+                        meta={"action": "error", "target": "", "fault": fault},
+                    )
+
+                    die(f"ERROR: {err}", code=2)
+
                 except Exception as e:
                     dur_ms = int((time.time() - step_started) * 1000)
                     scen_step({
@@ -4725,7 +4917,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                         verdict="fail",
                         duration_ms=dur_ms,
                         error=str(e),
-                        meta={"action": "error", "target": ""},
+                        meta={"action": "error", "target": "", "fault": fault},
                     )
 
                     scen_failed = True
@@ -6862,11 +7054,53 @@ def cmd_replay(args: argparse.Namespace) -> None:
     if (not isinstance(cmd, str)) or (not cmd.strip()):
         die("ERROR: Replay artifacts invalid or incomplete", code=2)
 
+    import shlex
+
+    replay_scenario: str | None = None
+    replay_all_scenarios = False
+
+    try:
+        cmd_tokens = shlex.split(cmd)
+    except Exception:
+        cmd_tokens = []
+
+    i = 0
+    while i < len(cmd_tokens):
+        tok = cmd_tokens[i]
+        if tok == "--all-scenarios":
+            replay_all_scenarios = True
+        elif tok == "--scenario" and (i + 1) < len(cmd_tokens):
+            replay_scenario = str(cmd_tokens[i + 1]).strip() or None
+            i += 1
+        i += 1
+
+    if replay_scenario is None:
+        raw = src_results.get("scenario")
+        if isinstance(raw, str) and raw.strip():
+            replay_scenario = raw.strip()
+
+    if not replay_all_scenarios:
+        raw_all = src_results.get("all_scenarios")
+        if isinstance(raw_all, bool):
+            replay_all_scenarios = raw_all
+
+    if replay_scenario is None and not replay_all_scenarios:
+        src_scenarios = src_results.get("scenarios")
+        if isinstance(src_scenarios, list):
+            scen_ids = []
+            for s in src_scenarios:
+                if isinstance(s, dict):
+                    sid = str(s.get("id") or "").strip()
+                    if sid:
+                        scen_ids.append(sid)
+            scen_ids = list(dict.fromkeys(scen_ids))
+            if len(scen_ids) == 1:
+                replay_scenario = scen_ids[0]
+
     # Minimal stable banner (quiet-mode safe).
     print("ai-netsim Replay Run")
     print("")
     print(f"Run Source: {src}")
-
     if bool(getattr(args, "gate", False)):
         # Authoritative replay:
         # IMPORTANT: Gate-mode enforces clean-state destroy by LAB NAME. If we pass the source resolved
@@ -6909,8 +7143,8 @@ def cmd_replay(args: argparse.Namespace) -> None:
                 json=False,
                 candidate_config=None,
                 verbose=bool(getattr(args, "verbose", False)),
-                scenario=None,
-                all_scenarios=False,
+                scenario=None if replay_all_scenarios else replay_scenario,
+                all_scenarios=replay_all_scenarios,
                 capture_config=False,
                 list_scenarios=False,
                 _report_authority="gate",

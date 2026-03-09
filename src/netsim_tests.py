@@ -17,7 +17,11 @@ from netsim_common import (
 from netsim_artifacts import (
     lab_dir,
 )
-from netsim_runtime_container import _normalize_prefix
+from netsim_runtime_container import (
+    _normalize_prefix,
+    scenario_apply_fault,
+    scenario_clear_fault_state,
+)
 
 def ensure_nc(rt: Runtime, lab: str, node: str) -> None:
     cp = rt.exec(
@@ -1470,7 +1474,16 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                     die(f"{sctx}.fault: must contain exactly one action")
 
                 action, spec = next(iter(fault.items()))
-                if action not in ("link_down", "link_up", "interface_down", "interface_up"):
+                if action not in (
+                    "link_down",
+                    "link_up",
+                    "interface_down",
+                    "interface_up",
+                    "packet_loss",
+                    "latency",
+                    "bandwidth_cap",
+                    "prefix_blackhole",
+                ):
                     die(f"{sctx}.fault: unsupported action '{action}'")
 
                 if not isinstance(spec, dict):
@@ -1490,7 +1503,6 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                     a_if = spec.get("a_if")
                     b_if = spec.get("b_if")
 
-                    # both-or-none
                     if (a_if is None) ^ (b_if is None):
                         die(f"{sctx}.fault.{action}: must provide both a_if and b_if (or neither)")
 
@@ -1500,13 +1512,11 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                         if not isinstance(b_if, str) or not b_if.strip():
                             die(f"{sctx}.fault.{action}.b_if: must be a non-empty string")
 
-                    # --- deeper v1 validation: link disambiguation must match topo['links'] ---
                     a = str(spec.get("a") or "").strip()
                     b = str(spec.get("b") or "").strip()
                     matches = _link_matches(a, b)
 
                     if a_if is None and b_if is None:
-                        # implicit path must be unambiguous
                         if len(matches) == 0:
                             die(f"{sctx}.fault.{action}: no declared link found between {a} and {b}")
                         if len(matches) > 1:
@@ -1515,7 +1525,6 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                                 f"({len(matches)} found); provide a_if/b_if"
                             )
                     else:
-                        # explicit path must match exactly one declared link
                         a_if_s = str(a_if).strip()
                         b_if_s = str(b_if).strip()
                         if (a_if_s, b_if_s) not in matches:
@@ -1525,7 +1534,123 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                                 f"does not match any declared link between {a} and {b}. "
                                 f"Known links: {known}"
                             )
-                    # -------------------------------------------------------------------------
+
+                elif action in ("packet_loss", "latency", "bandwidth_cap"):
+                    allowed_spec = {"a", "b", "a_if", "b_if", "node", "if", "iface", "interface"}
+                    if action == "packet_loss":
+                        allowed_spec |= {"loss", "loss_percent"}
+                    elif action == "latency":
+                        allowed_spec |= {"latency_ms"}
+                    elif action == "bandwidth_cap":
+                        allowed_spec |= {"bandwidth_mbps"}
+
+                    unknown = set(spec) - allowed_spec
+                    if unknown:
+                        die(f"{sctx}.fault.{action}: unknown keys {sorted(unknown)}")
+
+                    has_iface_target = any(k in spec for k in ("node", "if", "iface", "interface"))
+                    has_link_target = any(k in spec for k in ("a", "b", "a_if", "b_if"))
+
+                    if has_iface_target and has_link_target:
+                        die(f"{sctx}.fault.{action}: choose node+if OR a/b link form, not both")
+
+                    if has_iface_target:
+                        node = spec.get("node")
+                        if not isinstance(node, str) or not node.strip():
+                            die(f"{sctx}.fault.{action}.node: must be a non-empty string")
+
+                        iface_keys = ["if", "iface", "interface"]
+                        provided = [k for k in iface_keys if k in spec and spec.get(k) is not None]
+                        if len(provided) == 0:
+                            die(f"{sctx}.fault.{action}: must include exactly one of if/iface/interface")
+                        if len(provided) > 1:
+                            die(
+                                f"{sctx}.fault.{action}: provide only one of if/iface/interface "
+                                f"(got {provided})"
+                            )
+
+                        iface_val = spec.get(provided[0])
+                        if not isinstance(iface_val, str) or not iface_val.strip():
+                            die(f"{sctx}.fault.{action}.{provided[0]}: must be a non-empty string")
+                    else:
+                        a = spec.get("a")
+                        b = spec.get("b")
+                        if not isinstance(a, str) or not a.strip():
+                            die(f"{sctx}.fault.{action}.a: must be a non-empty string")
+                        if not isinstance(b, str) or not b.strip():
+                            die(f"{sctx}.fault.{action}.b: must be a non-empty string")
+
+                        a_if = spec.get("a_if")
+                        b_if = spec.get("b_if")
+                        if (a_if is None) ^ (b_if is None):
+                            die(f"{sctx}.fault.{action}: must provide both a_if and b_if (or neither)")
+
+                        if a_if is not None:
+                            if not isinstance(a_if, str) or not a_if.strip():
+                                die(f"{sctx}.fault.{action}.a_if: must be a non-empty string")
+                            if not isinstance(b_if, str) or not b_if.strip():
+                                die(f"{sctx}.fault.{action}.b_if: must be a non-empty string")
+
+                        matches = _link_matches(str(a).strip(), str(b).strip())
+                        if a_if is None and b_if is None:
+                            if len(matches) == 0:
+                                die(f"{sctx}.fault.{action}: no declared link found between {a} and {b}")
+                            if len(matches) > 1:
+                                die(
+                                    f"{sctx}.fault.{action}: ambiguous links between {a} and {b} "
+                                    f"({len(matches)} found); provide a_if/b_if"
+                                )
+                        else:
+                            a_if_s = str(a_if).strip()
+                            b_if_s = str(b_if).strip()
+                            if (a_if_s, b_if_s) not in matches:
+                                known = ", ".join([f"{a}:{x}<->{b}:{y}" for (x, y) in matches]) or "(none)"
+                                die(
+                                    f"{sctx}.fault.{action}: provided {a}:{a_if_s}<->{b}:{b_if_s} "
+                                    f"does not match any declared link between {a} and {b}. "
+                                    f"Known links: {known}"
+                                )
+
+                    if action == "packet_loss":
+                        loss = spec.get("loss_percent")
+                        if loss is None:
+                            loss = spec.get("loss")
+                        if not isinstance(loss, int):
+                            die(f"{sctx}.fault.packet_loss: loss/loss_percent must be an int")
+
+                    elif action == "latency":
+                        latency_ms = spec.get("latency_ms")
+                        if not isinstance(latency_ms, int):
+                            die(f"{sctx}.fault.latency: latency_ms must be int")
+
+                        if latency_ms < 0:
+                            die(f"{sctx}.fault.latency: latency_ms must be >= 0")
+
+                elif action == "prefix_blackhole":
+                    allowed_spec = {"node", "prefix"}
+                    unknown = set(spec) - allowed_spec
+                    if unknown:
+                        die(f"{sctx}.fault.{action}: unknown keys {sorted(unknown)}")
+
+                    node = spec.get("node")
+                    prefix = spec.get("prefix")
+
+                    if not isinstance(node, str) or not node.strip():
+                        die(f"{sctx}.fault.{action}.node: must be a non-empty string")
+                    node_s = node.strip()
+
+                    nodes = topo.get("nodes") or []
+                    by_name: dict[str, dict] = {
+                        n.get("name"): n
+                        for n in nodes
+                        if isinstance(n, dict) and isinstance(n.get("name"), str)
+                    }
+                    if node_s not in by_name:
+                        die(f"{sctx}.fault.{action}.node: unknown node '{node_s}'")
+
+                    if not isinstance(prefix, str) or not prefix.strip():
+                        die(f"{sctx}.fault.{action}.prefix: must be a non-empty string")
+                    _normalize_prefix(prefix.strip())
 
                 else:
                     # interface_down / interface_up
@@ -2211,6 +2336,7 @@ def execute_scenario(
 
     # v1.5: at most one active capture per scenario
     active_pcap: dict[str, Any] | None = None
+    active_fault_states: list[dict[str, Any]] = []
 
     for idx, step in enumerate(steps):
         if not isinstance(step, dict) or not step:
@@ -2481,25 +2607,57 @@ def execute_scenario(
 
         # ---- fault ----
         elif stype == "fault":
-            # Step 1: executor skeleton only.
-            # Step 2 will implement runtime-backed fault primitives.
-            step_rec["fault"] = step["fault"]
-            step_rec["verdict"] = "fail"
-            step_rec["error"] = "fault primitives not implemented yet (Step 2)"
+            fault = step["fault"]
+            action, spec = next(iter(fault.items()))
+            try:
+                applied = scenario_apply_fault(rt, lab, topo, action, spec)
+            except SystemExit as e:
+                step_rec["fault"] = fault
+                step_rec["verdict"] = "fail"
+                step_rec["error"] = f"fault step failed: {action} (exit={e.code})"
+                step_rec["duration_ms"] = int((time.time() - started) * 1000)
+                scen_rec["steps"].append(step_rec)
+                scen_rec["verdict"] = "fail"
+                raise
+
+            step_rec["fault"] = fault
+            step_rec["action"] = applied["action"]
+            step_rec["target"] = applied["target"]
+
+            if "loss_percent" in applied:
+                step_rec["loss_percent"] = applied["loss_percent"]
+            if "latency_ms" in applied:
+                step_rec["latency_ms"] = applied["latency_ms"]
+            if "bandwidth_mbps" in applied:
+                step_rec["bandwidth_mbps"] = applied["bandwidth_mbps"]
+            if "prefix" in applied:
+                step_rec["prefix"] = applied["prefix"]
+
+            step_rec["verdict"] = "pass"
             step_rec["duration_ms"] = int((time.time() - started) * 1000)
             scen_rec["steps"].append(step_rec)
-            scen_rec["verdict"] = "fail"
-            break
 
-        else:
-            step_rec["verdict"] = "fail"
-            step_rec["error"] = f"unknown step type '{stype}'"
-            step_rec["duration_ms"] = int((time.time() - started) * 1000)
-            scen_rec["steps"].append(step_rec)
-            scen_rec["verdict"] = "fail"
-            break
+            fault_event = {
+                "kind": "scenario_fault",
+                "scenario_id": scen_id,
+                "step": idx,
+                "action": applied["action"],
+                "target": applied["target"],
+            }
+            if "loss_percent" in applied:
+                fault_event["loss_percent"] = applied["loss_percent"]
+            if "latency_ms" in applied:
+                fault_event["latency_ms"] = applied["latency_ms"]
+            if "bandwidth_mbps" in applied:
+                fault_event["bandwidth_mbps"] = applied["bandwidth_mbps"]
+            if "prefix" in applied:
+                fault_event["prefix"] = applied["prefix"]
+            events.append(fault_event)
 
-    # Auto-stop capture at scenario end if still active (non-gating, evidence-only)
+            state = applied.get("state")
+            if state:
+                active_fault_states.append(state)
+                
     if active_pcap is not None:
         node = active_pcap["node"]
         iface = active_pcap["iface"]
@@ -2559,6 +2717,10 @@ def execute_scenario(
 
         Path(out_meta).parent.mkdir(parents=True, exist_ok=True)
         Path(out_meta).write_text(json.dumps(meta_obj, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    while active_fault_states:
+        state = active_fault_states.pop()
+        scenario_clear_fault_state(rt, lab, state)
 
     return scen_rec
 
