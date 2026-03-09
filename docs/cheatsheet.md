@@ -1,3 +1,4 @@
+````markdown
 # ai-netsim v79 — Operator Cheat Sheet
 
 *(Authoritative Operator Reference)*
@@ -496,6 +497,201 @@ Timeout = failure.
 
 ---
 
+## Grey Failures (Deterministic Degradation)
+
+Grey failures are **scenario-only capabilities**, not standalone CLI commands.
+
+Scenarios can model **partial network degradation**, not only full outages.
+
+Supported grey-failure actions:
+
+* `packet_loss`
+* `latency`
+* `bandwidth_cap`
+* `prefix_blackhole`
+
+These actions are:
+
+* deterministic
+* explicit
+* replay-stable
+* recorded in `results.json`
+
+Grey failures affect the **network condition**, not the verdict logic.
+
+Verdicts still come from the test results that run after the fault step.
+
+---
+
+### Example: Packet Loss
+
+```yaml
+scenarios:
+  - id: loss5_ping_still_passes
+    steps:
+      - fault:
+          packet_loss:
+            node: h1
+            if: eth1
+            loss: 5
+
+      - run: h1_to_fw1_ping
+```
+
+Meaning:
+
+> Apply 5% packet loss on `h1:eth1`, then run the declared test.
+
+---
+
+### Example: Latency
+
+```yaml
+scenarios:
+  - id: delayed_path
+    steps:
+      - fault:
+          latency:
+            node: h1
+            if: eth1
+            latency_ms: 100
+
+      - run: app_check
+```
+
+---
+
+### Example: Bandwidth Cap
+
+```yaml
+scenarios:
+  - id: slow_link
+    steps:
+      - fault:
+          bandwidth_cap:
+            node: h1
+            if: eth1
+            bandwidth_mbps: 10
+
+      - run: transfer_check
+```
+
+---
+
+### Example: Prefix Blackhole
+
+```yaml
+scenarios:
+  - id: blackhole_prefix
+    steps:
+      - fault:
+          prefix_blackhole:
+            node: r1
+            prefix: 192.168.50.0/24
+
+      - run: reachability_check
+```
+
+---
+
+### Target Forms
+
+Grey failures support two target styles.
+
+#### Interface target
+
+```yaml
+fault:
+  packet_loss:
+    node: h1
+    if: eth1
+    loss: 5
+```
+
+#### Link target
+
+Useful when you want to degrade both ends of a declared link.
+
+```yaml
+fault:
+  packet_loss:
+    a: r1
+    b: r2
+    a_if: eth1
+    b_if: eth1
+    loss: 5
+```
+
+If multiple links exist between the same nodes, explicit interfaces are required.
+
+---
+
+### Parameter Rules
+
+`packet_loss`
+
+* `loss` or `loss_percent`
+* integer
+* valid range: `0..100`
+
+`latency`
+
+* `latency_ms`
+* integer
+* must be `>= 0`
+
+`bandwidth_cap`
+
+* `bandwidth_mbps`
+* integer
+* must be `>= 1`
+
+`prefix_blackhole`
+
+* `node`
+* `prefix`
+
+Invalid values fail fast with exit code `2`.
+
+---
+
+### How to Run
+
+```bash
+netsim test topologies/fixtures/grey_failure_direct_pass.yaml --scenario loss5_ping_still_passes
+```
+
+Replay deterministically:
+
+```bash
+netsim replay labs/clab-grey-failure-direct-pass --gate --verify-results
+```
+
+---
+
+### Artifact Evidence
+
+Grey failures are recorded in `results.json` as `scenario_fault` events.
+
+Example shape:
+
+```json
+{
+  "type": "scenario_fault",
+  "scenario_id": "loss5_ping_still_passes",
+  "step": 1,
+  "meta": {
+    "action": "packet_loss",
+    "loss_percent": 5,
+    "target": "h1:eth1"
+  }
+}
+```
+
+This provides deterministic evidence that the degradation was applied before the test step ran.
+
+---
+
 # 🔟 Candidate Configuration (Gate Only)
 
 Apply candidate changes during validation.
@@ -717,6 +913,18 @@ Run scenario testing:
 netsim test topology.yaml --all-scenarios
 ```
 
+Run a grey-failure scenario:
+
+```bash
+netsim test topologies/fixtures/grey_failure_direct_pass.yaml --scenario loss5_ping_still_passes
+```
+
+Replay the same grey-failure scenario deterministically:
+
+```bash
+netsim replay labs/clab-grey-failure-direct-pass --gate --verify-results
+```
+
 ---
 
 # 1️⃣7️⃣ Exit Codes
@@ -749,3 +957,6 @@ netsim status <lab>
 ---
 
 # End of ai-netsim v79 Operator Cheat Sheet
+
+```
+```
