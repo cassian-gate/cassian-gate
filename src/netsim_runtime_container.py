@@ -170,6 +170,289 @@ def _coverage_resolve_link_between(
     a_ep, b_ep = matches[0]
     return _coverage_canonical_link_id(a_ep, b_ep)
 
+def _scenario_parse_ep(ep: str) -> tuple[str, str] | None:
+    if not isinstance(ep, str) or ":" not in ep:
+        return None
+    node, iface = ep.split(":", 1)
+    node = node.strip()
+    iface = iface.strip()
+    if not node or not iface:
+        return None
+    return node, iface
+
+
+def _scenario_link_matches(topo: dict[str, Any], a: str, b: str) -> list[tuple[str, str]]:
+    links = topo.get("links", []) or []
+    matches: list[tuple[str, str]] = []
+
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        eps = link.get("endpoints") or []
+        if not (isinstance(eps, list) and len(eps) == 2):
+            continue
+
+        p1 = _scenario_parse_ep(eps[0])
+        p2 = _scenario_parse_ep(eps[1])
+        if not p1 or not p2:
+            continue
+
+        n1, i1 = p1
+        n2, i2 = p2
+        if n1 == a and n2 == b:
+            matches.append((i1, i2))
+        elif n1 == b and n2 == a:
+            matches.append((i2, i1))
+
+    return matches
+
+
+def _scenario_node_exists(topo: dict[str, Any], node: str) -> bool:
+    for n in topo.get("nodes", []) or []:
+        if isinstance(n, dict) and str(n.get("name") or "").strip() == node:
+            return True
+    return False
+
+
+def _scenario_resolve_link_or_interface_targets(
+    topo: dict[str, Any],
+    action: str,
+    spec: dict[str, Any],
+) -> tuple[list[tuple[str, str]], str]:
+    node = str(spec.get("node") or "").strip()
+    iface = str(spec.get("if") or spec.get("iface") or spec.get("interface") or "").strip()
+
+    a = str(spec.get("a") or "").strip()
+    b = str(spec.get("b") or "").strip()
+    a_if = str(spec.get("a_if") or "").strip()
+    b_if = str(spec.get("b_if") or "").strip()
+
+    has_iface_target = bool(node or iface)
+    has_link_target = bool(a or b or a_if or b_if)
+
+    if has_iface_target and has_link_target:
+        die(f"ERROR: fault.{action} target is ambiguous (choose node+if OR a/b link form)", code=2)
+
+    if has_iface_target:
+        if not node or not iface:
+            die(f"ERROR: fault.{action} interface target requires node and if/iface/interface", code=2)
+        if not _scenario_node_exists(topo, node):
+            die(f"ERROR: fault.{action} references unknown node '{node}'", code=2)
+        return [(node, iface)], f"{node}:{iface}"
+
+    if not a or not b:
+        die(f"ERROR: fault.{action} link target requires a and b", code=2)
+
+    if not _scenario_node_exists(topo, a):
+        die(f"ERROR: fault.{action} references unknown node '{a}'", code=2)
+    if not _scenario_node_exists(topo, b):
+        die(f"ERROR: fault.{action} references unknown node '{b}'", code=2)
+
+    matches = _scenario_link_matches(topo, a, b)
+
+    if bool(a_if) ^ bool(b_if):
+        die(f"ERROR: fault.{action} must provide both a_if and b_if (or neither)", code=2)
+
+    if not a_if and not b_if:
+        if len(matches) == 0:
+            die(f"ERROR: fault.{action} no declared link found between {a} and {b}", code=2)
+        if len(matches) > 1:
+            die(f"ERROR: ambiguous link target for fault.{action} between {a} and {b}; provide a_if/b_if", code=2)
+        x_if, y_if = matches[0]
+        return [(a, x_if), (b, y_if)], f"{a}:{x_if}<->{b}:{y_if}"
+
+    if (a_if, b_if) not in matches:
+        known = ", ".join(f"{a}:{x}<->{b}:{y}" for (x, y) in matches) or "(none)"
+        die(
+            f"ERROR: fault.{action} target {a}:{a_if}<->{b}:{b_if} does not match any declared link. "
+            f"Known links: {known}",
+            code=2,
+        )
+
+    return [(a, a_if), (b, b_if)], f"{a}:{a_if}<->{b}:{b_if}"
+
+
+def _scenario_tc_replace(rt: "Runtime", lab: str, node: str, iface: str, qdisc_args: str) -> None:
+    cp = rt.sh(
+        lab,
+        node,
+        f"tc qdisc replace dev {iface} root {qdisc_args}",
+        check=False,
+        capture_output=True,
+    )
+    if cp.returncode != 0:
+        die(f"ERROR: failed to apply tc qdisc on {node}:{iface}", code=2)
+
+
+def _scenario_tc_clear(rt: "Runtime", lab: str, node: str, iface: str) -> None:
+    cp = rt.sh(
+        lab,
+        node,
+        f"tc qdisc del dev {iface} root",
+        check=False,
+        capture_output=True,
+    )
+    if cp.returncode not in (0, 2):
+        die(f"ERROR: failed to clear tc qdisc on {node}:{iface}", code=2)
+
+
+def scenario_apply_fault(
+    rt: "Runtime",
+    lab: str,
+    topo: dict[str, Any],
+    action: str,
+    spec: dict[str, Any],
+) -> dict[str, Any]:
+    if action in ("link_down", "link_up"):
+        targets, target_label = _scenario_resolve_link_or_interface_targets(topo, action, spec)
+        desired = "down" if action == "link_down" else "up"
+        for node, iface in targets:
+            cp = rt.sh(
+                lab,
+                node,
+                f"ip link set dev {iface} {desired}",
+                check=False,
+                capture_output=True,
+            )
+            if cp.returncode != 0:
+                die(f"ERROR: failed to set link state {desired} on {node}:{iface}", code=2)
+        return {
+            "action": action,
+            "target": target_label,
+            "state": {"kind": "link_state", "targets": targets, "desired": desired},
+        }
+
+    if action in ("interface_down", "interface_up"):
+        targets, target_label = _scenario_resolve_link_or_interface_targets(topo, action, spec)
+        node, iface = targets[0]
+        desired = "down" if action == "interface_down" else "up"
+        cp = rt.sh(
+            lab,
+            node,
+            f"ip link set dev {iface} {desired}",
+            check=False,
+            capture_output=True,
+        )
+        if cp.returncode != 0:
+            die(f"ERROR: failed to set interface state {desired} on {node}:{iface}", code=2)
+        return {
+            "action": action,
+            "target": target_label,
+            "state": {"kind": "link_state", "targets": [(node, iface)], "desired": desired},
+        }
+
+    if action == "packet_loss":
+        loss = spec.get("loss_percent")
+        if loss is None:
+            loss = spec.get("loss")
+        if not isinstance(loss, int) or loss < 0 or loss > 100:
+            die("ERROR: invalid packet loss value", code=2)
+
+        targets, target_label = _scenario_resolve_link_or_interface_targets(topo, action, spec)
+        for node, iface in targets:
+            _scenario_tc_replace(rt, lab, node, iface, f"netem loss {loss}%")
+        return {
+            "action": action,
+            "target": target_label,
+            "loss_percent": loss,
+            "state": {"kind": "tc", "targets": targets},
+        }
+
+    if action == "latency":
+        latency_ms = spec.get("latency_ms")
+        if not isinstance(latency_ms, int) or latency_ms < 0:
+            die("ERROR: invalid latency value", code=2)
+
+        targets, target_label = _scenario_resolve_link_or_interface_targets(topo, action, spec)
+        for node, iface in targets:
+            _scenario_tc_replace(rt, lab, node, iface, f"netem delay {latency_ms}ms")
+        return {
+            "action": action,
+            "target": target_label,
+            "latency_ms": latency_ms,
+            "state": {"kind": "tc", "targets": targets},
+        }
+
+    if action == "bandwidth_cap":
+        bandwidth_mbps = spec.get("bandwidth_mbps")
+        if not isinstance(bandwidth_mbps, int) or bandwidth_mbps < 1:
+            die("ERROR: invalid bandwidth cap value", code=2)
+
+        targets, target_label = _scenario_resolve_link_or_interface_targets(topo, action, spec)
+        for node, iface in targets:
+            _scenario_tc_replace(
+                rt,
+                lab,
+                node,
+                iface,
+                f"tbf rate {bandwidth_mbps}mbit burst 32kbit latency 400ms",
+            )
+        return {
+            "action": action,
+            "target": target_label,
+            "bandwidth_mbps": bandwidth_mbps,
+            "state": {"kind": "tc", "targets": targets},
+        }
+
+    if action == "prefix_blackhole":
+        node = str(spec.get("node") or "").strip()
+        prefix = str(spec.get("prefix") or "").strip()
+        if not node:
+            die("ERROR: prefix_blackhole requires node", code=2)
+        if not _scenario_node_exists(topo, node):
+            die(f"ERROR: prefix_blackhole references unknown node '{node}'", code=2)
+        if not prefix:
+            die("ERROR: prefix_blackhole requires prefix", code=2)
+
+        normalized = _normalize_prefix(prefix)
+        cp = rt.sh(
+            lab,
+            node,
+            f"ip route replace blackhole {normalized}",
+            check=False,
+            capture_output=True,
+        )
+        if cp.returncode != 0:
+            die(f"ERROR: failed to install blackhole route {normalized} on {node}", code=2)
+
+        return {
+            "action": action,
+            "target": f"{node}:{normalized}",
+            "prefix": normalized,
+            "state": {"kind": "blackhole_route", "node": node, "prefix": normalized},
+        }
+
+    die(f"ERROR: unsupported grey failure action '{action}'", code=2)
+    raise RuntimeError("unreachable")
+
+
+def scenario_clear_fault_state(rt: "Runtime", lab: str, state: dict[str, Any]) -> None:
+    kind = str(state.get("kind") or "").strip()
+
+    if kind == "tc":
+        for node, iface in state.get("targets") or []:
+            _scenario_tc_clear(rt, lab, str(node), str(iface))
+        return
+
+    if kind == "blackhole_route":
+        node = str(state.get("node") or "").strip()
+        prefix = str(state.get("prefix") or "").strip()
+        cp = rt.sh(
+            lab,
+            node,
+            f"ip route del blackhole {prefix}",
+            check=False,
+            capture_output=True,
+        )
+        if cp.returncode not in (0, 2):
+            die(f"ERROR: failed to remove blackhole route {prefix} on {node}", code=2)
+        return
+
+    if kind == "link_state":
+        return
+
+    die(f"ERROR: unsupported fault cleanup state '{kind}'", code=2)
+
 def build_coverage_model(resolved: dict[str, Any], topo_path: Path) -> dict[str, Any]:
     """
     Pure, declared-only coverage model computed from resolved topology.
@@ -249,7 +532,16 @@ def build_coverage_model(resolved: dict[str, Any], topo_path: Path) -> dict[str,
                         die(f"coverage: scenario '{sid}' fault must be a dict with exactly one action")
 
                     action, spec = next(iter(f.items()))
-                    if action not in ("link_down", "link_up", "interface_down", "interface_up"):
+                    if action not in (
+                        "link_down",
+                        "link_up",
+                        "interface_down",
+                        "interface_up",
+                        "packet_loss",
+                        "latency",
+                        "bandwidth_cap",
+                        "prefix_blackhole",
+                    ):
                         die(f"coverage: scenario '{sid}' has unknown fault action '{action}'")
 
                     if not isinstance(spec, dict):
@@ -257,29 +549,52 @@ def build_coverage_model(resolved: dict[str, Any], topo_path: Path) -> dict[str,
 
                     scen_faults.add(action)
 
-                    if action in ("link_down", "link_up"):
-                        a = str(spec.get("a") or "").strip()
-                        b = str(spec.get("b") or "").strip()
-                        if not a or not b:
-                            die(f"coverage: scenario '{sid}' fault.{action} requires a and b")
-                        if a not in known_nodes:
-                            die(f"coverage: scenario '{sid}' references unknown node '{a}'")
-                        if b not in known_nodes:
-                            die(f"coverage: scenario '{sid}' references unknown node '{b}'")
-                        scen_nodes.add(a)
-                        scen_nodes.add(b)
+                    if action in ("link_down", "link_up", "packet_loss", "latency", "bandwidth_cap"):
+                        has_iface_target = ("node" in spec) or ("if" in spec) or ("iface" in spec) or ("interface" in spec)
+                        has_link_target = ("a" in spec) or ("b" in spec) or ("a_if" in spec) or ("b_if" in spec)
 
-                        a_if_raw = spec.get("a_if")
-                        b_if_raw = spec.get("b_if")
+                        if has_iface_target and has_link_target:
+                            die(
+                                f"coverage: scenario '{sid}' fault.{action} target is ambiguous "
+                                "(choose node+if OR a/b link form)"
+                            )
 
-                        a_if = str(a_if_raw).strip() if isinstance(a_if_raw, str) and a_if_raw.strip() else None
-                        b_if = str(b_if_raw).strip() if isinstance(b_if_raw, str) and b_if_raw.strip() else None
+                        if has_iface_target:
+                            node = str(spec.get("node") or "").strip()
+                            if not node:
+                                die(f"coverage: scenario '{sid}' fault.{action} requires node")
+                            if node not in known_nodes:
+                                die(f"coverage: scenario '{sid}' references unknown node '{node}'")
+                            scen_nodes.add(node)
 
-                        link_id = _coverage_resolve_link_between(resolved, a, b, a_if, b_if)
-                        scen_links.add(link_id)
+                        else:
+                            a = str(spec.get("a") or "").strip()
+                            b = str(spec.get("b") or "").strip()
+                            if not a or not b:
+                                die(f"coverage: scenario '{sid}' fault.{action} requires a and b")
+                            if a not in known_nodes:
+                                die(f"coverage: scenario '{sid}' references unknown node '{a}'")
+                            if b not in known_nodes:
+                                die(f"coverage: scenario '{sid}' references unknown node '{b}'")
+                            scen_nodes.add(a)
+                            scen_nodes.add(b)
+
+                            a_if_raw = spec.get("a_if")
+                            b_if_raw = spec.get("b_if")
+
+                            a_if = str(a_if_raw).strip() if isinstance(a_if_raw, str) and a_if_raw.strip() else None
+                            b_if = str(b_if_raw).strip() if isinstance(b_if_raw, str) and b_if_raw.strip() else None
+
+                            link_id = _coverage_resolve_link_between(resolved, a, b, a_if, b_if)
+                            scen_links.add(link_id)
 
                     else:
                         node = str(spec.get("node") or "").strip()
+                        if not node:
+                            die(f"coverage: scenario '{sid}' fault.{action} requires node")
+                        if node not in known_nodes:
+                            die(f"coverage: scenario '{sid}' references unknown node '{node}'")
+                        scen_nodes.add(node)
                         if not node:
                             die(f"coverage: scenario '{sid}' fault.{action} requires node")
                         if node not in known_nodes:

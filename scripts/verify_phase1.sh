@@ -49,34 +49,54 @@ echo "=== 0b) Guardrail: wait_for_condition wiring invariant ==="
 #  - defined exactly once in netsim_tests.py
 #  - exactly one call site there (def + call = 2)
 #  - zero occurrences in netsim.py
-
-wfc_def_count="$({ grep -nE '^[[:space:]]*def[[:space:]]+wait_for_condition[[:space:]]*\(' src/netsim_tests.py || true; } | wc -l | tr -d ' ')"
-if [ "$wfc_def_count" -ne 1 ]; then
-  echo "FAIL: expected exactly one wait_for_condition() definition, found $wfc_def_count"
-  grep -nE '^[[:space:]]*def[[:space:]]+wait_for_condition[[:space:]]*\(' src/netsim_tests.py || true
+wf_defs="$({ grep -nE '^[[:space:]]*def[[:space:]]+wait_for_condition[[:space:]]*\(' src/netsim_tests.py || true; } | wc -l | tr -d ' ')"
+wf_all="$({ grep -nE '\bwait_for_condition[[:space:]]*\(' src/netsim_tests.py || true; } | wc -l | tr -d ' ')"
+wf_py="$({ grep -nE '\bwait_for_condition[[:space:]]*\(' src/netsim.py || true; } | wc -l | tr -d ' ')"
+echo "wait_for_condition defs in netsim_tests.py = $wf_defs"
+echo "wait_for_condition total refs in netsim_tests.py = $wf_all"
+echo "wait_for_condition refs in netsim.py = $wf_py"
+if [ "$wf_defs" -ne 1 ] || [ "$wf_all" -ne 2 ] || [ "$wf_py" -ne 0 ]; then
+  echo "FAIL: wait_for_condition wiring invariant broken"
   exit 1
 fi
 
-wfc_call_count="$({ grep -nE '\bwait_for_condition[[:space:]]*\(' src/netsim_tests.py || true; } | wc -l | tr -d ' ')"
-if [ "$wfc_call_count" -ne 2 ]; then
-  echo "FAIL: expected wait_for_condition() to appear exactly twice (def + call), found $wfc_call_count"
-  grep -nE '\bwait_for_condition[[:space:]]*\(' src/netsim_tests.py || true
+echo "=== 0c) Guardrail: grey-failure scenario invariant ==="
+# Invariant:
+#  - schema validator knows the four grey-failure actions
+#  - runtime coverage knows the four grey-failure actions
+#  - runtime exposes scenario_apply_fault + scenario_clear_fault_state
+#  - scenario executor uses scenario_apply_fault and cleanup
+for sym in '"packet_loss"' '"latency"' '"bandwidth_cap"' '"prefix_blackhole"'; do
+  if ! grep -q "$sym" src/netsim_tests.py; then
+    echo "FAIL: missing grey-failure action $sym in src/netsim_tests.py"
+    exit 1
+  fi
+  if ! grep -q "$sym" src/netsim_runtime_container.py; then
+    echo "FAIL: missing grey-failure action $sym in src/netsim_runtime_container.py"
+    exit 1
+  fi
+done
+
+if ! grep -q 'def scenario_apply_fault(' src/netsim_runtime_container.py; then
+  echo "FAIL: missing scenario_apply_fault in src/netsim_runtime_container.py"
   exit 1
 fi
-
-wfc_py_count="$({ grep -nE '\bwait_for_condition[[:space:]]*\(' src/netsim.py || true; } | wc -l | tr -d ' ')"
-if [ "$wfc_py_count" -ne 0 ]; then
-  echo "FAIL: wait_for_condition() must not appear in netsim.py"
-  grep -nE '\bwait_for_condition[[:space:]]*\(' src/netsim.py || true
+if ! grep -q 'def scenario_clear_fault_state(' src/netsim_runtime_container.py; then
+  echo "FAIL: missing scenario_clear_fault_state in src/netsim_runtime_container.py"
   exit 1
 fi
-
-caller_line="$({ grep -nE '\bwait_for_condition[[:space:]]*\(' src/netsim_tests.py || true; } | tail -n1)"
-echo "OK: wait_for_condition wiring appears stable:"
-echo "  $caller_line"
-echo
-
-# ------------------------------------------------------------------------------
+if ! grep -q 'scenario_apply_fault' src/netsim_tests.py; then
+  echo "FAIL: src/netsim_tests.py does not reference scenario_apply_fault"
+  exit 1
+fi
+if ! grep -q 'scenario_clear_fault_state' src/netsim_tests.py; then
+  echo "FAIL: src/netsim_tests.py does not reference scenario_clear_fault_state"
+  exit 1
+fi
+if ! grep -q 'active_fault_states' src/netsim_tests.py; then
+  echo "FAIL: src/netsim_tests.py missing active_fault_states tracking"
+  exit 1
+fi
 echo "=== 1) Guardrails: no package installs in engine ==="
 grep -RInE '\bapk\s+(add|update)\b' src && { echo "FAIL: apk usage found"; exit 1; } || echo "OK: no apk installs"
 grep -RInE '\bapt(-get)?\s+(install|update)\b' src && { echo "FAIL: apt usage found"; exit 1; } || echo "OK: no apt installs"
