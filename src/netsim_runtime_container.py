@@ -1105,6 +1105,17 @@ def verify_frr_ready(rt: Runtime, lab: str, rtr: str) -> None:
     if cp.returncode != 0:
         die(f"{rtr}: vtysh not ready")
 
+    # bgpd must be ready when FRR config includes EVPN/BGP generation support
+    cp = rt.exec(
+        lab,
+        rtr,
+        ["vtysh", "-c", "show bgp l2vpn evpn summary"],
+        check=False,
+        capture_output=True,
+    )
+    if cp.returncode != 0:
+        die(f"{rtr}: FRR EVPN/BGP not ready")
+
 def verify_sonic_vm_ready(rt: Runtime, lab: str, node: str) -> None:
     """
     VM substrate readiness gate (v1.5).

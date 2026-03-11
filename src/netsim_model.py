@@ -286,40 +286,94 @@ def _is_multihop_ping_test(topo: dict, test: dict) -> bool:
 
 def _validate_fabric_evpn_presence_only(topo: dict) -> dict[str, Any] | None:
     """
-    v1.5 EVPN Awareness (presence-only):
+    v2 EVPN topology/config generation support:
       - Only allowed declaration location: fabric.evpn
-      - Allowed keys under fabric.evpn: enabled (bool, optional), mode ("evpn", optional)
-      - Everything else is rejected (fail-fast) to prevent scope creep.
-      - EVPN presence MUST NOT be inferred from candidate config, runtime state, or other keys.
+      - Allowed keys under fabric.evpn: enabled, mode, asn
+      - Supported mode: vlan-aware
+      - Validates deterministic leaf/spine RR shape, VLAN↔VNI mapping, and
+        explicit host attachment semantics required for MAC learning proof.
     Returns:
       - normalized evpn dict if present and enabled
       - None if not present or explicitly disabled
     """
 
-    # Guard: reject any "evpn" keys outside fabric.evpn (canonical shape only).
-    # Deterministic: shallow + common nested scans; avoids heuristics and prevents alternate schema.
     def _scan_for_evpn_keys(obj: Any, path: str) -> list[str]:
         hits: list[str] = []
+        allowed_node_keys = {"evpn_rr"}
         if isinstance(obj, dict):
             for k, v in obj.items():
                 k_str = str(k)
                 p = f"{path}.{k_str}" if path else k_str
-                # The ONLY allowed path prefix is fabric.evpn.*
                 if "evpn" in k_str.lower():
-                    if not (p == "fabric.evpn" or p.startswith("fabric.evpn.")):
+                    if not (
+                        p == "fabric.evpn"
+                        or p.startswith("fabric.evpn.")
+                        or k_str in allowed_node_keys
+                    ):
                         hits.append(p)
-                # Recurse a bit to catch obvious alternates (nodes[*].evpn, etc.)
                 hits.extend(_scan_for_evpn_keys(v, p))
         elif isinstance(obj, list):
             for i, it in enumerate(obj, start=0):
                 hits.extend(_scan_for_evpn_keys(it, f"{path}[{i}]"))
         return hits
 
+    def _parse_vlan_id(raw: Any, field: str) -> int:
+        try:
+            vlan_id = int(str(raw).strip())
+        except Exception:
+            die(f"Topology invalid: {field} must be an integer VLAN id")
+        if vlan_id < 1 or vlan_id > 4094:
+            die(f"Topology invalid: {field} must be in range 1..4094")
+        return vlan_id
+
+    def _parse_vni(raw: Any, field: str) -> int:
+        try:
+            vni = int(raw)
+        except Exception:
+            die(f"Topology invalid: {field} must be an integer VNI")
+        if vni < 1 or vni > 16777215:
+            die(f"Topology invalid: {field} must be in range 1..16777215")
+        return vni
+
+    def _valid_mac(raw: Any) -> bool:
+        if not isinstance(raw, str):
+            return False
+        parts = raw.split(":")
+        if len(parts) != 6:
+            return False
+        for part in parts:
+            if len(part) != 2:
+                return False
+            try:
+                int(part, 16)
+            except Exception:
+                return False
+        return True
+
+    def _link_interfaces(links: list[Any], left: str, right: str) -> list[tuple[str, str]]:
+        pairs: list[tuple[str, str]] = []
+        for link in links:
+            if not isinstance(link, dict):
+                continue
+            eps = link.get("endpoints") or []
+            if not isinstance(eps, list) or len(eps) != 2:
+                continue
+            try:
+                n1, if1 = str(eps[0]).split(":", 1)
+                n2, if2 = str(eps[1]).split(":", 1)
+            except ValueError:
+                continue
+            if n1 == left and n2 == right:
+                pairs.append((if1, if2))
+            elif n1 == right and n2 == left:
+                pairs.append((if2, if1))
+        return pairs
+
     hits = _scan_for_evpn_keys(topo, "")
     if hits:
         hits_sorted = sorted(set(hits))
         die(
-            "Topology invalid: EVPN must be declared only at 'fabric.evpn' (v1.5 presence-only). "
+            "Topology invalid: EVPN must be declared only at 'fabric.evpn'. "
             f"Found evpn-shaped keys at: {', '.join(hits_sorted)}"
         )
 
@@ -335,29 +389,186 @@ def _validate_fabric_evpn_presence_only(topo: dict) -> dict[str, Any] | None:
     if not isinstance(evpn, dict):
         die("Topology invalid: 'fabric.evpn' must be a dict when provided")
 
-    # Allowed keys only (presence-only schema)
-    allowed = {"enabled", "mode"}
+    allowed = {"enabled", "mode", "asn", "rr_nodes", "leaf_nodes", "vlans", "host_attachments"}
     unknown = sorted([k for k in evpn.keys() if str(k) not in allowed])
     if unknown:
         die(
             "Topology invalid: fabric.evpn contains unsupported key(s): "
             + ", ".join(unknown)
-            + ". v1.5 supports presence-only: allowed keys are {enabled, mode}."
+            + ". Supported keys are {enabled, mode, asn, rr_nodes, leaf_nodes, vlans, host_attachments}."
         )
 
     enabled = evpn.get("enabled", True)
     if not isinstance(enabled, bool):
         die("Topology invalid: fabric.evpn.enabled must be boolean if provided")
-
     if not enabled:
         return None
 
-    mode = evpn.get("mode", "evpn")
-    if not isinstance(mode, str) or mode.strip() != "evpn":
-        die("Topology invalid: fabric.evpn.mode must be 'evpn' if provided")
+    mode = evpn.get("mode")
+    if not isinstance(mode, str) or mode.strip() != "vlan-aware":
+        die("Topology invalid: fabric.evpn.mode must be 'vlan-aware'")
 
-    # Normalized minimal dict
-    return {"enabled": True, "mode": "evpn"}
+    asn = evpn.get("asn")
+    if not isinstance(asn, int) or asn < 1 or asn > 4294967295:
+        die("Topology invalid: fabric.evpn.asn must be an integer in range 1..4294967295")
+
+    vlans = topo.get("vlans")
+    if not isinstance(vlans, dict) or not vlans:
+        die("Topology invalid: EVPN requires a non-empty top-level 'vlans' mapping")
+
+    vlan_to_vni: dict[int, int] = {}
+    seen_vnis: dict[int, int] = {}
+    for raw_vlan, raw_cfg in vlans.items():
+        vlan_id = _parse_vlan_id(raw_vlan, f"vlans.{raw_vlan}")
+        if not isinstance(raw_cfg, dict):
+            die(f"Topology invalid: vlans.{vlan_id} must be a mapping")
+        unknown_vlan_keys = sorted([k for k in raw_cfg.keys() if str(k) not in {"vni"}])
+        if unknown_vlan_keys:
+            die(
+                f"Topology invalid: vlans.{vlan_id} contains unsupported key(s): "
+                + ", ".join(unknown_vlan_keys)
+            )
+        if "vni" not in raw_cfg:
+            die(f"Topology invalid: vlans.{vlan_id}.vni is required")
+        vni = _parse_vni(raw_cfg.get("vni"), f"vlans.{vlan_id}.vni")
+        if vni in seen_vnis:
+            die(
+                "Topology invalid: duplicate VNI mapping is not allowed: "
+                f"VNI {vni} used by VLAN {seen_vnis[vni]} and VLAN {vlan_id}"
+            )
+        vlan_to_vni[vlan_id] = vni
+        seen_vnis[vni] = vlan_id
+
+    nodes = topo.get("nodes")
+    if not isinstance(nodes, list) or not nodes:
+        die("Topology invalid: EVPN requires a non-empty 'nodes' list")
+
+    links = topo.get("links")
+    if not isinstance(links, list):
+        die("Topology invalid: EVPN requires 'links' to be a list")
+
+    nodes_by_name: dict[str, dict[str, Any]] = {}
+    rr_names: list[str] = []
+    leaf_names: list[str] = []
+
+    for idx, node in enumerate(nodes, start=0):
+        if not isinstance(node, dict):
+            die(f"Topology invalid: nodes[{idx}] must be a mapping")
+        name = node.get("name")
+        ntype = node.get("type")
+        if not isinstance(name, str) or not name.strip():
+            die(f"Topology invalid: nodes[{idx}].name is required for EVPN")
+        if not isinstance(ntype, str) or not ntype.strip():
+            die(f"Topology invalid: nodes[{idx}].type is required for EVPN")
+        nodes_by_name[name] = node
+
+        role = node.get("role")
+        evpn_rr = node.get("evpn_rr", False)
+        if evpn_rr not in (True, False):
+            die(f"Topology invalid: node '{name}': evpn_rr must be boolean if provided")
+
+        if role is None:
+            if evpn_rr:
+                die(f"Topology invalid: node '{name}': evpn_rr requires role: spine")
+            continue
+
+        if not isinstance(role, str) or role not in {"spine", "leaf"}:
+            die(f"Topology invalid: node '{name}': role must be 'spine' or 'leaf'")
+        if ntype != "frr":
+            die(f"Topology invalid: node '{name}': EVPN participant nodes must use type: frr")
+
+        router_id = node.get("router_id")
+        if not isinstance(router_id, str) or not router_id.strip():
+            die(f"Topology invalid: node '{name}': router_id is required for EVPN participants")
+        try:
+            ipaddress.ip_address(router_id.strip())
+        except Exception:
+            die(f"Topology invalid: node '{name}': router_id must be a valid IP literal")
+
+        if role == "spine":
+            if not evpn_rr:
+                die(f"Topology invalid: node '{name}': spine nodes must set evpn_rr: true")
+            rr_names.append(name)
+        else:
+            if evpn_rr:
+                die(f"Topology invalid: node '{name}': evpn_rr is only allowed on spine nodes")
+            leaf_names.append(name)
+
+    rr_names = sorted(rr_names)
+    leaf_names = sorted(leaf_names)
+
+    if not rr_names:
+        die("Topology invalid: EVPN requires at least one spine node with evpn_rr: true")
+    if not leaf_names:
+        die("Topology invalid: EVPN requires at least one leaf node")
+
+    for leaf in leaf_names:
+        linked_rrs = [rr for rr in rr_names if _link_interfaces(links, leaf, rr)]
+        if not linked_rrs:
+            die(
+                f"Topology invalid: EVPN leaf '{leaf}' must have an explicit direct link to at least one EVPN RR spine"
+            )
+
+    host_attachments: list[dict[str, Any]] = []
+    for name, node in sorted(nodes_by_name.items()):
+        if node.get("type") != "host":
+            continue
+
+        attach = node.get("attach")
+        if not isinstance(attach, str) or not attach.strip():
+            die(f"Topology invalid: host '{name}': attach is required for EVPN MAC-route proof")
+        attach = attach.strip()
+        if attach not in leaf_names:
+            die(f"Topology invalid: host '{name}': attach must reference an EVPN leaf")
+
+        vlan_id = _parse_vlan_id(node.get("vlan"), f"host '{name}' vlan")
+        if vlan_id not in vlan_to_vni:
+            die(f"Topology invalid: host '{name}': vlan {vlan_id} has no declared VLAN↔VNI mapping")
+
+        mac = node.get("mac")
+        if not _valid_mac(mac):
+            die(f"Topology invalid: host '{name}': mac must be an explicit 6-octet MAC address")
+
+        host_ip = node.get("ip")
+        if not isinstance(host_ip, str) or not host_ip.strip():
+            die(f"Topology invalid: host '{name}': ip is required for deterministic host presence")
+        try:
+            ipaddress.ip_interface(host_ip.strip())
+        except Exception:
+            die(f"Topology invalid: host '{name}': ip must be a valid interface literal")
+
+        host_links = _link_interfaces(links, name, attach)
+        if len(host_links) != 1:
+            die(
+                f"Topology invalid: host '{name}' must have exactly one explicit link to attached leaf '{attach}'"
+            )
+
+        host_attachments.append(
+            {
+                "host": name,
+                "attach": attach,
+                "vlan": vlan_id,
+                "mac": str(mac).lower(),
+                "ip": host_ip.strip(),
+                "leaf_iface": host_links[0][1],
+                "host_iface": host_links[0][0],
+            }
+        )
+
+    if not host_attachments:
+        die("Topology invalid: EVPN MAC-route proof requires at least one explicitly attached host")
+
+    host_attachments.sort(key=lambda item: (item["attach"], item["leaf_iface"], item["host"]))
+
+    return {
+        "enabled": True,
+        "mode": "vlan-aware",
+        "asn": asn,
+        "rr_nodes": rr_names,
+        "leaf_nodes": leaf_names,
+        "vlans": {str(k): {"vni": vlan_to_vni[k]} for k in sorted(vlan_to_vni)},
+        "host_attachments": host_attachments,
+    }
 
 def ensure_valid_topology(topo: dict) -> None:
     if not isinstance(topo, dict):
@@ -779,23 +990,63 @@ def build_node_links(topo: dict) -> dict:
 
 def gen_frr_conf(node: dict, topo: dict) -> str:
     """
-    Generate FRR integrated config (routing-neutral).
+    Generate FRR integrated config.
 
-    - Configures interface IPs from topology links (only for this node)
-    - Optionally configures loopback /32 if router_id is provided
-    - Does NOT configure routing protocols (BGP/OSPF/etc.)
-    - Does NOT accept topology-encoded routing mechanics (static routes, policy, metrics)
-      Routing behavior must come from device configuration (candidate config or equivalent)
-      and be proven via tests.
+    Default behavior remains routing-neutral for non-EVPN nodes.
+    When fabric.evpn is enabled and the node is an EVPN participant, render a
+    deterministic iBGP EVPN configuration for the supported leaf/spine RR shape.
     """
     name = node["name"]
 
     rid = node.get("router_id")
     rid = str(rid).strip() if rid is not None else ""
 
-    # Build node link list from topology
+    evpn = _validate_fabric_evpn_presence_only(topo)
+    role = node.get("role")
+    is_evpn_participant = bool(
+        evpn
+        and node.get("type") == "frr"
+        and isinstance(role, str)
+        and role in {"spine", "leaf"}
+    )
+
+    nodes_by_name: dict[str, dict[str, Any]] = {}
+    for topo_node in topo.get("nodes", []) or []:
+        if isinstance(topo_node, dict):
+            topo_name = topo_node.get("name")
+            if isinstance(topo_name, str) and topo_name:
+                nodes_by_name[topo_name] = topo_node
+
     links_by_node = build_node_links(topo)
     node_links = links_by_node.get(name, [])
+
+    access_ifaces: set[str] = set()
+    if is_evpn_participant and role == "leaf":
+        for topo_node in topo.get("nodes", []) or []:
+            if not isinstance(topo_node, dict):
+                continue
+            if topo_node.get("type") != "host":
+                continue
+            if str(topo_node.get("attach") or "").strip() != name:
+                continue
+            host_name = topo_node.get("name")
+            if not isinstance(host_name, str) or not host_name:
+                continue
+            for link in topo.get("links", []) or []:
+                if not isinstance(link, dict):
+                    continue
+                eps = link.get("endpoints") or []
+                if not isinstance(eps, list) or len(eps) != 2:
+                    continue
+                try:
+                    n1, if1 = str(eps[0]).split(":", 1)
+                    n2, if2 = str(eps[1]).split(":", 1)
+                except ValueError:
+                    continue
+                if n1 == host_name and n2 == name:
+                    access_ifaces.add(if2)
+                elif n1 == name and n2 == host_name:
+                    access_ifaces.add(if1)
 
     cfg: list[str] = []
     cfg.append("frr version 8")
@@ -805,16 +1056,49 @@ def gen_frr_conf(node: dict, topo: dict) -> str:
     cfg.append("service integrated-vtysh-config")
     cfg.append("!")
 
-    # Optional loopback / router-id (metadata only; does not imply protocols)
     if rid:
         cfg.append("interface lo")
         cfg.append(f" ip address {rid}/32")
         cfg.append("!")
 
-    # Interfaces from topology endpoints (only this node's endpoints)
     for l in node_links:
         cfg.append(f"interface {l['iface']}")
-        cfg.append(f" ip address {l['ip']}")
+        if l["iface"] in access_ifaces:
+            cfg.append(" no ip address")
+        else:
+            cfg.append(f" ip address {l['ip']}")
+        cfg.append("!")
+
+    if is_evpn_participant:
+        peer_entries: list[tuple[str, str, bool]] = []
+        for l in node_links:
+            peer_name = l["peer"]
+            peer_node = nodes_by_name.get(peer_name) or {}
+            peer_role = peer_node.get("role")
+            if role == "leaf":
+                if peer_role == "spine" and bool(peer_node.get("evpn_rr")):
+                    peer_entries.append((peer_name, l["peer_ip"], False))
+            elif role == "spine" and bool(node.get("evpn_rr")):
+                if peer_role == "leaf":
+                    peer_entries.append((peer_name, l["peer_ip"], True))
+
+        peer_entries.sort(key=lambda item: (item[0], item[1]))
+
+        cfg.append(f"router bgp {evpn['asn']}")
+        cfg.append(f" bgp router-id {rid}")
+        cfg.append(" no bgp ebgp-requires-policy")
+        cfg.append(" no bgp default ipv4-unicast")
+        cfg.append(" neighbor EVPN peer-group")
+        cfg.append(f" neighbor EVPN remote-as {evpn['asn']}")
+        for peer_name, peer_ip, rr_client in peer_entries:
+            cfg.append(f" neighbor {peer_ip} peer-group EVPN")
+            if rr_client:
+                cfg.append(f" neighbor {peer_ip} route-reflector-client")
+        cfg.append(" !")
+        cfg.append(" address-family l2vpn evpn")
+        cfg.append("  neighbor EVPN activate")
+        cfg.append("  advertise-all-vni")
+        cfg.append(" exit-address-family")
         cfg.append("!")
 
     cfg.append("line vty")
@@ -827,24 +1111,28 @@ def topo_to_containerlab(topo: dict) -> dict:
         "topology": {"nodes": {}, "links": []},
     }
 
-    # Hard defaults for core node types (deterministic + first-time UX safe).
-    # node.image always overrides these.
     hard_defaults = {
         "host": "wbitt/network-multitool:latest",
         "nft-fw": "ghcr.io/andrew-ai-netsim/nft-fw:latest",
         "frr": "frrouting/frr:latest",
     }
 
+    evpn = _validate_fabric_evpn_presence_only(topo)
+    evpn_leaf_access: dict[str, dict[str, Any]] = {}
+    if isinstance(evpn, dict):
+        for item in evpn.get("host_attachments", []) or []:
+            if not isinstance(item, dict):
+                continue
+            key = f"{item['attach']}:{item['leaf_iface']}"
+            evpn_leaf_access[key] = item
+
     for n in topo["nodes"]:
         ntype = n["type"]
 
-        # Resolve image once (node.image overrides defaults)
         image = n.get("image") or hard_defaults.get(ntype) or DEFAULT_IMAGES.get(ntype)
         if not image:
             die(f"No default image for node type '{ntype}'. Set node.image explicitly.")
 
-        # Runtime-aware kind selection (backend mapping; topology remains runtime-agnostic).
-        # v1.5 foundation: runtime: vm is supported for SONiC via containerlab 'sonic-vm' kind.
         rt = (n.get("runtime") or "container").strip().lower()
 
         if rt == "vm":
@@ -857,10 +1145,6 @@ def topo_to_containerlab(topo: dict) -> dict:
         binds: list[str] = []
 
         if ntype == "frr":
-            # v1.x: allow demo/preconfigured FRR images without any /etc/frr binds
-            # frr_mode:
-            #   - "generated" (default): bind generated /etc/frr/{daemons,vtysh.conf,frr.conf}
-            #   - "preconfigured": do NOT bind /etc/frr/* (image owns routing + daemons)
             frr_mode = (n.get("frr_mode") or "generated").strip().lower()
             if frr_mode not in ("generated", "preconfigured"):
                 die(
@@ -880,21 +1164,17 @@ def topo_to_containerlab(topo: dict) -> dict:
                     f"{cfgdir}/frr.conf:/etc/frr/frr.conf:ro",
                 ]
             else:
-                # preconfigured: image provides /etc/frr/* and starts the right daemons (e.g., bgpd)
                 binds = []
 
-        # Hosts should stay alive
         if ntype == "host":
             node_def["cmd"] = "sleep infinity"
 
-        # nft-fw should stay alive and forward
         if ntype == "nft-fw":
             node_def["cmd"] = "sleep infinity"
             node_def["sysctls"] = {
                 "net.ipv4.ip_forward": "1",
                 "net.ipv4.conf.all.rp_filter": "0",
                 "net.ipv4.conf.default.rp_filter": "0",
-                # Let bridged IPv4/IPv6 traffic hit the inet forward hook (iptables/nft)
                 "net.bridge.bridge-nf-call-iptables": "1",
                 "net.bridge.bridge-nf-call-ip6tables": "1",
             }
