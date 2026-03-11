@@ -2209,77 +2209,12 @@ def cmd_test(args: argparse.Namespace) -> None:
             ensure_valid_topology(topo_preview)
             resolved_preview = resolve_topology(topo_preview)
             validate_scenarios(resolved_preview)
-
-            lab_name = str((resolved_preview or {}).get("name") or "").strip()
-            if not lab_name:
-                die(f"Topology missing required 'name': {topo_gate_path}")
-
         except SystemExit as e:
-            # If we already resolved a name, preserve gate hard-failure behavior downstream.
-            # Otherwise, emit fallback artifacts under a deterministic name derived from the input path.
-            if lab_name:
-                raise
+            raise SystemExit(2 if int(getattr(e, "code", 1) or 1) == 1 else int(getattr(e, "code", 1) or 1))
 
-            raw = str(topo_gate_path)
-            # Deterministic, stable slug: based only on input path string bytes.
-            h = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:12]
-            lab_name = f"unknown-{h}"
-
-            # Quiet mode: keep existing UX line shape.
-            msg = str(e).strip()
-            if msg:
-                print(f"ERROR: invalid YAML: {topo_gate_path}: {msg}")
-            else:
-                print(f"ERROR: invalid YAML: {topo_gate_path}")
-
-            # Best-effort: emit authoritative artifacts for this gate failure.
-            try:
-                _gate_write_hard_failure_results(
-                    phase="resolve",
-                    err=msg or "invalid input",
-                    code=int(getattr(e, "code", 2) or 2),
-                )
-            except Exception:
-                pass
-
-            raise
-
-        except Exception as e:
-            if lab_name:
-                # Name exists; preserve existing invalid-input UX + downstream hard-failure path.
-                msg = str(e).strip()
-                if msg:
-                    print(f"ERROR: invalid YAML: {topo_gate_path}: {msg}")
-                else:
-                    print(f"ERROR: invalid YAML: {topo_gate_path}")
-                if bool(getattr(args, "verbose", False)):
-                    import traceback  # local import to avoid global import impact
-                    traceback.print_exc()
-                raise SystemExit(2)
-
-            raw = str(topo_gate_path)
-            h = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:12]
-            lab_name = f"unknown-{h}"
-
-            msg = str(e).strip()
-            if msg:
-                print(f"ERROR: invalid YAML: {topo_gate_path}: {msg}")
-            else:
-                print(f"ERROR: invalid YAML: {topo_gate_path}")
-            if bool(getattr(args, "verbose", False)):
-                import traceback  # local import to avoid global import impact
-                traceback.print_exc()
-
-            try:
-                _gate_write_hard_failure_results(
-                    phase="resolve",
-                    err=msg or "invalid input",
-                    code=2,
-                )
-            except Exception:
-                pass
-
-            raise SystemExit(2)
+        lab_name = str((resolved_preview or {}).get("name") or "").strip()
+        if not lab_name:
+            die(f"Topology missing required 'name': {topo_gate_path}")
 
         # Phase 3 (WI-6): list scenarios directly from the resolved topology (no lab artifacts, no runtime).
         if bool(getattr(args, "list_scenarios", False)):
@@ -2521,6 +2456,14 @@ def cmd_test(args: argparse.Namespace) -> None:
             except Exception:
                 exit_code = 1
 
+            try:
+                err_msg = str(getattr(netsim_common, "LAST_ERROR_MSG", "") or "").strip()
+            except Exception:
+                err_msg = ""
+
+            if exit_code == 1 and err_msg.lower().startswith("topology invalid:"):
+                exit_code = 2
+
             # IMPORTANT (WI-1): only emit a synthetic "hard failure" record when we are NOT in the test stage
             # (deploy/provision/runtime faults) OR when upstream uses the hard-failure exit band.
             # Normal test-stage failures (exit=1) already have authoritative results written by cmd_test()
@@ -2531,7 +2474,6 @@ def cmd_test(args: argparse.Namespace) -> None:
                 # Best-effort: render a gate-style hard failure record under the derived lab name.
                 # Phase must reflect whether failure happened during deploy/provision or during test execution.
                 try:
-                    err_msg = str(getattr(netsim_common, "LAST_ERROR_MSG", "") or "gate failed").strip()
                     phase_report = str(gate_phase or "").strip().lower()
 
                     # WI (Gate failure clarity): map netsim-owned resolve-time validation/coverage failures
@@ -2553,7 +2495,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 except Exception:
                     pass
 
-            raise
+            raise SystemExit(exit_code)
 
         finally:
             # Always cleanup after gate-style runs (equivalent to: netsim down <lab>)
