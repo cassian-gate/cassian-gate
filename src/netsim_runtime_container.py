@@ -978,8 +978,9 @@ def configure_hosts_from_topology(rt: "Runtime", lab_name: str, topo: dict) -> N
       - No direct docker/container name usage here.
       - All node execution goes through rt.exec()/rt.sh() via host_configure().
     """
-    # Quick lookup: node name -> type
-    node_type = {n["name"]: n["type"] for n in topo.get("nodes", [])}
+    # Quick lookup: node name -> node dict / type
+    nodes_by_name = {n["name"]: n for n in topo.get("nodes", [])}
+    node_type = {name: node.get("type") for name, node in nodes_by_name.items()}
 
     for link in topo.get("links", []):
         eps = link.get("endpoints", [])
@@ -996,19 +997,47 @@ def configure_hosts_from_topology(rt: "Runtime", lab_name: str, topo: dict) -> N
 
         # Host on side 1?
         if node_type.get(n1) == "host" and node_type.get(n2) in ("frr", "linux", "nft-fw"):
-            host_configure(rt, lab_name, n1, if1, ip1, ip2.split("/")[0])
+            host_configure(
+                rt,
+                lab_name,
+                n1,
+                if1,
+                ip1,
+                ip2.split("/")[0],
+                mac=nodes_by_name.get(n1, {}).get("mac"),
+            )
 
         # Host on side 2?
         if node_type.get(n2) == "host" and node_type.get(n1) in ("frr", "linux", "nft-fw"):
-            host_configure(rt, lab_name, n2, if2, ip2, ip1.split("/")[0])
+            host_configure(
+                rt,
+                lab_name,
+                n2,
+                if2,
+                ip2,
+                ip1.split("/")[0],
+                mac=nodes_by_name.get(n2, {}).get("mac"),
+            )
 
-def host_configure(rt: "Runtime", lab_name: str, host: str, iface: str, ip_cidr: str, gw: str) -> None:
+def host_configure(
+    rt: "Runtime",
+    lab_name: str,
+    host: str,
+    iface: str,
+    ip_cidr: str,
+    gw: str,
+    mac: str | None = None,
+) -> None:
     """
     Inside host node:
+      - apply deterministic MAC on iface when declared
       - flush and set IP on iface
       - bring iface up
       - set default route via gw
     """
+    rt.exec(lab_name, host, ["ip", "link", "set", iface, "down"], check=False, capture_output=False)
+    if mac:
+        rt.exec(lab_name, host, ["ip", "link", "set", "dev", iface, "address", mac], check=True, capture_output=False)
     rt.exec(lab_name, host, ["ip", "link", "set", iface, "up"], check=False, capture_output=False)
     rt.exec(lab_name, host, ["ip", "addr", "flush", "dev", iface], check=False, capture_output=False)
     rt.exec(lab_name, host, ["ip", "addr", "add", ip_cidr, "dev", iface], check=True, capture_output=False)
@@ -1208,6 +1237,47 @@ ip link set eth2 master br0 2>/dev/null || true
 ip link set br0 up
 """
     rt.sh(lab_name, node, cmd, check=True, capture_output=False)
+
+def evpn_leaf_setup_vxlan_from_topology(rt: "Runtime", lab_name: str, topo: dict) -> None:
+    fabric = (topo.get("fabric") or {})
+    evpn = (fabric.get("evpn") or {})
+    if not evpn.get("enabled"):
+        return
+
+    nodes = {str(n.get("name") or "").strip(): n for n in (topo.get("nodes") or [])}
+    for att in list(evpn.get("host_attachments") or []):
+        leaf = str(att.get("attach") or "").strip()
+        host = str(att.get("host") or "").strip()
+        access_if = str(att.get("leaf_iface") or "").strip()
+        vlan = int(att.get("vlan"))
+        vni = int(((evpn.get("vlans") or {}).get(str(vlan)) or {}).get("vni"))
+        leaf_node = nodes.get(leaf) or {}
+        host_node = nodes.get(host) or {}
+        vtep_ip = str(leaf_node.get("router_id") or "").strip()
+        host_gw = str(host_node.get("gw") or "").strip()
+        if not leaf or not access_if or not vtep_ip:
+            continue
+
+        br = f"br{vlan}"
+        vx = f"vxlan{vni}"
+        cmd = f"""
+set -e
+ip link add {br} type bridge 2>/dev/null || true
+ip link add {vx} type vxlan id {vni} dstport 4789 local {vtep_ip} nolearning 2>/dev/null || true
+ip link set {access_if} up
+ip link set {vx} up
+ip link set {access_if} master {br} 2>/dev/null || true
+ip link set {vx} master {br} 2>/dev/null || true
+ip link set {br} up
+"""
+        rt.sh(lab_name, leaf, cmd, check=True, capture_output=False)
+
+        if host and host_gw:
+            stim_cmd = f"""
+set -e
+arping -c 2 -I eth1 {host_gw} >/dev/null 2>&1 || true
+"""
+            rt.sh(lab_name, host, stim_cmd, check=True, capture_output=False)
 
 def lab_file_from_name(lab_name: str) -> Path:
     return LABS_DIR / f"{lab_name}.clab.yaml"
