@@ -6,6 +6,7 @@ from typing import Any
 import hashlib
 import json
 from pathlib import Path
+import re
 
 import ipaddress
 import yaml
@@ -1088,16 +1089,32 @@ def gen_frr_conf(node: dict, topo: dict) -> str:
         cfg.append(f" bgp router-id {rid}")
         cfg.append(" no bgp ebgp-requires-policy")
         cfg.append(" no bgp default ipv4-unicast")
+        cfg.append(" bgp retain route-target all")
         cfg.append(" neighbor EVPN peer-group")
         cfg.append(f" neighbor EVPN remote-as {evpn['asn']}")
         for peer_name, peer_ip, rr_client in peer_entries:
             cfg.append(f" neighbor {peer_ip} peer-group EVPN")
+        cfg.append(" !")
+        cfg.append(" address-family ipv4 unicast")
+        for peer_name, peer_ip, rr_client in peer_entries:
+            cfg.append(f"  neighbor {peer_ip} activate")
             if rr_client:
-                cfg.append(f" neighbor {peer_ip} route-reflector-client")
+                cfg.append(f"  neighbor {peer_ip} route-reflector-client")
+        cfg.append(f"  network {rid}/32")
+        cfg.append(" exit-address-family")
         cfg.append(" !")
         cfg.append(" address-family l2vpn evpn")
         cfg.append("  neighbor EVPN activate")
+        for peer_name, peer_ip, rr_client in peer_entries:
+            if rr_client:
+                cfg.append(f"  neighbor {peer_ip} route-reflector-client")
         cfg.append("  advertise-all-vni")
+        if role == "leaf":
+            for vlan_id, vlan_data in sorted((evpn.get("vlans") or {}).items(), key=lambda item: int(str(item[0]))):
+                vni = int(vlan_data["vni"])
+                cfg.append(f"  vni {vni}")
+                cfg.append("   advertise-svi-ip")
+                cfg.append("  exit-vni")
         cfg.append(" exit-address-family")
         cfg.append("!")
 
@@ -1324,6 +1341,15 @@ def resolve_topology(topo: dict) -> dict:
     # ----------------------------
     # 1) Auto-address point-to-point links (10.0.0.0/16, sequential /31s)
     # ----------------------------
+    evpn_host_links = set()
+    fabric_evpn = (((resolved.get("fabric") or {}).get("evpn")) or {})
+    if fabric_evpn.get("enabled"):
+        for att in list((fabric_evpn.get("host_attachments") or [])):
+            leaf = str(att.get("attach") or att.get("leaf") or att.get("node") or "").strip()
+            host = str(att.get("host") or "").strip()
+            if leaf and host:
+                evpn_host_links.add(tuple(sorted((f"{host}:eth1", att.get("leaf_iface") and f"{leaf}:{att.get('leaf_iface')}" or f"{leaf}:eth2"))))
+
     next_host = 0  # host index inside 10.0.0.0/16
     for link in resolved.get("links", []):
         if "ipv4" in link and link["ipv4"]:
@@ -1332,6 +1358,29 @@ def resolve_topology(topo: dict) -> dict:
         eps = link["endpoints"]
         if len(eps) != 2:
             die("Auto-IP currently supports only point-to-point links with 2 endpoints")
+
+        if tuple(sorted(eps)) in evpn_host_links:
+            host_name = None
+            for ep in eps:
+                node_name = ep.split(":", 1)[0].strip()
+                for n in resolved.get("nodes", []):
+                    if str(n.get("name") or "").strip() == node_name:
+                        if str(n.get("type") or "").strip() == "host":
+                            host_name = node_name
+                        break
+
+            host_node = {}
+            for n in resolved.get("nodes", []):
+                if str(n.get("name") or "").strip() == str(host_name or "").strip():
+                    host_node = n
+                    break
+
+            host_ip = str(host_node.get("ip") or "").strip()
+            host_gw = str(host_node.get("gw") or "").strip()
+            if not host_ip or not host_gw:
+                die("EVPN host attachment requires host ip and gw for resolved access-link addressing")
+            link["ipv4"] = [host_ip, f"{host_gw}/24"]
+            continue  # EVPN access-side attachment: preserve non-/31 access-link addressing
 
         # Allocate a /31: two addresses
         a = next_host
@@ -1376,10 +1425,17 @@ def resolve_topology(topo: dict) -> dict:
             inv_type = str(type_raw).strip().lower()
             if not inv_type:
                 die(f"tests[{i}]: invariant test requires non-empty 'type'")
-            if inv_type not in ("bgp_session_up", "route_present", "route_absent"):
+            if inv_type not in (
+                "bgp_session_up",
+                "route_present",
+                "route_absent",
+                "evpn_mac_route_present",
+                "evpn_mac_route_absent",
+            ):
                 die(
                     f"tests[{i}]: invariant.type unsupported ({inv_type!r}) "
-                    f"(supported: bgp_session_up, route_present, route_absent)"
+                    f"(supported: bgp_session_up, route_present, route_absent, "
+                    f"evpn_mac_route_present, evpn_mac_route_absent)"
                 )
             t["type"] = inv_type
         else:
@@ -1428,6 +1484,46 @@ def resolve_topology(topo: dict) -> dict:
                 pfx = t.get("prefix")
                 if not isinstance(pfx, str) or not pfx.strip():
                     die(f"{ctx}: {inv_type} requires 'prefix' as CIDR (e.g. 10.0.0.0/24)")
+                try:
+                    _ = ipaddress.ip_network(pfx.strip(), strict=False)
+                except Exception:
+                    die(f"{ctx}: {inv_type}.prefix must be a valid CIDR (e.g. 10.0.0.0/24)")
+
+            elif inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent"):
+                mac = t.get("mac")
+                if not isinstance(mac, str) or not mac.strip():
+                    die(f"{ctx}: {inv_type} requires 'mac'")
+                mac_s = mac.strip().lower()
+                if not re.fullmatch(r"[0-9a-f]{2}(?::[0-9a-f]{2}){5}", mac_s):
+                    die(f"{ctx}: {inv_type}.mac must be a valid MAC address")
+                t["mac"] = mac_s
+
+                vni = t.get("vni")
+                if vni is None or str(vni).strip() == "":
+                    die(f"{ctx}: {inv_type} requires 'vni'")
+                try:
+                    vni_i = int(vni)
+                except Exception:
+                    die(f"{ctx}: {inv_type}.vni must be an integer")
+                if vni_i < 1:
+                    die(f"{ctx}: {inv_type}.vni must be >= 1")
+                t["vni"] = vni_i
+
+            elif inv_type == "bgp_session_up":
+                if "neighbor" in t and "dst" in t:
+                    a = str(t.get("neighbor") or "").strip()
+                    b = str(t.get("dst") or "").strip()
+                    if a and b and a != b:
+                        die(f"{ctx}: 'neighbor' and 'dst' disagree ({a!r} vs {b!r})")
+
+                if "dst" not in t and "neighbor" in t:
+                    t["dst"] = t.get("neighbor")
+
+                dst = t.get("dst")
+                if not isinstance(dst, str) or not dst.strip():
+                    die(f"{ctx}: bgp_session_up requires 'neighbor/dst' as an IPv4 literal")
+                if not is_ip_literal(dst.strip()):
+                    die(f"{ctx}: bgp_session_up neighbor/dst must be an IPv4 literal")
                 try:
                     _ = ipaddress.ip_network(pfx.strip(), strict=False)
                 except Exception:

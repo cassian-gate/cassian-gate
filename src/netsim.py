@@ -249,6 +249,7 @@ from netsim_runtime_container import (
     verify_lab_ready,
     fw_next_hops_from_links,
     nft_fw_setup_bridge,
+    evpn_leaf_setup_vxlan_from_topology,
     lab_file_from_name,
     parse_lab_nodes,
     docker_is_running,
@@ -3755,6 +3756,302 @@ def cmd_test(args: argparse.Namespace) -> None:
             )
             return verdict
 
+        if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent"):
+            mac = str(t.get("mac") or "").strip().lower()
+            vni = t.get("vni")
+            try:
+                vni_i = int(vni)
+            except Exception:
+                vni_i = None
+
+            if not mac or vni_i is None:
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error=f"{inv_type} requires mac and vni",
+                    evidence={"reason": "missing_mac_or_vni"},
+                    meta={"type": inv_type, "mac": mac, "vni": vni},
+                )
+                return "fail"
+
+            cp = rt.exec(
+                lab,
+                src,
+                ["vtysh", "-c", "show bgp l2vpn evpn route json"],
+                check=False,
+                capture_output=True,
+            )
+
+            if isinstance(cp, str):
+                out = cp
+                rc = None
+            else:
+                out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
+                if isinstance(out, (bytes, bytearray)):
+                    try:
+                        out = out.decode("utf-8", errors="replace")
+                    except Exception:
+                        out = str(out)
+                rc = getattr(cp, "returncode", None)
+
+            raw = str(out or "").strip()
+            evidence_entries = []
+            present = False
+            parse_error = ""
+
+            def _append_entry(mac_val, vni_val, state_val):
+                nonlocal present
+                rec = {
+                    "mac": str(mac_val or "").strip().lower(),
+                    "vni": vni_val,
+                    "route_type": state_val,
+                    "node": src,
+                }
+                if not rec["mac"]:
+                    return
+                evidence_entries.append(rec)
+                if rec["mac"] == mac and rec["vni"] == vni_i:
+                    if state_val is None or str(state_val).lower() in ("2", "2-evpn", "macip", "type2"):
+                        present = True
+
+            try:
+                doc = json.loads(raw) if raw else {}
+                seen = set()
+
+                if isinstance(doc, dict):
+                    for rd_key, rd_val in doc.items():
+                        if rd_key in ("numPrefix", "numPaths"):
+                            continue
+                        if not isinstance(rd_val, dict):
+                            continue
+
+                        vni_ctx = None
+                        rd_text = str(rd_val.get("rd") or rd_key)
+                        m_rt = re.search(r"RT:\d+:(\d+)", json.dumps(rd_val), flags=re.IGNORECASE)
+                        if m_rt:
+                            try:
+                                vni_ctx = int(m_rt.group(1))
+                            except Exception:
+                                vni_ctx = None
+
+                        for prefix_key, prefix_val in rd_val.items():
+                            if prefix_key == "rd":
+                                continue
+                            if not isinstance(prefix_val, dict):
+                                continue
+                            for path_group in list(prefix_val.get("paths") or []):
+                                if not isinstance(path_group, list):
+                                    continue
+                                for entry in path_group:
+                                    if not isinstance(entry, dict):
+                                        continue
+
+                                    mac_val = None
+                                    for key in ("mac", "macAddr", "macaddr"):
+                                        val = entry.get(key)
+                                        if isinstance(val, str) and val.strip():
+                                            mac_val = val.strip().lower()
+                                            break
+                                    if not mac_val:
+                                        continue
+
+                                    vni_val = None
+                                    for key in ("vni",):
+                                        val = entry.get(key)
+                                        if val is None or str(val).strip() == "":
+                                            continue
+                                        try:
+                                            vni_val = int(val)
+                                            break
+                                        except Exception:
+                                            continue
+                                    if vni_val is None:
+                                        vni_val = vni_ctx
+
+                                    state_val = entry.get("routeType")
+                                    if state_val is None:
+                                        state_val = entry.get("type")
+                                    if isinstance(state_val, str):
+                                        state_val = state_val.strip()
+
+                                    sig = (mac_val, vni_val, state_val, src)
+                                    if sig in seen:
+                                        continue
+                                    seen.add(sig)
+                                    _append_entry(mac_val, vni_val, state_val)
+                else:
+                    raise ValueError("unexpected_evpn_json_shape")
+
+            except Exception as e:
+                parse_error = str(e)
+
+            if rc not in (0, None):
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported EVPN MAC-route evidence provider capability",
+                    evidence={
+                        "cmd": "vtysh -c 'show bgp l2vpn evpn route json'",
+                        "rc": rc,
+                    },
+                    meta={
+                        "type": inv_type,
+                        "mac": mac,
+                        "vni": vni_i,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
+            if not present:
+                cp_text = rt.exec(
+                    lab,
+                    src,
+                    ["vtysh", "-c", "show bgp l2vpn evpn route"],
+                    check=False,
+                    capture_output=True,
+                )
+
+                if isinstance(cp_text, str):
+                    out_text = cp_text
+                    rc_text = None
+                else:
+                    out_text = getattr(cp_text, "stdout", "") or getattr(cp_text, "output", "") or ""
+                    if isinstance(out_text, (bytes, bytearray)):
+                        try:
+                            out_text = out_text.decode("utf-8", errors="replace")
+                        except Exception:
+                            out_text = str(out_text)
+                    rc_text = getattr(cp_text, "returncode", None)
+
+                if rc_text not in (0, None):
+                    record_fn(
+                        name=test_name,
+                        kind="invariant",
+                        src=src,
+                        dst="",
+                        expected=expected,
+                        observed="fail",
+                        verdict="fail",
+                        duration_ms=0,
+                        error="unsupported EVPN MAC-route evidence provider capability",
+                        evidence={
+                            "cmd": "vtysh -c 'show bgp l2vpn evpn route'",
+                            "rc": rc_text,
+                            "json_rc": rc,
+                        },
+                        meta={
+                            "type": inv_type,
+                            "mac": mac,
+                            "vni": vni_i,
+                            "misuse": True,
+                        },
+                    )
+                    raise SystemExit(2)
+
+                try:
+                    import re as _re
+
+                    text = str(out_text or "")
+                    for line in text.splitlines():
+                        m = _re.search(r"\[2\]:\[0\]:\[48\]:\[([0-9a-f:]{17})\]", line, flags=_re.IGNORECASE)
+                        if not m:
+                            continue
+                        mac_val = m.group(1).lower()
+                        _append_entry(mac_val, vni_i, "2")
+                except Exception as e:
+                    if parse_error:
+                        parse_error = f"{parse_error}; text_parse={e}"
+                    else:
+                        parse_error = f"text_parse={e}"
+
+            if parse_error and not evidence_entries:
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported EVPN MAC-route evidence normalization",
+                    evidence={
+                        "cmd": "vtysh -c 'show bgp l2vpn evpn route json'",
+                        "rc": rc,
+                    },
+                    meta={
+                        "type": inv_type,
+                        "mac": mac,
+                        "vni": vni_i,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
+            dedup = {}
+            for rec in evidence_entries:
+                sig = (
+                    rec.get("mac"),
+                    rec.get("vni"),
+                    rec.get("route_type"),
+                    rec.get("node"),
+                )
+                dedup[sig] = rec
+            evidence_entries = sorted(
+                dedup.values(),
+                key=lambda x: (
+                    str(x.get("mac") or ""),
+                    -1 if x.get("vni") is None else int(x.get("vni")),
+                    str(x.get("route_type") or ""),
+                    str(x.get("node") or ""),
+                ),
+            )
+
+            if inv_type == "evpn_mac_route_present":
+                observed = "pass" if present else "fail"
+            else:
+                observed = "pass" if not present else "fail"
+
+            verdict = "pass" if observed == expected else "fail"
+
+            record_fn(
+                name=test_name,
+                kind="invariant",
+                src=src,
+                dst="",
+                expected=expected,
+                observed=observed,
+                verdict=verdict,
+                duration_ms=int((time.time() - start) * 1000),
+                error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
+                evidence={
+                    "cmd": "vtysh -c 'show bgp l2vpn evpn route json'",
+                    "rc": rc,
+                    "routes": evidence_entries,
+                },
+                meta={
+                    "type": inv_type,
+                    "mac": mac,
+                    "vni": vni_i,
+                    "present": bool(present),
+                    "observed_route_count": len(evidence_entries),
+                },
+            )
+            return verdict
+
         record_fn(
             name=test_name,
             kind="invariant",
@@ -6854,6 +7151,10 @@ def cmd_up(args: argparse.Namespace) -> None:
 
     # 5) FRR provisioning
     configure_frr_interfaces_from_topology(rt, lab_name, topo)
+    evpn_leaf_setup_vxlan_from_topology(rt, lab_name, topo)
+
+    # Deterministic EVPN host-attachment stimulation for MAC learning
+    evpn_leaf_setup_vxlan_from_topology(rt, lab_name, topo)
 
     # ---------------------------------------------------------------------
     # Up success confirmation (v2-up-command-success-confirmation)
