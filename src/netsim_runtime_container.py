@@ -978,8 +978,9 @@ def configure_hosts_from_topology(rt: "Runtime", lab_name: str, topo: dict) -> N
       - No direct docker/container name usage here.
       - All node execution goes through rt.exec()/rt.sh() via host_configure().
     """
-    # Quick lookup: node name -> type
-    node_type = {n["name"]: n["type"] for n in topo.get("nodes", [])}
+    # Quick lookup: node name -> node dict / type
+    nodes_by_name = {n["name"]: n for n in topo.get("nodes", [])}
+    node_type = {name: node.get("type") for name, node in nodes_by_name.items()}
 
     for link in topo.get("links", []):
         eps = link.get("endpoints", [])
@@ -996,19 +997,47 @@ def configure_hosts_from_topology(rt: "Runtime", lab_name: str, topo: dict) -> N
 
         # Host on side 1?
         if node_type.get(n1) == "host" and node_type.get(n2) in ("frr", "linux", "nft-fw"):
-            host_configure(rt, lab_name, n1, if1, ip1, ip2.split("/")[0])
+            host_configure(
+                rt,
+                lab_name,
+                n1,
+                if1,
+                ip1,
+                ip2.split("/")[0],
+                mac=nodes_by_name.get(n1, {}).get("mac"),
+            )
 
         # Host on side 2?
         if node_type.get(n2) == "host" and node_type.get(n1) in ("frr", "linux", "nft-fw"):
-            host_configure(rt, lab_name, n2, if2, ip2, ip1.split("/")[0])
+            host_configure(
+                rt,
+                lab_name,
+                n2,
+                if2,
+                ip2,
+                ip1.split("/")[0],
+                mac=nodes_by_name.get(n2, {}).get("mac"),
+            )
 
-def host_configure(rt: "Runtime", lab_name: str, host: str, iface: str, ip_cidr: str, gw: str) -> None:
+def host_configure(
+    rt: "Runtime",
+    lab_name: str,
+    host: str,
+    iface: str,
+    ip_cidr: str,
+    gw: str,
+    mac: str | None = None,
+) -> None:
     """
     Inside host node:
+      - apply deterministic MAC on iface when declared
       - flush and set IP on iface
       - bring iface up
       - set default route via gw
     """
+    rt.exec(lab_name, host, ["ip", "link", "set", iface, "down"], check=False, capture_output=False)
+    if mac:
+        rt.exec(lab_name, host, ["ip", "link", "set", "dev", iface, "address", mac], check=True, capture_output=False)
     rt.exec(lab_name, host, ["ip", "link", "set", iface, "up"], check=False, capture_output=False)
     rt.exec(lab_name, host, ["ip", "addr", "flush", "dev", iface], check=False, capture_output=False)
     rt.exec(lab_name, host, ["ip", "addr", "add", ip_cidr, "dev", iface], check=True, capture_output=False)
