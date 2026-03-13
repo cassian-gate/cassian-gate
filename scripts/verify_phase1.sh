@@ -568,6 +568,171 @@ diff -u /tmp/route_present_missing.results.run1.json /tmp/route_present_missing.
   && echo "OK: invariant replay results.json deterministic (byte-identical)" \
   || { echo "FAIL: invariant replay results.json drift"; diff -u /tmp/route_present_missing.results.run1.json /tmp/route_present_missing.results.replay.json || true; exit 1; }
 
+EVPN_VNI_TOPO="topologies/evpn_vni_route_present.yaml"
+EVPN_VNI_LAB="evpn-vni-route-present"
+EVPN_VNI_LABDIR="labs/clab-${EVPN_VNI_LAB}"
+EVPN_VNI_NEG_TOPO="topologies/evpn_vni_route_absent_expected_present.yaml"
+EVPN_VNI_NEG_LAB="evpn-vni-route-absent-expected-present"
+EVPN_VNI_NEG_LABDIR="labs/clab-${EVPN_VNI_NEG_LAB}"
+EVPN_VNI_MISUSE_TOPO="topologies/neg/evpn_invalid_vni_invariant.yaml"
+
+rm -rf "${EVPN_VNI_LABDIR}" "${EVPN_VNI_NEG_LABDIR}" 2>/dev/null || true
+
+set +e
+evpn_vni_out="$($NS test "$EVPN_VNI_TOPO" 2>&1)"
+evpn_vni_rc=$?
+set -e
+if [ "$evpn_vni_rc" -ne 0 ]; then
+  echo "FAIL: expected EVPN VNI invariant gate run to pass (rc=0), but rc=$evpn_vni_rc"
+  echo "$evpn_vni_out"
+  exit 1
+fi
+
+test -s "${EVPN_VNI_LABDIR}/results.json" || { echo "FAIL: missing ${EVPN_VNI_LABDIR}/results.json after EVPN VNI gate run"; exit 1; }
+
+jq -e '
+  .result=="pass"
+  and ([.tests[]? | select(.name=="leaf2_sees_vni_10100" and .kind=="invariant" and .verdict=="pass")] | length) == 1
+' "${EVPN_VNI_LABDIR}/results.json" >/dev/null || {
+  echo "FAIL: EVPN VNI gate results.json missing expected invariant PASS entry"
+  jq '.tests' "${EVPN_VNI_LABDIR}/results.json" 2>/dev/null || true
+  exit 1
+}
+echo "OK: EVPN VNI invariant gate PASS recorded"
+
+set +e
+evpn_vni_neg_out="$($NS test "$EVPN_VNI_NEG_TOPO" 2>&1)"
+evpn_vni_neg_rc=$?
+set -e
+if [ "$evpn_vni_neg_rc" -ne 1 ]; then
+  echo "FAIL: expected EVPN VNI negative validation run to fail with rc=1, but rc=$evpn_vni_neg_rc"
+  echo "$evpn_vni_neg_out"
+  exit 1
+fi
+
+test -s "${EVPN_VNI_NEG_LABDIR}/results.json" || { echo "FAIL: missing ${EVPN_VNI_NEG_LABDIR}/results.json after EVPN VNI negative run"; exit 1; }
+
+jq -e '
+  .result=="fail"
+  and ([.tests[]? | select(.name=="leaf2_sees_absent_vni_10101" and .kind=="invariant" and .verdict=="fail")] | length) == 1
+' "${EVPN_VNI_NEG_LABDIR}/results.json" >/dev/null || {
+  echo "FAIL: EVPN VNI negative results.json missing expected invariant FAIL entry"
+  jq '.tests' "${EVPN_VNI_NEG_LABDIR}/results.json" 2>/dev/null || true
+  exit 1
+}
+echo "OK: EVPN VNI invariant negative validation recorded"
+
+set +e
+evpn_vni_misuse_out="$($NS test "$EVPN_VNI_MISUSE_TOPO" 2>&1)"
+evpn_vni_misuse_rc=$?
+set -e
+if [ "$evpn_vni_misuse_rc" -ne 2 ]; then
+  echo "FAIL: expected EVPN VNI misuse run to fail with rc=2, but rc=$evpn_vni_misuse_rc"
+  echo "$evpn_vni_misuse_out"
+  exit 1
+fi
+echo "OK: EVPN VNI invariant misuse recorded"
+
+cp -f "${EVPN_VNI_LABDIR}/results.json" /tmp/evpn_vni_route_present.results.run1.json
+
+set +e
+evpn_vni_replay_out="$($NS replay "${EVPN_VNI_LABDIR}" --gate --verify-results 2>&1)"
+evpn_vni_replay_rc=$?
+set -e
+if [ "$evpn_vni_replay_rc" -ne 0 ]; then
+  echo "FAIL: expected EVPN VNI replay to pass with --verify-results (rc=0), but rc=$evpn_vni_replay_rc"
+  echo "$evpn_vni_replay_out"
+  exit 1
+fi
+
+test -s "${EVPN_VNI_LABDIR}/results.json" || { echo "FAIL: missing ${EVPN_VNI_LABDIR}/results.json after EVPN VNI replay"; exit 1; }
+
+jq -e '
+  .result=="pass"
+  and ([.tests[]? | select(.name=="leaf2_sees_vni_10100" and .kind=="invariant" and .verdict=="pass")] | length) == 1
+' "${EVPN_VNI_LABDIR}/results.json" >/dev/null || {
+  echo "FAIL: EVPN VNI replay results.json missing expected invariant PASS entry"
+  jq '.tests' "${EVPN_VNI_LABDIR}/results.json" 2>/dev/null || true
+  exit 1
+}
+echo "OK: EVPN VNI invariant replay PASS recorded"
+
+cp -f "${EVPN_VNI_LABDIR}/results.json" /tmp/evpn_vni_route_present.results.replay.json
+
+diff -u /tmp/evpn_vni_route_present.results.run1.json /tmp/evpn_vni_route_present.results.replay.json >/dev/null \
+  && echo "OK: EVPN VNI replay results.json deterministic (byte-identical)" \
+  || { echo "FAIL: EVPN VNI replay results.json drift"; diff -u /tmp/evpn_vni_route_present.results.run1.json /tmp/evpn_vni_route_present.results.replay.json || true; exit 1; }
+
+EVPN_BGP_TOPO="topologies/evpn_bgp_session_up.yaml"
+EVPN_BGP_LAB="evpn-bgp-session-up"
+EVPN_BGP_LABDIR="labs/clab-${EVPN_BGP_LAB}"
+EVPN_BGP_MISUSE_TOPO="topologies/neg/evpn_invalid_bgp_session_invariant.yaml"
+
+rm -rf "${EVPN_BGP_LABDIR}" 2>/dev/null || true
+
+set +e
+evpn_bgp_out="$($NS test "$EVPN_BGP_TOPO" 2>&1)"
+evpn_bgp_rc=$?
+set -e
+if [ "$evpn_bgp_rc" -ne 0 ]; then
+  echo "FAIL: expected EVPN BGP-session invariant gate run to pass (rc=0), but rc=$evpn_bgp_rc"
+  echo "$evpn_bgp_out"
+  exit 1
+fi
+
+test -s "${EVPN_BGP_LABDIR}/results.json" || { echo "FAIL: missing ${EVPN_BGP_LABDIR}/results.json after EVPN BGP-session gate run"; exit 1; }
+
+jq -e '
+  .result=="pass"
+  and ([.tests[]? | select(.name=="leaf1_evpn_session_to_spine1_up" and .kind=="invariant" and .verdict=="pass")] | length) == 1
+' "${EVPN_BGP_LABDIR}/results.json" >/dev/null || {
+  echo "FAIL: EVPN BGP-session gate results.json missing expected invariant PASS entry"
+  jq '.tests' "${EVPN_BGP_LABDIR}/results.json" 2>/dev/null || true
+  exit 1
+}
+echo "OK: EVPN BGP-session invariant gate PASS recorded"
+
+set +e
+evpn_bgp_misuse_out="$($NS test "$EVPN_BGP_MISUSE_TOPO" 2>&1)"
+evpn_bgp_misuse_rc=$?
+set -e
+if [ "$evpn_bgp_misuse_rc" -ne 2 ]; then
+  echo "FAIL: expected EVPN BGP-session misuse run to fail with rc=2, but rc=$evpn_bgp_misuse_rc"
+  echo "$evpn_bgp_misuse_out"
+  exit 1
+fi
+echo "OK: EVPN BGP-session invariant misuse recorded"
+
+cp -f "${EVPN_BGP_LABDIR}/results.json" /tmp/evpn_bgp_session_up.results.run1.json
+
+set +e
+evpn_bgp_replay_out="$($NS replay "${EVPN_BGP_LABDIR}" --gate --verify-results 2>&1)"
+evpn_bgp_replay_rc=$?
+set -e
+if [ "$evpn_bgp_replay_rc" -ne 0 ]; then
+  echo "FAIL: expected EVPN BGP-session replay to pass with --verify-results (rc=0), but rc=$evpn_bgp_replay_rc"
+  echo "$evpn_bgp_replay_out"
+  exit 1
+fi
+
+test -s "${EVPN_BGP_LABDIR}/results.json" || { echo "FAIL: missing ${EVPN_BGP_LABDIR}/results.json after EVPN BGP-session replay"; exit 1; }
+
+jq -e '
+  .result=="pass"
+  and ([.tests[]? | select(.name=="leaf1_evpn_session_to_spine1_up" and .kind=="invariant" and .verdict=="pass")] | length) == 1
+' "${EVPN_BGP_LABDIR}/results.json" >/dev/null || {
+  echo "FAIL: EVPN BGP-session replay results.json missing expected invariant PASS entry"
+  jq '.tests' "${EVPN_BGP_LABDIR}/results.json" 2>/dev/null || true
+  exit 1
+}
+echo "OK: EVPN BGP-session invariant replay PASS recorded"
+
+cp -f "${EVPN_BGP_LABDIR}/results.json" /tmp/evpn_bgp_session_up.results.replay.json
+
+diff -u /tmp/evpn_bgp_session_up.results.run1.json /tmp/evpn_bgp_session_up.results.replay.json >/dev/null \
+  && echo "OK: EVPN BGP-session replay results.json deterministic (byte-identical)" \
+  || { echo "FAIL: EVPN BGP-session replay results.json drift"; diff -u /tmp/evpn_bgp_session_up.results.run1.json /tmp/evpn_bgp_session_up.results.replay.json || true; exit 1; }
+
 echo
 
 echo "=== 7) Cleanup smoke (netsim cleanup --all) ==="
