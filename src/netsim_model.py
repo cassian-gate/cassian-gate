@@ -1432,12 +1432,13 @@ def resolve_topology(topo: dict) -> dict:
                 "evpn_mac_route_present",
                 "evpn_mac_route_absent",
                 "evpn_vni_route_present",
+                "evpn_bgp_session_up",
             ):
                 die(
                     f"tests[{i}]: invariant.type unsupported ({inv_type!r}) "
                     f"(supported: bgp_session_up, route_present, route_absent, "
                     f"evpn_mac_route_present, evpn_mac_route_absent, "
-                    f"evpn_vni_route_present)"
+                    f"evpn_vni_route_present, evpn_bgp_session_up)"
                 )
             t["type"] = inv_type
         else:
@@ -1523,41 +1524,11 @@ def resolve_topology(topo: dict) -> dict:
                     die(f"{ctx}: {inv_type}.vni must be >= 1")
                 t["vni"] = vni_i
 
-            elif inv_type == "bgp_session_up":
-                if "neighbor" in t and "dst" in t:
-                    a = str(t.get("neighbor") or "").strip()
-                    b = str(t.get("dst") or "").strip()
-                    if a and b and a != b:
-                        die(f"{ctx}: 'neighbor' and 'dst' disagree ({a!r} vs {b!r})")
-
-                if "dst" not in t and "neighbor" in t:
-                    t["dst"] = t.get("neighbor")
-
-                dst = t.get("dst")
-                if not isinstance(dst, str) or not dst.strip():
-                    die(f"{ctx}: bgp_session_up requires 'neighbor/dst' as an IPv4 literal")
-                if not is_ip_literal(dst.strip()):
-                    die(f"{ctx}: bgp_session_up neighbor/dst must be an IPv4 literal")
-                try:
-                    _ = ipaddress.ip_network(pfx.strip(), strict=False)
-                except Exception:
-                    die(f"{ctx}: {inv_type}.prefix must be a valid CIDR (e.g. 10.0.0.0/24)")
-
-            elif inv_type == "bgp_session_up":
-                if "neighbor" in t and "dst" in t:
-                    a = str(t.get("neighbor") or "").strip()
-                    b = str(t.get("dst") or "").strip()
-                    if a and b and a != b:
-                        die(f"{ctx}: 'neighbor' and 'dst' disagree ({a!r} vs {b!r})")
-
-                if "dst" not in t and "neighbor" in t:
-                    t["dst"] = t.get("neighbor")
-
-                dst = t.get("dst")
-                if not isinstance(dst, str) or not dst.strip():
-                    die(f"{ctx}: bgp_session_up requires 'neighbor/dst' as an IPv4 literal")
-                if not is_ip_literal(dst.strip()):
-                    die(f"{ctx}: bgp_session_up neighbor/dst must be an IPv4 literal")
+            elif inv_type == "evpn_bgp_session_up":
+                peer = t.get("peer")
+                if not isinstance(peer, str) or not peer.strip():
+                    die(f"{ctx}: evpn_bgp_session_up requires non-empty 'peer'")
+                t["peer"] = peer.strip()
 
         # ----------------------------
         # v1.5: route_prefix alias normalization

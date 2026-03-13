@@ -3577,108 +3577,181 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         start = time.time()
 
-        if inv_type == "bgp_session_up":
-            neighbor = str(t.get("dst") or "").strip()
-            if not neighbor or not is_ip_literal(neighbor):
+        if inv_type == "evpn_bgp_session_up":
+            peer = str(t.get("peer") or "").strip()
+            if not peer:
                 record_fn(
                     name=test_name,
                     kind="invariant",
                     src=src,
-                    dst=neighbor,
+                    dst="",
                     expected=expected,
                     observed="fail",
                     verdict="fail",
                     duration_ms=0,
-                    error="bgp_session_up requires neighbor/dst as an IPv4 literal",
-                    evidence={"reason": "invalid_neighbor_ip"},
-                    meta={"type": inv_type, "neighbor": neighbor},
+                    error="evpn_bgp_session_up requires peer",
+                    evidence={"reason": "missing_peer"},
+                    meta={"type": inv_type, "peer": peer},
                 )
                 return "fail"
 
-            timeout_s = int(t.get("timeout") or 30)
-            interval_s = int(t.get("interval") or 1)
+            cp = rt.exec(
+                lab,
+                src,
+                ["vtysh", "-c", "show bgp l2vpn evpn summary json"],
+                check=False,
+                capture_output=True,
+            )
 
-            def attempt():
-                cp = rt.exec(
-                    lab,
-                    src,
-                    ["vtysh", "-c", "show bgp summary json"],
-                    check=False,
-                    capture_output=True,
-                )
-
-                if isinstance(cp, str):
-                    out = cp
-                    rc = None
-                else:
-                    out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
-                    if isinstance(out, (bytes, bytearray)):
-                        try:
-                            out = out.decode("utf-8", errors="replace")
-                        except Exception:
-                            out = str(out)
-                    rc = getattr(cp, "returncode", None)
-
-                peers = parse_frr_bgp_summary_neighbors_json(str(out or ""))
-                if not isinstance(peers, dict):
-                    peers = {}
-
-                cmp = compare_expected_vs_observed_bgp({neighbor}, peers)
-                ok = bool(cmp.get("ok"))
-                payload = {
-                    "rc": rc,
-                    "cmp": cmp,
-                    "peers": peers,
-                }
-                return ok, payload
-
-            if expected == "pass" and timeout_s > 0:
-                def try_once():
-                    ok, payload = attempt()
-                    return ok, payload
-
-                ok, last_payload, attempts, dur_ms = retry_until(timeout_s, interval_s, try_once)
-                payload = last_payload or {}
+            if isinstance(cp, str):
+                out = cp
+                rc = None
             else:
-                ok, payload = attempt()
-                attempts = 1
-                dur_ms = int((time.time() - start) * 1000)
+                out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
+                if isinstance(out, (bytes, bytearray)):
+                    try:
+                        out = out.decode("utf-8", errors="replace")
+                    except Exception:
+                        out = str(out)
+                rc = getattr(cp, "returncode", None)
 
-            cmp = payload.get("cmp") if isinstance(payload, dict) else None
-            if not isinstance(cmp, dict):
-                cmp = compare_expected_vs_observed_bgp({neighbor}, {})
+            evidence_entries = []
+            parse_error = ""
+            present = False
 
-            rc = payload.get("rc") if isinstance(payload, dict) else None
+            try:
+                doc = json.loads(str(out or "").strip()) if str(out or "").strip() else {}
+                peers = {}
+                if isinstance(doc, dict):
+                    peers = doc.get("peers", {})
+                    if not isinstance(peers, dict):
+                        peers = {}
+                else:
+                    raise ValueError("unexpected_evpn_bgp_summary_json_shape")
 
-            observed = "pass" if bool(cmp.get("ok")) else "fail"
+                peer_ips = set()
+                for link in (topo.get("links") or []):
+                    endpoints = list(link.get("endpoints") or [])
+                    if len(endpoints) != 2:
+                        continue
+                    try:
+                        a_node, _a_if = str(endpoints[0]).split(":", 1)
+                        b_node, _b_if = str(endpoints[1]).split(":", 1)
+                    except Exception:
+                        continue
+                    if a_node == src and b_node == peer:
+                        ips = list(link.get("ipv4") or [])
+                        if len(ips) >= 2:
+                            try:
+                                peer_ips.add(str(ipaddress.ip_interface(ips[0]).ip))
+                            except Exception:
+                                pass
+                    elif b_node == src and a_node == peer:
+                        ips = list(link.get("ipv4") or [])
+                        if len(ips) >= 2:
+                            try:
+                                peer_ips.add(str(ipaddress.ip_interface(ips[0]).ip))
+                            except Exception:
+                                pass
+
+                for nbr_ip, pdata in peers.items():
+                    if not isinstance(pdata, dict):
+                        continue
+                    rec = {
+                        "neighbor": str(nbr_ip or "").strip(),
+                        "peerName": str(pdata.get("peerName") or "").strip(),
+                        "state": str(pdata.get("state") or "").strip(),
+                        "node": src,
+                    }
+                    evidence_entries.append(rec)
+                    if rec["state"].lower() != "established":
+                        continue
+                    if rec["peerName"] == peer:
+                        present = True
+                    elif rec["neighbor"] in peer_ips:
+                        present = True
+            except Exception as e:
+                parse_error = str(e)
+
+            if rc not in (0, None):
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported EVPN BGP-session evidence provider capability",
+                    evidence={
+                        "cmd": "vtysh -c 'show bgp l2vpn evpn summary json'",
+                        "rc": rc,
+                    },
+                    meta={
+                        "type": inv_type,
+                        "peer": peer,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
+            if parse_error and not evidence_entries:
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported EVPN BGP-session evidence normalization",
+                    evidence={
+                        "cmd": "vtysh -c 'show bgp l2vpn evpn summary json'",
+                        "rc": rc,
+                    },
+                    meta={
+                        "type": inv_type,
+                        "peer": peer,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
+            evidence_entries = sorted(
+                evidence_entries,
+                key=lambda x: (
+                    str(x.get("neighbor") or ""),
+                    str(x.get("peerName") or ""),
+                    str(x.get("state") or ""),
+                    str(x.get("node") or ""),
+                ),
+            )
+
+            observed = "pass" if present else "fail"
             verdict = "pass" if observed == expected else "fail"
 
             record_fn(
                 name=test_name,
                 kind="invariant",
                 src=src,
-                dst=neighbor,
+                dst="",
                 expected=expected,
                 observed=observed,
                 verdict=verdict,
-                duration_ms=int(dur_ms),
+                duration_ms=int((time.time() - start) * 1000),
                 error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                 evidence={
-                    "cmd": "vtysh -c 'show bgp summary json'",
+                    "cmd": "vtysh -c 'show bgp l2vpn evpn summary json'",
                     "rc": rc,
-                    "expected_neighbors": list(cmp.get("expected") or []),
-                    "observed_neighbors": list(cmp.get("observed") or []),
-                    "missing_neighbors": list(cmp.get("missing") or []),
-                    "down_neighbors": list(cmp.get("down") or []),
+                    "neighbors": evidence_entries,
                 },
                 meta={
                     "type": inv_type,
-                    "neighbor": neighbor,
-                    "present_in_summary": neighbor in set(cmp.get("observed") or []),
-                    "established": neighbor in set(cmp.get("established") or []),
-                    "attempts": attempts,
-                    "timeout_s": timeout_s,
-                    "retry_interval_s": interval_s,
+                    "peer": peer,
+                    "present": bool(present),
+                    "observed_neighbor_count": len(evidence_entries),
                 },
             )
             return verdict
