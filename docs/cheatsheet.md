@@ -1,4 +1,3 @@
-````markdown
 # ai-netsim v79 — Operator Cheat Sheet
 
 *(Authoritative Operator Reference)*
@@ -48,7 +47,7 @@ ai-netsim **IS NOT**
 netsim doctor
 netsim validate <topology.yaml>
 netsim preflight <topology.yaml>
-````
+```
 
 ### Execution (Validation)
 
@@ -117,10 +116,10 @@ Returns deterministic exit codes.
 
 Gate mode is used for:
 
-* production validation
-* CI pipelines
-* change validation
-* baseline vs candidate comparison
+- production validation
+- CI pipelines
+- change validation
+- baseline vs candidate comparison
 
 You **do NOT run `netsim up` first**.
 
@@ -132,12 +131,12 @@ Gate mode owns the lifecycle.
 
 If the topology contains:
 
-* no `tests`
-* no `scenarios`
+- no `tests`
+- no `scenarios`
 
 Output:
 
-```
+```text
 Tests executed: 0
 Scenarios executed: 0
 RESULT: PASS
@@ -161,7 +160,7 @@ This verifies that the result is **reproducible and deterministic**.
 
 Replay consumes artifacts from a previous run:
 
-```
+```text
 topology.resolved.yaml
 results.json
 ```
@@ -172,19 +171,19 @@ These artifacts are treated as **authoritative inputs**.
 
 Run a test:
 
-```
+```bash
 netsim test topologies/rc_cold_baseline.yaml
 ```
 
 Artifacts are created:
 
-```
+```text
 labs/clab-rc-cold-baseline/
 ```
 
 Replay the same run:
 
-```
+```bash
 netsim replay labs/clab-rc-cold-baseline --gate
 ```
 
@@ -194,7 +193,7 @@ ai-netsim will:
 2. Create a temporary replay lab
 3. Re-run the full lifecycle
 
-```
+```text
 GENERATE → DEPLOY → PROVISION → TEST → COLLECT → DESTROY
 ```
 
@@ -202,13 +201,13 @@ GENERATE → DEPLOY → PROVISION → TEST → COLLECT → DESTROY
 
 You can also confirm the replay produces identical results:
 
-```
+```bash
 netsim replay labs/clab-rc-cold-baseline --gate --verify-results
 ```
 
 If the results differ, replay exits with:
 
-```
+```text
 exit code: 1
 ```
 
@@ -218,10 +217,10 @@ Replay is useful when you want to confirm that a result is **not accidental**.
 
 Common scenarios:
 
-* validating CI pipeline determinism
-* verifying network change simulations
-* reproducing previous test results
-* debugging unexpected behavior
+- validating CI pipeline determinism
+- verifying network change simulations
+- reproducing previous test results
+- debugging unexpected behavior
 
 ---
 
@@ -241,7 +240,7 @@ netsim run <topology.yaml>
 
 This performs:
 
-```
+```text
 up → test → collect → destroy
 ```
 
@@ -266,9 +265,9 @@ netsim down <lab>
 
 Use this when you want:
 
-* persistent labs
-* manual inspection
-* iterative debugging
+- persistent labs
+- manual inspection
+- iterative debugging
 
 ---
 
@@ -326,7 +325,7 @@ name: demo-lab
 
 Displayed during execution:
 
-```
+```text
 Lab: demo-lab
 ```
 
@@ -368,16 +367,17 @@ tests:
 
 Required:
 
-* `name`
-* `nodes`
-* `links`
+- `name`
+- `nodes`
+- `links`
 
 Optional:
 
-* `tests`
-* `scenarios`
-* `fabric`
-* `candidate_changes`
+- `tests`
+- `scenarios`
+- `fabric`
+- `candidate_changes`
+- `vlans`
 
 ---
 
@@ -405,29 +405,321 @@ Example:
 
 If `ipv4` is omitted:
 
-* `/31` addresses auto-assigned
+- `/31` addresses auto-assigned
 
 View assigned addresses:
 
-```
+```text
 labs/clab-<lab>/topology.resolved.yaml
 ```
 
 ---
 
-# 8️⃣ Tests
+# 8️⃣ EVPN Runtime Substrate (Generation Support)
 
-Required fields:
+ai-netsim supports a **deterministic EVPN topology/config generation substrate** for a limited, explicit proof shape.
 
-* `name`
-* `kind`
-* `src`
-* `dst`
+This support exists to produce runtime EVPN control-plane state for later validation work.
+
+It does **not** make EVPN generation itself authoritative.
+
+Generated EVPN state is **supporting runtime substrate only**.
+
+Truth still comes from:
+
+- tests
+- invariants
+
+---
+
+## Supported EVPN Intent Surface
+
+Declare EVPN only under:
+
+```yaml
+fabric:
+  evpn:
+    enabled: true
+    mode: vlan-aware
+    asn: 65100
+```
+
+Required EVPN fields:
+
+- `fabric.evpn.enabled`
+- `fabric.evpn.mode`
+- `fabric.evpn.asn`
+
+Supported mode:
+
+- `vlan-aware`
+
+---
+
+## Supported Node Shape
+
+EVPN participants currently use `frr` nodes with explicit roles.
+
+Example:
+
+```yaml
+nodes:
+  - name: spine1
+    type: frr
+    role: spine
+    evpn_rr: true
+    router_id: 10.255.0.1
+
+  - name: leaf1
+    type: frr
+    role: leaf
+    router_id: 10.255.0.11
+
+  - name: leaf2
+    type: frr
+    role: leaf
+    router_id: 10.255.0.12
+```
+
+Rules:
+
+- EVPN participant nodes must use `type: frr`
+- spine nodes must declare `evpn_rr: true`
+- leaf nodes must not declare `evpn_rr: true`
+- EVPN participant nodes require `router_id`
+- leaves must have an explicit direct link to at least one RR spine
+
+---
+
+## VLAN ↔ VNI Mapping
+
+EVPN requires a top-level `vlans` mapping.
+
+Example:
+
+```yaml
+vlans:
+  10:
+    vni: 10100
+```
+
+Rules:
+
+- each VLAN must map to exactly one VNI
+- duplicate VNI reuse is rejected
+- invalid or missing VNI fails fast
+
+---
+
+## Host Attachment Requirements
+
+Host attachment must be explicit.
+
+Example:
+
+```yaml
+- name: host1
+  type: host
+  attach: leaf1
+  vlan: 10
+  ip: 10.10.10.11/24
+  gw: 10.10.10.1
+  mac: "00:11:22:33:44:55"
+```
+
+Required host fields for EVPN proof substrate:
+
+- `attach`
+- `vlan`
+- `ip`
+- `mac`
+
+Rules:
+
+- attached host must connect explicitly to an EVPN leaf
+- host VLAN must exist in the declared VLAN/VNI map
+- host MAC must be explicit
+- host must have exactly one explicit link to its attached leaf
+
+---
+
+## Minimal Supported Proof Shape
+
+Supported proof shape is intentionally narrow:
+
+- leaf/spine only
+- explicit RR spine
+- explicit host attachment
+- one VLAN is sufficient
+- deterministic MAC/IP declarations required
+
+This support is intended to produce:
+
+- EVPN BGP control-plane sessions
+- deterministic VLAN/VNI configuration
+- deterministic host attachment semantics
+- deterministic runtime substrate for later MAC-route observation
+
+---
+
+## Unsupported / Rejected Shapes
+
+ai-netsim fails fast on unsupported EVPN topology intent.
+
+Examples include:
+
+- EVPN declared outside `fabric.evpn`
+- ambiguous EVPN participant selection
+- unsupported node role combinations
+- missing RR spine
+- missing or invalid VNI
+- missing explicit host attachment semantics
+- shapes requiring out-of-band configuration
+- heuristic peer inference
+
+These are misuse / invalid-topology errors.
+
+---
+
+## Example EVPN Runtime Generation Topology
+
+```yaml
+name: evpn-runtime-generation
+
+fabric:
+  evpn:
+    enabled: true
+    mode: vlan-aware
+    asn: 65100
+
+nodes:
+  - name: spine1
+    type: frr
+    role: spine
+    evpn_rr: true
+    router_id: 10.255.0.1
+
+  - name: leaf1
+    type: frr
+    role: leaf
+    router_id: 10.255.0.11
+
+  - name: leaf2
+    type: frr
+    role: leaf
+    router_id: 10.255.0.12
+
+  - name: host1
+    type: host
+    attach: leaf1
+    vlan: 10
+    ip: 10.10.10.11/24
+    gw: 10.10.10.1
+    mac: "00:11:22:33:44:55"
+
+  - name: host2
+    type: host
+    attach: leaf2
+    vlan: 10
+    ip: 10.10.10.12/24
+    gw: 10.10.10.1
+    mac: "00:11:22:33:44:66"
+
+links:
+  - endpoints: ["spine1:eth1", "leaf1:eth1"]
+    ipv4: ["172.16.0.0/31", "172.16.0.1/31"]
+
+  - endpoints: ["spine1:eth2", "leaf2:eth1"]
+    ipv4: ["172.16.0.2/31", "172.16.0.3/31"]
+
+  - endpoints: ["host1:eth1", "leaf1:eth2"]
+  - endpoints: ["host2:eth1", "leaf2:eth2"]
+
+vlans:
+  10:
+    vni: 10100
+
+tests: []
+```
+
+---
+
+## Operator Commands
+
+Validate the EVPN topology:
+
+```bash
+netsim validate topologies/evpn_runtime_generation.yaml
+```
+
+Bring up EVPN runtime substrate:
+
+```bash
+netsim up topologies/evpn_runtime_generation.yaml
+```
+
+Run authoritative gate proof:
+
+```bash
+netsim test topologies/evpn_runtime_generation.yaml
+```
+
+Replay deterministically:
+
+```bash
+netsim replay labs/clab-evpn-runtime-generation --gate --verify-results
+```
+
+Negative misuse proofs:
+
+```bash
+netsim test topologies/neg/evpn_invalid_vni.yaml
+netsim test topologies/neg/evpn_invalid_roles.yaml
+```
+
+---
+
+## Artifact Note
+
+`topology.resolved.yaml` may include additive EVPN-resolved fields for the generated proof substrate.
+
+These fields remain **generated** and **non-authoritative**.
+
+They support deterministic execution only.
+
+---
+
+## Important Boundary
+
+EVPN topology/config generation support:
+
+- configures deterministic EVPN runtime substrate
+- does not prove EVPN correctness by itself
+- does not validate dataplane forwarding
+- does not validate EVPN invariants by itself
+- does not change authority semantics
+
+Use later tests/invariants to establish truth.
+
+---
+
+# 9️⃣ Tests and Invariants
+
+ai-netsim supports both:
+
+- active behavior tests
+- deterministic invariant checks
+
+Both produce standard authoritative results in gate mode.
+
+---
+
+## Standard test kinds
 
 Supported kinds:
 
-* `ping`
-* `tcp`
+- `ping`
+- `tcp`
 
 ---
 
@@ -441,6 +733,13 @@ Supported kinds:
   count: 2
   expect: pass
 ```
+
+Required fields:
+
+- `name`
+- `kind`
+- `src`
+- `dst`
 
 ---
 
@@ -456,9 +755,187 @@ Supported kinds:
   expect: pass
 ```
 
+Required fields:
+
+- `name`
+- `kind`
+- `src`
+- `dst`
+
 ---
 
-# 9️⃣ Scenarios (Failure Choreography)
+## Invariant tests
+
+Invariant tests use:
+
+```yaml
+kind: invariant
+```
+
+They validate declared truth conditions and return authoritative pass/fail results like any other test.
+
+---
+
+## EVPN Invariants
+
+ai-netsim supports deterministic EVPN invariant checks as standard authoritative test results.
+
+### EVPN MAC Route Present
+
+Validates that a specific MAC route is present for the specified VNI on the specified node.
+
+Example:
+
+```yaml
+tests:
+  - name: leaf2_sees_host1_mac_route
+    kind: invariant
+    type: evpn_mac_route_present
+    node: leaf2
+    mac: "00:11:22:33:44:55"
+    vni: 10100
+    expect: pass
+```
+
+Required fields:
+
+- `kind: invariant`
+- `type: evpn_mac_route_present`
+- `node`
+- `mac`
+- `vni`
+
+### EVPN MAC Route Absent
+
+Validates that a specific MAC route is absent for the specified VNI on the specified node.
+
+Example:
+
+```yaml
+tests:
+  - name: leaf2_does_not_see_mac_route
+    kind: invariant
+    type: evpn_mac_route_absent
+    node: leaf2
+    mac: "00:11:22:33:44:55"
+    vni: 10100
+    expect: pass
+```
+
+Required fields:
+
+- `kind: invariant`
+- `type: evpn_mac_route_absent`
+- `node`
+- `mac`
+- `vni`
+
+### EVPN VNI Route Present
+
+Validates that EVPN control-plane route presence exists for the specified VNI on the specified node.
+
+Example:
+
+```yaml
+tests:
+  - name: leaf2_sees_vni_10100
+    kind: invariant
+    type: evpn_vni_route_present
+    node: leaf2
+    vni: 10100
+    expect: pass
+```
+
+Required fields:
+
+- `kind: invariant`
+- `type: evpn_vni_route_present`
+- `node`
+- `vni`
+
+### EVPN BGP Session Up
+
+Validates that the EVPN BGP session to the specified peer is up on the specified node.
+
+Example:
+
+```yaml
+tests:
+  - name: leaf1_evpn_session_to_spine1_up
+    kind: invariant
+    type: evpn_bgp_session_up
+    node: leaf1
+    peer: spine1
+    expect: pass
+```
+
+Required fields:
+
+- `kind: invariant`
+- `type: evpn_bgp_session_up`
+- `node`
+- `peer`
+
+### Expected outcomes
+
+These invariants behave like other authoritative test results:
+
+- `expect: pass` → invariant must be observed as true
+- mismatch → test fails with exit code `1`
+- invalid invariant declaration → usage / contract error with exit code `2`
+
+### Evidence and authority
+
+For EVPN invariants:
+
+- runtime EVPN route/session data is **supporting evidence**
+- the invariant verdict in `results.json` is **authoritative**
+
+The check is deterministic and replay-safe.
+
+### Positive proof examples
+
+```bash
+netsim test topologies/evpn_mac_route_present.yaml
+netsim test topologies/evpn_vni_route_present.yaml
+netsim test topologies/evpn_bgp_session_up.yaml
+```
+
+### Negative validation example
+
+```bash
+netsim test topologies/evpn_mac_route_absent_expected_present.yaml
+```
+
+### Negative misuse example
+
+```bash
+netsim test topologies/neg/evpn_invalid_mac_invariant.yaml
+```
+
+### Replay
+
+These invariants are replay-verifiable with standard gate replay:
+
+```bash
+netsim replay labs/clab-evpn-mac-route-present --gate --verify-results
+netsim replay labs/clab-evpn-vni-route-present --gate --verify-results
+netsim replay labs/clab-evpn-bgp-session-up --gate --verify-results
+```
+
+### Scope boundary
+
+EVPN invariants validate only the declared EVPN truth being tested.
+
+They do **not** by themselves prove:
+
+- full dataplane forwarding
+- broader EVPN feature correctness
+- non-EVPN control-plane behavior
+
+---
+
+# 🔟 Scenarios (Failure Choreography)
 
 Scenarios define **ordered fault injection sequences**.
 
@@ -486,11 +963,11 @@ scenarios:
 
 ## Step Types
 
-* `run`
-* `fault`
-* `wait`
-* `wait_for`
-* `wait_for_bgp`
+- `run`
+- `fault`
+- `wait`
+- `wait_for`
+- `wait_for_bgp`
 
 No implicit retries.
 Timeout = failure.
@@ -505,17 +982,17 @@ Scenarios can model **partial network degradation**, not only full outages.
 
 Supported grey-failure actions:
 
-* `packet_loss`
-* `latency`
-* `bandwidth_cap`
-* `prefix_blackhole`
+- `packet_loss`
+- `latency`
+- `bandwidth_cap`
+- `prefix_blackhole`
 
 These actions are:
 
-* deterministic
-* explicit
-* replay-stable
-* recorded in `results.json`
+- deterministic
+- explicit
+- replay-stable
+- recorded in `results.json`
 
 Grey failures affect the **network condition**, not the verdict logic.
 
@@ -630,26 +1107,26 @@ If multiple links exist between the same nodes, explicit interfaces are required
 
 `packet_loss`
 
-* `loss` or `loss_percent`
-* integer
-* valid range: `0..100`
+- `loss` or `loss_percent`
+- integer
+- valid range: `0..100`
 
 `latency`
 
-* `latency_ms`
-* integer
-* must be `>= 0`
+- `latency_ms`
+- integer
+- must be `>= 0`
 
 `bandwidth_cap`
 
-* `bandwidth_mbps`
-* integer
-* must be `>= 1`
+- `bandwidth_mbps`
+- integer
+- must be `>= 1`
 
 `prefix_blackhole`
 
-* `node`
-* `prefix`
+- `node`
+- `prefix`
 
 Invalid values fail fast with exit code `2`.
 
@@ -692,7 +1169,7 @@ This provides deterministic evidence that the degradation was applied before the
 
 ---
 
-# 🔟 Candidate Configuration (Gate Only)
+# 1️⃣1️⃣ Candidate Configuration (Gate Only)
 
 Apply candidate changes during validation.
 
@@ -703,7 +1180,7 @@ netsim test <topology.yaml> \
 
 Directory layout:
 
-```
+```text
 <dir>/
   frr/<node>.conf
   nft/<node>.nft
@@ -711,14 +1188,14 @@ Directory layout:
 
 Rules:
 
-* full replacement
-* no merge
-* atomic apply
-* failure aborts gate
+- full replacement
+- no merge
+- atomic apply
+- failure aborts gate
 
 ---
 
-# 1️⃣1️⃣ Status Command
+# 1️⃣2️⃣ Status Command
 
 Inspect running labs.
 
@@ -728,14 +1205,14 @@ netsim status <lab>
 
 Useful options:
 
-* `--summary`
-* `--interfaces`
-* `--bgp`
-* `--bgp-verbose`
-* `--routes`
-* `--routes-verbose`
-* `--json`
-* `--strict`
+- `--summary`
+- `--interfaces`
+- `--bgp`
+- `--bgp-verbose`
+- `--routes`
+- `--routes-verbose`
+- `--json`
+- `--strict`
 
 Example:
 
@@ -745,7 +1222,7 @@ netsim status demo-lab --summary
 
 ---
 
-# 1️⃣2️⃣ Cleanup & Lab Management
+# 1️⃣3️⃣ Cleanup & Lab Management
 
 Destroy a running lab:
 
@@ -770,7 +1247,7 @@ Dry-run occurs unless `--yes` is provided.
 
 ---
 
-# 1️⃣3️⃣ DevOps Integration
+# 1️⃣4️⃣ DevOps Integration
 
 Generate adapter artifacts.
 
@@ -785,7 +1262,7 @@ netsim adapt terraform \
 
 Input:
 
-```
+```text
 terraform show -json
 ```
 
@@ -802,15 +1279,15 @@ Adapters are **advisory only**.
 
 ---
 
-# 1️⃣4️⃣ AI Assistance (Optional)
+# 1️⃣5️⃣ AI Assistance (Optional)
 
 AI is **assistive only**.
 
 It never affects:
 
-* execution
-* verdicts
-* exit codes
+- execution
+- verdicts
+- exit codes
 
 ---
 
@@ -844,20 +1321,20 @@ Provides general guidance.
 
 ---
 
-# 1️⃣5️⃣ Artifacts
+# 1️⃣6️⃣ Artifacts
 
 Artifacts are written to:
 
-```
+```text
 labs/clab-<lab-name>/
 ```
 
 Key files:
 
-* `topology.resolved.yaml`
-* `results.json`
-* `results.summary.txt`
-* `artifacts/`
+- `topology.resolved.yaml`
+- `results.json`
+- `results.summary.txt`
+- `artifacts/`
 
 ---
 
@@ -867,13 +1344,14 @@ Contains the **fully expanded deterministic model** used for execution.
 
 Includes:
 
-* resolved defaults
-* auto IP assignments
-* normalized topology
+- resolved defaults
+- auto IP assignments
+- normalized topology
+- additive EVPN-resolved fields when EVPN runtime substrate is used
 
 ---
 
-# 1️⃣6️⃣ Common Operator Tasks
+# 1️⃣7️⃣ Common Operator Tasks
 
 Validate a topology:
 
@@ -899,6 +1377,24 @@ Explore a lab interactively:
 netsim run topology.yaml --keep
 netsim status <lab>
 netsim exec <lab> r1
+```
+
+Bring up EVPN runtime substrate:
+
+```bash
+netsim up topologies/evpn_runtime_generation.yaml
+```
+
+Run an EVPN invariant proof:
+
+```bash
+netsim test topologies/evpn_mac_route_present.yaml
+```
+
+Replay an EVPN proof deterministically:
+
+```bash
+netsim replay labs/clab-evpn-mac-route-present --gate --verify-results
 ```
 
 Clean up labs:
@@ -927,7 +1423,7 @@ netsim replay labs/clab-grey-failure-direct-pass --gate --verify-results
 
 ---
 
-# 1️⃣7️⃣ Exit Codes
+# 1️⃣8️⃣ Exit Codes
 
 | Code | Meaning                |
 | ---- | ---------------------- |
@@ -935,9 +1431,15 @@ netsim replay labs/clab-grey-failure-direct-pass --gate --verify-results
 | 1    | Test failure           |
 | 2    | Usage / contract error |
 
+Examples:
+
+- invariant truth mismatch → `1`
+- unsupported EVPN topology shape → `2`
+- invalid invariant declaration → `2`
+
 ---
 
-# 1️⃣8️⃣ First 10 Minutes
+# 1️⃣9️⃣ First 10 Minutes
 
 Recommended onboarding workflow:
 
@@ -954,9 +1456,13 @@ netsim run topology.yaml --keep
 netsim status <lab>
 ```
 
+For EVPN runtime + proof:
+
+```bash
+netsim validate topologies/evpn_runtime_generation.yaml
+netsim test topologies/evpn_mac_route_present.yaml
+```
+
 ---
 
 # End of ai-netsim v79 Operator Cheat Sheet
-
-```
-```
