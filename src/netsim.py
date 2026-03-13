@@ -3756,7 +3756,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             )
             return verdict
 
-        if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent"):
+        if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent", "evpn_vni_route_present"):
             mac = str(t.get("mac") or "").strip().lower()
             vni = t.get("vni")
             try:
@@ -3764,21 +3764,38 @@ def cmd_test(args: argparse.Namespace) -> None:
             except Exception:
                 vni_i = None
 
-            if not mac or vni_i is None:
-                record_fn(
-                    name=test_name,
-                    kind="invariant",
-                    src=src,
-                    dst="",
-                    expected=expected,
-                    observed="fail",
-                    verdict="fail",
-                    duration_ms=0,
-                    error=f"{inv_type} requires mac and vni",
-                    evidence={"reason": "missing_mac_or_vni"},
-                    meta={"type": inv_type, "mac": mac, "vni": vni},
-                )
-                return "fail"
+            if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent"):
+                if not mac or vni_i is None:
+                    record_fn(
+                        name=test_name,
+                        kind="invariant",
+                        src=src,
+                        dst="",
+                        expected=expected,
+                        observed="fail",
+                        verdict="fail",
+                        duration_ms=0,
+                        error=f"{inv_type} requires mac and vni",
+                        evidence={"reason": "missing_mac_or_vni"},
+                        meta={"type": inv_type, "mac": mac, "vni": vni},
+                    )
+                    return "fail"
+            else:
+                if vni_i is None:
+                    record_fn(
+                        name=test_name,
+                        kind="invariant",
+                        src=src,
+                        dst="",
+                        expected=expected,
+                        observed="fail",
+                        verdict="fail",
+                        duration_ms=0,
+                        error=f"{inv_type} requires vni",
+                        evidence={"reason": "missing_vni"},
+                        meta={"type": inv_type, "vni": vni},
+                    )
+                    return "fail"
 
             cp = rt.exec(
                 lab,
@@ -3813,12 +3830,16 @@ def cmd_test(args: argparse.Namespace) -> None:
                     "route_type": state_val,
                     "node": src,
                 }
-                if not rec["mac"]:
+                if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent") and not rec["mac"]:
                     return
                 evidence_entries.append(rec)
-                if rec["mac"] == mac and rec["vni"] == vni_i:
-                    if state_val is None or str(state_val).lower() in ("2", "2-evpn", "macip", "type2"):
+                if inv_type == "evpn_vni_route_present":
+                    if rec["vni"] == vni_i:
                         present = True
+                else:
+                    if rec["mac"] == mac and rec["vni"] == vni_i:
+                        if state_val is None or str(state_val).lower() in ("2", "2-evpn", "macip", "type2"):
+                            present = True
 
             try:
                 doc = json.loads(raw) if raw else {}
@@ -3832,7 +3853,6 @@ def cmd_test(args: argparse.Namespace) -> None:
                             continue
 
                         vni_ctx = None
-                        rd_text = str(rd_val.get("rd") or rd_key)
                         m_rt = re.search(r"RT:\d+:(\d+)", json.dumps(rd_val), flags=re.IGNORECASE)
                         if m_rt:
                             try:
@@ -3858,8 +3878,6 @@ def cmd_test(args: argparse.Namespace) -> None:
                                         if isinstance(val, str) and val.strip():
                                             mac_val = val.strip().lower()
                                             break
-                                    if not mac_val:
-                                        continue
 
                                     vni_val = None
                                     for key in ("vni",):
@@ -3879,6 +3897,11 @@ def cmd_test(args: argparse.Namespace) -> None:
                                         state_val = entry.get("type")
                                     if isinstance(state_val, str):
                                         state_val = state_val.strip()
+
+                                    if inv_type == "evpn_vni_route_present" and vni_val is None:
+                                        continue
+                                    if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent") and not mac_val:
+                                        continue
 
                                     sig = (mac_val, vni_val, state_val, src)
                                     if sig in seen:
@@ -3901,7 +3924,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     observed="fail",
                     verdict="fail",
                     duration_ms=0,
-                    error="unsupported EVPN MAC-route evidence provider capability",
+                    error="unsupported EVPN VNI/MAC-route evidence provider capability",
                     evidence={
                         "cmd": "vtysh -c 'show bgp l2vpn evpn route json'",
                         "rc": rc,
@@ -3915,7 +3938,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 )
                 raise SystemExit(2)
 
-            if not present:
+            if not present and inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent"):
                 cp_text = rt.exec(
                     lab,
                     src,
@@ -3946,7 +3969,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                         observed="fail",
                         verdict="fail",
                         duration_ms=0,
-                        error="unsupported EVPN MAC-route evidence provider capability",
+                        error="unsupported EVPN VNI/MAC-route evidence provider capability",
                         evidence={
                             "cmd": "vtysh -c 'show bgp l2vpn evpn route'",
                             "rc": rc_text,
@@ -3987,7 +4010,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     observed="fail",
                     verdict="fail",
                     duration_ms=0,
-                    error="unsupported EVPN MAC-route evidence normalization",
+                    error="unsupported EVPN VNI/MAC-route evidence normalization",
                     evidence={
                         "cmd": "vtysh -c 'show bgp l2vpn evpn route json'",
                         "rc": rc,
@@ -4022,8 +4045,10 @@ def cmd_test(args: argparse.Namespace) -> None:
 
             if inv_type == "evpn_mac_route_present":
                 observed = "pass" if present else "fail"
-            else:
+            elif inv_type == "evpn_mac_route_absent":
                 observed = "pass" if not present else "fail"
+            else:
+                observed = "pass" if present else "fail"
 
             verdict = "pass" if observed == expected else "fail"
 

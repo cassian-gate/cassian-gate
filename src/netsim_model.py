@@ -1431,11 +1431,13 @@ def resolve_topology(topo: dict) -> dict:
                 "route_absent",
                 "evpn_mac_route_present",
                 "evpn_mac_route_absent",
+                "evpn_vni_route_present",
             ):
                 die(
                     f"tests[{i}]: invariant.type unsupported ({inv_type!r}) "
                     f"(supported: bgp_session_up, route_present, route_absent, "
-                    f"evpn_mac_route_present, evpn_mac_route_absent)"
+                    f"evpn_mac_route_present, evpn_mac_route_absent, "
+                    f"evpn_vni_route_present)"
                 )
             t["type"] = inv_type
         else:
@@ -1498,6 +1500,18 @@ def resolve_topology(topo: dict) -> dict:
                     die(f"{ctx}: {inv_type}.mac must be a valid MAC address")
                 t["mac"] = mac_s
 
+                vni = t.get("vni")
+                if vni is None or str(vni).strip() == "":
+                    die(f"{ctx}: {inv_type} requires 'vni'")
+                try:
+                    vni_i = int(vni)
+                except Exception:
+                    die(f"{ctx}: {inv_type}.vni must be an integer")
+                if vni_i < 1:
+                    die(f"{ctx}: {inv_type}.vni must be >= 1")
+                t["vni"] = vni_i
+
+            elif inv_type == "evpn_vni_route_present":
                 vni = t.get("vni")
                 if vni is None or str(vni).strip() == "":
                     die(f"{ctx}: {inv_type} requires 'vni'")
