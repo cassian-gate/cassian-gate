@@ -1049,6 +1049,18 @@ def gen_frr_conf(node: dict, topo: dict) -> str:
                 elif n1 == name and n2 == host_name:
                     access_ifaces.add(if1)
 
+    bgp = node.get("bgp") if isinstance(node.get("bgp"), dict) else {}
+    asn = node.get("asn")
+    neighbors = bgp.get("neighbors") if isinstance(bgp.get("neighbors"), list) else []
+    route_maps = bgp.get("route_maps") if isinstance(bgp.get("route_maps"), list) else []
+    is_generic_bgp_participant = bool(
+        node.get("type") == "frr"
+        and not is_evpn_participant
+        and asn is not None
+        and rid
+        and (neighbors or route_maps or (node.get("networks") if isinstance(node.get("networks"), list) else []))
+    )
+
     cfg: list[str] = []
     cfg.append("frr version 8")
     cfg.append("frr defaults traditional")
@@ -1117,6 +1129,77 @@ def gen_frr_conf(node: dict, topo: dict) -> str:
                 cfg.append("  exit-vni")
         cfg.append(" exit-address-family")
         cfg.append("!")
+
+    elif is_generic_bgp_participant:
+        neighbor_entries: list[tuple[str, str, int, str]] = []
+        for nbr in neighbors:
+            if not isinstance(nbr, dict):
+                continue
+            peer_name = str(nbr.get("peer") or "").strip()
+            if not peer_name:
+                continue
+            link_match = None
+            for l in node_links:
+                if l["peer"] == peer_name:
+                    link_match = l
+                    break
+            if not link_match:
+                continue
+            try:
+                remote_as = int(nbr.get("remote_as"))
+            except Exception:
+                continue
+            route_map_in = ""
+            ipv4u = nbr.get("ipv4_unicast")
+            if isinstance(ipv4u, dict):
+                route_map_in = str(ipv4u.get("route_map_in") or "").strip()
+            neighbor_entries.append((peer_name, link_match["peer_ip"], remote_as, route_map_in))
+
+        neighbor_entries.sort(key=lambda item: (item[0], item[1], item[2], item[3]))
+
+        cfg.append(f"router bgp {int(asn)}")
+        cfg.append(f" bgp router-id {rid}")
+        cfg.append(" no bgp ebgp-requires-policy")
+        for peer_name, peer_ip, remote_as, route_map_in in neighbor_entries:
+            cfg.append(f" neighbor {peer_ip} remote-as {remote_as}")
+        cfg.append(" !")
+        cfg.append(" address-family ipv4 unicast")
+        for peer_name, peer_ip, remote_as, route_map_in in neighbor_entries:
+            cfg.append(f"  neighbor {peer_ip} activate")
+            if route_map_in:
+                cfg.append(f"  neighbor {peer_ip} route-map {route_map_in} in")
+        for network in node.get("networks", []) or []:
+            if isinstance(network, str) and network.strip():
+                cfg.append(f"  network {network.strip()}")
+        cfg.append(" exit-address-family")
+        cfg.append("!")
+
+        for rm in route_maps:
+            if not isinstance(rm, dict):
+                continue
+            rm_name = str(rm.get("name") or "").strip()
+            if not rm_name:
+                continue
+            entries = rm.get("entries") if isinstance(rm.get("entries"), list) else []
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                try:
+                    seq = int(entry.get("seq"))
+                except Exception:
+                    continue
+                action = str(entry.get("action") or "").strip()
+                if action not in ("permit", "deny"):
+                    continue
+                cfg.append(f"route-map {rm_name} {action} {seq}")
+                set_block = entry.get("set") if isinstance(entry.get("set"), dict) else {}
+                if "med" in set_block:
+                    try:
+                        cfg.append(f" set metric {int(set_block.get('med'))}")
+                    except Exception:
+                        pass
+        if route_maps:
+            cfg.append("!")
 
     cfg.append("line vty")
     cfg.append("!")
@@ -1429,6 +1512,7 @@ def resolve_topology(topo: dict) -> dict:
                 "bgp_session_up",
                 "route_present",
                 "route_absent",
+                "bgp_med_equals",
                 "evpn_mac_route_present",
                 "evpn_mac_route_absent",
                 "evpn_vni_route_present",
@@ -1437,7 +1521,7 @@ def resolve_topology(topo: dict) -> dict:
                 die(
                     f"tests[{i}]: invariant.type unsupported ({inv_type!r}) "
                     f"(supported: bgp_session_up, route_present, route_absent, "
-                    f"evpn_mac_route_present, evpn_mac_route_absent, "
+                    f"bgp_med_equals, evpn_mac_route_present, evpn_mac_route_absent, "
                     f"evpn_vni_route_present, evpn_bgp_session_up)"
                 )
             t["type"] = inv_type
@@ -1483,7 +1567,7 @@ def resolve_topology(topo: dict) -> dict:
                 die(f"{ctx}: invariant.expect must be pass|fail if provided")
             t["expect"] = exp_s
 
-            if inv_type in ("route_present", "route_absent"):
+            if inv_type in ("route_present", "route_absent", "bgp_med_equals"):
                 pfx = t.get("prefix")
                 if not isinstance(pfx, str) or not pfx.strip():
                     die(f"{ctx}: {inv_type} requires 'prefix' as CIDR (e.g. 10.0.0.0/24)")
@@ -1491,6 +1575,15 @@ def resolve_topology(topo: dict) -> dict:
                     _ = ipaddress.ip_network(pfx.strip(), strict=False)
                 except Exception:
                     die(f"{ctx}: {inv_type}.prefix must be a valid CIDR (e.g. 10.0.0.0/24)")
+
+                if inv_type == "bgp_med_equals":
+                    expv = t.get("expected")
+                    if expv is None or str(expv).strip() == "":
+                        die(f"{ctx}: {inv_type} requires 'expected'")
+                    try:
+                        t["expected"] = int(expv)
+                    except Exception:
+                        die(f"{ctx}: {inv_type}.expected must be an integer")
 
             elif inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent"):
                 mac = t.get("mac")
