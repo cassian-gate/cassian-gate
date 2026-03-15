@@ -776,6 +776,95 @@ They validate declared truth conditions and return authoritative pass/fail resul
 
 ---
 
+## Routing Invariants
+
+Routing invariants validate specific routing truth on a named node.
+
+They are useful when you need to prove policy outcome, path preference, or route attributes.
+
+### BGP Local Preference Invariant
+
+Invariant type:
+
+```text
+bgp_localpref_equals
+```
+
+Purpose:
+
+Verify that a BGP route installed on a node has the expected **LOCAL_PREF** value.
+
+This is useful for validating routing policy behavior such as:
+
+- inbound route-maps
+- outbound policy manipulation
+- policy-based path preference
+- iBGP policy consistency
+
+Required fields:
+
+| Field    | Description                               |
+| -------- | ----------------------------------------- |
+| node     | Node where the route must be observed     |
+| prefix   | Prefix being validated                    |
+| expected | Expected BGP local preference value       |
+
+Example:
+
+```yaml
+tests:
+  - name: r2_sees_1_1_1_1_32_with_localpref_200
+    kind: invariant
+    type: bgp_localpref_equals
+    node: r2
+    prefix: 1.1.1.1/32
+    expected: 200
+    expect: pass
+```
+
+Behavior:
+
+- The invariant inspects the routing information on the specified node.
+- The route must exist and contain the declared LOCAL_PREF value.
+- If the route is present but the LOCAL_PREF differs from the expected value, the invariant fails.
+- If the invariant definition itself is invalid, the run fails with misuse exit code `2`.
+
+Exit behavior:
+
+| Condition                              | Exit Code |
+| -------------------------------------- | --------- |
+| invariant satisfied                    | 0         |
+| invariant mismatch                     | 1         |
+| invariant misuse / invalid declaration | 2         |
+
+Artifacts produced:
+
+The invariant result is recorded in the standard artifacts:
+
+```text
+labs/<lab>/results.json
+labs/<lab>/results.summary.txt
+```
+
+Example result entry:
+
+```json
+{
+  "name": "r2_sees_1_1_1_1_32_with_localpref_200",
+  "kind": "invariant",
+  "type": "bgp_localpref_equals",
+  "verdict": "pass"
+}
+```
+
+Determinism guarantees:
+
+- invariant evaluation occurs during the **TEST** phase
+- results are deterministic under identical topology, code version, and runtime conditions
+- replay verification (`netsim replay --gate --verify-results`) must reproduce identical results
+
+---
+
 ## EVPN Invariants
 
 ai-netsim supports deterministic EVPN invariant checks as standard authoritative test results.
@@ -1383,6 +1472,12 @@ Bring up EVPN runtime substrate:
 
 ```bash
 netsim up topologies/evpn_runtime_generation.yaml
+```
+
+Run a routing invariant proof:
+
+```bash
+netsim test topologies/bgp_localpref_equals.yaml
 ```
 
 Run an EVPN invariant proof:

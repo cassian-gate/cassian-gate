@@ -735,6 +735,105 @@ diff -u /tmp/evpn_bgp_session_up.results.run1.json /tmp/evpn_bgp_session_up.resu
 
 echo
 
+echo "=== 6e) BGP localpref invariant gate + replay determinism ==="
+
+LP_TOPO="topologies/bgp_localpref_equals.yaml"
+LP_LAB="bgp-localpref-equals"
+LP_LABDIR="labs/clab-${LP_LAB}"
+LP_NEG_TOPO="topologies/bgp_localpref_not_equal_expected_equal.yaml"
+LP_NEG_LAB="bgp-localpref-not-equal-expected-equal"
+LP_NEG_LABDIR="labs/clab-${LP_NEG_LAB}"
+LP_MISUSE_TOPO="topologies/neg/bgp_invalid_localpref_invariant.yaml"
+
+rm -rf "${LP_LABDIR}" "${LP_NEG_LABDIR}" 2>/dev/null || true
+
+set +e
+lp_out="$($NS test "$LP_TOPO" 2>&1)"
+lp_rc=$?
+set -e
+if [ "$lp_rc" -ne 0 ]; then
+  echo "FAIL: expected BGP localpref invariant gate run to pass (rc=0), but rc=$lp_rc"
+  echo "$lp_out"
+  exit 1
+fi
+
+test -s "${LP_LABDIR}/results.json" || { echo "FAIL: missing ${LP_LABDIR}/results.json after BGP localpref gate run"; exit 1; }
+
+jq -e '
+  .result=="pass"
+  and ([.tests[]? | select(.name=="r2_sees_1_1_1_1_32_with_localpref_200" and .kind=="invariant" and .verdict=="pass")] | length) == 1
+' "${LP_LABDIR}/results.json" >/dev/null || {
+  echo "FAIL: BGP localpref gate results.json missing expected invariant PASS entry"
+  jq '.tests' "${LP_LABDIR}/results.json" 2>/dev/null || true
+  exit 1
+}
+echo "OK: BGP localpref invariant gate PASS recorded"
+
+set +e
+lp_neg_out="$($NS test "$LP_NEG_TOPO" 2>&1)"
+lp_neg_rc=$?
+set -e
+if [ "$lp_neg_rc" -ne 1 ]; then
+  echo "FAIL: expected BGP localpref negative validation run to fail with rc=1, but rc=$lp_neg_rc"
+  echo "$lp_neg_out"
+  exit 1
+fi
+
+test -s "${LP_NEG_LABDIR}/results.json" || { echo "FAIL: missing ${LP_NEG_LABDIR}/results.json after BGP localpref negative run"; exit 1; }
+
+jq -e '
+  .result=="fail"
+  and ([.tests[]? | select(.name=="r2_sees_1_1_1_1_32_with_localpref_150" and .kind=="invariant" and .verdict=="fail")] | length) == 1
+' "${LP_NEG_LABDIR}/results.json" >/dev/null || {
+  echo "FAIL: BGP localpref negative results.json missing expected invariant FAIL entry"
+  jq '.tests' "${LP_NEG_LABDIR}/results.json" 2>/dev/null || true
+  exit 1
+}
+echo "OK: BGP localpref invariant negative validation recorded"
+
+set +e
+lp_misuse_out="$($NS test "$LP_MISUSE_TOPO" 2>&1)"
+lp_misuse_rc=$?
+set -e
+if [ "$lp_misuse_rc" -ne 2 ]; then
+  echo "FAIL: expected BGP localpref misuse run to fail with rc=2, but rc=$lp_misuse_rc"
+  echo "$lp_misuse_out"
+  exit 1
+fi
+echo "OK: BGP localpref invariant misuse recorded"
+
+cp -f "${LP_LABDIR}/results.json" /tmp/bgp_localpref_equals.results.run1.json
+
+set +e
+lp_replay_out="$($NS replay "${LP_LABDIR}" --gate --verify-results 2>&1)"
+lp_replay_rc=$?
+set -e
+if [ "$lp_replay_rc" -ne 0 ]; then
+  echo "FAIL: expected BGP localpref replay to pass with --verify-results (rc=0), but rc=$lp_replay_rc"
+  echo "$lp_replay_out"
+  exit 1
+fi
+
+test -s "${LP_LABDIR}/results.json" || { echo "FAIL: missing ${LP_LABDIR}/results.json after BGP localpref replay"; exit 1; }
+
+jq -e '
+  .result=="pass"
+  and ([.tests[]? | select(.name=="r2_sees_1_1_1_1_32_with_localpref_200" and .kind=="invariant" and .verdict=="pass")] | length) == 1
+' "${LP_LABDIR}/results.json" >/dev/null || {
+  echo "FAIL: BGP localpref replay results.json missing expected invariant PASS entry"
+  jq '.tests' "${LP_LABDIR}/results.json" 2>/dev/null || true
+  exit 1
+}
+echo "OK: BGP localpref invariant replay PASS recorded"
+
+cp -f "${LP_LABDIR}/results.json" /tmp/bgp_localpref_equals.results.replay.json
+
+diff -u /tmp/bgp_localpref_equals.results.run1.json /tmp/bgp_localpref_equals.results.replay.json >/dev/null \
+  && echo "OK: BGP localpref replay results.json deterministic (byte-identical)" \
+  || { echo "FAIL: BGP localpref replay results.json drift"; diff -u /tmp/bgp_localpref_equals.results.run1.json /tmp/bgp_localpref_equals.results.replay.json || true; exit 1; }
+
+echo
+
 echo "=== 7) Cleanup smoke (netsim cleanup --all) ==="
 
 # 7a) Dry-run must show a plan and exit 0
