@@ -1,0 +1,16 @@
+name: bgp-invalid-localpref-invariant
+
+nodes:
+  - name: r1
+    type: frr
+
+links: []
+
+tests:
+  - name: invalid_localpref_expected_shape
+    kind: invariant
+    type: bgp_localpref_equals
+    node: r1
+    prefix: 1.1.1.1/32
+    expected: not-an-integer
+    expect: pass
