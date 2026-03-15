@@ -4423,6 +4423,158 @@ def cmd_test(args: argparse.Namespace) -> None:
             )
             return verdict
 
+        if inv_type == "bgp_localpref_equals":
+            node = str(t.get("node") or "")
+            prefix = _normalize_prefix(str(t.get("prefix") or ""))
+            expv = t.get("expected")
+            exp_localpref_i = int(expv)
+
+            cp = rt.exec(lab, node, ["vtysh", "-c", f"show ip bgp {prefix} json"], check=False)
+            out = cp.stdout or ""
+            rc = cp.returncode
+            if isinstance(out, (bytes, bytearray)):
+                try:
+                    out = out.decode("utf-8", errors="replace")
+                except Exception:
+                    out = str(out)
+
+            parse_error = ""
+            observed_localpref = None
+            try:
+                doc = json.loads(str(out or "").strip()) if str(out or "").strip() else {}
+                route_obj = None
+                if isinstance(doc, dict):
+                    cand = doc.get(prefix)
+                    if isinstance(cand, list) and cand:
+                        route_obj = cand[0]
+                    elif isinstance(cand, dict):
+                        route_obj = cand
+                    elif (
+                        doc.get("prefix") is not None
+                        and (_normalize_prefix(str(doc.get("prefix"))) or str(doc.get("prefix"))) == prefix
+                    ):
+                        route_obj = doc
+                    else:
+                        routes = doc.get("routes")
+                        if isinstance(routes, dict):
+                            cand = routes.get(prefix)
+                            if isinstance(cand, list) and cand:
+                                route_obj = cand[0]
+                            elif isinstance(cand, dict):
+                                route_obj = cand
+                            else:
+                                for k, v in routes.items():
+                                    nk = _normalize_prefix(str(k)) or str(k)
+                                    if nk != prefix:
+                                        continue
+                                    if isinstance(v, list) and v:
+                                        route_obj = v[0]
+                                        break
+                                    if isinstance(v, dict):
+                                        route_obj = v
+                                        break
+                        if route_obj is None:
+                            for k, v in doc.items():
+                                nk = _normalize_prefix(str(k)) or str(k)
+                                if nk != prefix:
+                                    continue
+                                if isinstance(v, list) and v:
+                                    route_obj = v[0]
+                                    break
+                                if isinstance(v, dict):
+                                    route_obj = v
+                                    break
+                else:
+                    raise ValueError("unexpected_bgp_prefix_json_shape")
+
+                if not isinstance(route_obj, dict):
+                    parse_error = "prefix not present in bgp json"
+                else:
+                    for key in ("locPrf", "localpref", "localPref", "local_preference"):
+                        val = route_obj.get(key)
+                        if val is None or str(val).strip() == "":
+                            continue
+                        try:
+                            observed_localpref = int(val)
+                            break
+                        except Exception:
+                            continue
+
+                    if observed_localpref is None:
+                        paths = route_obj.get("paths")
+                        if isinstance(paths, list):
+                            for path in paths:
+                                if not isinstance(path, dict):
+                                    continue
+                                for key in ("locPrf", "localpref", "localPref", "local_preference"):
+                                    val = path.get(key)
+                                    if val is None or str(val).strip() == "":
+                                        continue
+                                    try:
+                                        observed_localpref = int(val)
+                                        break
+                                    except Exception:
+                                        continue
+                                if observed_localpref is not None:
+                                    break
+
+                    if observed_localpref is None:
+                        parse_error = "localpref not present in bgp json"
+            except Exception as e:
+                parse_error = str(e)
+
+            if observed_localpref is None:
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=node,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported BGP LOCALPREF evidence normalization",
+                    evidence={
+                        "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                        "rc": rc,
+                        "parse_error": parse_error,
+                    },
+                    meta={
+                        "type": inv_type,
+                        "prefix": prefix,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
+            observed = "pass" if observed_localpref == exp_localpref_i else "fail"
+            verdict = "pass" if observed == expected else "fail"
+
+            record_fn(
+                name=test_name,
+                kind="invariant",
+                src=node,
+                dst="",
+                expected=expected,
+                observed=observed,
+                verdict=verdict,
+                duration_ms=int((time.time() - start) * 1000),
+                error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
+                evidence={
+                    "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                    "rc": rc,
+                    "prefix": prefix,
+                    "localpref": observed_localpref,
+                },
+                meta={
+                    "type": inv_type,
+                    "prefix": prefix,
+                    "expected_value": exp_localpref_i,
+                    "observed_value": observed_localpref,
+                },
+            )
+            return verdict
+
         record_fn(
             name=test_name,
             kind="invariant",
@@ -4489,7 +4641,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     )
                     return "fail"
 
-            elif inv_type in ("route_present", "route_absent", "bgp_med_equals"):
+            elif inv_type in ("route_present", "route_absent", "bgp_med_equals", "bgp_localpref_equals"):
                 prefix = t.get("prefix")
                 if not isinstance(prefix, str) or not prefix.strip():
                     record_test(
@@ -4507,7 +4659,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     )
                     return "fail"
 
-                if inv_type == "bgp_med_equals":
+                if inv_type in ("bgp_med_equals", "bgp_localpref_equals"):
                     expv = t.get("expected")
                     if expv is None or str(expv).strip() == "":
                         record_test(

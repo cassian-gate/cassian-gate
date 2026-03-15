@@ -1198,6 +1198,11 @@ def gen_frr_conf(node: dict, topo: dict) -> str:
                         cfg.append(f" set metric {int(set_block.get('med'))}")
                     except Exception:
                         pass
+                if "localpref" in set_block:
+                    try:
+                        cfg.append(f" set local-preference {int(set_block.get('localpref'))}")
+                    except Exception:
+                        pass
         if route_maps:
             cfg.append("!")
 
@@ -1513,6 +1518,7 @@ def resolve_topology(topo: dict) -> dict:
                 "route_present",
                 "route_absent",
                 "bgp_med_equals",
+                "bgp_localpref_equals",
                 "evpn_mac_route_present",
                 "evpn_mac_route_absent",
                 "evpn_vni_route_present",
@@ -1521,7 +1527,7 @@ def resolve_topology(topo: dict) -> dict:
                 die(
                     f"tests[{i}]: invariant.type unsupported ({inv_type!r}) "
                     f"(supported: bgp_session_up, route_present, route_absent, "
-                    f"bgp_med_equals, evpn_mac_route_present, evpn_mac_route_absent, "
+                    f"bgp_med_equals, bgp_localpref_equals, evpn_mac_route_present, evpn_mac_route_absent, "
                     f"evpn_vni_route_present, evpn_bgp_session_up)"
                 )
             t["type"] = inv_type
@@ -1567,7 +1573,7 @@ def resolve_topology(topo: dict) -> dict:
                 die(f"{ctx}: invariant.expect must be pass|fail if provided")
             t["expect"] = exp_s
 
-            if inv_type in ("route_present", "route_absent", "bgp_med_equals"):
+            if inv_type in ("route_present", "route_absent", "bgp_med_equals", "bgp_localpref_equals"):
                 pfx = t.get("prefix")
                 if not isinstance(pfx, str) or not pfx.strip():
                     die(f"{ctx}: {inv_type} requires 'prefix' as CIDR (e.g. 10.0.0.0/24)")
@@ -1576,7 +1582,7 @@ def resolve_topology(topo: dict) -> dict:
                 except Exception:
                     die(f"{ctx}: {inv_type}.prefix must be a valid CIDR (e.g. 10.0.0.0/24)")
 
-                if inv_type == "bgp_med_equals":
+                if inv_type in ("bgp_med_equals", "bgp_localpref_equals"):
                     expv = t.get("expected")
                     if expv is None or str(expv).strip() == "":
                         die(f"{ctx}: {inv_type} requires 'expected'")
