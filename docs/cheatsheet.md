@@ -780,7 +780,7 @@ They validate declared truth conditions and return authoritative pass/fail resul
 
 Routing invariants validate specific routing truth on a named node.
 
-They are useful when you need to prove policy outcome, path preference, or route attributes.
+They are useful when you need to prove policy outcome, path preference, route advertisement boundaries, or route attributes.
 
 ### BGP Local Preference Invariant
 
@@ -803,11 +803,11 @@ This is useful for validating routing policy behavior such as:
 
 Required fields:
 
-| Field    | Description                               |
-| -------- | ----------------------------------------- |
-| node     | Node where the route must be observed     |
-| prefix   | Prefix being validated                    |
-| expected | Expected BGP local preference value       |
+| Field    | Description                           |
+| -------- | ------------------------------------- |
+| node     | Node where the route must be observed |
+| prefix   | Prefix being validated                |
+| expected | Expected BGP local preference value   |
 
 Example:
 
@@ -862,6 +862,172 @@ Determinism guarantees:
 - invariant evaluation occurs during the **TEST** phase
 - results are deterministic under identical topology, code version, and runtime conditions
 - replay verification (`netsim replay --gate --verify-results`) must reproduce identical results
+
+### Route Advertised To Invariant
+
+Invariant type:
+
+```text
+route_advertised_to
+```
+
+Purpose:
+
+Verify that a specific route is being advertised from the specified node to the specified peer.
+
+This is useful for validating routing advertisement boundaries such as:
+
+- expected route export to a peer
+- intended prefix propagation across a boundary
+- prevention of missing outbound advertisements
+- verification that a route is actually being sent to a named neighbor
+
+Required fields:
+
+| Field  | Description                                   |
+| ------ | --------------------------------------------- |
+| node   | Node where the route advertisement is checked |
+| peer   | Named peer that must receive the route        |
+| prefix | Prefix being validated                        |
+
+Example:
+
+```yaml
+tests:
+  - name: r1_advertises_10_10_10_0_24_to_r2
+    kind: invariant
+    type: route_advertised_to
+    node: r1
+    peer: r2
+    prefix: 10.10.10.0/24
+    expect: pass
+```
+
+Behavior:
+
+- The invariant inspects supported structured advertisement evidence on the specified node.
+- It passes when the specified prefix is observed as advertised to the named peer.
+- It fails when the prefix is not observed as advertised to that peer.
+- If the invariant definition itself is invalid, the run fails with misuse exit code `2`.
+
+Exit behavior:
+
+| Condition                              | Exit Code |
+| -------------------------------------- | --------- |
+| invariant satisfied                    | 0         |
+| invariant mismatch                     | 1         |
+| invariant misuse / invalid declaration | 2         |
+
+Artifacts produced:
+
+The invariant result is recorded in the standard artifacts:
+
+```text
+labs/<lab>/results.json
+labs/<lab>/results.summary.txt
+```
+
+Replay:
+
+This invariant is replay-verifiable with standard gate replay:
+
+```bash
+netsim replay labs/clab-route-advertised-to --gate --verify-results
+```
+
+Scope boundary:
+
+This invariant validates only peer-scoped route advertisement presence.
+
+It does **not** by itself prove:
+
+- generic routing policy correctness
+- attribute correctness
+- community / AS-path behavior
+- broader route-map intent
+
+### Route Not Advertised To Invariant
+
+Invariant type:
+
+```text
+route_not_advertised_to
+```
+
+Purpose:
+
+Verify that a specific route is not being advertised from the specified node to the specified peer.
+
+This is useful for validating routing advertisement boundaries such as:
+
+- expected suppression of a prefix to a peer
+- prevention of route leaks
+- verification that a route is withheld from a named neighbor
+- confirming that local route presence does not imply outbound advertisement
+
+Required fields:
+
+| Field  | Description                                   |
+| ------ | --------------------------------------------- |
+| node   | Node where the route advertisement is checked |
+| peer   | Named peer that must not receive the route    |
+| prefix | Prefix being validated                        |
+
+Example:
+
+```yaml
+tests:
+  - name: r1_does_not_advertise_10_10_10_0_24_to_r2
+    kind: invariant
+    type: route_not_advertised_to
+    node: r1
+    peer: r2
+    prefix: 10.10.10.0/24
+    expect: pass
+```
+
+Behavior:
+
+- The invariant inspects supported structured advertisement evidence on the specified node.
+- It passes when the specified prefix is not observed as advertised to the named peer.
+- It fails when the prefix is observed as advertised to that peer.
+- If the invariant definition itself is invalid, the run fails with misuse exit code `2`.
+
+Exit behavior:
+
+| Condition                              | Exit Code |
+| -------------------------------------- | --------- |
+| invariant satisfied                    | 0         |
+| invariant mismatch                     | 1         |
+| invariant misuse / invalid declaration | 2         |
+
+Artifacts produced:
+
+The invariant result is recorded in the standard artifacts:
+
+```text
+labs/<lab>/results.json
+labs/<lab>/results.summary.txt
+```
+
+Replay:
+
+This invariant is replay-verifiable with standard gate replay:
+
+```bash
+netsim replay labs/clab-route-not-advertised-to --gate --verify-results
+```
+
+Scope boundary:
+
+This invariant validates only peer-scoped route advertisement absence.
+
+It does **not** by itself prove:
+
+- generic routing policy correctness
+- attribute correctness
+- community / AS-path behavior
+- broader route-map intent
 
 ---
 
@@ -1474,10 +1640,17 @@ Bring up EVPN runtime substrate:
 netsim up topologies/evpn_runtime_generation.yaml
 ```
 
-Run a routing invariant proof:
+Run a routing attribute invariant proof:
 
 ```bash
 netsim test topologies/bgp_localpref_equals.yaml
+```
+
+Run a route advertisement invariant proof:
+
+```bash
+netsim test topologies/route_advertised_to.yaml
+netsim test topologies/route_not_advertised_to.yaml
 ```
 
 Run an EVPN invariant proof:

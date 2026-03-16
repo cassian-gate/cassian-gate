@@ -833,7 +833,160 @@ diff -u /tmp/bgp_localpref_equals.results.run1.json /tmp/bgp_localpref_equals.re
   || { echo "FAIL: BGP localpref replay results.json drift"; diff -u /tmp/bgp_localpref_equals.results.run1.json /tmp/bgp_localpref_equals.results.replay.json || true; exit 1; }
 
 echo
+echo "=== 6f) Route advertisement invariants gate + replay determinism ==="
 
+RA_TOPO="topologies/route_advertised_to.yaml"
+RA_LAB="route-advertised-to"
+RA_LABDIR="labs/clab-${RA_LAB}"
+RA_NEG_TOPO="topologies/route_advertised_to_expected_not_advertised.yaml"
+RA_NEG_LAB="route-advertised-to-expected-not-advertised"
+RA_NEG_LABDIR="labs/clab-${RA_NEG_LAB}"
+RA_MISUSE_TOPO="topologies/neg/route_invalid_advertisement_invariant.yaml"
+
+RNA_TOPO="topologies/route_not_advertised_to.yaml"
+RNA_LAB="route-not-advertised-to"
+RNA_LABDIR="labs/clab-${RNA_LAB}"
+
+rm -rf "${RA_LABDIR}" "${RA_NEG_LABDIR}" "${RNA_LABDIR}" 2>/dev/null || true
+
+set +e
+ra_out="$($NS test "$RA_TOPO" 2>&1)"
+ra_rc=$?
+set -e
+if [ "$ra_rc" -ne 0 ]; then
+  echo "FAIL: expected route_advertised_to gate run to pass (rc=0), but rc=$ra_rc"
+  echo "$ra_out"
+  exit 1
+fi
+
+test -s "${RA_LABDIR}/results.json" || { echo "FAIL: missing ${RA_LABDIR}/results.json after route_advertised_to gate run"; exit 1; }
+
+jq -e '
+  .result=="pass"
+  and ([.tests[]? | select(.name=="r1_advertises_10_10_10_0_24_to_r2" and .kind=="invariant" and .verdict=="pass")] | length) == 1
+' "${RA_LABDIR}/results.json" >/dev/null || {
+  echo "FAIL: route_advertised_to gate results.json missing expected invariant PASS entry"
+  jq '.tests' "${RA_LABDIR}/results.json" 2>/dev/null || true
+  exit 1
+}
+echo "OK: route_advertised_to invariant gate PASS recorded"
+
+cp -f "${RA_LABDIR}/results.json" /tmp/route_advertised_to.results.run1.json
+
+set +e
+ra_neg_out="$($NS test "$RA_NEG_TOPO" 2>&1)"
+ra_neg_rc=$?
+set -e
+if [ "$ra_neg_rc" -ne 1 ]; then
+  echo "FAIL: expected route_advertised_to negative validation run to fail with rc=1, but rc=$ra_neg_rc"
+  echo "$ra_neg_out"
+  exit 1
+fi
+
+test -s "${RA_NEG_LABDIR}/results.json" || { echo "FAIL: missing ${RA_NEG_LABDIR}/results.json after route_advertised_to negative run"; exit 1; }
+
+jq -e '
+  .result=="fail"
+  and ([.tests[]? | select(.name=="r1_advertises_10_10_10_0_24_to_r2_but_it_should_not" and .kind=="invariant" and .verdict=="fail")] | length) == 1
+' "${RA_NEG_LABDIR}/results.json" >/dev/null || {
+  echo "FAIL: route_advertised_to negative results.json missing expected invariant FAIL entry"
+  jq '.tests' "${RA_NEG_LABDIR}/results.json" 2>/dev/null || true
+  exit 1
+}
+echo "OK: route_advertised_to invariant negative validation recorded"
+
+set +e
+ra_misuse_out="$($NS test "$RA_MISUSE_TOPO" 2>&1)"
+ra_misuse_rc=$?
+set -e
+if [ "$ra_misuse_rc" -ne 2 ]; then
+  echo "FAIL: expected route_advertised_to misuse run to fail with rc=2, but rc=$ra_misuse_rc"
+  echo "$ra_misuse_out"
+  exit 1
+fi
+echo "OK: route_advertised_to invariant misuse recorded"
+
+set +e
+ra_replay_out="$($NS replay "${RA_LABDIR}" --gate --verify-results 2>&1)"
+ra_replay_rc=$?
+set -e
+if [ "$ra_replay_rc" -ne 0 ]; then
+  echo "FAIL: expected route_advertised_to replay to pass with --verify-results (rc=0), but rc=$ra_replay_rc"
+  echo "$ra_replay_out"
+  exit 1
+fi
+
+test -s "${RA_LABDIR}/results.json" || { echo "FAIL: missing ${RA_LABDIR}/results.json after route_advertised_to replay"; exit 1; }
+
+jq -e '
+  .result=="pass"
+  and ([.tests[]? | select(.name=="r1_advertises_10_10_10_0_24_to_r2" and .kind=="invariant" and .verdict=="pass")] | length) == 1
+' "${RA_LABDIR}/results.json" >/dev/null || {
+  echo "FAIL: route_advertised_to replay results.json missing expected invariant PASS entry"
+  jq '.tests' "${RA_LABDIR}/results.json" 2>/dev/null || true
+  exit 1
+}
+echo "OK: route_advertised_to invariant replay PASS recorded"
+
+cp -f "${RA_LABDIR}/results.json" /tmp/route_advertised_to.results.replay.json
+
+diff -u /tmp/route_advertised_to.results.run1.json /tmp/route_advertised_to.results.replay.json >/dev/null \
+  && echo "OK: route_advertised_to replay results.json deterministic (byte-identical)" \
+  || { echo "FAIL: route_advertised_to replay results.json drift"; diff -u /tmp/route_advertised_to.results.run1.json /tmp/route_advertised_to.results.replay.json || true; exit 1; }
+
+set +e
+rna_out="$($NS test "$RNA_TOPO" 2>&1)"
+rna_rc=$?
+set -e
+if [ "$rna_rc" -ne 0 ]; then
+  echo "FAIL: expected route_not_advertised_to gate run to pass (rc=0), but rc=$rna_rc"
+  echo "$rna_out"
+  exit 1
+fi
+
+test -s "${RNA_LABDIR}/results.json" || { echo "FAIL: missing ${RNA_LABDIR}/results.json after route_not_advertised_to gate run"; exit 1; }
+
+jq -e '
+  .result=="pass"
+  and ([.tests[]? | select(.name=="r1_does_not_advertise_10_10_10_0_24_to_r2" and .kind=="invariant" and .verdict=="pass")] | length) == 1
+' "${RNA_LABDIR}/results.json" >/dev/null || {
+  echo "FAIL: route_not_advertised_to gate results.json missing expected invariant PASS entry"
+  jq '.tests' "${RNA_LABDIR}/results.json" 2>/dev/null || true
+  exit 1
+}
+echo "OK: route_not_advertised_to invariant gate PASS recorded"
+
+cp -f "${RNA_LABDIR}/results.json" /tmp/route_not_advertised_to.results.run1.json
+
+set +e
+rna_replay_out="$($NS replay "${RNA_LABDIR}" --gate --verify-results 2>&1)"
+rna_replay_rc=$?
+set -e
+if [ "$rna_replay_rc" -ne 0 ]; then
+  echo "FAIL: expected route_not_advertised_to replay to pass with --verify-results (rc=0), but rc=$rna_replay_rc"
+  echo "$rna_replay_out"
+  exit 1
+fi
+
+test -s "${RNA_LABDIR}/results.json" || { echo "FAIL: missing ${RNA_LABDIR}/results.json after route_not_advertised_to replay"; exit 1; }
+
+jq -e '
+  .result=="pass"
+  and ([.tests[]? | select(.name=="r1_does_not_advertise_10_10_10_0_24_to_r2" and .kind=="invariant" and .verdict=="pass")] | length) == 1
+' "${RNA_LABDIR}/results.json" >/dev/null || {
+  echo "FAIL: route_not_advertised_to replay results.json missing expected invariant PASS entry"
+  jq '.tests' "${RNA_LABDIR}/results.json" 2>/dev/null || true
+  exit 1
+}
+echo "OK: route_not_advertised_to invariant replay PASS recorded"
+
+cp -f "${RNA_LABDIR}/results.json" /tmp/route_not_advertised_to.results.replay.json
+
+diff -u /tmp/route_not_advertised_to.results.run1.json /tmp/route_not_advertised_to.results.replay.json >/dev/null \
+  && echo "OK: route_not_advertised_to replay results.json deterministic (byte-identical)" \
+  || { echo "FAIL: route_not_advertised_to replay results.json drift"; diff -u /tmp/route_not_advertised_to.results.run1.json /tmp/route_not_advertised_to.results.replay.json || true; exit 1; }
+
+echo
 echo "=== 7) Cleanup smoke (netsim cleanup --all) ==="
 
 # 7a) Dry-run must show a plan and exit 0
