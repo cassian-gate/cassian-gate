@@ -382,15 +382,17 @@ Optional:
 
 ---
 
-## Invariant Packs (Expanded During Resolve)
+## Invariant Packs (Loaded and Expanded During Resolve)
 
-ai-netsim supports declarative invariant packs that expand into explicit invariant declarations during **Resolve**.
+ai-netsim supports declarative invariant packs that are **loaded from the supported local pack surface**, compatibility-checked, and then expanded into explicit invariant declarations during **Resolve**.
 
 Packs are optional authoring shortcuts. The authoritative validation still comes later from the expanded invariant verdicts.
 
 Packs are:
 
 - declarative only
+- loaded locally and deterministically
+- compatibility-checked before expansion
 - expanded deterministically during Resolve
 - written as explicit tests in `topology.resolved.yaml`
 - non-authoritative by themselves
@@ -401,6 +403,8 @@ Packs do **not**:
 - change lifecycle behavior
 - introduce runtime-only semantics
 - change authority boundaries
+- load from remote registries
+- use fallback or best-match lookup
 
 Later validation still comes from the resulting invariant verdicts.
 
@@ -417,7 +421,9 @@ Rules:
 
 - `packs` must be a list
 - each pack entry must be a non-empty string
+- pack lookup is deterministic and local only
 - unknown pack names fail fast with exit code `2`
+- incompatible pack contents fail fast with exit code `2`
 - pack expansion must be deterministic
 
 ### Current Supported Pack
@@ -428,6 +434,8 @@ datacenter-bgp-safety
 
 Current behavior:
 
+- loads from the supported local pack surface
+- passes local compatibility enforcement before expansion
 - expands during Resolve into explicit invariant tests
 - later phases consume only the expanded invariants
 - replay and gate execution use the resolved expanded test list
@@ -435,7 +443,7 @@ Current behavior:
 ### Example
 
 ```yaml
-name: pack-resolve-expansion
+name: pack-local-compatibility-ok
 
 packs:
   - datacenter-bgp-safety
@@ -498,28 +506,30 @@ tests: []
 
 ### Operator Commands
 
-Validate pack expansion:
+Validate local pack loading and compatibility enforcement:
 
 ```bash
-netsim validate topologies/pack_resolve_expansion.yaml
+netsim validate topologies/pack_local_compatibility_ok.yaml
 ```
 
-Run authoritative gate execution of expanded invariants:
+Run authoritative gate execution of the accepted expanded invariants:
 
 ```bash
-netsim test topologies/pack_resolve_expansion.yaml
+netsim test topologies/pack_local_compatibility_ok.yaml
 ```
 
-Negative misuse proof:
+Negative misuse proofs:
 
 ```bash
-netsim validate topologies/neg/pack_invalid_reference.yaml
+netsim validate topologies/neg/pack_unknown_reference.yaml
+netsim validate topologies/neg/pack_incompatible_contents.yaml
 ```
 
 Expected behavior:
 
-- valid pack topology → exit `0`
-- invalid pack reference → exit `2`
+- valid local pack topology → exit `0`
+- unknown pack reference → exit `2`
+- incompatible pack contents → exit `2`
 
 ### Artifact Note
 
@@ -536,8 +546,6 @@ Authority still comes from the later invariant verdicts in:
 ```text
 results.json
 ```
-
----
 
 # 6️⃣ Nodes
 
@@ -1779,22 +1787,23 @@ Run validation gate:
 netsim test topology.yaml
 ```
 
-Validate invariant-pack expansion:
+Validate invariant-pack compatibility:
 
 ```bash
-netsim validate topologies/pack_resolve_expansion.yaml
+netsim validate topologies/pack_local_compatibility_ok.yaml
 ```
 
 Run invariant-pack gate proof:
 
 ```bash
-netsim test topologies/pack_resolve_expansion.yaml
+netsim test topologies/pack_local_compatibility_ok.yaml
 ```
 
 Validate invalid pack misuse handling:
 
 ```bash
-netsim validate topologies/neg/pack_invalid_reference.yaml
+netsim validate topologies/neg/pack_unknown_reference.yaml
+netsim validate topologies/neg/pack_incompatible_contents.yaml
 ```
 
 Replay a previous gate deterministically:
@@ -1881,6 +1890,7 @@ Examples:
 - invariant truth mismatch → `1`
 - unsupported EVPN topology shape → `2`
 - invalid invariant declaration → `2`
+- incompatible pack contents → `2`
 
 ---
 
