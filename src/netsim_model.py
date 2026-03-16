@@ -1502,24 +1502,49 @@ def resolve_topology(topo: dict) -> dict:
         die("packs: must be a list")
 
     builtin_invariant_packs = {
-        "datacenter-bgp-safety": [
-            {
-                "name": "leaf1_evpn_session_to_spine1_up",
-                "kind": "invariant",
-                "type": "evpn_bgp_session_up",
-                "node": "leaf1",
-                "peer": "spine1",
-                "expect": "pass",
-            },
-            {
-                "name": "leaf2_evpn_session_to_spine1_up",
-                "kind": "invariant",
-                "type": "evpn_bgp_session_up",
-                "node": "leaf2",
-                "peer": "spine1",
-                "expect": "pass",
-            },
-        ]
+        "datacenter-bgp-safety": {
+            "pack_id": "datacenter-bgp-safety",
+            "invariants": [
+                {
+                    "name": "leaf1_evpn_session_to_spine1_up",
+                    "kind": "invariant",
+                    "type": "evpn_bgp_session_up",
+                    "node": "leaf1",
+                    "peer": "spine1",
+                    "expect": "pass",
+                },
+                {
+                    "name": "leaf2_evpn_session_to_spine1_up",
+                    "kind": "invariant",
+                    "type": "evpn_bgp_session_up",
+                    "node": "leaf2",
+                    "peer": "spine1",
+                    "expect": "pass",
+                },
+            ],
+        },
+        "pack_incompatible_fixture": {
+            "pack_id": "pack_incompatible_fixture",
+            "invariants": [
+                {
+                    "name": "invalid_pack_entry",
+                    "kind": "invariant",
+                    "type": "not_a_supported_invariant_type",
+                    "node": "leaf1",
+                    "expect": "pass",
+                }
+            ],
+        },
+    }
+
+    supported_pack_invariant_types = {
+        "evpn_bgp_session_up",
+        "evpn_mac_route_present",
+        "evpn_mac_route_absent",
+        "evpn_vni_route_present",
+        "bgp_localpref_equals",
+        "route_advertised_to",
+        "route_not_advertised_to",
     }
 
     expanded_pack_tests = []
@@ -1528,7 +1553,39 @@ def resolve_topology(topo: dict) -> dict:
             die(f"packs[{i}]: must be a non-empty string", code=2)
         if pack_name not in builtin_invariant_packs:
             die(f"Unknown invariant pack: {pack_name}", code=2)
-        for test_def in builtin_invariant_packs[pack_name]:
+
+        pack_def = builtin_invariant_packs[pack_name]
+        if not isinstance(pack_def, dict):
+            die(f"Invariant pack '{pack_name}' has invalid local definition", code=2)
+
+        allowed_pack_keys = {"pack_id", "invariants"}
+        unknown_pack_keys = sorted(set(pack_def.keys()) - allowed_pack_keys)
+        if unknown_pack_keys:
+            die(
+                f"Invariant pack '{pack_name}' contains unsupported keys: {', '.join(unknown_pack_keys)}",
+                code=2,
+            )
+
+        pack_id = pack_def.get("pack_id")
+        if pack_id != pack_name:
+            die(f"Invariant pack '{pack_name}' has mismatched local identity", code=2)
+
+        pack_tests = pack_def.get("invariants")
+        if not isinstance(pack_tests, list) or not pack_tests:
+            die(f"Invariant pack '{pack_name}' has invalid invariant list", code=2)
+
+        for test_def in pack_tests:
+            if not isinstance(test_def, dict):
+                die(f"Invariant pack '{pack_name}' contains invalid invariant declaration", code=2)
+            if test_def.get("kind") != "invariant":
+                die(f"Invariant pack '{pack_name}' contains non-invariant content", code=2)
+            if test_def.get("type") not in supported_pack_invariant_types:
+                die(
+                    f"Invariant pack '{pack_name}' contains unsupported invariant type: {test_def.get('type')}",
+                    code=2,
+                )
+            if "run" in test_def or "command" in test_def or "steps" in test_def:
+                die(f"Invariant pack '{pack_name}' contains non-declarative content", code=2)
             expanded_pack_tests.append(dict(test_def))
 
     tests = expanded_pack_tests + tests
