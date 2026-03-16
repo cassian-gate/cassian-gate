@@ -99,7 +99,12 @@ if ! grep -q 'active_fault_states' src/netsim_tests.py; then
 fi
 
 echo "=== 0d) Guardrail: invariant pack resolve expansion ==="
-rm -rf labs/clab-pack-resolve-expansion labs/clab-pack-invalid-reference
+rm -rf \
+  labs/clab-pack-resolve-expansion \
+  labs/clab-pack-local-compatibility-ok \
+  labs/clab-pack-invalid-reference \
+  labs/clab-pack-unknown-reference \
+  labs/clab-pack-incompatible-contents
 
 src/netsim.py validate topologies/pack_resolve_expansion.yaml >/tmp/verify_pack_validate.out 2>/tmp/verify_pack_validate.err
 rc=$?
@@ -110,14 +115,34 @@ if [ "$rc" -ne 0 ]; then
   exit 1
 fi
 
+src/netsim.py validate topologies/pack_local_compatibility_ok.yaml >/tmp/verify_pack_local_ok.out 2>/tmp/verify_pack_local_ok.err
+rc=$?
+cat /tmp/verify_pack_local_ok.out
+cat /tmp/verify_pack_local_ok.err
+if [ "$rc" -ne 0 ]; then
+  echo "FAIL: pack_local_compatibility_ok validate exited $rc"
+  exit 1
+fi
+
 set +e
-src/netsim.py validate topologies/neg/pack_invalid_reference.yaml >/tmp/verify_pack_neg.out 2>/tmp/verify_pack_neg.err
+src/netsim.py validate topologies/neg/pack_unknown_reference.yaml >/tmp/verify_pack_neg.out 2>/tmp/verify_pack_neg.err
 rc=$?
 set -e
 cat /tmp/verify_pack_neg.out
 cat /tmp/verify_pack_neg.err
 if [ "$rc" -ne 2 ]; then
-  echo "FAIL: pack_invalid_reference validate exited $rc (expected 2)"
+  echo "FAIL: pack_unknown_reference validate exited $rc (expected 2)"
+  exit 1
+fi
+
+set +e
+src/netsim.py validate topologies/neg/pack_incompatible_contents.yaml >/tmp/verify_pack_incompat.out 2>/tmp/verify_pack_incompat.err
+rc=$?
+set -e
+cat /tmp/verify_pack_incompat.out
+cat /tmp/verify_pack_incompat.err
+if [ "$rc" -ne 2 ]; then
+  echo "FAIL: pack_incompatible_contents validate exited $rc (expected 2)"
   exit 1
 fi
 echo "OK: pack_invalid_reference validate failed as expected (exit 2)"
@@ -152,7 +177,7 @@ if ! grep -q 'leaf2_evpn_session_to_spine1_up' labs/clab-pack-resolve-expansion/
   exit 1
 fi
 
-echo "OK: invariant pack resolve expansion guardrails"
+echo "OK: invariant pack loading and compatibility guardrails"
 
 echo "=== 1) Guardrails: no package installs in engine ==="
 grep -RInE '\bapk\s+(add|update)\b' src && { echo "FAIL: apk usage found"; exit 1; } || echo "OK: no apk installs"
