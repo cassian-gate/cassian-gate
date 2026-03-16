@@ -7574,12 +7574,12 @@ def cmd_validate(args: argparse.Namespace) -> None:
         return  # do not fall through
 
     except SystemExit as e:
-        # In --json mode, die() should have raised SystemExit(<message>), so str(e) is the real error.
+        # In --json mode, die() may raise either SystemExit(<message>) or SystemExit(<code>).
+        code = e.code if isinstance(e.code, int) else 2
         msg = str(e).strip() or "validation failed"
         if want_json:
             emit("fail", msg)
-            raise SystemExit(1)
-        raise
+        raise SystemExit(code)
 
     except Exception as e:
         msg = str(e).strip() or "validation failed"

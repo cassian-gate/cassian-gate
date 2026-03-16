@@ -578,6 +578,15 @@ def ensure_valid_topology(topo: dict) -> None:
         if k not in topo:
             die(f"Missing required key: '{k}'")
 
+    packs = topo.get("packs", [])
+    if packs is None:
+        packs = []
+    if not isinstance(packs, list):
+        die("packs: must be a list", code=2)
+    for i, pack_name in enumerate(packs, start=1):
+        if not isinstance(pack_name, str) or not pack_name.strip():
+            die(f"packs[{i}]: must be a non-empty string", code=2)
+
     # v1.5 EVPN Awareness (presence-only): validate canonical fabric.evpn shape (fail-fast).
     # This MUST NOT change execution semantics; it only validates declared intent.
     _validate_fabric_evpn_presence_only(topo)
@@ -1488,6 +1497,43 @@ def resolve_topology(topo: dict) -> dict:
     #    - fail fast if both are present
     # ----------------------------
     tests = resolved.get("tests", []) or []
+    packs = resolved.get("packs", []) or []
+    if not isinstance(packs, list):
+        die("packs: must be a list")
+
+    builtin_invariant_packs = {
+        "datacenter-bgp-safety": [
+            {
+                "name": "leaf1_evpn_session_to_spine1_up",
+                "kind": "invariant",
+                "type": "evpn_bgp_session_up",
+                "node": "leaf1",
+                "peer": "spine1",
+                "expect": "pass",
+            },
+            {
+                "name": "leaf2_evpn_session_to_spine1_up",
+                "kind": "invariant",
+                "type": "evpn_bgp_session_up",
+                "node": "leaf2",
+                "peer": "spine1",
+                "expect": "pass",
+            },
+        ]
+    }
+
+    expanded_pack_tests = []
+    for i, pack_name in enumerate(packs, start=1):
+        if not isinstance(pack_name, str) or not pack_name.strip():
+            die(f"packs[{i}]: must be a non-empty string", code=2)
+        if pack_name not in builtin_invariant_packs:
+            die(f"Unknown invariant pack: {pack_name}", code=2)
+        for test_def in builtin_invariant_packs[pack_name]:
+            expanded_pack_tests.append(dict(test_def))
+
+    tests = expanded_pack_tests + tests
+    resolved["tests"] = tests
+
     for idx, t in enumerate(tests):
         i = idx + 1
 
