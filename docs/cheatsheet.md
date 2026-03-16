@@ -375,9 +375,167 @@ Optional:
 
 - `tests`
 - `scenarios`
+- `packs`
 - `fabric`
 - `candidate_changes`
 - `vlans`
+
+---
+
+## Invariant Packs (Expanded During Resolve)
+
+ai-netsim supports declarative invariant packs that expand into explicit invariant declarations during **Resolve**.
+
+Packs are optional authoring shortcuts. The authoritative validation still comes later from the expanded invariant verdicts.
+
+Packs are:
+
+- declarative only
+- expanded deterministically during Resolve
+- written as explicit tests in `topology.resolved.yaml`
+- non-authoritative by themselves
+
+Packs do **not**:
+
+- execute code
+- change lifecycle behavior
+- introduce runtime-only semantics
+- change authority boundaries
+
+Later validation still comes from the resulting invariant verdicts.
+
+### Pack Declaration
+
+Example:
+
+```yaml
+packs:
+  - datacenter-bgp-safety
+```
+
+Rules:
+
+- `packs` must be a list
+- each pack entry must be a non-empty string
+- unknown pack names fail fast with exit code `2`
+- pack expansion must be deterministic
+
+### Current Supported Pack
+
+```text
+datacenter-bgp-safety
+```
+
+Current behavior:
+
+- expands during Resolve into explicit invariant tests
+- later phases consume only the expanded invariants
+- replay and gate execution use the resolved expanded test list
+
+### Example
+
+```yaml
+name: pack-resolve-expansion
+
+packs:
+  - datacenter-bgp-safety
+
+fabric:
+  evpn:
+    enabled: true
+    mode: vlan-aware
+    asn: 65100
+
+nodes:
+  - name: spine1
+    type: frr
+    role: spine
+    evpn_rr: true
+    router_id: 10.255.0.1
+
+  - name: leaf1
+    type: frr
+    role: leaf
+    router_id: 10.255.0.11
+
+  - name: leaf2
+    type: frr
+    role: leaf
+    router_id: 10.255.0.12
+
+  - name: host1
+    type: host
+    attach: leaf1
+    vlan: 10
+    ip: 10.10.10.11/24
+    gw: 10.10.10.1
+    mac: "00:11:22:33:44:55"
+
+  - name: host2
+    type: host
+    attach: leaf2
+    vlan: 10
+    ip: 10.10.10.12/24
+    gw: 10.10.10.1
+    mac: "00:11:22:33:44:66"
+
+links:
+  - endpoints: ["spine1:eth1", "leaf1:eth1"]
+    ipv4: ["172.16.0.0/31", "172.16.0.1/31"]
+
+  - endpoints: ["spine1:eth2", "leaf2:eth1"]
+    ipv4: ["172.16.0.2/31", "172.16.0.3/31"]
+
+  - endpoints: ["host1:eth1", "leaf1:eth2"]
+  - endpoints: ["host2:eth1", "leaf2:eth2"]
+
+vlans:
+  10:
+    vni: 10100
+
+tests: []
+```
+
+### Operator Commands
+
+Validate pack expansion:
+
+```bash
+netsim validate topologies/pack_resolve_expansion.yaml
+```
+
+Run authoritative gate execution of expanded invariants:
+
+```bash
+netsim test topologies/pack_resolve_expansion.yaml
+```
+
+Negative misuse proof:
+
+```bash
+netsim validate topologies/neg/pack_invalid_reference.yaml
+```
+
+Expected behavior:
+
+- valid pack topology → exit `0`
+- invalid pack reference → exit `2`
+
+### Artifact Note
+
+After Resolve, the expanded invariant list appears explicitly in:
+
+```text
+labs/clab-<lab-name>/topology.resolved.yaml
+```
+
+These expanded tests are generated inputs for later execution only.
+
+Authority still comes from the later invariant verdicts in:
+
+```text
+results.json
+```
 
 ---
 
@@ -1602,6 +1760,7 @@ Includes:
 - resolved defaults
 - auto IP assignments
 - normalized topology
+- explicit invariant expansion from declared `packs`
 - additive EVPN-resolved fields when EVPN runtime substrate is used
 
 ---
@@ -1618,6 +1777,24 @@ Run validation gate:
 
 ```bash
 netsim test topology.yaml
+```
+
+Validate invariant-pack expansion:
+
+```bash
+netsim validate topologies/pack_resolve_expansion.yaml
+```
+
+Run invariant-pack gate proof:
+
+```bash
+netsim test topologies/pack_resolve_expansion.yaml
+```
+
+Validate invalid pack misuse handling:
+
+```bash
+netsim validate topologies/neg/pack_invalid_reference.yaml
 ```
 
 Replay a previous gate deterministically:
