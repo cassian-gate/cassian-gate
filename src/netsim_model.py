@@ -1519,6 +1519,8 @@ def resolve_topology(topo: dict) -> dict:
                 "route_absent",
                 "bgp_med_equals",
                 "bgp_localpref_equals",
+                "route_advertised_to",
+                "route_not_advertised_to",
                 "evpn_mac_route_present",
                 "evpn_mac_route_absent",
                 "evpn_vni_route_present",
@@ -1527,7 +1529,8 @@ def resolve_topology(topo: dict) -> dict:
                 die(
                     f"tests[{i}]: invariant.type unsupported ({inv_type!r}) "
                     f"(supported: bgp_session_up, route_present, route_absent, "
-                    f"bgp_med_equals, bgp_localpref_equals, evpn_mac_route_present, evpn_mac_route_absent, "
+                    f"bgp_med_equals, bgp_localpref_equals, route_advertised_to, route_not_advertised_to, "
+                    f"evpn_mac_route_present, evpn_mac_route_absent, "
                     f"evpn_vni_route_present, evpn_bgp_session_up)"
                 )
             t["type"] = inv_type
@@ -1573,7 +1576,7 @@ def resolve_topology(topo: dict) -> dict:
                 die(f"{ctx}: invariant.expect must be pass|fail if provided")
             t["expect"] = exp_s
 
-            if inv_type in ("route_present", "route_absent", "bgp_med_equals", "bgp_localpref_equals"):
+            if inv_type in ("route_present", "route_absent", "bgp_med_equals", "bgp_localpref_equals", "route_advertised_to", "route_not_advertised_to"):
                 pfx = t.get("prefix")
                 if not isinstance(pfx, str) or not pfx.strip():
                     die(f"{ctx}: {inv_type} requires 'prefix' as CIDR (e.g. 10.0.0.0/24)")
@@ -1581,6 +1584,11 @@ def resolve_topology(topo: dict) -> dict:
                     _ = ipaddress.ip_network(pfx.strip(), strict=False)
                 except Exception:
                     die(f"{ctx}: {inv_type}.prefix must be a valid CIDR (e.g. 10.0.0.0/24)")
+
+                if inv_type in ("route_advertised_to", "route_not_advertised_to"):
+                    peer = t.get("peer")
+                    if not isinstance(peer, str) or not peer.strip():
+                        die(f"{ctx}: {inv_type} requires 'peer'")
 
                 if inv_type in ("bgp_med_equals", "bgp_localpref_equals"):
                     expv = t.get("expected")

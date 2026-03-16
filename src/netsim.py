@@ -4423,6 +4423,202 @@ def cmd_test(args: argparse.Namespace) -> None:
             )
             return verdict
 
+        if inv_type in ("route_advertised_to", "route_not_advertised_to"):
+            node = str(t.get("node") or "")
+            peer = str(t.get("peer") or "").strip()
+            prefix = _normalize_prefix(str(t.get("prefix") or ""))
+
+            if not peer:
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=node,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error=f"{inv_type} requires peer",
+                    evidence={"reason": "missing_peer"},
+                    meta={"type": inv_type, "prefix": prefix},
+                )
+                return "fail"
+
+            peer_ips = []
+            for link in (topo.get("links") or []):
+                endpoints = list(link.get("endpoints") or [])
+                if len(endpoints) != 2:
+                    continue
+                try:
+                    a_node, _ = str(endpoints[0]).split(":", 1)
+                    b_node, _ = str(endpoints[1]).split(":", 1)
+                except Exception:
+                    continue
+                ips = list(link.get("ipv4") or [])
+                if len(ips) != 2:
+                    continue
+                if a_node == node and b_node == peer:
+                    try:
+                        peer_ips.append(str(ipaddress.ip_interface(ips[1]).ip))
+                    except Exception:
+                        continue
+                elif b_node == node and a_node == peer:
+                    try:
+                        peer_ips.append(str(ipaddress.ip_interface(ips[0]).ip))
+                    except Exception:
+                        continue
+
+            peer_ips = sorted(set(peer_ips))
+            if not peer_ips:
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=node,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported route advertisement peer mapping",
+                    evidence={"reason": "unsupported_peer_mapping", "peer": peer},
+                    meta={"type": inv_type, "prefix": prefix, "peer": peer, "misuse": True},
+                )
+                raise SystemExit(2)
+
+            cp = rt.exec(
+                lab,
+                node,
+                ["vtysh", "-c", f"show ip bgp neighbor {peer_ips[0]} advertised-routes json"],
+                check=False,
+            )
+            out = cp.stdout or ""
+            rc = cp.returncode
+            if isinstance(out, (bytes, bytearray)):
+                try:
+                    out = out.decode("utf-8", errors="replace")
+                except Exception:
+                    out = str(out)
+
+            raw = str(out or "").strip()
+            parse_error = ""
+            advertised_prefixes = []
+
+            def _collect_adv_prefixes(obj):
+                found = []
+                if isinstance(obj, dict):
+                    for container_key in ("advertisedRoutes", "routes"):
+                        container = obj.get(container_key)
+                        if isinstance(container, dict):
+                            for k, v in container.items():
+                                if isinstance(v, (dict, list)):
+                                    nk = _normalize_prefix(str(k)) or str(k)
+                                    if nk:
+                                        found.append(nk)
+                    for k, v in obj.items():
+                        if isinstance(v, (dict, list)):
+                            nk = _normalize_prefix(str(k)) or str(k)
+                            if nk and "/" in nk:
+                                found.append(nk)
+                    for key in ("prefix", "network"):
+                        val = obj.get(key)
+                        nk = _normalize_prefix(str(val)) or str(val or "")
+                        if nk:
+                            found.append(nk)
+                    paths = obj.get("paths")
+                    if isinstance(paths, list):
+                        for path in paths:
+                            found.extend(_collect_adv_prefixes(path))
+                elif isinstance(obj, list):
+                    for item in obj:
+                        found.extend(_collect_adv_prefixes(item))
+                return found
+
+            try:
+                doc = json.loads(raw) if raw else {}
+                advertised_prefixes = sorted(set(_collect_adv_prefixes(doc)))
+            except Exception as e:
+                parse_error = str(e)
+
+            if rc != 0:
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=node,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported route advertisement evidence provider capability",
+                    evidence={
+                        "cmd": f"vtysh -c 'show ip bgp neighbor {peer_ips[0]} advertised-routes json'",
+                        "rc": rc,
+                    },
+                    meta={
+                        "type": inv_type,
+                        "prefix": prefix,
+                        "peer": peer,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
+            if parse_error and not advertised_prefixes:
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=node,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported route advertisement evidence normalization",
+                    evidence={
+                        "cmd": f"vtysh -c 'show ip bgp neighbor {peer_ips[0]} advertised-routes json'",
+                        "rc": rc,
+                        "parse_error": parse_error,
+                    },
+                    meta={
+                        "type": inv_type,
+                        "prefix": prefix,
+                        "peer": peer,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
+            present = prefix in advertised_prefixes
+            observed = "pass" if present else "fail"
+            if inv_type == "route_not_advertised_to":
+                observed = "pass" if not present else "fail"
+            verdict = "pass" if observed == expected else "fail"
+
+            record_fn(
+                name=test_name,
+                kind="invariant",
+                src=node,
+                dst="",
+                expected=expected,
+                observed=observed,
+                verdict=verdict,
+                duration_ms=int((time.time() - start) * 1000),
+                error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
+                evidence={
+                    "cmd": f"vtysh -c 'show ip bgp neighbor {peer_ips[0]} advertised-routes json'",
+                    "rc": rc,
+                    "prefixes": advertised_prefixes,
+                },
+                meta={
+                    "type": inv_type,
+                    "prefix": prefix,
+                    "peer": peer,
+                    "present": bool(present),
+                    "observed_prefix_count": len(advertised_prefixes),
+                },
+            )
+            return verdict
+
         if inv_type == "bgp_localpref_equals":
             node = str(t.get("node") or "")
             prefix = _normalize_prefix(str(t.get("prefix") or ""))
@@ -4641,7 +4837,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     )
                     return "fail"
 
-            elif inv_type in ("route_present", "route_absent", "bgp_med_equals", "bgp_localpref_equals"):
+            elif inv_type in ("route_present", "route_absent", "bgp_med_equals", "bgp_localpref_equals", "route_advertised_to", "route_not_advertised_to"):
                 prefix = t.get("prefix")
                 if not isinstance(prefix, str) or not prefix.strip():
                     record_test(
@@ -4658,6 +4854,24 @@ def cmd_test(args: argparse.Namespace) -> None:
                         meta={"type": inv_type},
                     )
                     return "fail"
+
+                if inv_type in ("route_advertised_to", "route_not_advertised_to"):
+                    peer = t.get("peer")
+                    if not isinstance(peer, str) or not peer.strip():
+                        record_test(
+                            name=ref,
+                            kind="invariant",
+                            src=src or "",
+                            dst="",
+                            expected=str(t.get("expect") or "pass"),
+                            observed="fail",
+                            verdict="fail",
+                            evidence={"reason": "missing_peer"},
+                            duration_ms=0,
+                            error=f"{inv_type} requires peer",
+                            meta={"type": inv_type},
+                        )
+                        return "fail"
 
                 if inv_type in ("bgp_med_equals", "bgp_localpref_equals"):
                     expv = t.get("expected")
