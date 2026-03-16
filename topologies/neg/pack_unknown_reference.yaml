@@ -1,0 +1,16 @@
+name: pack-unknown-reference
+
+packs:
+  - nonexistent-pack
+
+nodes:
+  - name: r1
+    type: frr
+
+  - name: r2
+    type: frr
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+
+tests: []
