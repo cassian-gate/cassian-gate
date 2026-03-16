@@ -97,6 +97,63 @@ if ! grep -q 'active_fault_states' src/netsim_tests.py; then
   echo "FAIL: src/netsim_tests.py missing active_fault_states tracking"
   exit 1
 fi
+
+echo "=== 0d) Guardrail: invariant pack resolve expansion ==="
+rm -rf labs/clab-pack-resolve-expansion labs/clab-pack-invalid-reference
+
+src/netsim.py validate topologies/pack_resolve_expansion.yaml >/tmp/verify_pack_validate.out 2>/tmp/verify_pack_validate.err
+rc=$?
+cat /tmp/verify_pack_validate.out
+cat /tmp/verify_pack_validate.err
+if [ "$rc" -ne 0 ]; then
+  echo "FAIL: pack_resolve_expansion validate exited $rc"
+  exit 1
+fi
+
+set +e
+src/netsim.py validate topologies/neg/pack_invalid_reference.yaml >/tmp/verify_pack_neg.out 2>/tmp/verify_pack_neg.err
+rc=$?
+set -e
+cat /tmp/verify_pack_neg.out
+cat /tmp/verify_pack_neg.err
+if [ "$rc" -ne 2 ]; then
+  echo "FAIL: pack_invalid_reference validate exited $rc (expected 2)"
+  exit 1
+fi
+echo "OK: pack_invalid_reference validate failed as expected (exit 2)"
+
+rm -rf labs/clab-pack-resolve-expansion
+src/netsim.py test topologies/pack_resolve_expansion.yaml >/tmp/verify_pack_test.out 2>/tmp/verify_pack_test.err
+rc=$?
+cat /tmp/verify_pack_test.out
+cat /tmp/verify_pack_test.err
+if [ "$rc" -ne 0 ]; then
+  echo "FAIL: pack_resolve_expansion test exited $rc"
+  exit 1
+fi
+
+if [ ! -f labs/clab-pack-resolve-expansion/topology.resolved.yaml ]; then
+  echo "FAIL: pack_resolve_expansion resolved artifact missing after test"
+  exit 1
+fi
+
+if ! grep -q '^tests:' labs/clab-pack-resolve-expansion/topology.resolved.yaml; then
+  echo "FAIL: resolved artifact missing tests section"
+  exit 1
+fi
+
+if ! grep -q 'leaf1_evpn_session_to_spine1_up' labs/clab-pack-resolve-expansion/topology.resolved.yaml; then
+  echo "FAIL: resolved artifact missing expanded invariant leaf1_evpn_session_to_spine1_up"
+  exit 1
+fi
+
+if ! grep -q 'leaf2_evpn_session_to_spine1_up' labs/clab-pack-resolve-expansion/topology.resolved.yaml; then
+  echo "FAIL: resolved artifact missing expanded invariant leaf2_evpn_session_to_spine1_up"
+  exit 1
+fi
+
+echo "OK: invariant pack resolve expansion guardrails"
+
 echo "=== 1) Guardrails: no package installs in engine ==="
 grep -RInE '\bapk\s+(add|update)\b' src && { echo "FAIL: apk usage found"; exit 1; } || echo "OK: no apk installs"
 grep -RInE '\bapt(-get)?\s+(install|update)\b' src && { echo "FAIL: apt usage found"; exit 1; } || echo "OK: no apt installs"
