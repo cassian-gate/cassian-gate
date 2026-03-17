@@ -528,9 +528,25 @@ if [ -d "$pcap_root" ] || [ -f "$results_json" ]; then
     else
       echo "OK: results.json pcap supporting_evidence schema sanity (no pcap entries present)"
     fi
+
+    state_diff_ev_count="$(jq -r '.authority.supporting_evidence[]? | select(.type=="state_diff") | 1' "$results_json" 2>/dev/null | wc -l | tr -d ' ' || true)"
+    if [ "${state_diff_ev_count:-0}" -gt 0 ]; then
+      jq -e '
+        [ .authority.supporting_evidence[]? | select(.type=="state_diff") ] as $xs
+        | ($xs | length) > 0
+        and ( all($xs[];
+            (.authority=="supporting_evidence")
+            and (.path|type=="string" and length>0)
+            and (.profiles|type=="array")
+          ))
+      ' "$results_json" >/dev/null || { echo "FAIL: results.json state_diff supporting_evidence schema invalid"; exit 1; }
+      echo "OK: results.json state_diff supporting_evidence schema sanity (${state_diff_ev_count} entries)"
+    else
+      echo "OK: results.json state_diff supporting_evidence schema sanity (no state_diff entries present)"
+    fi
   fi
 else
-  echo "OK: PCAP schema sanity skipped (no artifacts/results present)"
+  echo "OK: PCAP/state_diff schema sanity skipped (no artifacts/results present)"
 fi
 echo
 # ------------------------------------------------------------------------------
