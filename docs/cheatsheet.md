@@ -547,6 +547,8 @@ Authority still comes from the later invariant verdicts in:
 results.json
 ```
 
+---
+
 # 6️⃣ Nodes
 
 Supported node types:
@@ -1773,6 +1775,92 @@ Includes:
 
 ---
 
+## Structured State Diff (Advisory Only)
+
+ai-netsim can produce a **structured pre/post operational state diff** when state capture is explicitly enabled for both phases.
+
+This artifact is:
+
+- advisory only
+- non-authoritative
+- deterministic
+- generated only from the explicitly captured state
+
+It does **not**:
+
+- change verdicts
+- change exit codes
+- replace `results.json`
+- score differences as good or bad
+
+### How it works
+
+When enabled, ai-netsim captures the declared command/profile state:
+
+- once before tests (`pre`)
+- once after tests (`post`)
+
+It then compares those two captured state sets and writes a structured diff artifact.
+
+This is a diff between:
+
+- pre-state captured command output
+- post-state captured command output
+
+for the **same run**.
+
+It is **not** a diff between:
+
+- two different runs
+- two different topologies
+- baseline vs candidate config directories
+- intended config vs actual config
+
+### Command Example
+
+```bash
+netsim test topologies/three-frr-two-hosts-fw-routed.yaml \
+  --state-capture both \
+  --state-profile linux-net-basic \
+  --state-profile frr-interfaces-basic \
+  --state-profile frr-routing-basic \
+  --state-profile nft-ruleset-basic
+```
+
+### Artifact Path
+
+```text
+labs/clab-<lab-name>/artifacts/state-diff/state_diff.json
+```
+
+### What to inspect
+
+Typical fields include:
+
+- `schema`
+- `authority`
+- `capture_profiles`
+- `compared_objects`
+- `added`
+- `removed`
+- `changed`
+- `counts`
+
+### Operator meaning
+
+Use this artifact when you want to understand:
+
+- what operational state changed during the run
+- which captured command surfaces changed between pre and post
+- supporting evidence for review or explanation
+
+Keep the authority boundary clear:
+
+- `results.json` = authoritative verdict surface
+- `state_diff.json` = supporting evidence only
+
+---
+
 # 1️⃣7️⃣ Common Operator Tasks
 
 Validate a topology:
@@ -1873,6 +1961,19 @@ Replay the same grey-failure scenario deterministically:
 
 ```bash
 netsim replay labs/clab-grey-failure-direct-pass --gate --verify-results
+```
+
+Inspect structured state diff output:
+
+```bash
+netsim test topologies/three-frr-two-hosts-fw-routed.yaml \
+  --state-capture both \
+  --state-profile linux-net-basic \
+  --state-profile frr-interfaces-basic \
+  --state-profile frr-routing-basic \
+  --state-profile nft-ruleset-basic
+
+python -m json.tool labs/clab-three-frr-two-hosts-fw-routed/artifacts/state-diff/state_diff.json
 ```
 
 ---
