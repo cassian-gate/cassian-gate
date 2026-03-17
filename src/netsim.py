@@ -6464,6 +6464,8 @@ def cmd_test(args: argparse.Namespace) -> None:
         state_plan_path = str(_state_capture_write_plan(lab, state_plan))
 
     # Additive-only results labeling (never affects verdict)
+    state_diff_enabled = bool(state_plan.get("enabled")) and str(state_plan.get("mode") or "none") == "both"
+    state_diff_path = str(lab_dir(lab) / "artifacts" / "state-diff" / "state_diff.json") if state_diff_enabled else ""
     results["state_capture"] = {
         "enabled": bool(state_plan.get("enabled")),
         "mode": str(state_plan.get("mode") or "none"),
@@ -6471,6 +6473,15 @@ def cmd_test(args: argparse.Namespace) -> None:
         "plan_path": state_plan_path,
         "pre": {"ran": 0, "ok": 0, "error": 0, "timeout": 0},
         "post": {"ran": 0, "ok": 0, "error": 0, "timeout": 0},
+        "state_diff": {
+            "enabled": bool(state_diff_enabled),
+            "authority": "supporting_evidence",
+            "path": state_diff_path,
+            "compared": 0,
+            "added": 0,
+            "removed": 0,
+            "changed": 0,
+        },
     }
 
     # Link into authority.supporting_evidence (additive pointer only)
@@ -7106,9 +7117,155 @@ def cmd_test(args: argparse.Namespace) -> None:
                 results["state_capture"]["post"] = {
                     k: int(summ.get(k, 0)) for k in ["ran", "ok", "error", "timeout", "skipped"]
                 }
+
+                if bool(results.get("state_capture", {}).get("state_diff", {}).get("enabled")):
+                    def _state_diff_collect(root: Path) -> dict[str, dict]:
+                        coll: dict[str, dict] = {}
+                        if not root.exists():
+                            return coll
+
+                        for meta_path in sorted(root.rglob("*.json"), key=lambda p: p.as_posix()):
+                            rel = meta_path.relative_to(root)
+                            rel_s = rel.as_posix()
+                            if rel_s == "plan.json":
+                                continue
+
+                            try:
+                                rec = json.loads(meta_path.read_text(encoding="utf-8"))
+                            except Exception:
+                                rec = {}
+
+                            out_path = meta_path.with_suffix(".out.txt")
+                            stdout_text = ""
+                            if out_path.exists() and out_path.is_file():
+                                try:
+                                    stdout_text = out_path.read_text(encoding="utf-8")
+                                except Exception:
+                                    stdout_text = ""
+
+                            result_rec = rec.get("result") if isinstance(rec.get("result"), dict) else {}
+                            node = str(rec.get("node") or rel.parent.name)
+                            command_id = str(rec.get("command_id") or meta_path.stem)
+                            key = f"{node}/{command_id}"
+
+                            coll[key] = {
+                                "profile": str(rec.get("profile") or ""),
+                                "node": node,
+                                "node_type": str(rec.get("node_type") or ""),
+                                "command_id": command_id,
+                                "argv": list(rec.get("argv") or []),
+                                "result": {
+                                    "status": str(result_rec.get("status") or ""),
+                                    "exit_code": int(result_rec.get("exit_code") or 0),
+                                },
+                                "stdout_sha256": hashlib.sha256(stdout_text.encode("utf-8", errors="replace")).hexdigest(),
+                            }
+
+                        return coll
+
+                    diff_path_s = str(results.get("state_capture", {}).get("state_diff", {}).get("path") or "").strip()
+                    if diff_path_s:
+                        pre_root = lab_dir(lab) / "artifacts" / "state_capture" / "pre"
+                        post_root = lab_dir(lab) / "artifacts" / "state_capture" / "post"
+
+                        pre_objs = _state_diff_collect(pre_root)
+                        post_objs = _state_diff_collect(post_root)
+
+                        compared_keys = sorted(set(pre_objs.keys()) | set(post_objs.keys()))
+                        added = []
+                        removed = []
+                        changed = []
+
+                        for key in compared_keys:
+                            in_pre = key in pre_objs
+                            in_post = key in post_objs
+                            if in_pre and in_post:
+                                if pre_objs[key] != post_objs[key]:
+                                    changed.append(
+                                        {
+                                            "key": key,
+                                            "pre": pre_objs[key],
+                                            "post": post_objs[key],
+                                        }
+                                    )
+                            elif in_post:
+                                added.append({"key": key, "post": post_objs[key]})
+                            else:
+                                removed.append({"key": key, "pre": pre_objs[key]})
+
+                        diff_obj = {
+                            "schema": "state_diff.v1",
+                            "authority": "supporting_evidence",
+                            "capture_profiles": list(results.get("state_capture", {}).get("profiles") or []),
+                            "pre_state_ref_identity": "artifacts/state_capture/pre",
+                            "post_state_ref_identity": "artifacts/state_capture/post",
+                            "compared_objects": compared_keys,
+                            "added": added,
+                            "removed": removed,
+                            "changed": changed,
+                            "counts": {
+                                "compared": int(len(compared_keys)),
+                                "added": int(len(added)),
+                                "removed": int(len(removed)),
+                                "changed": int(len(changed)),
+                            },
+                        }
+
+                        write_json_canonical(Path(diff_path_s), diff_obj)
+
+                        scd = results.setdefault("state_capture", {}).setdefault("state_diff", {})
+                        scd["compared"] = int(len(compared_keys))
+                        scd["added"] = int(len(added))
+                        scd["removed"] = int(len(removed))
+                        scd["changed"] = int(len(changed))
+
+                        try:
+                            auth = results.get("authority")
+                            if not isinstance(auth, dict):
+                                auth = {}
+                                results["authority"] = auth
+
+                            se = auth.get("supporting_evidence")
+                            if not isinstance(se, list):
+                                se = []
+                                auth["supporting_evidence"] = se
+
+                            se.append(
+                                {
+                                    "type": "state_diff",
+                                    "authority": "supporting_evidence",
+                                    "path": diff_path_s,
+                                    "profiles": list(results.get("state_capture", {}).get("profiles") or []),
+                                }
+                            )
+                        except Exception:
+                            pass
         except Exception as e:
             # Non-authoritative: record but do not fail
             results["state_capture"]["post"] = {"ran": 0, "ok": 0, "error": 1, "timeout": 0, "skipped": 0}
+
+            # Type-safe append into authority.supporting_evidence (do not assume shapes)
+            try:
+                auth = results.get("authority")
+                if not isinstance(auth, dict):
+                    auth = {}
+                    results["authority"] = auth
+
+                se = auth.get("supporting_evidence")
+                if not isinstance(se, list):
+                    se = []
+                    auth["supporting_evidence"] = se
+
+                se.append(
+                    {
+                        "type": "state_capture_error",
+                        "authority": "supporting_evidence",
+                        "when": "post",
+                        "error": _safe_stdio(str(e)),
+                    }
+                )
+            except Exception:
+                pass
 
             # Type-safe append into authority.supporting_evidence (do not assume shapes)
             try:
