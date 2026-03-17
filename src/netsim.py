@@ -2854,6 +2854,366 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         results["events"].append(rec)
 
+    def _blast_radius_link_id_from_fields(a: str, a_if: str, b: str, b_if: str) -> str:
+        ends = sorted([f"{a}:{a_if}", f"{b}:{b_if}"])
+        return " -- ".join(ends)
+
+    def _blast_radius_build_graph_or_die(topo_obj: dict[str, Any]) -> dict[str, Any]:
+        nodes_decl = topo_obj.get("nodes") or []
+        links_decl = topo_obj.get("links") or []
+
+        node_names: list[str] = []
+        node_set: set[str] = set()
+        adjacency: dict[str, set[str]] = {}
+        node_links: dict[str, set[str]] = {}
+
+        for idx, node in enumerate(nodes_decl, start=1):
+            if not isinstance(node, dict):
+                die(f"blast-radius: invalid node declaration at index {idx}", code=2)
+            name = str(node.get("name") or "").strip()
+            if not name:
+                die(f"blast-radius: node at index {idx} missing name", code=2)
+            if name in node_set:
+                die(f"blast-radius: duplicate node name '{name}'", code=2)
+            node_set.add(name)
+            node_names.append(name)
+            adjacency[name] = set()
+            node_links[name] = set()
+
+        links_by_id: dict[str, dict[str, Any]] = {}
+        for idx, link in enumerate(links_decl, start=1):
+            if not isinstance(link, dict):
+                die(f"blast-radius: invalid link declaration at index {idx}", code=2)
+            endpoints = link.get("endpoints")
+            if not isinstance(endpoints, list) or len(endpoints) != 2:
+                die(f"blast-radius: link at index {idx} must declare exactly two endpoints", code=2)
+
+            parsed: list[tuple[str, str]] = []
+            for ep in endpoints:
+                ep_s = str(ep or "").strip()
+                if ":" not in ep_s:
+                    die(f"blast-radius: invalid link endpoint {ep_s!r} at index {idx}", code=2)
+                node_name, if_name = ep_s.split(":", 1)
+                node_name = node_name.strip()
+                if_name = if_name.strip()
+                if not node_name or not if_name:
+                    die(f"blast-radius: invalid link endpoint {ep_s!r} at index {idx}", code=2)
+                if node_name not in node_set:
+                    die(f"blast-radius: link endpoint references unknown node '{node_name}'", code=2)
+                parsed.append((node_name, if_name))
+
+            (a, a_if), (b, b_if) = parsed
+            link_id = _blast_radius_link_id_from_fields(a, a_if, b, b_if)
+            if link_id in links_by_id:
+                die(f"blast-radius: duplicate canonical link identity '{link_id}'", code=2)
+
+            links_by_id[link_id] = {
+                "id": link_id,
+                "nodes": sorted([a, b]),
+                "endpoints": sorted([f"{a}:{a_if}", f"{b}:{b_if}"]),
+            }
+            adjacency[a].add(b)
+            adjacency[b].add(a)
+            node_links[a].add(link_id)
+            node_links[b].add(link_id)
+
+        return {
+            "nodes": sorted(node_names),
+            "node_set": set(node_set),
+            "adjacency": {k: sorted(v) for k, v in sorted(adjacency.items())},
+            "node_links": {k: sorted(v) for k, v in sorted(node_links.items())},
+            "links": dict(sorted(links_by_id.items())),
+        }
+
+    def _blast_radius_collect_coverage_or_die(
+        topo_obj: dict[str, Any],
+        graph: dict[str, Any],
+    ) -> dict[str, list[str]]:
+        covered_nodes: set[str] = set()
+        covered_links: set[str] = set()
+        coverage_basis: list[str] = []
+
+        def _add_node(name: str, context: str) -> None:
+            node_name = str(name or "").strip()
+            if not node_name:
+                return
+            if node_name not in graph["node_set"]:
+                die(f"blast-radius: {context} references unknown node '{node_name}'", code=2)
+            covered_nodes.add(node_name)
+
+        def _add_link(a: str, a_if: str, b: str, b_if: str, context: str) -> None:
+            link_id = _blast_radius_link_id_from_fields(
+                str(a or "").strip(),
+                str(a_if or "").strip(),
+                str(b or "").strip(),
+                str(b_if or "").strip(),
+            )
+            if link_id not in graph["links"]:
+                die(f"blast-radius: {context} references unknown link '{link_id}'", code=2)
+            covered_links.add(link_id)
+
+        def _collect_test(test_obj: dict[str, Any], basis_label: str) -> None:
+            kind = str(test_obj.get("kind") or "").strip()
+            if not kind:
+                die(f"blast-radius: {basis_label} missing kind", code=2)
+
+            coverage_basis.append(basis_label)
+
+            if kind in ("ping", "tcp"):
+                if test_obj.get("src") is not None:
+                    _add_node(str(test_obj.get("src") or ""), f"{basis_label}.src")
+
+                dst = test_obj.get("dst")
+                if isinstance(dst, str) and dst.strip() and dst.strip() in graph["node_set"]:
+                    _add_node(dst.strip(), f"{basis_label}.dst")
+
+                for fld in ("to", "to_ip"):
+                    val = test_obj.get(fld)
+                    if isinstance(val, str) and val.strip():
+                        if val.strip() in graph["node_set"]:
+                            _add_node(val.strip(), f"{basis_label}.{fld}")
+                        elif not is_ip_literal(val.strip()):
+                            die(
+                                f"blast-radius: unsupported non-canonical target {val!r} in {basis_label}.{fld}",
+                                code=2,
+                            )
+                return
+
+            if kind == "invariant":
+                for fld in ("node", "peer"):
+                    if test_obj.get(fld) is not None:
+                        _add_node(str(test_obj.get(fld) or ""), f"{basis_label}.{fld}")
+                return
+
+            die(f"blast-radius: unsupported test kind '{kind}' in {basis_label}", code=2)
+
+        tests_decl = topo_obj.get("tests") or []
+        tests_by_name: dict[str, dict[str, Any]] = {}
+        for idx, test_obj in enumerate(tests_decl, start=1):
+            if not isinstance(test_obj, dict):
+                die(f"blast-radius: invalid test declaration at index {idx}", code=2)
+            test_name = str(test_obj.get("name") or "").strip() or f"test_{idx}"
+            if test_name in tests_by_name:
+                die(f"blast-radius: duplicate test name '{test_name}'", code=2)
+            tests_by_name[test_name] = test_obj
+            _collect_test(test_obj, f"test:{test_name}")
+
+        scenarios_decl = topo_obj.get("scenarios") or []
+        for sidx, scenario in enumerate(scenarios_decl, start=1):
+            if not isinstance(scenario, dict):
+                die(f"blast-radius: invalid scenario declaration at index {sidx}", code=2)
+            scenario_id = str(scenario.get("id") or "").strip() or f"scenario_{sidx}"
+            steps = scenario.get("steps") or []
+            if not isinstance(steps, list):
+                die(f"blast-radius: scenario '{scenario_id}' steps must be a list", code=2)
+
+            for step_idx, step in enumerate(steps, start=1):
+                if not isinstance(step, dict) or len(step) != 1:
+                    die(
+                        f"blast-radius: scenario '{scenario_id}' step {step_idx} must contain exactly one action",
+                        code=2,
+                    )
+                action, payload = next(iter(step.items()))
+                coverage_basis.append(f"scenario:{scenario_id}:step:{step_idx}:{action}")
+
+                if action == "run":
+                    if isinstance(payload, str):
+                        if payload not in tests_by_name:
+                            die(
+                                f"blast-radius: scenario '{scenario_id}' step {step_idx} references unknown test '{payload}'",
+                                code=2,
+                            )
+                    elif isinstance(payload, dict):
+                        include_val = str(payload.get("include") or "").strip()
+                        if include_val and include_val != "all":
+                            die(
+                                f"blast-radius: unsupported run include value '{include_val}' in scenario '{scenario_id}' step {step_idx}",
+                                code=2,
+                            )
+                    else:
+                        die(
+                            f"blast-radius: unsupported run payload in scenario '{scenario_id}' step {step_idx}",
+                            code=2,
+                        )
+                    continue
+
+                if action == "fault":
+                    if not isinstance(payload, dict) or len(payload) != 1:
+                        die(
+                            f"blast-radius: scenario '{scenario_id}' step {step_idx} fault must contain exactly one action",
+                            code=2,
+                        )
+                    fault_name, fault_body = next(iter(payload.items()))
+                    if not isinstance(fault_body, dict):
+                        die(
+                            f"blast-radius: scenario '{scenario_id}' step {step_idx} fault payload must be a mapping",
+                            code=2,
+                        )
+
+                    if fault_name in ("link_down", "link_up"):
+                        _add_link(
+                            str(fault_body.get("a") or ""),
+                            str(fault_body.get("a_if") or ""),
+                            str(fault_body.get("b") or ""),
+                            str(fault_body.get("b_if") or ""),
+                            f"scenario:{scenario_id}:step:{step_idx}:{fault_name}",
+                        )
+                        continue
+
+                    if fault_name in ("interface_down", "interface_up", "prefix_blackhole"):
+                        _add_node(
+                            str(fault_body.get("node") or ""),
+                            f"scenario:{scenario_id}:step:{step_idx}:{fault_name}.node",
+                        )
+                        continue
+
+                    if fault_name in ("packet_loss", "latency", "bandwidth_cap"):
+                        has_node_target = bool(str(fault_body.get("node") or "").strip()) and bool(
+                            str(fault_body.get("if") or "").strip()
+                        )
+                        has_link_target = all(
+                            bool(str(fault_body.get(k) or "").strip()) for k in ("a", "a_if", "b", "b_if")
+                        )
+                        if has_node_target and has_link_target:
+                            die(
+                                f"blast-radius: ambiguous target in scenario '{scenario_id}' step {step_idx} fault '{fault_name}'",
+                                code=2,
+                            )
+                        if has_node_target:
+                            _add_node(
+                                str(fault_body.get("node") or ""),
+                                f"scenario:{scenario_id}:step:{step_idx}:{fault_name}.node",
+                            )
+                            continue
+                        if has_link_target:
+                            _add_link(
+                                str(fault_body.get("a") or ""),
+                                str(fault_body.get("a_if") or ""),
+                                str(fault_body.get("b") or ""),
+                                str(fault_body.get("b_if") or ""),
+                                f"scenario:{scenario_id}:step:{step_idx}:{fault_name}",
+                            )
+                            continue
+                        die(
+                            f"blast-radius: unsupported target in scenario '{scenario_id}' step {step_idx} fault '{fault_name}'",
+                            code=2,
+                        )
+
+                    die(
+                        f"blast-radius: unsupported fault action '{fault_name}' in scenario '{scenario_id}' step {step_idx}",
+                        code=2,
+                    )
+
+                if action == "wait_for":
+                    if not isinstance(payload, dict):
+                        die(f"blast-radius: scenario '{scenario_id}' step {step_idx} wait_for must be a mapping", code=2)
+                    if payload.get("from") is not None:
+                        _add_node(str(payload.get("from") or ""), f"scenario:{scenario_id}:step:{step_idx}:wait_for.from")
+                    to_val = payload.get("to")
+                    if isinstance(to_val, str) and to_val.strip():
+                        if to_val.strip() in graph["node_set"]:
+                            _add_node(to_val.strip(), f"scenario:{scenario_id}:step:{step_idx}:wait_for.to")
+                        elif not is_ip_literal(to_val.strip()):
+                            die(
+                                f"blast-radius: unsupported wait_for target {to_val!r} in scenario '{scenario_id}' step {step_idx}",
+                                code=2,
+                            )
+                    continue
+
+                if action == "wait_for_bgp":
+                    if not isinstance(payload, dict):
+                        die(
+                            f"blast-radius: scenario '{scenario_id}' step {step_idx} wait_for_bgp must be a mapping",
+                            code=2,
+                        )
+                    _add_node(str(payload.get("node") or ""), f"scenario:{scenario_id}:step:{step_idx}:wait_for_bgp.node")
+                    continue
+
+                if action == "pcap_start":
+                    if not isinstance(payload, dict):
+                        die(
+                            f"blast-radius: scenario '{scenario_id}' step {step_idx} pcap_start must be a mapping",
+                            code=2,
+                        )
+                    target = payload.get("target")
+                    if not isinstance(target, dict):
+                        die(
+                            f"blast-radius: scenario '{scenario_id}' step {step_idx} pcap_start.target must be a mapping",
+                            code=2,
+                        )
+                    _add_node(str(target.get("node") or ""), f"scenario:{scenario_id}:step:{step_idx}:pcap_start.target.node")
+                    continue
+
+                if action == "pcap_stop":
+                    continue
+
+                die(f"blast-radius: unsupported scenario action '{action}' in scenario '{scenario_id}' step {step_idx}", code=2)
+
+        return {
+            "coverage_basis": sorted(coverage_basis),
+            "covered_nodes": sorted(covered_nodes),
+            "covered_links": sorted(covered_links),
+        }
+
+    def _blast_radius_compute_or_die(topo_obj: dict[str, Any]) -> dict[str, Any]:
+        graph = _blast_radius_build_graph_or_die(topo_obj)
+        coverage = _blast_radius_collect_coverage_or_die(topo_obj, graph)
+
+        seed_nodes: set[str] = set(coverage["covered_nodes"])
+        for link_id in coverage["covered_links"]:
+            seed_nodes.update(graph["links"][link_id]["nodes"])
+
+        visited: set[str] = set()
+        queue = sorted(seed_nodes)
+        while queue:
+            node_name = queue.pop(0)
+            if node_name in visited:
+                continue
+            visited.add(node_name)
+            for peer_name in graph["adjacency"].get(node_name, []):
+                if peer_name not in visited:
+                    queue.append(peer_name)
+            queue = sorted(set(queue))
+
+        affected_nodes = [
+            {"id": node_name, "reason": "graph_connected_to_covered_scope"}
+            for node_name in sorted(visited)
+            if node_name not in set(coverage["covered_nodes"])
+        ]
+
+        affected_links = []
+        covered_link_set = set(coverage["covered_links"])
+        for link_id, link_rec in sorted(graph["links"].items()):
+            node_a, node_b = link_rec["nodes"]
+            if node_a in visited and node_b in visited and link_id not in covered_link_set:
+                affected_links.append(
+                    {
+                        "id": link_id,
+                        "reason": "component_touching_covered_scope",
+                    }
+                )
+
+        return {
+            "schema": "blast_radius.v1",
+            "authority": "supporting_evidence",
+            "topology": {"name": str(topo_obj.get("name") or lab)},
+            "coverage_basis": list(coverage["coverage_basis"]),
+            "directly_covered": {
+                "nodes": list(coverage["covered_nodes"]),
+                "links": list(coverage["covered_links"]),
+            },
+            "potentially_affected": {
+                "nodes": affected_nodes,
+                "links": affected_links,
+            },
+            "counts": {
+                "directly_covered_nodes": int(len(coverage["covered_nodes"])),
+                "directly_covered_links": int(len(coverage["covered_links"])),
+                "potentially_affected_nodes": int(len(affected_nodes)),
+                "potentially_affected_links": int(len(affected_links)),
+            },
+        }
+
     def write_results() -> None:
         # Collect-time schema stabilization (additive-only; must not change semantics)
         try:
@@ -6466,6 +6826,7 @@ def cmd_test(args: argparse.Namespace) -> None:
     # Additive-only results labeling (never affects verdict)
     state_diff_enabled = bool(state_plan.get("enabled")) and str(state_plan.get("mode") or "none") == "both"
     state_diff_path = str(lab_dir(lab) / "artifacts" / "state-diff" / "state_diff.json") if state_diff_enabled else ""
+    blast_radius_path = str(lab_dir(lab) / "artifacts" / "blast-radius" / "blast_radius.json")
     results["state_capture"] = {
         "enabled": bool(state_plan.get("enabled")),
         "mode": str(state_plan.get("mode") or "none"),
@@ -6482,6 +6843,13 @@ def cmd_test(args: argparse.Namespace) -> None:
             "removed": 0,
             "changed": 0,
         },
+    }
+    results["blast_radius"] = {
+        "enabled": True,
+        "authority": "supporting_evidence",
+        "path": blast_radius_path,
+        "directly_covered": {"nodes": 0, "links": 0},
+        "potentially_affected": {"nodes": 0, "links": 0},
     }
 
     # Link into authority.supporting_evidence (additive pointer only)
@@ -7163,83 +7531,121 @@ def cmd_test(args: argparse.Namespace) -> None:
 
                         return coll
 
-                    diff_path_s = str(results.get("state_capture", {}).get("state_diff", {}).get("path") or "").strip()
-                    if diff_path_s:
-                        pre_root = lab_dir(lab) / "artifacts" / "state_capture" / "pre"
-                        post_root = lab_dir(lab) / "artifacts" / "state_capture" / "post"
+            blast_cfg = results.get("blast_radius")
+            if isinstance(blast_cfg, dict) and bool(blast_cfg.get("enabled")):
+                blast_path_s = str(blast_cfg.get("path") or "").strip()
+                if blast_path_s:
+                    blast_obj = _blast_radius_compute_or_die(topo)
+                    write_json_canonical(Path(blast_path_s), blast_obj)
 
-                        pre_objs = _state_diff_collect(pre_root)
-                        post_objs = _state_diff_collect(post_root)
+                    blast_cfg["directly_covered"] = {
+                        "nodes": int(blast_obj.get("counts", {}).get("directly_covered_nodes") or 0),
+                        "links": int(blast_obj.get("counts", {}).get("directly_covered_links") or 0),
+                    }
+                    blast_cfg["potentially_affected"] = {
+                        "nodes": int(blast_obj.get("counts", {}).get("potentially_affected_nodes") or 0),
+                        "links": int(blast_obj.get("counts", {}).get("potentially_affected_links") or 0),
+                    }
 
-                        compared_keys = sorted(set(pre_objs.keys()) | set(post_objs.keys()))
-                        added = []
-                        removed = []
-                        changed = []
+                    try:
+                        auth = results.get("authority")
+                        if not isinstance(auth, dict):
+                            auth = {}
+                            results["authority"] = auth
 
-                        for key in compared_keys:
-                            in_pre = key in pre_objs
-                            in_post = key in post_objs
-                            if in_pre and in_post:
-                                if pre_objs[key] != post_objs[key]:
-                                    changed.append(
-                                        {
-                                            "key": key,
-                                            "pre": pre_objs[key],
-                                            "post": post_objs[key],
-                                        }
-                                    )
-                            elif in_post:
-                                added.append({"key": key, "post": post_objs[key]})
-                            else:
-                                removed.append({"key": key, "pre": pre_objs[key]})
+                        se = auth.get("supporting_evidence")
+                        if not isinstance(se, list):
+                            se = []
+                            auth["supporting_evidence"] = se
 
-                        diff_obj = {
-                            "schema": "state_diff.v1",
-                            "authority": "supporting_evidence",
-                            "capture_profiles": list(results.get("state_capture", {}).get("profiles") or []),
-                            "pre_state_ref_identity": "artifacts/state_capture/pre",
-                            "post_state_ref_identity": "artifacts/state_capture/post",
-                            "compared_objects": compared_keys,
-                            "added": added,
-                            "removed": removed,
-                            "changed": changed,
-                            "counts": {
-                                "compared": int(len(compared_keys)),
-                                "added": int(len(added)),
-                                "removed": int(len(removed)),
-                                "changed": int(len(changed)),
-                            },
-                        }
+                        se.append(
+                            {
+                                "type": "blast_radius",
+                                "authority": "supporting_evidence",
+                                "path": blast_path_s,
+                                "counts": dict(blast_obj.get("counts") or {}),
+                            }
+                        )
+                    except Exception:
+                        pass
 
-                        write_json_canonical(Path(diff_path_s), diff_obj)
+            diff_path_s = str(results.get("state_capture", {}).get("state_diff", {}).get("path") or "").strip()
+            if diff_path_s:
+                pre_root = lab_dir(lab) / "artifacts" / "state_capture" / "pre"
+                post_root = lab_dir(lab) / "artifacts" / "state_capture" / "post"
 
-                        scd = results.setdefault("state_capture", {}).setdefault("state_diff", {})
-                        scd["compared"] = int(len(compared_keys))
-                        scd["added"] = int(len(added))
-                        scd["removed"] = int(len(removed))
-                        scd["changed"] = int(len(changed))
+                pre_objs = _state_diff_collect(pre_root)
+                post_objs = _state_diff_collect(post_root)
 
-                        try:
-                            auth = results.get("authority")
-                            if not isinstance(auth, dict):
-                                auth = {}
-                                results["authority"] = auth
+                compared_keys = sorted(set(pre_objs.keys()) | set(post_objs.keys()))
+                added = []
+                removed = []
+                changed = []
 
-                            se = auth.get("supporting_evidence")
-                            if not isinstance(se, list):
-                                se = []
-                                auth["supporting_evidence"] = se
-
-                            se.append(
+                for key in compared_keys:
+                    in_pre = key in pre_objs
+                    in_post = key in post_objs
+                    if in_pre and in_post:
+                        if pre_objs[key] != post_objs[key]:
+                            changed.append(
                                 {
-                                    "type": "state_diff",
-                                    "authority": "supporting_evidence",
-                                    "path": diff_path_s,
-                                    "profiles": list(results.get("state_capture", {}).get("profiles") or []),
+                                    "key": key,
+                                    "pre": pre_objs[key],
+                                    "post": post_objs[key],
                                 }
                             )
-                        except Exception:
-                            pass
+                    elif in_post:
+                        added.append({"key": key, "post": post_objs[key]})
+                    else:
+                        removed.append({"key": key, "pre": pre_objs[key]})
+
+                diff_obj = {
+                    "schema": "state_diff.v1",
+                    "authority": "supporting_evidence",
+                    "capture_profiles": list(results.get("state_capture", {}).get("profiles") or []),
+                    "pre_state_ref_identity": "artifacts/state_capture/pre",
+                    "post_state_ref_identity": "artifacts/state_capture/post",
+                    "compared_objects": compared_keys,
+                    "added": added,
+                    "removed": removed,
+                    "changed": changed,
+                    "counts": {
+                        "compared": int(len(compared_keys)),
+                        "added": int(len(added)),
+                        "removed": int(len(removed)),
+                        "changed": int(len(changed)),
+                    },
+                }
+
+                write_json_canonical(Path(diff_path_s), diff_obj)
+
+                scd = results.setdefault("state_capture", {}).setdefault("state_diff", {})
+                scd["compared"] = int(len(compared_keys))
+                scd["added"] = int(len(added))
+                scd["removed"] = int(len(removed))
+                scd["changed"] = int(len(changed))
+
+                try:
+                    auth = results.get("authority")
+                    if not isinstance(auth, dict):
+                        auth = {}
+                        results["authority"] = auth
+
+                    se = auth.get("supporting_evidence")
+                    if not isinstance(se, list):
+                        se = []
+                        auth["supporting_evidence"] = se
+
+                    se.append(
+                        {
+                            "type": "state_diff",
+                            "authority": "supporting_evidence",
+                            "path": diff_path_s,
+                            "profiles": list(results.get("state_capture", {}).get("profiles") or []),
+                        }
+                    )
+                except Exception:
+                    pass
         except Exception as e:
             # Non-authoritative: record but do not fail
             results["state_capture"]["post"] = {"ran": 0, "ok": 0, "error": 1, "timeout": 0, "skipped": 0}
