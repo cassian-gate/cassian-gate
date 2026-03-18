@@ -37,6 +37,25 @@ need_cmd diff
 need_cmd tr
 need_cmd docker
 
+TMPROOT="$(mktemp -d)"
+trap 'rm -rf "$TMPROOT"' EXIT
+
+fail() {
+  echo "FAIL: $*"
+  exit 1
+}
+
+dump_file_if_nonempty() {
+  local f="$1"
+  [ -s "$f" ] && cat "$f"
+}
+
+dump_pair_if_nonempty() {
+  dump_file_if_nonempty "$1"
+  dump_file_if_nonempty "$2"
+}
+
+
 # ------------------------------------------------------------------------------
 echo "=== 0) py_compile ==="
 python -m py_compile src/netsim.py src/netsim_tests.py src/netsim_artifacts.py
@@ -106,55 +125,45 @@ rm -rf \
   labs/clab-pack-unknown-reference \
   labs/clab-pack-incompatible-contents
 
-src/netsim.py validate topologies/pack_resolve_expansion.yaml >/tmp/verify_pack_validate.out 2>/tmp/verify_pack_validate.err
+src/netsim.py validate topologies/pack_resolve_expansion.yaml >"${TMPROOT}/verify_pack_validate.out" 2>"${TMPROOT}/verify_pack_validate.err"
 rc=$?
-cat /tmp/verify_pack_validate.out
-cat /tmp/verify_pack_validate.err
 if [ "$rc" -ne 0 ]; then
-  echo "FAIL: pack_resolve_expansion validate exited $rc"
-  exit 1
+  dump_pair_if_nonempty "${TMPROOT}/verify_pack_validate.out" "${TMPROOT}/verify_pack_validate.err"
+  fail "pack_resolve_expansion validate exited $rc"
 fi
 
-src/netsim.py validate topologies/pack_local_compatibility_ok.yaml >/tmp/verify_pack_local_ok.out 2>/tmp/verify_pack_local_ok.err
+src/netsim.py validate topologies/pack_local_compatibility_ok.yaml >"${TMPROOT}/verify_pack_local_ok.out" 2>"${TMPROOT}/verify_pack_local_ok.err"
 rc=$?
-cat /tmp/verify_pack_local_ok.out
-cat /tmp/verify_pack_local_ok.err
 if [ "$rc" -ne 0 ]; then
-  echo "FAIL: pack_local_compatibility_ok validate exited $rc"
-  exit 1
+  dump_pair_if_nonempty "${TMPROOT}/verify_pack_local_ok.out" "${TMPROOT}/verify_pack_local_ok.err"
+  fail "pack_local_compatibility_ok validate exited $rc"
 fi
 
 set +e
-src/netsim.py validate topologies/neg/pack_unknown_reference.yaml >/tmp/verify_pack_neg.out 2>/tmp/verify_pack_neg.err
+src/netsim.py validate topologies/neg/pack_unknown_reference.yaml >"${TMPROOT}/verify_pack_neg.out" 2>"${TMPROOT}/verify_pack_neg.err"
 rc=$?
 set -e
-cat /tmp/verify_pack_neg.out
-cat /tmp/verify_pack_neg.err
 if [ "$rc" -ne 2 ]; then
-  echo "FAIL: pack_unknown_reference validate exited $rc (expected 2)"
-  exit 1
+  dump_pair_if_nonempty "${TMPROOT}/verify_pack_neg.out" "${TMPROOT}/verify_pack_neg.err"
+  fail "pack_unknown_reference validate exited $rc (expected 2)"
 fi
 
 set +e
-src/netsim.py validate topologies/neg/pack_incompatible_contents.yaml >/tmp/verify_pack_incompat.out 2>/tmp/verify_pack_incompat.err
+src/netsim.py validate topologies/neg/pack_incompatible_contents.yaml >"${TMPROOT}/verify_pack_incompat.out" 2>"${TMPROOT}/verify_pack_incompat.err"
 rc=$?
 set -e
-cat /tmp/verify_pack_incompat.out
-cat /tmp/verify_pack_incompat.err
 if [ "$rc" -ne 2 ]; then
-  echo "FAIL: pack_incompatible_contents validate exited $rc (expected 2)"
-  exit 1
+  dump_pair_if_nonempty "${TMPROOT}/verify_pack_incompat.out" "${TMPROOT}/verify_pack_incompat.err"
+  fail "pack_incompatible_contents validate exited $rc (expected 2)"
 fi
-echo "OK: pack_invalid_reference validate failed as expected (exit 2)"
+echo "OK: pack compatibility negative validation failed as expected (exit 2)"
 
 rm -rf labs/clab-pack-resolve-expansion
-src/netsim.py test topologies/pack_resolve_expansion.yaml >/tmp/verify_pack_test.out 2>/tmp/verify_pack_test.err
+src/netsim.py test topologies/pack_resolve_expansion.yaml >"${TMPROOT}/verify_pack_test.out" 2>"${TMPROOT}/verify_pack_test.err"
 rc=$?
-cat /tmp/verify_pack_test.out
-cat /tmp/verify_pack_test.err
 if [ "$rc" -ne 0 ]; then
-  echo "FAIL: pack_resolve_expansion test exited $rc"
-  exit 1
+  dump_pair_if_nonempty "${TMPROOT}/verify_pack_test.out" "${TMPROOT}/verify_pack_test.err"
+  fail "pack_resolve_expansion test exited $rc"
 fi
 
 if [ ! -f labs/clab-pack-resolve-expansion/topology.resolved.yaml ]; then
@@ -180,10 +189,10 @@ fi
 echo "OK: invariant pack loading and compatibility guardrails"
 
 echo "=== 0e) Guardrail: blast radius awareness ==="
-python src/netsim.py test topologies/blast_radius_ok.yaml >/tmp/blast_radius_ok.out 2>&1
+python src/netsim.py test topologies/blast_radius_ok.yaml >${TMPROOT}/blast_radius_ok.out 2>&1
 br_exit=$?
 if [ "$br_exit" -ne 0 ]; then
-  cat /tmp/blast_radius_ok.out
+  cat ${TMPROOT}/blast_radius_ok.out
   echo "FAIL: blast_radius_ok gate run failed"
   exit 1
 fi
@@ -225,26 +234,26 @@ if [ "$?" -ne 0 ]; then
 fi
 echo "OK: blast radius artifact + results surfaces valid"
 
-python src/netsim.py replay labs/clab-blast-radius-ok --gate --verify-results >/tmp/blast_radius_replay.out 2>&1
+python src/netsim.py replay labs/clab-blast-radius-ok --gate --verify-results >${TMPROOT}/blast_radius_replay.out 2>&1
 replay_exit=$?
 if [ "$replay_exit" -ne 0 ]; then
-  cat /tmp/blast_radius_replay.out
+  cat ${TMPROOT}/blast_radius_replay.out
   echo "FAIL: blast radius replay verification failed"
   exit 1
 fi
 echo "OK: blast radius replay verification passed"
 
 set +e
-python src/netsim.py test topologies/neg/blast_radius_ambiguous_fault_target.yaml >/tmp/blast_radius_ambiguous_fault_target.out 2>&1
+python src/netsim.py test topologies/neg/blast_radius_ambiguous_fault_target.yaml >${TMPROOT}/blast_radius_ambiguous_fault_target.out 2>&1
 neg_exit=$?
 set -e
 if [ "$neg_exit" -ne 2 ]; then
-  cat /tmp/blast_radius_ambiguous_fault_target.out
+  cat ${TMPROOT}/blast_radius_ambiguous_fault_target.out
   echo "FAIL: blast radius ambiguous fault misuse expected exit 2"
   exit 1
 fi
-if ! grep -q "choose node+if OR a/b link form, not both" /tmp/blast_radius_ambiguous_fault_target.out; then
-  cat /tmp/blast_radius_ambiguous_fault_target.out
+if ! grep -q "choose node+if OR a/b link form, not both" ${TMPROOT}/blast_radius_ambiguous_fault_target.out; then
+  cat ${TMPROOT}/blast_radius_ambiguous_fault_target.out
   echo "FAIL: blast radius ambiguous fault misuse missing expected error text"
   exit 1
 fi
@@ -324,16 +333,16 @@ jq -e '.authority=="advisory" and .schema_version=="preflight.v1"' artifacts/pre
 echo "OK: preflight.json valid"
 # Determinism proof (WI-1):
 # Run the same JSON write twice and require byte-identical output.
-cp -f artifacts/preflight/preflight.json /tmp/preflight.json.run1
+cp -f artifacts/preflight/preflight.json ${TMPROOT}/preflight.json.run1
 
 rm -f artifacts/preflight/preflight.json 2>/dev/null || true
 $NS preflight "$TOPO" --format json >/dev/null
 test -s artifacts/preflight/preflight.json
-cp -f artifacts/preflight/preflight.json /tmp/preflight.json.run2
+cp -f artifacts/preflight/preflight.json ${TMPROOT}/preflight.json.run2
 
-diff -u /tmp/preflight.json.run1 /tmp/preflight.json.run2 >/dev/null \
+diff -u ${TMPROOT}/preflight.json.run1 ${TMPROOT}/preflight.json.run2 >/dev/null \
   && echo "OK: preflight.json deterministic (byte-identical across runs)" \
-  || { echo "FAIL: preflight.json not deterministic across runs"; diff -u /tmp/preflight.json.run1 /tmp/preflight.json.run2 || true; exit 1; }
+  || { echo "FAIL: preflight.json not deterministic across runs"; diff -u ${TMPROOT}/preflight.json.run1 ${TMPROOT}/preflight.json.run2 || true; exit 1; }
 echo
 # ------------------------------------------------------------------------------
 echo "=== 4bb) Advisory-only: adapters (fixtures + golden drift guard) ==="
@@ -480,7 +489,16 @@ echo
 
 # ------------------------------------------------------------------------------
 echo "=== 6) Run authoritative tests ==="
-$NS test "$LAB"
+test_out="${TMPROOT}/authoritative_lab_test.out"
+test_err="${TMPROOT}/authoritative_lab_test.err"
+set +e
+$NS test "$LAB" >"$test_out" 2>"$test_err"
+test_rc=$?
+set -e
+if [ "$test_rc" -ne 0 ]; then
+  dump_pair_if_nonempty "$test_out" "$test_err"
+  fail "tests failed (rc=$test_rc)"
+fi
 echo "OK: tests passed"
 echo
 # ------------------------------------------------------------------------------
@@ -706,7 +724,7 @@ jq -e '
 }
 echo "OK: invariant gate PASS recorded"
 
-cp -f "${INV_LABDIR}/results.json" /tmp/route_present_missing.results.run1.json
+cp -f "${INV_LABDIR}/results.json" ${TMPROOT}/route_present_missing.results.run1.json
 
 # 2) Replay must PASS and --verify-results must confirm deterministic equality
 set +e
@@ -732,11 +750,11 @@ jq -e '
 }
 echo "OK: invariant replay PASS recorded"
 
-cp -f "${INV_LABDIR}/results.json" /tmp/route_present_missing.results.replay.json
+cp -f "${INV_LABDIR}/results.json" ${TMPROOT}/route_present_missing.results.replay.json
 
-diff -u /tmp/route_present_missing.results.run1.json /tmp/route_present_missing.results.replay.json >/dev/null \
+diff -u ${TMPROOT}/route_present_missing.results.run1.json ${TMPROOT}/route_present_missing.results.replay.json >/dev/null \
   && echo "OK: invariant replay results.json deterministic (byte-identical)" \
-  || { echo "FAIL: invariant replay results.json drift"; diff -u /tmp/route_present_missing.results.run1.json /tmp/route_present_missing.results.replay.json || true; exit 1; }
+  || { echo "FAIL: invariant replay results.json drift"; diff -u ${TMPROOT}/route_present_missing.results.run1.json ${TMPROOT}/route_present_missing.results.replay.json || true; exit 1; }
 
 EVPN_VNI_TOPO="topologies/evpn_vni_route_present.yaml"
 EVPN_VNI_LAB="evpn-vni-route-present"
@@ -803,7 +821,7 @@ if [ "$evpn_vni_misuse_rc" -ne 2 ]; then
 fi
 echo "OK: EVPN VNI invariant misuse recorded"
 
-cp -f "${EVPN_VNI_LABDIR}/results.json" /tmp/evpn_vni_route_present.results.run1.json
+cp -f "${EVPN_VNI_LABDIR}/results.json" ${TMPROOT}/evpn_vni_route_present.results.run1.json
 
 set +e
 evpn_vni_replay_out="$($NS replay "${EVPN_VNI_LABDIR}" --gate --verify-results 2>&1)"
@@ -827,11 +845,11 @@ jq -e '
 }
 echo "OK: EVPN VNI invariant replay PASS recorded"
 
-cp -f "${EVPN_VNI_LABDIR}/results.json" /tmp/evpn_vni_route_present.results.replay.json
+cp -f "${EVPN_VNI_LABDIR}/results.json" ${TMPROOT}/evpn_vni_route_present.results.replay.json
 
-diff -u /tmp/evpn_vni_route_present.results.run1.json /tmp/evpn_vni_route_present.results.replay.json >/dev/null \
+diff -u ${TMPROOT}/evpn_vni_route_present.results.run1.json ${TMPROOT}/evpn_vni_route_present.results.replay.json >/dev/null \
   && echo "OK: EVPN VNI replay results.json deterministic (byte-identical)" \
-  || { echo "FAIL: EVPN VNI replay results.json drift"; diff -u /tmp/evpn_vni_route_present.results.run1.json /tmp/evpn_vni_route_present.results.replay.json || true; exit 1; }
+  || { echo "FAIL: EVPN VNI replay results.json drift"; diff -u ${TMPROOT}/evpn_vni_route_present.results.run1.json ${TMPROOT}/evpn_vni_route_present.results.replay.json || true; exit 1; }
 
 EVPN_BGP_TOPO="topologies/evpn_bgp_session_up.yaml"
 EVPN_BGP_LAB="evpn-bgp-session-up"
@@ -873,7 +891,7 @@ if [ "$evpn_bgp_misuse_rc" -ne 2 ]; then
 fi
 echo "OK: EVPN BGP-session invariant misuse recorded"
 
-cp -f "${EVPN_BGP_LABDIR}/results.json" /tmp/evpn_bgp_session_up.results.run1.json
+cp -f "${EVPN_BGP_LABDIR}/results.json" ${TMPROOT}/evpn_bgp_session_up.results.run1.json
 
 set +e
 evpn_bgp_replay_out="$($NS replay "${EVPN_BGP_LABDIR}" --gate --verify-results 2>&1)"
@@ -897,11 +915,11 @@ jq -e '
 }
 echo "OK: EVPN BGP-session invariant replay PASS recorded"
 
-cp -f "${EVPN_BGP_LABDIR}/results.json" /tmp/evpn_bgp_session_up.results.replay.json
+cp -f "${EVPN_BGP_LABDIR}/results.json" ${TMPROOT}/evpn_bgp_session_up.results.replay.json
 
-diff -u /tmp/evpn_bgp_session_up.results.run1.json /tmp/evpn_bgp_session_up.results.replay.json >/dev/null \
+diff -u ${TMPROOT}/evpn_bgp_session_up.results.run1.json ${TMPROOT}/evpn_bgp_session_up.results.replay.json >/dev/null \
   && echo "OK: EVPN BGP-session replay results.json deterministic (byte-identical)" \
-  || { echo "FAIL: EVPN BGP-session replay results.json drift"; diff -u /tmp/evpn_bgp_session_up.results.run1.json /tmp/evpn_bgp_session_up.results.replay.json || true; exit 1; }
+  || { echo "FAIL: EVPN BGP-session replay results.json drift"; diff -u ${TMPROOT}/evpn_bgp_session_up.results.run1.json ${TMPROOT}/evpn_bgp_session_up.results.replay.json || true; exit 1; }
 
 echo
 
@@ -972,7 +990,7 @@ if [ "$lp_misuse_rc" -ne 2 ]; then
 fi
 echo "OK: BGP localpref invariant misuse recorded"
 
-cp -f "${LP_LABDIR}/results.json" /tmp/bgp_localpref_equals.results.run1.json
+cp -f "${LP_LABDIR}/results.json" ${TMPROOT}/bgp_localpref_equals.results.run1.json
 
 set +e
 lp_replay_out="$($NS replay "${LP_LABDIR}" --gate --verify-results 2>&1)"
@@ -996,11 +1014,11 @@ jq -e '
 }
 echo "OK: BGP localpref invariant replay PASS recorded"
 
-cp -f "${LP_LABDIR}/results.json" /tmp/bgp_localpref_equals.results.replay.json
+cp -f "${LP_LABDIR}/results.json" ${TMPROOT}/bgp_localpref_equals.results.replay.json
 
-diff -u /tmp/bgp_localpref_equals.results.run1.json /tmp/bgp_localpref_equals.results.replay.json >/dev/null \
+diff -u ${TMPROOT}/bgp_localpref_equals.results.run1.json ${TMPROOT}/bgp_localpref_equals.results.replay.json >/dev/null \
   && echo "OK: BGP localpref replay results.json deterministic (byte-identical)" \
-  || { echo "FAIL: BGP localpref replay results.json drift"; diff -u /tmp/bgp_localpref_equals.results.run1.json /tmp/bgp_localpref_equals.results.replay.json || true; exit 1; }
+  || { echo "FAIL: BGP localpref replay results.json drift"; diff -u ${TMPROOT}/bgp_localpref_equals.results.run1.json ${TMPROOT}/bgp_localpref_equals.results.replay.json || true; exit 1; }
 
 echo
 echo "=== 6f) Route advertisement invariants gate + replay determinism ==="
@@ -1041,7 +1059,7 @@ jq -e '
 }
 echo "OK: route_advertised_to invariant gate PASS recorded"
 
-cp -f "${RA_LABDIR}/results.json" /tmp/route_advertised_to.results.run1.json
+cp -f "${RA_LABDIR}/results.json" ${TMPROOT}/route_advertised_to.results.run1.json
 
 set +e
 ra_neg_out="$($NS test "$RA_NEG_TOPO" 2>&1)"
@@ -1098,11 +1116,11 @@ jq -e '
 }
 echo "OK: route_advertised_to invariant replay PASS recorded"
 
-cp -f "${RA_LABDIR}/results.json" /tmp/route_advertised_to.results.replay.json
+cp -f "${RA_LABDIR}/results.json" ${TMPROOT}/route_advertised_to.results.replay.json
 
-diff -u /tmp/route_advertised_to.results.run1.json /tmp/route_advertised_to.results.replay.json >/dev/null \
+diff -u ${TMPROOT}/route_advertised_to.results.run1.json ${TMPROOT}/route_advertised_to.results.replay.json >/dev/null \
   && echo "OK: route_advertised_to replay results.json deterministic (byte-identical)" \
-  || { echo "FAIL: route_advertised_to replay results.json drift"; diff -u /tmp/route_advertised_to.results.run1.json /tmp/route_advertised_to.results.replay.json || true; exit 1; }
+  || { echo "FAIL: route_advertised_to replay results.json drift"; diff -u ${TMPROOT}/route_advertised_to.results.run1.json ${TMPROOT}/route_advertised_to.results.replay.json || true; exit 1; }
 
 set +e
 rna_out="$($NS test "$RNA_TOPO" 2>&1)"
@@ -1126,7 +1144,7 @@ jq -e '
 }
 echo "OK: route_not_advertised_to invariant gate PASS recorded"
 
-cp -f "${RNA_LABDIR}/results.json" /tmp/route_not_advertised_to.results.run1.json
+cp -f "${RNA_LABDIR}/results.json" ${TMPROOT}/route_not_advertised_to.results.run1.json
 
 set +e
 rna_replay_out="$($NS replay "${RNA_LABDIR}" --gate --verify-results 2>&1)"
@@ -1150,11 +1168,11 @@ jq -e '
 }
 echo "OK: route_not_advertised_to invariant replay PASS recorded"
 
-cp -f "${RNA_LABDIR}/results.json" /tmp/route_not_advertised_to.results.replay.json
+cp -f "${RNA_LABDIR}/results.json" ${TMPROOT}/route_not_advertised_to.results.replay.json
 
-diff -u /tmp/route_not_advertised_to.results.run1.json /tmp/route_not_advertised_to.results.replay.json >/dev/null \
+diff -u ${TMPROOT}/route_not_advertised_to.results.run1.json ${TMPROOT}/route_not_advertised_to.results.replay.json >/dev/null \
   && echo "OK: route_not_advertised_to replay results.json deterministic (byte-identical)" \
-  || { echo "FAIL: route_not_advertised_to replay results.json drift"; diff -u /tmp/route_not_advertised_to.results.run1.json /tmp/route_not_advertised_to.results.replay.json || true; exit 1; }
+  || { echo "FAIL: route_not_advertised_to replay results.json drift"; diff -u ${TMPROOT}/route_not_advertised_to.results.run1.json ${TMPROOT}/route_not_advertised_to.results.replay.json || true; exit 1; }
 
 echo
 echo "=== 7) Cleanup smoke (netsim cleanup --all) ==="
