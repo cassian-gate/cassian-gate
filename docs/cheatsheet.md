@@ -1758,6 +1758,7 @@ Key files:
 - `results.json`
 - `results.summary.txt`
 - `artifacts/`
+- `artifacts/blast-radius/blast_radius.json`
 
 ---
 
@@ -1861,6 +1862,99 @@ Keep the authority boundary clear:
 
 ---
 
+## Blast Radius (Advisory Only)
+
+ai-netsim can produce a **blast radius artifact** that shows:
+
+- what the executed tests/scenarios directly covered
+- what additional nodes/links are potentially affected based on deterministic topology connectivity
+
+This artifact is:
+
+- advisory only
+- non-authoritative
+- deterministic
+- generated during **Collect**
+
+It does **not**:
+
+- change verdicts
+- change exit codes
+- replace `results.json`
+- score severity or risk
+- infer live routing/runtime behavior
+
+### Artifact Path
+
+```text
+labs/clab-<lab-name>/artifacts/blast-radius/blast_radius.json
+```
+
+### Supporting `results.json` Surface
+
+`results.json` may also include a clearly labeled non-authoritative supporting section:
+
+```text
+blast_radius
+```
+
+This remains:
+
+- supporting evidence only
+- non-authoritative
+- not part of verdict logic
+
+Keep the authority boundary clear:
+
+- `results.json` verdict fields = authoritative
+- `results.json` `blast_radius` section = supporting evidence only
+- `artifacts/blast-radius/blast_radius.json` = detailed advisory artifact
+
+### What it contains
+
+Typical fields include:
+
+- `schema`
+- `authority`
+- `topology`
+- `coverage_basis`
+- `directly_covered`
+- `potentially_affected`
+- `counts`
+
+### Operator meaning
+
+Use this artifact when you want to understand:
+
+- what your declared tests directly touched
+- what else is connected to that tested scope
+- where additional coverage may be useful
+
+### Example
+
+```bash
+netsim test topologies/blast_radius_ok.yaml
+
+python -m json.tool \
+  labs/clab-blast-radius-ok/artifacts/blast-radius/blast_radius.json
+```
+
+### Important Boundary
+
+Blast radius currently reflects:
+
+- resolved topology structure
+- declared coverage surfaces
+- deterministic conservative graph expansion
+
+It does **not** currently prove:
+
+- live routing impact
+- actual traffic path usage
+- runtime failure propagation
+- business severity
+---
+
 # 1️⃣7️⃣ Common Operator Tasks
 
 Validate a topology:
@@ -1961,6 +2055,18 @@ Replay the same grey-failure scenario deterministically:
 
 ```bash
 netsim replay labs/clab-grey-failure-direct-pass --gate --verify-results
+```
+Run a blast radius proof:
+
+```bash
+netsim test topologies/blast_radius_ok.yaml
+```
+
+Inspect blast radius output:
+
+```bash
+python -m json.tool \
+  labs/clab-blast-radius-ok/artifacts/blast-radius/blast_radius.json
 ```
 
 Inspect structured state diff output:

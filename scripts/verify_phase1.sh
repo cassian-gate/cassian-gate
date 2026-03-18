@@ -179,6 +179,78 @@ fi
 
 echo "OK: invariant pack loading and compatibility guardrails"
 
+echo "=== 0e) Guardrail: blast radius awareness ==="
+python src/netsim.py test topologies/blast_radius_ok.yaml >/tmp/blast_radius_ok.out 2>&1
+br_exit=$?
+if [ "$br_exit" -ne 0 ]; then
+  cat /tmp/blast_radius_ok.out
+  echo "FAIL: blast_radius_ok gate run failed"
+  exit 1
+fi
+
+if [ ! -f labs/clab-blast-radius-ok/artifacts/blast-radius/blast_radius.json ]; then
+  echo "FAIL: missing blast radius artifact"
+  exit 1
+fi
+
+python - <<'PY'
+import json
+from pathlib import Path
+
+results = json.loads(Path("labs/clab-blast-radius-ok/results.json").read_text(encoding="utf-8"))
+artifact = json.loads(Path("labs/clab-blast-radius-ok/artifacts/blast-radius/blast_radius.json").read_text(encoding="utf-8"))
+
+assert isinstance(results.get("authority"), dict), "results.authority missing"
+se = results["authority"].get("supporting_evidence")
+assert isinstance(se, list), "results.authority.supporting_evidence missing"
+assert any(
+    isinstance(x, dict)
+    and x.get("type") == "blast_radius"
+    and x.get("authority") == "supporting_evidence"
+    for x in se
+), "blast_radius supporting evidence entry missing"
+
+br = results.get("blast_radius")
+assert isinstance(br, dict), "results.blast_radius missing"
+assert br.get("authority") == "supporting_evidence", "results.blast_radius authority mismatch"
+
+assert artifact.get("authority") == "supporting_evidence", "artifact authority mismatch"
+assert artifact.get("schema") == "blast_radius.v1", "artifact schema mismatch"
+assert isinstance(artifact.get("coverage_basis"), list), "artifact coverage_basis missing"
+assert isinstance(artifact.get("counts"), dict), "artifact counts missing"
+PY
+if [ "$?" -ne 0 ]; then
+  echo "FAIL: blast radius artifact/results validation failed"
+  exit 1
+fi
+echo "OK: blast radius artifact + results surfaces valid"
+
+python src/netsim.py replay labs/clab-blast-radius-ok --gate --verify-results >/tmp/blast_radius_replay.out 2>&1
+replay_exit=$?
+if [ "$replay_exit" -ne 0 ]; then
+  cat /tmp/blast_radius_replay.out
+  echo "FAIL: blast radius replay verification failed"
+  exit 1
+fi
+echo "OK: blast radius replay verification passed"
+
+set +e
+python src/netsim.py test topologies/neg/blast_radius_ambiguous_fault_target.yaml >/tmp/blast_radius_ambiguous_fault_target.out 2>&1
+neg_exit=$?
+set -e
+if [ "$neg_exit" -ne 2 ]; then
+  cat /tmp/blast_radius_ambiguous_fault_target.out
+  echo "FAIL: blast radius ambiguous fault misuse expected exit 2"
+  exit 1
+fi
+if ! grep -q "choose node+if OR a/b link form, not both" /tmp/blast_radius_ambiguous_fault_target.out; then
+  cat /tmp/blast_radius_ambiguous_fault_target.out
+  echo "FAIL: blast radius ambiguous fault misuse missing expected error text"
+  exit 1
+fi
+echo "OK: blast radius ambiguous fault misuse failed as expected (exit 2)"
+echo
+
 echo "=== 1) Guardrails: no package installs in engine ==="
 grep -RInE '\bapk\s+(add|update)\b' src && { echo "FAIL: apk usage found"; exit 1; } || echo "OK: no apk installs"
 grep -RInE '\bapt(-get)?\s+(install|update)\b' src && { echo "FAIL: apt usage found"; exit 1; } || echo "OK: no apt installs"
