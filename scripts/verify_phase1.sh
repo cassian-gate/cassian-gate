@@ -159,8 +159,10 @@ fi
 echo "OK: pack compatibility negative validation failed as expected (exit 2)"
 
 rm -rf labs/clab-pack-resolve-expansion
+set +e
 src/netsim.py test topologies/pack_resolve_expansion.yaml >"${TMPROOT}/verify_pack_test.out" 2>"${TMPROOT}/verify_pack_test.err"
 rc=$?
+set -e
 if [ "$rc" -ne 0 ]; then
   dump_pair_if_nonempty "${TMPROOT}/verify_pack_test.out" "${TMPROOT}/verify_pack_test.err"
   fail "pack_resolve_expansion test exited $rc"

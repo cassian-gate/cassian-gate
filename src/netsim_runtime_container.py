@@ -1145,6 +1145,13 @@ def verify_frr_ready(rt: Runtime, lab: str, rtr: str) -> None:
     if cp.returncode != 0:
         die(f"{rtr}: FRR EVPN/BGP not ready")
 
+    evpn_summary = (cp.stdout or "").strip()
+    if not evpn_summary:
+        die(f"{rtr}: FRR EVPN/BGP not ready")
+
+    if "No BGP neighbors found" in evpn_summary:
+        die(f"{rtr}: FRR EVPN/BGP not ready")
+
 def verify_sonic_vm_ready(rt: Runtime, lab: str, node: str) -> None:
     """
     VM substrate readiness gate (v1.5).
