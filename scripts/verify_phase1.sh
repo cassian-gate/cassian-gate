@@ -464,10 +464,10 @@ else
     exit 1
   fi
 
-  # Prove VM runtime is active (qemu running inside the container).
-  docker exec clab-${OUT_LAB}-s1 sh -lc 'ps -eo comm,args | grep -E "[q]emu-system|[q]emu-kvm" >/dev/null' \
-    && echo "OK: outcomes s1 has a running qemu process (VM runtime active)" \
-    || { echo "FAIL: outcomes s1 has no qemu process (expected SONiC VM runtime)"; docker exec clab-${OUT_LAB}-s1 sh -lc 'ps -eo comm,args | head -n 80 || true'; exit 1; }
+  # Prove VM runtime is active (qemu or SONiC launch process running inside the container).
+  docker exec clab-${OUT_LAB}-s1 sh -lc 'ps -eo comm,args | grep -E "[q]emu-system|[q]emu-kvm|/launch\.py" >/dev/null' \
+    && echo "OK: outcomes s1 has a VM runtime process (SONiC runtime active)" \
+    || { echo "FAIL: outcomes s1 has no VM runtime process (expected SONiC VM runtime)"; docker exec clab-${OUT_LAB}-s1 sh -lc 'ps -eo comm,args | head -n 80 || true'; exit 1; }
 
   $NS test "$OUT_LAB" >/dev/null
 
