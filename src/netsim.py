@@ -7059,8 +7059,9 @@ def cmd_test(args: argparse.Namespace) -> None:
 
     if do_global_cp_precheck and bgp_participants:
         try:
+            require_evpn_bgp = bool((((resolved.get("fabric") or {}).get("evpn") or {}).get("enabled")))
             for n in bgp_participants:
-                wait_for_bgp(rt, lab, n["name"], timeout=30)
+                wait_for_bgp(rt, lab, n["name"], timeout=30, require_evpn=require_evpn_bgp)
             time.sleep(5)
         except SystemExit:
             results["result"] = "fail"
