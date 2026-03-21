@@ -1063,6 +1063,8 @@ echo "OK: route_advertised_to invariant gate PASS recorded"
 
 cp -f "${RA_LABDIR}/results.json" ${TMPROOT}/route_advertised_to.results.run1.json
 
+rm -rf "${RA_NEG_LABDIR}"
+
 set +e
 ra_neg_out="$($NS test "$RA_NEG_TOPO" 2>&1)"
 ra_neg_rc=$?
@@ -1073,14 +1075,16 @@ if [ "$ra_neg_rc" -ne 1 ]; then
   exit 1
 fi
 
-test -s "${RA_NEG_LABDIR}/results.json" || { echo "FAIL: missing ${RA_NEG_LABDIR}/results.json after route_advertised_to negative run"; exit 1; }
+test -s "${RA_NEG_LABDIR}/results.json" || { echo "FAIL: missing ${RA_NEG_LABDIR}/results.json after route_advertised_to negative run"; echo "$ra_neg_out"; exit 1; }
 
 jq -e '
   .result=="fail"
+  and (.hard_failure.occurred==false)
   and ([.tests[]? | select(.name=="r1_advertises_10_10_10_0_24_to_r2_but_it_should_not" and .kind=="invariant" and .verdict=="fail")] | length) == 1
 ' "${RA_NEG_LABDIR}/results.json" >/dev/null || {
   echo "FAIL: route_advertised_to negative results.json missing expected invariant FAIL entry"
-  jq '.tests' "${RA_NEG_LABDIR}/results.json" 2>/dev/null || true
+  echo "$ra_neg_out"
+  jq '.' "${RA_NEG_LABDIR}/results.json" 2>/dev/null || true
   exit 1
 }
 echo "OK: route_advertised_to invariant negative validation recorded"
