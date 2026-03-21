@@ -8710,6 +8710,12 @@ def cmd_replay(args: argparse.Namespace) -> None:
 
         src_doc2 = dict(src_doc)
         src_doc2["name"] = replay_name
+
+        if not (((src_doc2.get("fabric") or {}).get("evpn") or {}).get("enabled"):
+            replay_precheck_controlplane = False
+        else:
+            replay_precheck_controlplane = True
+
         write_file(tmp_resolved, yaml.safe_dump(src_doc2, sort_keys=False))
 
         # Delegate to the existing authoritative gate-style topology-mode handler.
@@ -8730,6 +8736,7 @@ def cmd_replay(args: argparse.Namespace) -> None:
                 all_scenarios=replay_all_scenarios,
                 capture_config=False,
                 list_scenarios=False,
+                precheck_controlplane=replay_precheck_controlplane,
                 _report_authority="gate",
             )
         )
