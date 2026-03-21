@@ -7060,12 +7060,12 @@ def cmd_test(args: argparse.Namespace) -> None:
     if do_global_cp_precheck and bgp_participants:
         try:
             require_evpn_bgp = bool((((topo.get("fabric") or {}).get("evpn") or {}).get("enabled")))
+            is_replay_lab = "-replay-" in str(topo.get("name", ""))
+            precheck_timeout = 60 if (require_evpn_bgp and is_replay_lab) else 30
+            post_precheck_sleep = 15 if (require_evpn_bgp and is_replay_lab) else (10 if require_evpn_bgp else 5)
             for n in bgp_participants:
-                wait_for_bgp(rt, lab, n["name"], timeout=30, require_evpn=require_evpn_bgp)
-            if require_evpn_bgp:
-                time.sleep(10)
-            else:
-                time.sleep(5)
+                wait_for_bgp(rt, lab, n["name"], timeout=precheck_timeout, require_evpn=require_evpn_bgp)
+            time.sleep(post_precheck_sleep)
         except SystemExit:
             results["result"] = "fail"
             finished_at = time.time()
