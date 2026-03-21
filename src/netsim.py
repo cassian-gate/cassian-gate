@@ -7062,7 +7062,10 @@ def cmd_test(args: argparse.Namespace) -> None:
             require_evpn_bgp = bool((((topo.get("fabric") or {}).get("evpn") or {}).get("enabled")))
             for n in bgp_participants:
                 wait_for_bgp(rt, lab, n["name"], timeout=30, require_evpn=require_evpn_bgp)
-            time.sleep(5)
+            if require_evpn_bgp:
+                time.sleep(10)
+            else:
+                time.sleep(5)
         except SystemExit:
             results["result"] = "fail"
             finished_at = time.time()

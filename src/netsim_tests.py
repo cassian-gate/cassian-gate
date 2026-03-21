@@ -769,6 +769,36 @@ def wait_for_bgp(rt: Runtime, lab: str, node: str, timeout: int = 30, require_ev
         last_evpn_details = ""
         return True
 
+    def evpn_routes_present() -> bool:
+        nonlocal last_evpn_details
+        cp = rt.exec(
+            lab,
+            node,
+            ["vtysh", "-c", "show bgp l2vpn evpn route json"],
+            check=False,
+            capture_output=True,
+        )
+        if cp.returncode != 0:
+            last_evpn_details = f"route rc={cp.returncode}"
+            return False
+        raw = (cp.stdout or "").strip()
+        if not raw:
+            last_evpn_details = "(empty EVPN route table)"
+            return False
+        try:
+            data = json.loads(raw)
+        except Exception:
+            last_evpn_details = raw
+            return False
+
+        routes = data.get("routes")
+        if not isinstance(routes, list) or not routes:
+            last_evpn_details = "(no EVPN routes)"
+            return False
+
+        last_evpn_details = ""
+        return True
+
     while True:
         cp = rt.exec(lab, node, ["vtysh", "-c", "show bgp summary"], check=False, capture_output=True)
         last_summary = cp.stdout or ""
@@ -794,7 +824,7 @@ def wait_for_bgp(rt: Runtime, lab: str, node: str, timeout: int = 30, require_ev
                     return False
 
                 if all(is_up(s) for s in states):
-                    if not require_evpn or evpn_neighbors_up():
+                    if not require_evpn or (evpn_neighbors_up() and evpn_routes_present()):
                         return
 
         if time.time() - start > timeout:
