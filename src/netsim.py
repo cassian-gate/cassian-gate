@@ -8711,10 +8711,7 @@ def cmd_replay(args: argparse.Namespace) -> None:
         src_doc2 = dict(src_doc)
         src_doc2["name"] = replay_name
 
-        if not (((src_doc2.get("fabric") or {}).get("evpn") or {}).get("enabled")):
-            replay_precheck_controlplane = False
-        else:
-            replay_precheck_controlplane = True
+        replay_precheck_controlplane = False
 
         write_file(tmp_resolved, yaml.safe_dump(src_doc2, sort_keys=False))
 
