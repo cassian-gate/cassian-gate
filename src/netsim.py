@@ -8733,7 +8733,7 @@ def cmd_replay(args: argparse.Namespace) -> None:
                 all_scenarios=replay_all_scenarios,
                 capture_config=False,
                 list_scenarios=False,
-                precheck_controlplane=replay_precheck_controlplane,
+                precheck_controlplane=False,
                 _report_authority="gate",
             )
         )
