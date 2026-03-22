@@ -7054,7 +7054,11 @@ def cmd_test(args: argparse.Namespace) -> None:
     # Convergence semantics:
     # - Default tests: keep legacy behavior (precheck BGP if participants exist)
     # - Scenarios: skip global precheck unless user explicitly requests it
-    do_global_cp_precheck = (not want_scenarios) or precheck_controlplane
+    # - Replay delegated runs: respect explicit caller intent exactly
+    if hasattr(args, "precheck_controlplane"):
+        do_global_cp_precheck = bool(precheck_controlplane)
+    else:
+        do_global_cp_precheck = (not want_scenarios) or precheck_controlplane
     results["summary"]["precheck_controlplane"] = bool(do_global_cp_precheck)
 
     if do_global_cp_precheck and bgp_participants:
@@ -7750,6 +7754,8 @@ def cmd_test(args: argparse.Namespace) -> None:
 
     if bgp_participants and results["summary"].get("precheck_controlplane"):
         print(f"✅ Control-plane PASS: BGP established ({len(bgp_participants)} participants)")
+    elif bgp_participants and results["summary"].get("precheck_controlplane") is False:
+        print("ℹ️ Control-plane precheck skipped by explicit execution policy")
     elif bgp_participants and want_scenarios:
         print("ℹ️ Control-plane precheck skipped for scenarios (use --precheck-controlplane to enable)")
 
@@ -8733,7 +8739,7 @@ def cmd_replay(args: argparse.Namespace) -> None:
                 all_scenarios=replay_all_scenarios,
                 capture_config=False,
                 list_scenarios=False,
-                precheck_controlplane=False,
+                precheck_controlplane=replay_precheck_controlplane,
                 _report_authority="gate",
             )
         )
