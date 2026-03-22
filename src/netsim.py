@@ -7054,11 +7054,7 @@ def cmd_test(args: argparse.Namespace) -> None:
     # Convergence semantics:
     # - Default tests: keep legacy behavior (precheck BGP if participants exist)
     # - Scenarios: skip global precheck unless user explicitly requests it
-    # - Replay delegated runs: respect explicit caller intent exactly
-    if bool(getattr(args, "_explicit_precheck_controlplane", False)):
-        do_global_cp_precheck = bool(precheck_controlplane)
-    else:
-        do_global_cp_precheck = (not want_scenarios) or precheck_controlplane
+    do_global_cp_precheck = (not want_scenarios) or precheck_controlplane
     results["summary"]["precheck_controlplane"] = bool(do_global_cp_precheck)
 
     if do_global_cp_precheck and bgp_participants:
@@ -8739,8 +8735,7 @@ def cmd_replay(args: argparse.Namespace) -> None:
                 all_scenarios=replay_all_scenarios,
                 capture_config=False,
                 list_scenarios=False,
-                precheck_controlplane=replay_precheck_controlplane,
-                _explicit_precheck_controlplane=True,
+                precheck_controlplane=False,
                 _report_authority="gate",
             )
         )
