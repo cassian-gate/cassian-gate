@@ -1139,7 +1139,7 @@ def verify_frr_ready(rt: Runtime, lab: str, rtr: str, require_evpn_bgp: bool = F
 
     # bgpd must be ready when FRR config includes EVPN/BGP generation support.
     # For EVPN topologies, treat any reported failed peers as not ready yet.
-    timeout_s = 30
+    timeout_s = 90
     interval_s = 1.0
     deadline = time.time() + timeout_s
 
