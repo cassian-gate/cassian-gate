@@ -40,6 +40,7 @@ from netsim_common import (
     LAST_ERROR_MSG,
     is_ip_literal, validate_ip_literal, classify_invalid_target,
     nodes_by_type,
+    assert_vm_runtime_supported,
 )
 
 # ---------------------------------------------------------------------
@@ -8442,6 +8443,14 @@ def cmd_up(args: argparse.Namespace) -> None:
     out = write_containerlab_file(topo_path)
 
     # Deploy
+    vm_nodes = [
+        n for n in (resolved_preview or {}).get("nodes", [])
+        if isinstance(n, dict) and (str(n.get("runtime") or "").strip().lower() == "vm")
+    ]
+    if vm_nodes:
+        first_vm = vm_nodes[0]
+        first_name = str(first_vm.get("name") or "<unnamed>").strip()
+        assert_vm_runtime_supported(first_name)
     _maybe_print_privilege_notice("A")
     _run_containerlab(["sudo", "containerlab", "deploy", "-t", str(out)], check=True)
 
