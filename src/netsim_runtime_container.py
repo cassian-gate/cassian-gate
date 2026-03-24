@@ -1137,16 +1137,34 @@ def verify_frr_ready(rt: Runtime, lab: str, rtr: str, require_evpn_bgp: bool = F
     if not require_evpn_bgp:
         return
 
-    # bgpd must be ready when FRR config includes EVPN/BGP generation support
-    cp = rt.exec(
-        lab,
-        rtr,
-        ["vtysh", "-c", "show bgp l2vpn evpn summary"],
-        check=False,
-        capture_output=True,
-    )
-    if cp.returncode != 0:
-        die(f"{rtr}: FRR EVPN/BGP not ready")
+    # bgpd must be ready when FRR config includes EVPN/BGP generation support.
+    # For EVPN topologies, treat any reported failed peers as not ready yet.
+    timeout_s = 30
+    interval_s = 1.0
+    deadline = time.time() + timeout_s
+
+    while True:
+        cp = rt.exec(
+            lab,
+            rtr,
+            ["vtysh", "-c", "show bgp l2vpn evpn summary json"],
+            check=False,
+            capture_output=True,
+        )
+        if cp.returncode == 0:
+            try:
+                data = json.loads((cp.stdout or "").strip() or "{}")
+            except json.JSONDecodeError:
+                data = {}
+            failed_peers = int(data.get("failedPeers", 0) or 0)
+            peer_count = int(data.get("peerCount", 0) or 0)
+            if peer_count == 0 or failed_peers == 0:
+                return
+
+        if time.time() >= deadline:
+            die(f"{rtr}: FRR EVPN/BGP not ready within {timeout_s}s")
+
+        time.sleep(interval_s)
 
 def verify_sonic_vm_ready(rt: Runtime, lab: str, node: str) -> None:
     """
