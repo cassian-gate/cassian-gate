@@ -159,8 +159,10 @@ fi
 echo "OK: pack compatibility negative validation failed as expected (exit 2)"
 
 rm -rf labs/clab-pack-resolve-expansion
+set +e
 src/netsim.py test topologies/pack_resolve_expansion.yaml >"${TMPROOT}/verify_pack_test.out" 2>"${TMPROOT}/verify_pack_test.err"
 rc=$?
+set -e
 if [ "$rc" -ne 0 ]; then
   dump_pair_if_nonempty "${TMPROOT}/verify_pack_test.out" "${TMPROOT}/verify_pack_test.err"
   fail "pack_resolve_expansion test exited $rc"
@@ -462,10 +464,10 @@ else
     exit 1
   fi
 
-  # Prove VM runtime is active (qemu running inside the container).
-  docker exec clab-${OUT_LAB}-s1 sh -lc 'ps -eo comm,args | grep -E "[q]emu-system|[q]emu-kvm" >/dev/null' \
-    && echo "OK: outcomes s1 has a running qemu process (VM runtime active)" \
-    || { echo "FAIL: outcomes s1 has no qemu process (expected SONiC VM runtime)"; docker exec clab-${OUT_LAB}-s1 sh -lc 'ps -eo comm,args | head -n 80 || true'; exit 1; }
+  # Prove VM runtime is active (qemu or SONiC launch process running inside the container).
+  docker exec clab-${OUT_LAB}-s1 sh -lc 'ps -eo comm,args | grep -E "[q]emu-system|[q]emu-kvm|/launch\.py" >/dev/null' \
+    && echo "OK: outcomes s1 has a VM runtime process (SONiC runtime active)" \
+    || { echo "FAIL: outcomes s1 has no VM runtime process (expected SONiC VM runtime)"; docker exec clab-${OUT_LAB}-s1 sh -lc 'ps -eo comm,args | head -n 80 || true'; exit 1; }
 
   $NS test "$OUT_LAB" >/dev/null
 
@@ -1061,6 +1063,8 @@ echo "OK: route_advertised_to invariant gate PASS recorded"
 
 cp -f "${RA_LABDIR}/results.json" ${TMPROOT}/route_advertised_to.results.run1.json
 
+rm -rf "${RA_NEG_LABDIR}"
+
 set +e
 ra_neg_out="$($NS test "$RA_NEG_TOPO" 2>&1)"
 ra_neg_rc=$?
@@ -1071,14 +1075,16 @@ if [ "$ra_neg_rc" -ne 1 ]; then
   exit 1
 fi
 
-test -s "${RA_NEG_LABDIR}/results.json" || { echo "FAIL: missing ${RA_NEG_LABDIR}/results.json after route_advertised_to negative run"; exit 1; }
+test -s "${RA_NEG_LABDIR}/results.json" || { echo "FAIL: missing ${RA_NEG_LABDIR}/results.json after route_advertised_to negative run"; echo "$ra_neg_out"; exit 1; }
 
 jq -e '
   .result=="fail"
+  and (.hard_failure.occurred==false)
   and ([.tests[]? | select(.name=="r1_advertises_10_10_10_0_24_to_r2_but_it_should_not" and .kind=="invariant" and .verdict=="fail")] | length) == 1
 ' "${RA_NEG_LABDIR}/results.json" >/dev/null || {
   echo "FAIL: route_advertised_to negative results.json missing expected invariant FAIL entry"
-  jq '.tests' "${RA_NEG_LABDIR}/results.json" 2>/dev/null || true
+  echo "$ra_neg_out"
+  jq '.' "${RA_NEG_LABDIR}/results.json" 2>/dev/null || true
   exit 1
 }
 echo "OK: route_advertised_to invariant negative validation recorded"

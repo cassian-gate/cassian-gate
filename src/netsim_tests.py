@@ -703,7 +703,7 @@ def compare_expected_vs_observed_bgp(expected: set[str], observed: dict[str, dic
         "ok": ok,
     }
 
-def wait_for_bgp(rt: Runtime, lab: str, node: str, timeout: int = 30) -> None:
+def wait_for_bgp(rt: Runtime, lab: str, node: str, timeout: int = 30, require_evpn: bool = False) -> None:
     """
     Wait for BGP to be Established-ish on a node.
 
@@ -717,16 +717,57 @@ def wait_for_bgp(rt: Runtime, lab: str, node: str, timeout: int = 30) -> None:
     Anything like Idle/Active/Connect/OpenSent/OpenConfirm is not OK.
     "(Policy)" is not OK.
     """
+    import json
     import time
 
     start = time.time()
     last_summary = ""
     last_neigh_lines: list[str] = []
+    last_evpn_details = ""
 
     def parse_state_pfxrcd(neigh_line: str) -> str:
         parts = neigh_line.split()
         # parts[9] is State/PfxRcd in typical FRR output
         return parts[9] if len(parts) >= 10 else ""
+
+    def evpn_neighbors_up() -> bool:
+        nonlocal last_evpn_details
+        cp = rt.exec(
+            lab,
+            node,
+            ["vtysh", "-c", "show bgp l2vpn evpn summary json"],
+            check=False,
+            capture_output=True,
+        )
+        if cp.returncode != 0:
+            last_evpn_details = f"rc={cp.returncode}"
+            return False
+        raw = (cp.stdout or "").strip()
+        if not raw:
+            last_evpn_details = "(empty EVPN summary)"
+            return False
+        try:
+            data = json.loads(raw)
+        except Exception:
+            last_evpn_details = raw
+            return False
+
+        peers = data.get("peers") or {}
+        if not peers:
+            last_evpn_details = "(no EVPN peers)"
+            return False
+
+        bad = []
+        for peer_ip, meta in peers.items():
+            state = str((meta or {}).get("state", ""))
+            if state.lower() != "established":
+                bad.append(f"{peer_ip}:{state or 'unknown'}")
+        if bad:
+            last_evpn_details = "\n".join(bad)
+            return False
+
+        last_evpn_details = ""
+        return True
 
     while True:
         cp = rt.exec(lab, node, ["vtysh", "-c", "show bgp summary"], check=False, capture_output=True)
@@ -753,10 +794,13 @@ def wait_for_bgp(rt: Runtime, lab: str, node: str, timeout: int = 30) -> None:
                     return False
 
                 if all(is_up(s) for s in states):
-                    return
+                    if not require_evpn or evpn_neighbors_up():
+                        return
 
         if time.time() - start > timeout:
             details = "\n".join(last_neigh_lines) if last_neigh_lines else "(no neighbor lines found)"
+            if require_evpn and last_evpn_details:
+                details = f"{details}\nEVPN:\n{last_evpn_details}"
             die(f"{node}: BGP did not converge within {timeout}s:\n{details}")
 
         time.sleep(1)

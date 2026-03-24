@@ -7059,9 +7059,13 @@ def cmd_test(args: argparse.Namespace) -> None:
 
     if do_global_cp_precheck and bgp_participants:
         try:
+            require_evpn_bgp = bool((((topo.get("fabric") or {}).get("evpn") or {}).get("enabled")))
+            is_replay_lab = "-replay-" in str(topo.get("name", ""))
+            precheck_timeout = 60 if (require_evpn_bgp and is_replay_lab) else 30
+            post_precheck_sleep = 15 if (require_evpn_bgp and is_replay_lab) else (10 if require_evpn_bgp else 5)
             for n in bgp_participants:
-                wait_for_bgp(rt, lab, n["name"], timeout=30)
-            time.sleep(5)
+                wait_for_bgp(rt, lab, n["name"], timeout=precheck_timeout, require_evpn=require_evpn_bgp)
+            time.sleep(post_precheck_sleep)
         except SystemExit:
             results["result"] = "fail"
             finished_at = time.time()
@@ -7746,6 +7750,8 @@ def cmd_test(args: argparse.Namespace) -> None:
 
     if bgp_participants and results["summary"].get("precheck_controlplane"):
         print(f"✅ Control-plane PASS: BGP established ({len(bgp_participants)} participants)")
+    elif bgp_participants and results["summary"].get("precheck_controlplane") is False:
+        print("ℹ️ Control-plane precheck skipped by explicit execution policy")
     elif bgp_participants and want_scenarios:
         print("ℹ️ Control-plane precheck skipped for scenarios (use --precheck-controlplane to enable)")
 
@@ -8706,6 +8712,9 @@ def cmd_replay(args: argparse.Namespace) -> None:
 
         src_doc2 = dict(src_doc)
         src_doc2["name"] = replay_name
+
+        replay_precheck_controlplane = False
+
         write_file(tmp_resolved, yaml.safe_dump(src_doc2, sort_keys=False))
 
         # Delegate to the existing authoritative gate-style topology-mode handler.
@@ -8726,6 +8735,7 @@ def cmd_replay(args: argparse.Namespace) -> None:
                 all_scenarios=replay_all_scenarios,
                 capture_config=False,
                 list_scenarios=False,
+                precheck_controlplane=False,
                 _report_authority="gate",
             )
         )

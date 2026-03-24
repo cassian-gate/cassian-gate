@@ -1122,7 +1122,7 @@ def verify_host_ready(rt: Runtime, lab: str, host: str) -> None:
         )
         die(f"{host}: no global IPv4 configured (host not ready)\n{(dbg.stdout or '').strip()}")
 
-def verify_frr_ready(rt: Runtime, lab: str, rtr: str) -> None:
+def verify_frr_ready(rt: Runtime, lab: str, rtr: str, require_evpn_bgp: bool = False) -> None:
     # vtysh must work
     cp = rt.exec(
         lab,
@@ -1134,16 +1134,37 @@ def verify_frr_ready(rt: Runtime, lab: str, rtr: str) -> None:
     if cp.returncode != 0:
         die(f"{rtr}: vtysh not ready")
 
-    # bgpd must be ready when FRR config includes EVPN/BGP generation support
-    cp = rt.exec(
-        lab,
-        rtr,
-        ["vtysh", "-c", "show bgp l2vpn evpn summary"],
-        check=False,
-        capture_output=True,
-    )
-    if cp.returncode != 0:
-        die(f"{rtr}: FRR EVPN/BGP not ready")
+    if not require_evpn_bgp:
+        return
+
+    # bgpd must be ready when FRR config includes EVPN/BGP generation support.
+    # For EVPN topologies, treat any reported failed peers as not ready yet.
+    timeout_s = 90
+    interval_s = 1.0
+    deadline = time.time() + timeout_s
+
+    while True:
+        cp = rt.exec(
+            lab,
+            rtr,
+            ["vtysh", "-c", "show bgp l2vpn evpn summary json"],
+            check=False,
+            capture_output=True,
+        )
+        if cp.returncode == 0:
+            try:
+                data = json.loads((cp.stdout or "").strip() or "{}")
+            except json.JSONDecodeError:
+                data = {}
+            failed_peers = int(data.get("failedPeers", 0) or 0)
+            peer_count = int(data.get("peerCount", 0) or 0)
+            if peer_count == 0 or failed_peers == 0:
+                return
+
+        if time.time() >= deadline:
+            die(f"{rtr}: FRR EVPN/BGP not ready within {timeout_s}s")
+
+        time.sleep(interval_s)
 
 def verify_sonic_vm_ready(rt: Runtime, lab: str, node: str) -> None:
     """
@@ -1181,6 +1202,7 @@ def verify_sonic_vm_ready(rt: Runtime, lab: str, node: str) -> None:
 
 def verify_lab_ready(rt: Runtime, topo: dict, lab: str) -> None:
     nodes = topo.get("nodes", []) or []
+    require_evpn_bgp = bool((((topo.get("fabric") or {}).get("evpn") or {}).get("enabled")))
     for n in nodes:
         name = n.get("name")
         t = n.get("type")
@@ -1194,7 +1216,7 @@ def verify_lab_ready(rt: Runtime, topo: dict, lab: str) -> None:
             from netsim_tests import verify_fw_routed_ready
             verify_fw_routed_ready(rt, lab, name)
         elif t == "frr":
-            verify_frr_ready(rt, lab, name)
+            verify_frr_ready(rt, lab, name, require_evpn_bgp=require_evpn_bgp)
         elif t == "sonic-vm":
             verify_sonic_vm_ready(rt, lab, name)
 

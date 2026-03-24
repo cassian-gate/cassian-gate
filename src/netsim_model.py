@@ -1086,7 +1086,7 @@ def gen_frr_conf(node: dict, topo: dict) -> str:
     for l in node_links:
         cfg.append(f"interface {l['iface']}")
         if l["iface"] in access_ifaces:
-            cfg.append(" no ip address")
+            pass
         else:
             cfg.append(f" ip address {l['ip']}")
         cfg.append("!")
@@ -1110,7 +1110,6 @@ def gen_frr_conf(node: dict, topo: dict) -> str:
         cfg.append(f" bgp router-id {rid}")
         cfg.append(" no bgp ebgp-requires-policy")
         cfg.append(" no bgp default ipv4-unicast")
-        cfg.append(" bgp retain route-target all")
         cfg.append(" neighbor EVPN peer-group")
         cfg.append(f" neighbor EVPN remote-as {evpn['asn']}")
         for peer_name, peer_ip, rr_client in peer_entries:
