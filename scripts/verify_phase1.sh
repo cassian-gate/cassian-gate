@@ -385,9 +385,10 @@ echo
 
 # ------------------------------------------------------------------------------
 echo "=== 4c) VM runtime precondition gate (env-aware) ==="
-# This is a deterministic PRECONDITION gate:
-# - If VM runtime is requested and the host is unsupported, validate must fail fast
-# - Container-only topologies must remain unaffected
+# Active handover contract:
+# - validate must remain environment-agnostic
+# - unsupported VM environments must be rejected at deploy/up/test
+# - supported hosts must still validate+gen successfully
 
 # Detect WSL2 deterministically (common signals)
 is_wsl2=0
@@ -405,44 +406,67 @@ if [ -e /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
   has_kvm=1
 fi
 
-# Capture validate output *and* true exit code (must not be masked by "|| true")
-set +e
-vm_out="$($NS validate topologies/vm-smoke.yaml 2>&1)"
-vm_rc=$?
-set -e
+# validate must pass regardless of host VM support
+$NS validate topologies/vm-smoke.yaml >/dev/null
 
 if [ "$is_wsl2" -eq 1 ]; then
-  if [ "$vm_rc" -eq 0 ]; then
-    echo "FAIL: expected VM validate to fail on WSL2, but it succeeded"
+  set +e
+  vm_up_out="$($NS up topologies/vm-smoke.yaml 2>&1)"
+  vm_up_rc=$?
+  vm_test_out="$($NS test topologies/vm-smoke.yaml 2>&1)"
+  vm_test_rc=$?
+  set -e
+
+  if [ "$vm_up_rc" -ne 1 ]; then
+    echo "FAIL: expected VM up to fail with exit 1 on WSL2"
+    echo "$vm_up_out"
     exit 1
   fi
-  echo "$vm_out" | grep -Fq "VM runtime is not supported on WSL2." || {
-    echo "FAIL: expected WSL2 VM runtime gate message"
-    echo "$vm_out"
+  echo "$vm_up_out" | grep -Fq "VM runtime is not supported on WSL2." || {
+    echo "FAIL: expected WSL2 VM runtime gate message during up"
+    echo "$vm_up_out"
     exit 1
   }
-  echo "OK: VM runtime gate triggers on WSL2"
+
+  if [ "$vm_test_rc" -ne 1 ]; then
+    echo "FAIL: expected VM test to fail with exit 1 on WSL2"
+    echo "$vm_test_out"
+    exit 1
+  fi
+  echo "$vm_test_out" | grep -Fq "Failure phase: DEPLOY" || {
+    echo "FAIL: expected DEPLOY failure phase during VM test on WSL2"
+    echo "$vm_test_out"
+    exit 1
+  }
+  echo "$vm_test_out" | grep -Fq "VM runtime is not supported on WSL2." || {
+    echo "FAIL: expected WSL2 VM runtime gate message during test"
+    echo "$vm_test_out"
+    exit 1
+  }
+  echo "OK: VM runtime gate triggers at deploy on WSL2"
 elif [ "$has_kvm" -eq 0 ]; then
-  if [ "$vm_rc" -eq 0 ]; then
-    echo "FAIL: expected VM validate to fail without /dev/kvm, but it succeeded"
+  set +e
+  vm_up_out="$($NS up topologies/vm-smoke.yaml 2>&1)"
+  vm_up_rc=$?
+  set -e
+
+  if [ "$vm_up_rc" -ne 1 ]; then
+    echo "FAIL: expected VM up to fail with exit 1 without /dev/kvm"
+    echo "$vm_up_out"
     exit 1
   fi
-  echo "$vm_out" | grep -Fq "VM runtime requires KVM (/dev/kvm)." || {
-    echo "FAIL: expected /dev/kvm VM runtime gate message"
-    echo "$vm_out"
+  echo "$vm_up_out" | grep -Fq "VM runtime requires KVM (/dev/kvm)." || {
+    echo "FAIL: expected /dev/kvm VM runtime gate message during up"
+    echo "$vm_up_out"
     exit 1
   }
-  echo "OK: VM runtime gate triggers without /dev/kvm"
+  echo "OK: VM runtime gate triggers at deploy without /dev/kvm"
 else
-  if [ "$vm_rc" -ne 0 ]; then
-    echo "FAIL: expected VM validate to pass on supported host, but it failed"
-    echo "$vm_out"
-    exit 1
-  fi
   $NS gen topologies/vm-smoke.yaml >/dev/null
   test -f labs/vm-smoke.clab.yaml
   grep -nE 'kind:[[:space:]]*sonic-vm|image:' labs/vm-smoke.clab.yaml >/dev/null
   echo "OK: VM validate + gen succeed on supported host"
+fi
 
   echo "=== 4d) VM SONiC outcomes scenario smoke (supported hosts only) ==="
 
@@ -454,33 +478,35 @@ else
   OUT_TOPO="topologies/vm-three-nodes-two-hosts-fw-outcomes.yaml"
   OUT_LAB="vm-three-nodes-two-hosts-fw-outcomes"
 
-  $NS validate "$OUT_TOPO" >/dev/null
-  $NS up "$OUT_TOPO" --reconfigure >/dev/null
+  if [ "$is_wsl2" -eq 1 ] || [ "$has_kvm" -eq 0 ]; then
+    echo "SKIP: VM SONiC outcomes scenario smoke requires supported VM host"
+  else
+    $NS validate "$OUT_TOPO" >/dev/null
+    $NS up "$OUT_TOPO" --reconfigure >/dev/null
 
-  # Prove the s1 node is using the SONiC VM image.
-  if ! docker inspect -f '{{.Config.Image}}' clab-${OUT_LAB}-s1 2>/dev/null | grep -Fq "local/sonic-vm"; then
-    echo "FAIL: outcomes lab s1 is not using local/sonic-vm image"
-    docker inspect -f '{{.Name}} {{.Config.Image}}' clab-${OUT_LAB}-s1 2>/dev/null || true
-    exit 1
+    # Prove the s1 node is using the SONiC VM image.
+    if ! docker inspect -f '{{.Config.Image}}' clab-${OUT_LAB}-s1 2>/dev/null | grep -Fq "local/sonic-vm"; then
+      echo "FAIL: outcomes lab s1 is not using local/sonic-vm image"
+      docker inspect -f '{{.Name}} {{.Config.Image}}' clab-${OUT_LAB}-s1 2>/dev/null || true
+      exit 1
+    fi
+
+    # Prove VM runtime is active (qemu or SONiC launch process running inside the container).
+    docker exec clab-${OUT_LAB}-s1 sh -lc 'ps -eo comm,args | grep -E "[q]emu-system|[q]emu-kvm|/launch\.py" >/dev/null' \
+      && echo "OK: outcomes s1 has a VM runtime process (SONiC runtime active)" \
+      || { echo "FAIL: outcomes s1 has no VM runtime process (expected SONiC VM runtime)"; docker exec clab-${OUT_LAB}-s1 sh -lc 'ps -eo comm,args | head -n 80 || true'; exit 1; }
+
+    $NS test "$OUT_LAB" >/dev/null
+
+    scen_list="$($NS test "$OUT_LAB" --list-scenarios 2>/dev/null || true)"
+    echo "$scen_list" | grep -Fq "vm_bounce_interface_s1_eth1_recover" || { echo "FAIL: missing expected scenario vm_bounce_interface_s1_eth1_recover"; echo "$scen_list"; exit 1; }
+    echo "$scen_list" | grep -Fq "vm_bounce_link_fw1_s1_recover"     || { echo "FAIL: missing expected scenario vm_bounce_link_fw1_s1_recover";     echo "$scen_list"; exit 1; }
+
+    $NS test "$OUT_LAB" --all-scenarios >/dev/null
+    $NS down "$OUT_LAB" >/dev/null
+
+    echo "OK: VM SONiC outcomes scenario smoke passed"
   fi
-
-  # Prove VM runtime is active (qemu or SONiC launch process running inside the container).
-  docker exec clab-${OUT_LAB}-s1 sh -lc 'ps -eo comm,args | grep -E "[q]emu-system|[q]emu-kvm|/launch\.py" >/dev/null' \
-    && echo "OK: outcomes s1 has a VM runtime process (SONiC runtime active)" \
-    || { echo "FAIL: outcomes s1 has no VM runtime process (expected SONiC VM runtime)"; docker exec clab-${OUT_LAB}-s1 sh -lc 'ps -eo comm,args | head -n 80 || true'; exit 1; }
-
-  $NS test "$OUT_LAB" >/dev/null
-
-  scen_list="$($NS test "$OUT_LAB" --list-scenarios 2>/dev/null || true)"
-  echo "$scen_list" | grep -Fq "vm_bounce_interface_s1_eth1_recover" || { echo "FAIL: missing expected scenario vm_bounce_interface_s1_eth1_recover"; echo "$scen_list"; exit 1; }
-  echo "$scen_list" | grep -Fq "vm_bounce_link_fw1_s1_recover"     || { echo "FAIL: missing expected scenario vm_bounce_link_fw1_s1_recover";     echo "$scen_list"; exit 1; }
-
-  $NS test "$OUT_LAB" --all-scenarios >/dev/null
-  $NS down "$OUT_LAB" >/dev/null
-
-  echo "OK: VM SONiC outcomes scenario smoke passed"
-
-fi
 echo
 
 # ------------------------------------------------------------------------------
