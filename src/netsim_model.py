@@ -707,16 +707,6 @@ def ensure_valid_topology(topo: dict) -> None:
     # - Topology MUST NOT encode routing mechanics (protocols/metrics/policy).
     # - FRR nodes MAY include metadata like asn/router_id, but these do not imply routing.
     # - If present, validate types deterministically.
-    # VM runtime availability gate (fail-fast before deploy).
-    # If any node requests runtime: vm, enforce deterministic host requirements now.
-    vm_nodes = [
-        n for n in topo.get("nodes", [])
-        if isinstance(n, dict) and (str(n.get("runtime") or "").strip().lower() == "vm")
-    ]
-    if vm_nodes:
-        first_vm = vm_nodes[0]
-        first_name = str(first_vm.get("name") or "<unnamed>").strip()
-        assert_vm_runtime_supported(first_name)
 
     for i, n in enumerate(topo["nodes"], start=1):
         if not isinstance(n, dict):
