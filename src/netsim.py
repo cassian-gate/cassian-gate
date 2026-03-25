@@ -8866,6 +8866,11 @@ def cmd_replay(args: argparse.Namespace) -> None:
     src_doc2["name"] = replay_name
     write_file(tmp_resolved, yaml.safe_dump(src_doc2, sort_keys=False))
 
+    print("Authority: RUN (non-authoritative)")
+    print("Mode: replay (exploration artifacts)")
+    print("Replay Context: non-gate replay keeps runtime up for inspection")
+    print("")
+
     cmd_up(argparse.Namespace(topology=str(tmp_resolved), reconfigure=True, _from_gate=False))
 
 def cmd_down(args: argparse.Namespace) -> None:

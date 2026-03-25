@@ -150,11 +150,14 @@ No routing or connectivity validation occurred.
 
 ---
 
-## netsim replay — Re-run a previous test deterministically
+````md
+## netsim replay — Deterministic replay of prior artifacts
 
-Replay re-executes a previous ai-netsim run using the **exact artifacts** that produced the original result.
+Replay re-executes a previous ai-netsim run from previously generated artifacts.
 
-This verifies that the result is **reproducible and deterministic**.
+Replay is a **reproduction/analysis surface**, not a new authority path.
+
+Authority is preserved from the replayed source context.
 
 ### Inputs
 
@@ -163,64 +166,96 @@ Replay consumes artifacts from a previous run:
 ```text
 topology.resolved.yaml
 results.json
-```
+````
 
-These artifacts are treated as **authoritative inputs**.
+These are **generated replay inputs**.
 
-### Example
+Important boundary:
 
-Run a test:
+* artifact reuse for replay does **not** make replay a new source of authority
+* shared artifact shape does **not** imply shared authority
+* authority still depends on the replay mode and source context
+
+### Gate replay (authoritative context preserved)
+
+Replay a prior authoritative gate run:
 
 ```bash
-netsim test topologies/rc_cold_baseline.yaml
+netsim replay labs/clab-<lab> --gate
 ```
 
-Artifacts are created:
+This preserves **gate / authoritative** context.
+
+Current operator-visible behavior includes authoritative gate-style output such as:
 
 ```text
-labs/clab-rc-cold-baseline/
+MODE: GATE | AUTHORITATIVE: YES | CLEAN-STATE: YES
+Authority: GATE (authoritative)
 ```
 
-Replay the same run:
+Use this when you want to:
+
+* reproduce a prior gate result
+* verify deterministic gate behavior
+* confirm replay-stable authoritative outcomes
+
+You can also verify deterministic result equivalence:
 
 ```bash
-netsim replay labs/clab-rc-cold-baseline --gate
+netsim replay labs/clab-<lab> --gate --verify-results
 ```
 
-ai-netsim will:
-
-1. Load the resolved topology from the artifacts
-2. Create a temporary replay lab
-3. Re-run the full lifecycle
-
-```text
-GENERATE → DEPLOY → PROVISION → TEST → COLLECT → DESTROY
-```
-
-### Verify deterministic results
-
-You can also confirm the replay produces identical results:
-
-```bash
-netsim replay labs/clab-rc-cold-baseline --gate --verify-results
-```
-
-If the results differ, replay exits with:
+If the replayed verdict core differs from the source result, replay exits with:
 
 ```text
 exit code: 1
 ```
 
+### Non-gate replay (non-authoritative context preserved)
+
+Replay without `--gate` keeps replay in a **non-authoritative** exploration context.
+
+Example:
+
+```bash
+netsim replay labs/clab-<lab>
+```
+
+Current operator-visible behavior includes non-authoritative replay labeling such as:
+
+```text
+Authority: RUN (non-authoritative)
+Mode: replay (exploration artifacts)
+```
+
+This path is useful for:
+
+* inspection
+* investigation
+* iterative debugging
+* bringing replayed runtime up for manual follow-up commands
+
+This does **not** upgrade exploration artifacts into gate proof.
+
 ### When to use replay
 
-Replay is useful when you want to confirm that a result is **not accidental**.
+Use replay when you want deterministic reproduction of a prior run.
 
-Common scenarios:
+Typical uses:
 
-- validating CI pipeline determinism
-- verifying network change simulations
-- reproducing previous test results
-- debugging unexpected behavior
+* reproducing a prior authoritative gate result
+* replaying a prior exploration run for investigation
+* checking deterministic stability
+* debugging unexpected behavior from existing artifacts
+
+### Important boundary
+
+Replay:
+
+* preserves prior context
+* does not create a parallel authority model
+* does not make exploration authoritative
+* does not change verdict/exit semantics by itself
 
 ---
 
