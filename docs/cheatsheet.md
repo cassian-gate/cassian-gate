@@ -1605,6 +1605,14 @@ Directory layout:
 
 ```text
 <dir>/
+  <node-name>/
+    <config-files>
+```
+
+Currently proven supported examples:
+
+```text
+<dir>/
   frr/<node>.conf
   nft/<node>.nft
 ```
@@ -1615,6 +1623,36 @@ Rules:
 - no merge
 - atomic apply
 - failure aborts gate
+- candidate config is non-authoritative input only
+- verdicts still come only from tests / scenarios / invariants
+
+Important current boundary for vendor NOS VM nodes:
+
+- candidate-config for supported `sonic-vm` / NOS VM nodes is **not currently a supported candidate-config surface**
+- unsupported or undefined NOS VM candidate-config input is rejected explicitly
+- current truthful behavior for unsupported NOS VM candidate-config input is:
+  - misuse / invalid candidate-config surface
+  - exit code `2`
+
+Example of current unsupported behavior:
+
+```bash
+netsim test topologies/vendor_nos_smoke.yaml \
+  --candidate-config tests/fixtures/vendor-nos-cand-neg-unsupported
+```
+
+Expected outcome:
+
+```text
+ERROR: Candidate config directory structure invalid: <dir>
+exit code: 2
+```
+
+Scope boundary:
+
+- candidate config support is currently proven only for the existing supported candidate-apply surfaces
+- this does not currently establish candidate-config support for `sonic-vm` or other vendor NOS VM node types
+- any future NOS VM candidate-config support requires an explicit contract surface and proof
 
 ---
 
@@ -1953,6 +1991,7 @@ It does **not** currently prove:
 - actual traffic path usage
 - runtime failure propagation
 - business severity
+
 ---
 
 # 1️⃣7️⃣ Common Operator Tasks
@@ -2056,6 +2095,7 @@ Replay the same grey-failure scenario deterministically:
 ```bash
 netsim replay labs/clab-grey-failure-direct-pass --gate --verify-results
 ```
+
 Run a blast radius proof:
 
 ```bash
