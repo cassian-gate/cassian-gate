@@ -144,40 +144,104 @@ awk '
 
 echo
 
-echo "=== AI) Smoke: advisory headers + strict-inputs exit code ==="
+echo "=== AI) Smoke: unified netsim ai surface ==="
 
-./src/netsim.py ai coach >/dev/null
-echo "OK: ai coach runs"
-
-./src/netsim.py ai coach --bundle \
-  | jq -r '.schema_version,.command,.authority,.non_authoritative' \
-  | paste -sd' ' - \
-  | grep -Fxq "1 coach advisory true" \
-  && echo "OK: ai coach bundle headers" \
-  || { echo "FAIL: ai coach bundle headers"; exit 1; }
-
-# Review bundle headers (topology file path)
-if [ ! -f "$TOPO" ]; then
-  echo "WARN: topology not found for review bundle check: $TOPO (skipping review bundle smoke)"
-else
-  ./src/netsim.py ai review "$TOPO" --bundle \
-    | jq -r '.schema_version,.command,.authority,.non_authoritative' \
-    | paste -sd' ' - \
-    | grep -Fxq "1 review advisory true" \
-    && echo "OK: ai review bundle headers" \
-    || { echo "FAIL: ai review bundle headers"; exit 1; }
+echo "INFO: produce deterministic artifact context"
+if ! python3 src/netsim.py test topologies/three-frr-two-hosts-fw-routed.yaml >/dev/null; then
+  echo "FAIL: prerequisite test run for ai verification failed"
+  exit 1
 fi
 
-# explain strict-inputs must exit 2
+tmp="$(mktemp)"
+if ! python3 src/netsim.py ai --artifacts labs/clab-three-frr-two-hosts-fw-routed "why did this fail" >"$tmp"; then
+  echo "FAIL: unified ai --artifacts command failed"
+  rm -f "$tmp"
+  exit 1
+fi
+if ! grep -q '^Authority: Advisory Only$' "$tmp"; then
+  echo "FAIL: unified ai --artifacts missing advisory authority line"
+  rm -f "$tmp"
+  exit 1
+fi
+if ! grep -q '^Execution Impact: None$' "$tmp"; then
+  echo "FAIL: unified ai --artifacts missing execution impact line"
+  rm -f "$tmp"
+  exit 1
+fi
+if ! grep -q '^Context Source: explicit_artifacts$' "$tmp"; then
+  echo "FAIL: unified ai --artifacts missing explicit_artifacts context"
+  rm -f "$tmp"
+  exit 1
+fi
+echo "OK: unified ai --artifacts advisory/context lines"
+rm -f "$tmp"
+
+tmp="$(mktemp)"
+if ! python3 src/netsim.py ai --lab three-frr-two-hosts-fw-routed "why did this fail" >"$tmp"; then
+  echo "FAIL: unified ai --lab command failed"
+  rm -f "$tmp"
+  exit 1
+fi
+if ! grep -q '^Context Source: explicit_lab$' "$tmp"; then
+  echo "FAIL: unified ai --lab missing explicit_lab context"
+  rm -f "$tmp"
+  exit 1
+fi
+echo "OK: unified ai --lab context line"
+rm -f "$tmp"
+
+tmp="$(mktemp)"
+if ! python3 src/netsim.py ai "why did this fail" >"$tmp"; then
+  echo "FAIL: unified ai common path failed"
+  rm -f "$tmp"
+  exit 1
+fi
+if ! grep -q '^Context Source: most_recent_run$' "$tmp"; then
+  echo "FAIL: unified ai common path missing most_recent_run context"
+  rm -f "$tmp"
+  exit 1
+fi
+echo "OK: unified ai common path context line"
+rm -f "$tmp"
+
 set +e
-./src/netsim.py ai explain not_a_real_lab --strict-inputs >/dev/null 2>&1
+python3 src/netsim.py ai "modify this topology to fix the problem" >/tmp/verify_ai_blocked.out 2>&1
 rc=$?
 set -e
 if [ "$rc" -ne 2 ]; then
-  echo "FAIL: ai explain strict-inputs expected exit 2, got $rc"
+  echo "FAIL: blocked out-of-scope request expected exit 2, got $rc"
+  rm -f /tmp/verify_ai_blocked.out
   exit 1
 fi
-echo "OK: ai explain strict-inputs exit 2"
+if ! grep -q 'AI request blocked (advisory scope exceeded)' /tmp/verify_ai_blocked.out; then
+  echo "FAIL: blocked out-of-scope request missing scope-block message"
+  rm -f /tmp/verify_ai_blocked.out
+  exit 1
+fi
+rm -f /tmp/verify_ai_blocked.out
+echo "OK: blocked out-of-scope request"
+
+set +e
+python3 src/netsim.py ai --artifacts labs/does-not-exist "why did this fail" >/tmp/verify_ai_missing.out 2>&1
+rc=$?
+set -e
+if [ "$rc" -ne 2 ]; then
+  echo "FAIL: missing-artifact refusal expected exit 2, got $rc"
+  rm -f /tmp/verify_ai_missing.out
+  exit 1
+fi
+if ! grep -q 'Required artifacts:' /tmp/verify_ai_missing.out; then
+  echo "FAIL: missing-artifact refusal missing required artifacts text"
+  rm -f /tmp/verify_ai_missing.out
+  exit 1
+fi
+if ! grep -q 'results.json' /tmp/verify_ai_missing.out; then
+  echo "FAIL: missing-artifact refusal missing results.json reference"
+  rm -f /tmp/verify_ai_missing.out
+  exit 1
+fi
+rm -f /tmp/verify_ai_missing.out
+echo "OK: deterministic missing-artifact refusal"
 echo
 
 echo "=== AI) Key redaction (must not leak API key) ==="
@@ -190,7 +254,7 @@ echo "=== AI) Key redaction (must not leak API key) ==="
   export AI_NETSIM_AI_API_KEY="$FAKE_KEY"
   export AI_NETSIM_AI_MODEL="${AI_NETSIM_AI_MODEL:-gpt-4.1-mini}"
 
-  ai_err="$(./src/netsim.py ai explain "$LAB" --online --format json | jq -r '.ai_error' || true)"
+  ai_err="$(./src/netsim.py ai --lab "$LAB" "why did this fail" --format json | jq -r '.ai_error' || true)"
 
   echo "$ai_err" | grep -Fq "$FAKE_KEY" \
     && { echo "FAIL: ai_error leaked raw API key"; echo "$ai_err"; exit 1; } \
@@ -206,47 +270,38 @@ echo "=== AI) Key redaction (must not leak API key) ==="
 )
 
 echo
-echo "=== AI) Golden fixtures (bundle drift guardrail) ==="
+echo "=== AI) Unified surface stability + non-AI non-regression ==="
 
-test -s tests/ai/fixtures/explain.bundle.json || { echo "FAIL: missing tests/ai/fixtures/explain.bundle.json"; exit 1; }
-test -s tests/ai/fixtures/review.bundle.json   || { echo "FAIL: missing tests/ai/fixtures/review.bundle.json"; exit 1; }
-test -s tests/ai/fixtures/coach.bundle.json    || { echo "FAIL: missing tests/ai/fixtures/coach.bundle.json"; exit 1; }
-
-tmp_explain_golden="$(mktemp)"; tmps+=("$tmp_explain_golden")
-tmp_explain_now="$(mktemp)";    tmps+=("$tmp_explain_now")
-tmp_review_golden="$(mktemp)";  tmps+=("$tmp_review_golden")
-tmp_review_now="$(mktemp)";     tmps+=("$tmp_review_now")
-tmp_coach_golden="$(mktemp)";   tmps+=("$tmp_coach_golden")
-tmp_coach_now="$(mktemp)";      tmps+=("$tmp_coach_now")
-
-jq -S . tests/ai/fixtures/explain.bundle.json > "$tmp_explain_golden"
-./src/netsim.py ai explain "$LAB" --bundle | jq -S . > "$tmp_explain_now"
-diff -u "$tmp_explain_golden" "$tmp_explain_now" \
-  && echo "OK: ai explain bundle matches golden" \
-  || { echo "FAIL: ai explain bundle drift"; exit 1; }
-
-jq -S . tests/ai/fixtures/review.bundle.json > "$tmp_review_golden"
-if [ -f "$TOPO" ]; then
-  ./src/netsim.py ai review "$TOPO" --bundle | jq -S . > "$tmp_review_now"
-  diff -u "$tmp_review_golden" "$tmp_review_now" \
-    && echo "OK: ai review bundle matches golden" \
-    || { echo "FAIL: ai review bundle drift"; exit 1; }
-else
-  echo "WARN: skipping ai review golden diff (missing $TOPO)"
+tmp1="$(mktemp)"
+tmp2="$(mktemp)"
+if ! python3 src/netsim.py ai --artifacts labs/clab-three-frr-two-hosts-fw-routed "why did this fail" >"$tmp1"; then
+  echo "FAIL: first unified ai stability run failed"
+  rm -f "$tmp1" "$tmp2"
+  exit 1
 fi
+if ! python3 src/netsim.py ai --artifacts labs/clab-three-frr-two-hosts-fw-routed "why did this fail" >"$tmp2"; then
+  echo "FAIL: second unified ai stability run failed"
+  rm -f "$tmp1" "$tmp2"
+  exit 1
+fi
+if ! diff -u "$tmp1" "$tmp2" >/dev/null; then
+  echo "FAIL: unified ai output drift across identical invocations"
+  rm -f "$tmp1" "$tmp2"
+  exit 1
+fi
+rm -f "$tmp1" "$tmp2"
+echo "OK: unified ai stable across repeated identical invocations"
 
-jq -S . tests/ai/fixtures/coach.bundle.json > "$tmp_coach_golden"
-./src/netsim.py ai coach --bundle | jq -S . > "$tmp_coach_now"
-diff -u "$tmp_coach_golden" "$tmp_coach_now" \
-  && echo "OK: ai coach bundle matches golden" \
-  || { echo "FAIL: ai coach bundle drift"; exit 1; }
-
-out="$(./src/netsim.py ai coach 2>/dev/null || true)"
-echo "$out" | grep -Eq '^[[:space:]]*(tests:|scenarios:|nodes:|links:)[[:space:]]*$' \
-  && { echo "FAIL: ai coach emitted YAML-like section header (v1 forbids paste-ready YAML)"; exit 1; } \
-  || echo "OK: ai coach does not emit YAML blocks"
-
-echo
+echo "=== AI) Non-AI command non-regression smoke ==="
+set +e
+python3 src/netsim.py validate topologies/three-frr-two-hosts-fw-routed.yaml >/dev/null 2>&1
+rc=$?
+set -e
+if [ "$rc" -ne 0 ]; then
+  echo "FAIL: validate non-regression expected exit 0, got $rc"
+  exit 1
+fi
+echo "OK: validate non-regression"
 echo "=== AI) Optional: online structured-output schema (explicit opt-in) ==="
 
 if [ "${AI_NETSIM_VERIFY_ONLINE_OK:-0}" = "1" ]; then
@@ -259,7 +314,7 @@ if [ "${AI_NETSIM_VERIFY_ONLINE_OK:-0}" = "1" ]; then
     exit 1
   fi
 
-  j="$(AI_NETSIM_AI_PROVIDER=openai ./src/netsim.py ai explain "$LAB" --online --format json)"
+  j="$(AI_NETSIM_AI_PROVIDER=openai ./src/netsim.py ai --lab "$LAB" "why did this fail" --format json)"
   status="$(echo "$j" | jq -r '.ai_status')"
   if [ "$status" != "ok" ]; then
     skip_or_fail_invalid_key "online check" "$j"
@@ -307,7 +362,7 @@ if [ "${AI_NETSIM_VERIFY_ONLINE_OK:-0}" = "1" ] && [ "${AI_NETSIM_VERIFY_SANITIZ
     exit 1
   fi
 
-  j2="$(AI_NETSIM_AI_PROVIDER=openai ./src/netsim.py ai explain "$LAB" --online --format json)"
+  j2="$(AI_NETSIM_AI_PROVIDER=openai ./src/netsim.py ai --lab "$LAB" "why did this fail" --format json)"
   status2="$(echo "$j2" | jq -r '.ai_status')"
   if [ "$status2" != "ok" ]; then
     skip_or_fail_invalid_key "fixture check" "$j2"
