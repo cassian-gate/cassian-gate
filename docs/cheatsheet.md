@@ -80,10 +80,18 @@ netsim adapt ansible
 ### AI Assistance (optional / advisory only)
 
 ```bash
-netsim ai explain
-netsim ai review
-netsim ai coach
-```
+netsim ai "why did this fail"
+netsim ai --lab <lab> "why did this fail"
+netsim ai --artifacts <dir> "why did this fail"
+````
+
+AI is **advisory only** and **artifact-only**.
+
+It never affects:
+
+* execution
+* verdicts
+* authoritative command behavior
 
 AI **never affects execution or verdicts**.
 
@@ -1787,33 +1795,65 @@ It never affects:
 
 ---
 
-## Explain Failures
+````md
+## Unified AI Assistance
+
+Use the same conversational entrypoint for failure explanation, coverage review, topology review, scenario interpretation, invariant explanation, and blast-radius explanation.
+
+### Common human path
 
 ```bash
-netsim ai explain <target>
-```
+netsim ai "why did this fail"
+````
 
-Explains failure causes using artifacts.
+Uses the most recent valid artifact context when available.
 
----
-
-## Review Test Coverage
+### Explicit lab path
 
 ```bash
-netsim ai review <topology.yaml>
+netsim ai --lab <lab> "why did this fail"
 ```
 
-Suggests missing tests.
+Uses the specified lab when it contains the required artifacts.
 
----
-
-## Coaching
+### Explicit artifacts path
 
 ```bash
-netsim ai coach
+netsim ai --artifacts <dir> "why did this fail"
 ```
 
-Provides general guidance.
+This is the most explicit override and is useful for proof/debug workflows.
+
+### Deterministic context selection
+
+Context selection priority is:
+
+1. explicit artifacts
+2. explicit lab
+3. most recent valid artifact context
+
+Required artifacts:
+
+```text
+topology.resolved.yaml
+results.json
+```
+
+If the required artifacts are missing, `netsim ai` refuses with a deterministic advisory error.
+
+### Important boundary
+
+`netsim ai`:
+
+* reads artifacts only
+* does not execute lifecycle actions
+* does not modify topology, tests, scenarios, or configs
+* does not affect verdicts
+* remains advisory-only
+
+```
+```
+
 
 ---
 

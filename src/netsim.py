@@ -11715,221 +11715,394 @@ def _ai_review_change_sections(bundle: dict[str, Any]) -> dict[str, Any]:
 
 def cmd_ai_review(args) -> None:
     """
-    Review topology-only (no execution). Deterministic coverage sketch + bounded snippets.
-    Exit codes: 0 success, 2 usage error.
+    Unified conversational ai handler (advisory-only, artifact-only).
+
+    Exit codes:
+      0 = successful advisory response
+      1 = internal ai interface failure after valid invocation context
+      2 = misuse / blocked / missing-artifact / ambiguous-context error
     """
     from pathlib import Path
+    import json
     import yaml
 
-    topo_path = Path(args.topology)
-    if not topo_path.exists():
-        print(f"ERROR: topology not found: {topo_path}", file=sys.stderr)
-        sys.exit(2)
-
-    with topo_path.open("r", encoding="utf-8") as f:
-        topo = yaml.safe_load(f) or {}
-
-    nodes = topo.get("nodes") or []
-    tests = topo.get("tests") or []
-    scenarios = topo.get("scenarios") or []
-
-    max_items = max(0, int(getattr(args, "max_items", 50) or 50))
-
-    # ---- Deterministic inventory ----
-    node_names: list[str] = []
-    node_types: dict[str, str] = {}
-    for n in nodes:
-        if isinstance(n, dict):
-            nm = n.get("name")
-            tp = n.get("type")
-            if isinstance(nm, str) and nm.strip():
-                nm2 = nm.strip()
-                node_names.append(nm2)
-                if isinstance(tp, str) and tp.strip():
-                    node_types[nm2] = tp.strip()
-    node_names = sorted(set(node_names))
-
-    frr_nodes = sorted([n for n in node_names if node_types.get(n) == "frr"])
-    host_nodes = sorted([n for n in node_names if node_types.get(n) == "host"])
-    fw_nodes = sorted([n for n in node_names if node_types.get(n) in ("fw", "fw-routed", "firewall")])
-
-    test_names: list[str] = []
-    covered_dst: set[str] = set()
-    kinds: set[str] = set()
-
-    for t in (tests or []):
-        if not isinstance(t, dict):
-            continue
-        nm = t.get("name")
-        if isinstance(nm, str) and nm.strip():
-            test_names.append(nm.strip())
-
-        kd = t.get("type") or t.get("kind")
-        if isinstance(kd, str) and kd.strip():
-            kinds.add(kd.strip())
-
-        if "to" in t and isinstance(t.get("to"), str) and t.get("to").strip():
-            covered_dst.add(t.get("to").strip())
-        if "to_ip" in t and isinstance(t.get("to_ip"), str) and t.get("to_ip").strip():
-            covered_dst.add(t.get("to_ip").strip())
-
-    test_names = sorted(set(test_names))
-    kinds = set(sorted(kinds))
-
-    has_faults = False
-    has_postfault_revalidate = False
-    scenario_ids: list[str] = []
-    for s in (scenarios or []):
-        if not isinstance(s, dict):
-            continue
-        sid = s.get("id")
-        if isinstance(sid, str) and sid.strip():
-            scenario_ids.append(sid.strip())
-
-        for st in (s.get("steps") or []):
-            if not isinstance(st, dict):
-                continue
-            if "fault" in st:
-                has_faults = True
-            if "run_tests" in st:
-                has_postfault_revalidate = True
-
-    scenario_ids = sorted(set(scenario_ids))
-
-    gaps: list[dict[str, Any]] = []
-    for nn in node_names:
-        if nn not in covered_dst:
-            gaps.append({"type": "node_uncovered_as_dst", "node": nn})
-
-    if fw_nodes:
-        gaps.append({"type": "firewall_present_consider_negative_tests", "nodes": fw_nodes})
-
-    if has_faults and not has_postfault_revalidate:
-        gaps.append(
-            {
-                "type": "scenario_faults_without_postfault_revalidation",
-                "hint": "Add a run_tests step after faults",
-            }
+    def _blocked_message() -> str:
+        return (
+            "AI request blocked (advisory scope exceeded)\n\n"
+            "The assistant cannot create or modify topology or tests."
         )
 
-    evpn_present = False
-    if isinstance(topo.get("evpn"), dict):
-        evpn_present = True
-    else:
+    def _question_text() -> str:
+        parts = list(getattr(args, "question", []) or [])
+        return " ".join([str(x) for x in parts]).strip()
+
+    def _route_question(question: str) -> str | None:
+        q = (question or "").strip().lower()
+        if not q:
+            return None
+        if "blast radius" in q:
+            return "blast_radius_explain"
+        if "scenario" in q and ("validate" in q or "what did" in q or "explain" in q):
+            return "scenario_interpret"
+        if "invariant" in q:
+            return "invariant_explain"
+        if "coverage" in q or "miss any coverage" in q or "missing coverage" in q:
+            return "coverage_review"
+        if "improve this topology" in q or ("improve" in q and "topology" in q):
+            return "topology_review"
+        if "why did this fail" in q or "what caused this failure" in q or "explain this failure" in q:
+            return "failure_explain"
+        return None
+
+    def _is_out_of_scope(question: str) -> bool:
+        q = (question or "").strip().lower()
+        if not q:
+            return False
+        mutate_words = ("modify", "change", "create", "add", "rewrite", "generate", "update", "fix")
+        scope_words = ("topology", "test", "tests", "scenario", "scenarios", "config", "configs", "configuration")
+        execute_words = ("run ", "execute ", "deploy", "provision", "destroy", "replay", "test ")
+        if any(w in q for w in execute_words):
+            return True
+        return any(w in q for w in mutate_words) and any(w in q for w in scope_words)
+
+    def _latest_artifacts_dir() -> tuple[Path | None, str]:
+        labs_dir = Path("labs")
+        if not labs_dir.exists() or not labs_dir.is_dir():
+            return None, "most_recent_run"
+        candidates: list[tuple[float, str, Path]] = []
+        for child in sorted(labs_dir.iterdir(), key=lambda p: p.name):
+            if not child.is_dir() or not child.name.startswith("clab-"):
+                continue
+            rp = child / "results.json"
+            tp = child / "topology.resolved.yaml"
+            if not rp.exists() or not tp.exists():
+                continue
+            try:
+                score = max(rp.stat().st_mtime, tp.stat().st_mtime)
+            except Exception:
+                score = 0.0
+            candidates.append((score, child.name, child))
+        if not candidates:
+            return None, "most_recent_run"
+        candidates = sorted(candidates, key=lambda x: (x[0], x[1]))
+        return candidates[-1][2], "most_recent_run"
+
+    def _resolve_context_dir() -> tuple[Path | None, str]:
+        artifacts = getattr(args, "artifacts", None)
+        lab = getattr(args, "lab", None)
+        latest_dir, latest_source = _latest_artifacts_dir()
+        if artifacts:
+            return Path(str(artifacts)), "explicit_artifacts"
+        if lab:
+            lab_dir = Path("labs") / f"clab-{str(lab).strip()}"
+            rp = lab_dir / "results.json"
+            tp = lab_dir / "topology.resolved.yaml"
+            if rp.exists() and tp.exists():
+                return lab_dir, "explicit_lab"
+            if latest_dir is not None:
+                return latest_dir, "most_recent_run"
+            return lab_dir, "explicit_lab"
+        if latest_dir is not None:
+            return latest_dir, latest_source
+        return None, "most_recent_run"
+
+    def _build_banner(context_dir: Path, context_source: str, module_name: str, loaded: list[str]) -> list[str]:
+        return [
+            "AI Assistant (Advisory Mode)",
+            "Authority: Advisory Only",
+            "Execution Impact: None",
+            f"Context Source: {context_source}",
+            f"Artifacts Dir: {context_dir}",
+            f"Artifacts Loaded: {', '.join(loaded)}",
+            f"Module: {module_name}",
+        ]
+
+    def _load_required_artifacts(context_dir: Path) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
+        resolved_path = context_dir / "topology.resolved.yaml"
+        results_path = context_dir / "results.json"
+        missing: list[str] = []
+        if not resolved_path.exists():
+            missing.append("topology.resolved.yaml")
+        if not results_path.exists():
+            missing.append("results.json")
+        if missing:
+            print(
+                "ERROR: AI Assistant cannot operate without artifacts.\n\n"
+                "Required artifacts:\n"
+                "  topology.resolved.yaml\n"
+                "  results.json\n\n"
+                "Run:\n"
+                "netsim test <topology>",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        with resolved_path.open("r", encoding="utf-8") as f:
+            topo = yaml.safe_load(f) or {}
+        with results_path.open("r", encoding="utf-8") as f:
+            results = json.load(f) or {}
+        return topo, results, ["topology.resolved.yaml", "results.json"]
+
+    def _inventory(topo: dict[str, Any]) -> dict[str, Any]:
+        nodes = topo.get("nodes") or []
+        tests = topo.get("tests") or []
+        scenarios = topo.get("scenarios") or []
+        node_names: list[str] = []
+        node_types: dict[str, str] = {}
         for n in nodes:
-            if isinstance(n, dict) and "evpn" in n:
-                evpn_present = True
-                break
-    if evpn_present:
-        gaps.append({"type": "evpn_present_add_east_west_tests", "hint": "Add host-to-host reachability tests across VNIs/VLANs"})
-
-    gaps = sorted(gaps, key=lambda g: (str(g.get("type") or ""), json.dumps(g, sort_keys=True)))
-
-    # snippets
-    snippets: list[dict[str, str]] = []
-    src_host = host_nodes[0] if host_nodes else (node_names[0] if node_names else "src")
-    dst_host = host_nodes[1] if len(host_nodes) > 1 else (host_nodes[0] if host_nodes else (node_names[0] if node_names else "dst"))
-
-    snippets.append(
-        {
-            "title": "Add steady-state ping reachability test (IP target)",
-            "language": "yaml",
-            "snippet": "\n".join(
-                [
-                    "tests:",
-                    "  - name: ping_host_to_host",
-                    "    type: ping",
-                    f"    from: {src_host}",
-                    "    to_ip: 192.0.2.1  # replace with real destination IP",
-                ]
-            ),
-        }
-    )
-
-    snippets.append(
-        {
-            "title": "Add steady-state TCP port test (IP target)",
-            "language": "yaml",
-            "snippet": "\n".join(
-                [
-                    "tests:",
-                    "  - name: tcp_service_reachability",
-                    "    type: tcp",
-                    f"    from: {src_host}",
-                    "    to_ip: 192.0.2.1  # replace with real destination IP",
-                    "    port: 443",
-                ]
-            ),
-        }
-    )
-
-    snippets.append(
-        {
-            "title": "Add post-fault revalidation in a scenario (run_tests after faults)",
-            "language": "yaml",
-            "snippet": "\n".join(
-                [
-                    "scenarios:",
-                    "  - id: example_failover_check",
-                    "    steps:",
-                    "      - fault:",
-                    "          interface_down:",
-                    "            node: r1",
-                    "            interface: eth1",
-                    "      - wait_for:",
-                    "          type: ping",
-                    f"          from: {src_host}",
-                    f"          to: {dst_host}  # or an IP literal",
-                    "          expect: pass",
-                    "          timeout: 30",
-                    "      - run_tests:",
-                    "          include: all  # syntactic sugar expands deterministically",
-                ]
-            ),
-        }
-    )
-
-    snippets = snippets[:max_items]
-
-    adapter_paths = list(getattr(args, "adapter", None) or [])
-    adapters = _ai_load_adapters(adapter_paths, command_name="review") if adapter_paths else {
-        "authority": "advisory",
-        "count": 0,
-        "inputs": [],
-    }
-
-    bundle = {
-        "schema_version": "1",
-        **_ai_advisory_headers(),
-        "command": "review",
-        "adapters": adapters,
-        "topology": str(topo_path),
-        "counts": {"nodes": len(nodes), "tests": len(tests), "scenarios": len(scenarios)},
-        "inventory": {
+            if isinstance(n, dict):
+                nm = str(n.get("name") or "").strip()
+                tp = str(n.get("type") or "").strip()
+                if nm:
+                    node_names.append(nm)
+                    if tp:
+                        node_types[nm] = tp
+        node_names = sorted(set(node_names))
+        return {
             "node_names": node_names,
             "node_types": {k: node_types[k] for k in sorted(node_types)},
-            "frr_nodes": frr_nodes,
-            "host_nodes": host_nodes,
-            "fw_nodes": fw_nodes,
-            "scenario_ids": scenario_ids,
-            "test_names": test_names,
-            "test_kinds": sorted(list(kinds)),
-            "has_faults": has_faults,
-            "has_postfault_revalidate": has_postfault_revalidate,
-        },
-        "gaps": gaps[:max_items],
-        "suggested_snippets": snippets,
-        "non_goals": [
-            "No lab execution from ai review.",
-            "No protocol sprawl or feature-parity assumptions.",
-            "Suggestions are advisory-only; tests/scenarios remain authoritative.",
-        ],
-    }
+            "tests_count": len(tests),
+            "scenarios_count": len(scenarios),
+            "hosts": sorted([n for n in node_names if node_types.get(n) == "host"]),
+            "routers": sorted([n for n in node_names if node_types.get(n) in ("frr", "linux", "sonic-vm")]),
+        }
 
-    bundle["change_context"] = _ai_cc_build_change_context(topo, base_dir=topo_path.parent)
-    bundle["change_review"] = _ai_review_change_sections(bundle)
+    def _failed_tests(results: dict[str, Any]) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for t in list(results.get("tests") or []):
+            if isinstance(t, dict) and str(t.get("verdict") or "").lower() == "fail":
+                out.append(
+                    {
+                        "name": str(t.get("name") or ""),
+                        "kind": str(t.get("kind") or t.get("type") or ""),
+                        "reason": str(t.get("reason") or ""),
+                    }
+                )
+        return sorted(out, key=lambda x: (x["name"], x["kind"], x["reason"]))
 
-    _ai_finalize_and_emit("review", bundle, args)
+    def _failed_scenario_steps(results: dict[str, Any]) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for s in list(results.get("scenarios") or []):
+            if not isinstance(s, dict):
+                continue
+            sid = str(s.get("id") or "")
+            for st in list(s.get("steps") or []):
+                if isinstance(st, dict) and str(st.get("verdict") or "").lower() == "fail":
+                    step_v = st.get("step")
+                    step_i = step_v if isinstance(step_v, int) else 10**9
+                    out.append(
+                        {
+                            "scenario_id": sid,
+                            "step": step_i,
+                            "type": str(st.get("type") or ""),
+                            "error": str(st.get("error") or ""),
+                        }
+                    )
+        return sorted(out, key=lambda x: (x["scenario_id"], x["step"], x["type"], x["error"]))
+
+    def _module_output(module_name: str, question: str, topo: dict[str, Any], results: dict[str, Any], context_dir: Path) -> dict[str, Any]:
+        inv = _inventory(topo)
+        failed_tests = _failed_tests(results)
+        failed_steps = _failed_scenario_steps(results)
+        scenarios = sorted(
+            [
+                str(s.get("id") or "")
+                for s in list(topo.get("scenarios") or [])
+                if isinstance(s, dict) and str(s.get("id") or "").strip()
+            ]
+        )
+        overall = results.get("result")
+        blast_radius_path = context_dir / "artifacts" / "blast-radius" / "blast_radius.json"
+
+        if module_name == "failure_explain":
+            return {
+                "summary": f"Overall result is {overall}. Failed tests: {len(failed_tests)}. Failed scenario steps: {len(failed_steps)}.",
+                "primary_failures": failed_tests[:10],
+                "evidence_refs": [
+                    {"artifact": str(context_dir / "results.json"), "section": "tests"},
+                    {"artifact": str(context_dir / "results.json"), "section": "scenarios"},
+                ],
+                "likely_causes": [
+                    "Validation failures are derived from existing authoritative artifacts only.",
+                    "Review the named failed tests or scenario steps first; AI does not redefine verdicts.",
+                ],
+                "next_actions": [
+                    "Inspect the failed test or scenario entries in results.json.",
+                    "Use deterministic replay or gate rerun to reproduce if needed.",
+                ],
+                "authority": "advisory",
+            }
+
+        if module_name == "coverage_review":
+            suggestions: list[str] = []
+            if inv["tests_count"] == 0:
+                suggestions.append("No tests are declared.")
+            if inv["scenarios_count"] == 0:
+                suggestions.append("No scenarios are declared.")
+            if len(inv["hosts"]) >= 2 and inv["tests_count"] > 0:
+                suggestions.append("Consider explicit steady-state and failover coverage between host endpoints.")
+            return {
+                "summary": f"Topology has {inv['tests_count']} tests and {inv['scenarios_count']} scenarios.",
+                "primary_failures": [],
+                "evidence_refs": [
+                    {"artifact": str(context_dir / "topology.resolved.yaml"), "section": "tests"},
+                    {"artifact": str(context_dir / "topology.resolved.yaml"), "section": "scenarios"},
+                ],
+                "likely_causes": suggestions,
+                "next_actions": [
+                    "Add missing steady-state tests if coverage is sparse.",
+                    "Add explicit failure choreography where resiliency matters.",
+                ],
+                "authority": "advisory",
+            }
+
+        if module_name == "topology_review":
+            notes: list[str] = []
+            if len(inv["hosts"]) < 2:
+                notes.append("Topology has fewer than two host nodes; endpoint coverage may be limited.")
+            if inv["scenarios_count"] == 0:
+                notes.append("No scenarios are declared.")
+            return {
+                "summary": f"Resolved topology contains {len(inv['node_names'])} nodes.",
+                "primary_failures": [],
+                "evidence_refs": [{"artifact": str(context_dir / "topology.resolved.yaml"), "section": "nodes"}],
+                "likely_causes": notes,
+                "next_actions": [
+                    "Use explicit tests and scenarios to validate intended behavior.",
+                    "Keep suggestions advisory and prove them through deterministic tests.",
+                ],
+                "authority": "advisory",
+            }
+
+        if module_name == "blast_radius_explain":
+            if blast_radius_path.exists():
+                with blast_radius_path.open("r", encoding="utf-8") as f:
+                    br = json.load(f) or {}
+                return {
+                    "summary": "Blast radius artifact is present.",
+                    "primary_failures": [],
+                    "evidence_refs": [{"artifact": str(blast_radius_path), "section": "counts"}],
+                    "likely_causes": [f"Directly covered: {json.dumps(br.get('directly_covered') or {}, sort_keys=True)}"],
+                    "next_actions": ["Use blast radius as supporting evidence only."],
+                    "authority": "advisory",
+                }
+            return {
+                "summary": "Blast radius artifact is not present for this context.",
+                "primary_failures": [],
+                "evidence_refs": [{"artifact": str(context_dir / 'results.json'), "section": "blast_radius"}],
+                "likely_causes": ["No blast_radius.json artifact was found in the selected context."],
+                "next_actions": ["Run a topology or scenario path that produces blast radius artifacts if needed."],
+                "authority": "advisory",
+            }
+
+        if module_name == "scenario_interpret":
+            return {
+                "summary": f"Resolved topology declares {len(scenarios)} scenarios.",
+                "primary_failures": failed_steps[:10],
+                "evidence_refs": [{"artifact": str(context_dir / "topology.resolved.yaml"), "section": "scenarios"}],
+                "likely_causes": ["Scenario interpretation is based only on declared scenarios and recorded scenario results."],
+                "next_actions": ["Review failed scenario steps in results.json for exact step ordering and errors."],
+                "authority": "advisory",
+            }
+
+        if module_name == "invariant_explain":
+            invariant_failures = [t for t in failed_tests if t.get("kind") == "invariant"]
+            return {
+                "summary": f"Found {len(invariant_failures)} failed invariant tests.",
+                "primary_failures": invariant_failures[:10],
+                "evidence_refs": [{"artifact": str(context_dir / "results.json"), "section": "tests"}],
+                "likely_causes": ["Invariant explanations are derived from existing failed invariant entries only."],
+                "next_actions": ["Inspect the failed invariant entries in results.json and replay deterministically if needed."],
+                "authority": "advisory",
+            }
+
+        print("ERROR: unsupported ai routing target", file=sys.stderr)
+        sys.exit(2)
+
+    def _emit_text(question: str, banner_lines: list[str], module_name: str, output: dict[str, Any]) -> None:
+        for line in banner_lines:
+            print(line)
+        print("")
+        print(f"Question: {question}")
+        print(f"Summary: {output.get('summary')}")
+        for item in list(output.get("likely_causes") or []):
+            print(f"- {item}")
+        for item in list(output.get("next_actions") or []):
+            print(f"- {item}")
+
+    def _emit_json(question: str, context_dir: Path, context_source: str, loaded: list[str], module_name: str, output: dict[str, Any]) -> None:
+        payload = {
+            "authority": "advisory",
+            "execution_impact": "none",
+            "context_source": context_source,
+            "artifacts_dir": str(context_dir),
+            "artifacts_loaded": loaded,
+            "module": module_name,
+            "question": question,
+            "response": output,
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+
+    try:
+        question = _question_text()
+        if question and _is_out_of_scope(question):
+            print(_blocked_message(), file=sys.stderr)
+            sys.exit(2)
+
+        context_dir, context_source = _resolve_context_dir()
+        if context_dir is None:
+            print(
+                "ERROR: AI Assistant cannot operate without artifacts.\n\n"
+                "Required artifacts:\n"
+                "  topology.resolved.yaml\n"
+                "  results.json\n\n"
+                "Run:\n"
+                "netsim test <topology>",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
+        topo, results, loaded = _load_required_artifacts(context_dir)
+
+        def _handle_one(question: str) -> None:
+            if _is_out_of_scope(question):
+                print(_blocked_message(), file=sys.stderr)
+                sys.exit(2)
+            module_name = _route_question(question)
+            if module_name is None:
+                print("ERROR: unsupported/out-of-scope advisory request", file=sys.stderr)
+                sys.exit(2)
+            output = _module_output(module_name, question, topo, results, context_dir)
+            banner_lines = _build_banner(context_dir, context_source, module_name, loaded)
+            fmt = str(getattr(args, "format", "text") or "text")
+            if fmt == "json":
+                _emit_json(question, context_dir, context_source, loaded, module_name, output)
+            else:
+                _emit_text(question, banner_lines, module_name, output)
+
+        if question:
+            _handle_one(question)
+            return
+
+        # Optional interactive mode: artifact context is locked for the session.
+        banner_lines = _build_banner(context_dir, context_source, "session", loaded)
+        for line in banner_lines:
+            print(line)
+        while True:
+            try:
+                q = input("> ").strip()
+            except EOFError:
+                break
+            if not q:
+                continue
+            if q.lower() in ("exit", "quit"):
+                break
+            _handle_one(q)
+
+    except SystemExit:
+        raise
+    except Exception as e:
+        print(f"ERROR: ai interface failure: {e!s}", file=sys.stderr)
+        sys.exit(1)
 
 def cmd_ai_coach(args) -> None:
     """
@@ -12264,8 +12437,7 @@ def main() -> None:
     p_run.set_defaults(func=cmd_run)
 
     # ai (group)
-    p_ai = sub.add_parser("ai", help="Assistive, non-authoritative AI (post-exec, artifact-only)")
-    ai_sub = p_ai.add_subparsers(dest="ai_cmd", required=True)
+    p_ai = sub.add_parser("ai", help="Unified advisory-only AI interface (artifact-only)")
 
     def _ai_add_common_flags(p) -> None:
         p.add_argument("--bundle", action="store_true", help="Emit deterministic JSON bundle (no model) and exit 0")
@@ -12280,30 +12452,12 @@ def main() -> None:
             help="Path to adapters.v1 JSON (repeatable). Advisory-only context; never gates.",
         )
 
-    # ai explain
-    p_ai_explain = ai_sub.add_parser("explain", help="Explain a prior run using artifacts only")
-    p_ai_explain.add_argument("target", help="Lab name or topology file (to resolve lab)")
-    _ai_add_common_flags(p_ai_explain)
-    p_ai_explain.add_argument(
-        "--strict-inputs",
-        dest="strict_inputs",
-        action="store_true",
-        help="Usage error (exit 2) if required artifacts are missing.",
-    )
-    p_ai_explain.add_argument("--max-items", type=int, default=50, help="Bound findings/suggestions deterministically")
-    p_ai_explain.set_defaults(func=cmd_ai_explain)
-
-    # ai review
-    p_ai_review = ai_sub.add_parser("review", help="Review topology tests/scenarios coverage (no execution)")
-    p_ai_review.add_argument("topology", help="Topology YAML file")
-    _ai_add_common_flags(p_ai_review)
-    p_ai_review.add_argument("--max-items", type=int, default=50, help="Bound gaps/snippets deterministically")
-    p_ai_review.set_defaults(func=cmd_ai_review)
-
-    # ai coach
-    p_ai_coach = ai_sub.add_parser("coach", help="Onboarding and guidance (no YAML generation)")
-    _ai_add_common_flags(p_ai_coach)
-    p_ai_coach.set_defaults(func=cmd_ai_coach)
+    # unified ai
+    p_ai.add_argument("question", nargs="*", help="Natural language advisory question")
+    p_ai.add_argument("--lab", help="Explicit lab name (context priority 2)")
+    p_ai.add_argument("--artifacts", help="Explicit artifacts directory (context priority 1)")
+    p_ai.add_argument("--format", choices=["json", "text"], default="text", help="Output format")
+    p_ai.set_defaults(func=cmd_ai_review)
 
     args = parser.parse_args()
 
