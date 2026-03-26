@@ -11790,11 +11790,21 @@ def cmd_ai_review(args) -> None:
     def _resolve_context_dir() -> tuple[Path | None, str]:
         artifacts = getattr(args, "artifacts", None)
         lab = getattr(args, "lab", None)
+        latest_dir, latest_source = _latest_artifacts_dir()
         if artifacts:
             return Path(str(artifacts)), "explicit_artifacts"
         if lab:
-            return Path("labs") / f"clab-{str(lab).strip()}", "explicit_lab"
-        return _latest_artifacts_dir()
+            lab_dir = Path("labs") / f"clab-{str(lab).strip()}"
+            rp = lab_dir / "results.json"
+            tp = lab_dir / "topology.resolved.yaml"
+            if rp.exists() and tp.exists():
+                return lab_dir, "explicit_lab"
+            if latest_dir is not None:
+                return latest_dir, "most_recent_run"
+            return lab_dir, "explicit_lab"
+        if latest_dir is not None:
+            return latest_dir, latest_source
+        return None, "most_recent_run"
 
     def _build_banner(context_dir: Path, context_source: str, module_name: str, loaded: list[str]) -> list[str]:
         return [
