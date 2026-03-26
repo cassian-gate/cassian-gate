@@ -77,12 +77,14 @@ netsim adapt terraform
 netsim adapt ansible
 ```
 
+````md
 ### AI Assistance (optional / advisory only)
 
 ```bash
 netsim ai "why did this fail"
 netsim ai --lab <lab> "why did this fail"
 netsim ai --artifacts <dir> "why did this fail"
+netsim ai --online "why did this fail"
 ````
 
 AI is **advisory only** and **artifact-only**.
@@ -95,6 +97,8 @@ It never affects:
 
 AI **never affects execution or verdicts**.
 
+```
+```
 ---
 
 # 3️⃣ Two Execution Modes (CRITICAL)
@@ -1796,6 +1800,7 @@ It never affects:
 ---
 
 ````md
+````md
 ## Unified AI Assistance
 
 Use the same conversational entrypoint for failure explanation, coverage review, topology review, scenario interpretation, invariant explanation, and blast-radius explanation.
@@ -1823,6 +1828,32 @@ netsim ai --artifacts <dir> "why did this fail"
 ```
 
 This is the most explicit override and is useful for proof/debug workflows.
+
+### Optional online-enriched rendering
+
+Enable online-enriched advisory rendering explicitly:
+
+```bash
+netsim ai --online "why did this fail"
+netsim ai --lab <lab> --online "why did this fail"
+netsim ai --artifacts <dir> --online "why did this fail"
+```
+
+Rules:
+
+* online-enriched rendering is explicit opt-in only
+* local advisory rendering remains the baseline behavior
+* online rendering does not change authority, verdicts, or execution behavior
+* if online rendering is explicitly requested but unavailable, `netsim ai` refuses with exit code `2`
+
+### Rendering modes
+
+`netsim ai` discloses the rendering mode it used:
+
+* `local advisory rendering`
+* `online-enriched advisory rendering`
+
+Both remain advisory-only.
 
 ### Deterministic context selection
 
@@ -1854,6 +1885,9 @@ If the required artifacts are missing, `netsim ai` refuses with a deterministic 
 ```
 ```
 
+
+```
+```
 
 ---
 

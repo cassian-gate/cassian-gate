@@ -11806,6 +11806,9 @@ def cmd_ai_review(args) -> None:
             return latest_dir, latest_source
         return None, "most_recent_run"
 
+    def _selected_rendering_mode() -> str:
+        return "online-enriched advisory rendering" if getattr(args, "online", False) else "local advisory rendering"
+
     def _build_banner(context_dir: Path, context_source: str, module_name: str, loaded: list[str]) -> list[str]:
         return [
             "AI Assistant (Advisory Mode)",
@@ -11815,7 +11818,27 @@ def cmd_ai_review(args) -> None:
             f"Artifacts Dir: {context_dir}",
             f"Artifacts Loaded: {', '.join(loaded)}",
             f"Module: {module_name}",
+            f"Rendering Mode: {_selected_rendering_mode()}",
         ]
+
+    def _build_evidence_package(
+        module_name: str,
+        question: str,
+        output: dict[str, Any],
+        context_dir: Path,
+        context_source: str,
+        loaded: list[str],
+    ) -> dict[str, Any]:
+        return {
+            "authority": "advisory",
+            "execution_impact": "none",
+            "context_source": context_source,
+            "artifacts_dir": str(context_dir),
+            "artifacts_loaded": list(loaded),
+            "module": module_name,
+            "question": question,
+            "response": output,
+        }
 
     def _load_required_artifacts(context_dir: Path) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
         resolved_path = context_dir / "topology.resolved.yaml"
@@ -12078,6 +12101,87 @@ def cmd_ai_review(args) -> None:
                 _emit_json(question, context_dir, context_source, loaded, module_name, output)
             else:
                 _emit_text(question, banner_lines, module_name, output)
+
+        if getattr(args, "online", False):
+            if not question:
+                print("ERROR: online-enriched advisory rendering requires a question", file=sys.stderr)
+                sys.exit(2)
+            module_name = _route_question(question)
+            if module_name is None:
+                print("ERROR: unsupported/out-of-scope advisory request", file=sys.stderr)
+                sys.exit(2)
+            output = _module_output(module_name, question, topo, results, context_dir)
+            evidence_package = _build_evidence_package(
+                module_name,
+                question,
+                output,
+                context_dir,
+                context_source,
+                loaded,
+            )
+            cfg = _ai_online_config(args)
+            if not cfg["provider"]:
+                print("ERROR: online-enriched advisory rendering requested but unavailable: AI_NETSIM_AI_PROVIDER not set", file=sys.stderr)
+                sys.exit(2)
+            if cfg["provider"] != "openai":
+                print(f"ERROR: online-enriched advisory rendering requested but unavailable: unsupported provider '{cfg['provider']}'", file=sys.stderr)
+                sys.exit(2)
+            if not cfg["api_key"]:
+                print("ERROR: online-enriched advisory rendering requested but unavailable: AI_NETSIM_AI_API_KEY/OPENAI_API_KEY not set", file=sys.stderr)
+                sys.exit(2)
+            model = cfg["model"] or "gpt-4.1-mini"
+            ai_status, ai_output, ai_error = _ai_provider_openai(
+                bundle=evidence_package,
+                model=model,
+                api_key=cfg["api_key"],
+                base_url=cfg["base_url"],
+            )
+            if ai_status != "ok":
+                err = ai_error or "online AI unavailable"
+                print(f"ERROR: online-enriched advisory rendering requested but unavailable: {err}", file=sys.stderr)
+                sys.exit(2)
+            banner_lines = _build_banner(context_dir, context_source, module_name, loaded)
+            fmt = str(getattr(args, "format", "text") or "text")
+            if fmt == "json":
+                payload = {
+                    "authority": "advisory",
+                    "execution_impact": "none",
+                    "context_source": context_source,
+                    "artifacts_dir": str(context_dir),
+                    "artifacts_loaded": loaded,
+                    "module": module_name,
+                    "rendering_mode": _selected_rendering_mode(),
+                    "question": question,
+                    "model_used": model,
+                    "response": ai_output,
+                }
+                print(json.dumps(payload, indent=2, sort_keys=True))
+            else:
+                for line in banner_lines:
+                    print(line)
+                print("")
+                print(f"Question: {question}")
+                print(f"Summary: {str(ai_output.get('summary') or '').strip()}")
+                for item in list(ai_output.get("findings") or []):
+                    if isinstance(item, dict):
+                        title = str(item.get("title") or "").strip()
+                        evidence = str(item.get("evidence") or "").strip()
+                        suggestion = str(item.get("suggestion") or "").strip()
+                        if title or evidence or suggestion:
+                            print(f"- Finding: {title}")
+                            if evidence:
+                                print(f"  Evidence: {evidence}")
+                            if suggestion:
+                                print(f"  Advisory suggestion: {suggestion}")
+                for item in list(ai_output.get("suggested_next_tests") or []):
+                    if isinstance(item, dict):
+                        title = str(item.get("title") or "").strip()
+                        why = str(item.get("why") or "").strip()
+                        if title or why:
+                            print(f"- Suggested next test: {title}")
+                            if why:
+                                print(f"  Why: {why}")
+            return
 
         if question:
             _handle_one(question)
@@ -12438,21 +12542,7 @@ def main() -> None:
 
     # ai (group)
     p_ai = sub.add_parser("ai", help="Unified advisory-only AI interface (artifact-only)")
-
-    def _ai_add_common_flags(p) -> None:
-        p.add_argument("--bundle", action="store_true", help="Emit deterministic JSON bundle (no model) and exit 0")
-        p.add_argument("--bundle-out", dest="bundle_out", help="Write bundle JSON to this path and exit 0")
-        p.add_argument("--online", action="store_true", help="Attempt online model call (BYO key). Never gates; exit 0 on failure.")
-        p.add_argument("--model", help="Override model name (else AI_NETSIM_AI_MODEL)")
-        p.add_argument("--format", choices=["json", "text"], default="json", help="Output format (json is CI-safe)")
-        p.add_argument(
-            "--adapter",
-            action="append",
-            default=[],
-            help="Path to adapters.v1 JSON (repeatable). Advisory-only context; never gates.",
-        )
-
-    # unified ai
+    p_ai.add_argument("--online", action="store_true", help="Request online-enriched advisory rendering (explicit opt-in only)")
     p_ai.add_argument("question", nargs="*", help="Natural language advisory question")
     p_ai.add_argument("--lab", help="Explicit lab name (context priority 2)")
     p_ai.add_argument("--artifacts", help="Explicit artifacts directory (context priority 1)")
