@@ -244,6 +244,43 @@ rm -f /tmp/verify_ai_missing.out
 echo "OK: deterministic missing-artifact refusal"
 echo
 
+echo "=== AI) Stronger advisory usefulness proofs ==="
+python src/netsim.py test topologies/ai_dummy_failure.yaml >/tmp/verify_ai_dummy_gate.out 2>&1 || true
+grep -q "RESULT: FAIL" /tmp/verify_ai_dummy_gate.out
+grep -q "h1_tcp_443_to_h2_should_pass" /tmp/verify_ai_dummy_gate.out
+
+python src/netsim.py ai --lab ai-dummy-failure "draft me a concrete fix" >/tmp/verify_ai_concrete_fix.out 2>&1
+grep -q "Draft 1:" /tmp/verify_ai_concrete_fix.out
+grep -q "allow_tcp: \[8443, 443\]" /tmp/verify_ai_concrete_fix.out
+grep -q "Draft 2:" /tmp/verify_ai_concrete_fix.out
+grep -q "port: 8443" /tmp/verify_ai_concrete_fix.out
+grep -q "Not yet:" /tmp/verify_ai_concrete_fix.out
+
+python src/netsim.py ai --lab three-frr-two-hosts-fw-routed "what invariant would help here" >/tmp/verify_ai_invariant.out 2>&1
+grep -q "Parallel links exist between" /tmp/verify_ai_invariant.out
+grep -q "Declared host subnets 192.168.1.0/24, 192.168.2.0/24" /tmp/verify_ai_invariant.out
+grep -q "Draft 1:" /tmp/verify_ai_invariant.out
+grep -q "type: route_advertised_to" /tmp/verify_ai_invariant.out
+grep -q "Not yet," /tmp/verify_ai_invariant.out
+
+python src/netsim.py ai --lab three-frr-two-hosts-fw-routed "give me a concrete validation plan" >/tmp/verify_ai_validation_plan.out 2>&1
+grep -q "First, add one explicit steady-state passing proof" /tmp/verify_ai_validation_plan.out
+grep -q "Second, add one negative-path proof" /tmp/verify_ai_validation_plan.out
+grep -q "Third, add one scenario" /tmp/verify_ai_validation_plan.out
+grep -q "Draft 1:" /tmp/verify_ai_validation_plan.out
+grep -q "Draft 2:" /tmp/verify_ai_validation_plan.out
+grep -q "Draft 3:" /tmp/verify_ai_validation_plan.out
+
+python src/netsim.py ai --lab three-frr-two-hosts-fw-routed "provide an improved topology" >/tmp/verify_ai_topology_render.out 2>&1
+grep -q "Draft 1:" /tmp/verify_ai_topology_render.out
+grep -q "Draft 2:" /tmp/verify_ai_topology_render.out
+grep -q "Draft 3:" /tmp/verify_ai_topology_render.out
+grep -q -- "-----" /tmp/verify_ai_topology_render.out
+
+rm -f /tmp/verify_ai_dummy_gate.out /tmp/verify_ai_concrete_fix.out /tmp/verify_ai_invariant.out /tmp/verify_ai_validation_plan.out /tmp/verify_ai_topology_render.out
+echo "OK: stronger advisory usefulness proofs"
+echo
+
 echo "=== AI) Key redaction (must not leak API key) ==="
 
 # IMPORTANT: Run redaction check in a subshell so fake exports do not leak
