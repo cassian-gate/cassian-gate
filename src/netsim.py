@@ -11757,24 +11757,59 @@ def cmd_ai_review(args) -> None:
         )
         if "blast radius" in q:
             return "blast_radius_explain"
+        if "invariant" in q and ("add" in q or "missing" in q or "help" in q):
+            return "coverage_review"
         if "invariant" in q:
             return "invariant_explain"
         if "scenario" in q and (
-            any(word in q for word in advisory_words) or "validate" in q or "add" in q
+            any(word in q for word in advisory_words)
+            or "validate" in q
+            or "add" in q
+            or "missing" in q
         ):
-            return "scenario_interpret"
+            return "coverage_review"
         if "coverage" in q or (
             ("test" in q or "tests" in q) and any(word in q for word in advisory_words)
         ):
             return "coverage_review"
-        if ("topology" in q or "design" in q) and any(word in q for word in advisory_words):
+        if (
+            ("topology" in q or "design" in q)
+            and any(word in q for word in advisory_words)
+        ) or ("topology" in q and "improved" in q):
             return "topology_review"
+        if (
+            "validation plan" in q
+            or "validate this better" in q
+            or "what should i change first" in q
+            or "what tests should i add next" in q
+        ):
+            return "coverage_review"
         if (
             "fail" in q
             or "wrong" in q
             or "cause" in q
             or "change first" in q
             or "path to a passing result" in q
+            or "failure mechanism" in q
+            or "inspect first" in q
+        ):
+            return "failure_explain"
+            return "coverage_review"
+        if (
+            "validation plan" in q
+            or "validate this better" in q
+            or "what should i change first" in q
+            or "what tests should i add next" in q
+        ):
+            return "coverage_review"
+        if (
+            "fail" in q
+            or "wrong" in q
+            or "cause" in q
+            or "change first" in q
+            or "path to a passing result" in q
+            or "failure mechanism" in q
+            or "inspect first" in q
         ):
             return "failure_explain"
         return None
@@ -11802,6 +11837,8 @@ def cmd_ai_review(args) -> None:
         scope_words = ("topology", "scenario", "scenarios", "config", "configs", "configuration")
         execute_words = ("run ", "execute ", "deploy", "provision", "destroy", "replay")
         if any(w in q for w in execute_words):
+            return True
+        if "apply the best fix now" in q:
             return True
         if any(w in q for w in mutate_words) and any(w in q for w in scope_words):
             return not any(w in q for w in advisory_words)
@@ -11841,8 +11878,6 @@ def cmd_ai_review(args) -> None:
             tp = lab_dir / "topology.resolved.yaml"
             if rp.exists() and tp.exists():
                 return lab_dir, "explicit_lab"
-            if latest_dir is not None:
-                return latest_dir, "most_recent_run"
             return lab_dir, "explicit_lab"
         if latest_dir is not None:
             return latest_dir, latest_source
@@ -12005,6 +12040,51 @@ def cmd_ai_review(args) -> None:
                 suggestions.append("No scenarios are declared.")
             if len(inv["hosts"]) >= 2 and inv["tests_count"] > 0:
                 suggestions.append("Consider explicit steady-state and failover coverage between host endpoints.")
+            question_l = (question or "").strip().lower()
+            next_actions = [
+                "Add missing steady-state tests if coverage is sparse.",
+                "Add explicit failure choreography where resiliency matters.",
+            ]
+            example_drafts = [
+                "Example only: add one steady-state path test and one failure scenario before treating coverage as strong."
+            ]
+            coaching_notes = [
+                "Suggested tests and scenarios are advisory ideas only until they are added and proven by deterministic execution."
+            ]
+            if "validation plan" in question_l or "validate this better" in question_l:
+                next_actions = [
+                    "Start with one explicit steady-state path proof for the intended successful flow.",
+                    "Add one negative-path proof for the traffic or policy that must fail.",
+                    "Add one scenario that injects the most important failure and re-runs the key proof.",
+                ]
+                example_drafts = [
+                    "Example only: validation plan = steady-state proof -> negative-path proof -> failure scenario -> deterministic replay."
+                ]
+                coaching_notes = [
+                    "A validation plan is advisory only until each step is encoded as deterministic tests or scenarios."
+                ]
+            if "scenario" in question_l and ("missing" in question_l or "add" in question_l):
+                next_actions = [
+                    "Add one scenario that breaks the most important dependency in the path.",
+                    "Re-run the key end-to-end proof before and after the fault step.",
+                ]
+                example_drafts = [
+                    "Example only: add a single failure choreography scenario that drops the critical link/interface and re-runs the key test."
+                ]
+                coaching_notes = [
+                    "Missing-scenario advice is advisory only until the scenario is declared and proven by deterministic execution."
+                ]
+            if "invariant" in question_l and ("help" in question_l or "add" in question_l or "missing" in question_l):
+                next_actions = [
+                    "Add one invariant that proves the intended control-plane or policy truth directly.",
+                    "Keep the invariant narrowly scoped to the specific route, peer, or attribute that matters.",
+                ]
+                example_drafts = [
+                    "Example only: add a narrowly scoped invariant that proves the intended route or peer-state truth instead of relying only on end-to-end traffic."
+                ]
+                coaching_notes = [
+                    "Invariant suggestions are advisory only until the invariant is declared and proven by deterministic execution."
+                ]
             return {
                 "summary": f"Topology has {inv['tests_count']} tests and {inv['scenarios_count']} scenarios.",
                 "primary_failures": [],
@@ -12013,16 +12093,9 @@ def cmd_ai_review(args) -> None:
                     {"artifact": str(context_dir / "topology.resolved.yaml"), "section": "scenarios"},
                 ],
                 "likely_causes": suggestions,
-                "next_actions": [
-                    "Add missing steady-state tests if coverage is sparse.",
-                    "Add explicit failure choreography where resiliency matters.",
-                ],
-                "example_drafts": [
-                    "Example only: add one steady-state path test and one failure scenario before treating coverage as strong."
-                ],
-                "coaching_notes": [
-                    "Suggested tests and scenarios are advisory ideas only until they are added and proven by deterministic execution."
-                ],
+                "next_actions": next_actions,
+                "example_drafts": example_drafts,
+                "coaching_notes": coaching_notes,
                 "authority": "advisory",
             }
 
@@ -12078,6 +12151,9 @@ def cmd_ai_review(args) -> None:
                 "evidence_refs": [{"artifact": str(context_dir / "topology.resolved.yaml"), "section": "scenarios"}],
                 "likely_causes": ["Scenario interpretation is based only on declared scenarios and recorded scenario results."],
                 "next_actions": ["Review failed scenario steps in results.json for exact step ordering and errors."],
+                "example_drafts": [
+                    "Example only: add one scenario that injects the key failure and re-runs the primary proof before and after the fault."
+                ],
                 "authority": "advisory",
             }
 
@@ -12089,6 +12165,9 @@ def cmd_ai_review(args) -> None:
                 "evidence_refs": [{"artifact": str(context_dir / "results.json"), "section": "tests"}],
                 "likely_causes": ["Invariant explanations are derived from existing failed invariant entries only."],
                 "next_actions": ["Inspect the failed invariant entries in results.json and replay deterministically if needed."],
+                "example_drafts": [
+                    "Example only: add one narrowly scoped invariant that proves the intended route, peer, or attribute truth directly."
+                ],
                 "authority": "advisory",
             }
 
