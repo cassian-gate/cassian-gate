@@ -12410,6 +12410,28 @@ def cmd_ai_review(args) -> None:
         sys.exit(2)
 
     def _emit_text(question: str, banner_lines: list[str], module_name: str, output: dict[str, Any]) -> None:
+        def _looks_structured_block(text: str) -> bool:
+            if "\n" not in text:
+                return False
+            stripped = text.strip()
+            if not stripped:
+                return False
+            structured_markers = (
+                "tests:\n",
+                "scenarios:\n",
+                "nodes:\n",
+                "links:\n",
+                "vlans:\n",
+                "fabric:\n",
+                "packs:\n",
+            )
+            return stripped.startswith(structured_markers) or "\n  - " in stripped or "\n    " in stripped
+
+        def _print_draft_block(text: str) -> None:
+            print("-----")
+            print(text.rstrip())
+            print("-----")
+
         for line in banner_lines:
             print(line)
         print("")
@@ -12449,8 +12471,13 @@ def cmd_ai_review(args) -> None:
         if example_drafts:
             print("")
             print("Example Drafts (Non-Authoritative / Human Review Only):")
-            for item in example_drafts:
-                print(f"- {item}")
+            for idx, item in enumerate(example_drafts, start=1):
+                text = str(item)
+                print(f"Draft {idx}:")
+                if _looks_structured_block(text):
+                    _print_draft_block(text)
+                else:
+                    print(text)
 
         if coaching_notes:
             print("")
