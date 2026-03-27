@@ -12106,6 +12106,39 @@ def cmd_ai_review(args) -> None:
             has_scenarios = bool(inv["scenarios_count"])
             host_pair = "host endpoints" if len(inv["hosts"]) >= 2 else "declared endpoints"
 
+            link_pair_counts: dict[tuple[str, str], int] = {}
+            pair_link_details: dict[tuple[str, str], list[tuple[str, str]]] = {}
+            for link in list(topo.get("links") or []):
+                if not isinstance(link, dict):
+                    continue
+                endpoints = list(link.get("endpoints") or [])
+                if len(endpoints) != 2:
+                    continue
+                try:
+                    left_node, left_if = str(endpoints[0]).split(":", 1)
+                    right_node, right_if = str(endpoints[1]).split(":", 1)
+                except ValueError:
+                    continue
+                pair = tuple(sorted([left_node, right_node]))
+                link_pair_counts[pair] = link_pair_counts.get(pair, 0) + 1
+                pair_link_details.setdefault(pair, []).append((left_if, right_if))
+            parallel_pairs = sorted([pair for pair, count in link_pair_counts.items() if count > 1])
+
+            host_networks: list[str] = []
+            for node in list(topo.get("nodes") or []):
+                if not isinstance(node, dict):
+                    continue
+                if str(node.get("type") or "").strip() != "host":
+                    continue
+                ip_v = str(node.get("ip") or "").strip()
+                if not ip_v:
+                    continue
+                try:
+                    host_networks.append(str(ipaddress.ip_interface(ip_v).network))
+                except Exception:
+                    pass
+            host_networks = sorted(set(host_networks))
+
             insights: list[str] = []
             if inv["tests_count"] == 0:
                 insights.append("No tests are declared, so the topology currently has no executable proof of intended behavior.")
@@ -12117,6 +12150,11 @@ def cmd_ai_review(args) -> None:
                 insights.append("There are declared tests, but none currently prove a clear positive steady-state success path.")
             if len(inv["hosts"]) >= 2 and inv["tests_count"] > 0:
                 insights.append(f"The highest-value next proof is usually one explicit steady-state test across the {host_pair}.")
+            if parallel_pairs:
+                pair_desc = " and ".join(f"{a}<->{b}" for a, b in parallel_pairs)
+                insights.append(f"Parallel links exist between {pair_desc}, so the topology already encodes a failover or ambiguity surface that should be proven explicitly.")
+            if host_networks and ("invariant" in question_l or "scenario" in question_l):
+                insights.append(f"Declared host subnets {', '.join(host_networks)} provide a bounded control-plane or path-intent surface for more targeted proofs.")
 
             ranked_actions: list[str] = []
             example_drafts: list[str] = []
@@ -12132,8 +12170,18 @@ def cmd_ai_review(args) -> None:
                 example_drafts = [
                     "Example only: tests:\n  - name: h1_to_h2_ping_should_pass\n    kind: ping\n    src: h1\n    dst: h2\n    expect: pass\n    count: 2",
                     "Example only: tests:\n  - name: h1_to_h2_tcp_22_should_fail\n    kind: tcp\n    src: h1\n    dst: h2\n    port: 22\n    expect: fail",
-                    "Example only: scenarios:\n  - id: break_primary_path\n    steps:\n      - run: h1_to_h2_ping_should_pass\n      - fault:\n          link_down:\n            a: r2\n            a_if: eth2\n            b: fw1\n            b_if: eth1\n      - run: h1_to_h2_ping_should_pass"
                 ]
+                if parallel_pairs:
+                    pair = parallel_pairs[0]
+                    details = pair_link_details.get(pair) or []
+                    left_if, right_if = details[0] if details else ("ethX", "ethY")
+                    example_drafts.append(
+                        f"Example only: scenarios:\n  - id: break_primary_path\n    steps:\n      - run: h1_to_h2_ping_should_pass\n      - fault:\n          link_down:\n            a: {pair[0]}\n            a_if: {left_if}\n            b: {pair[1]}\n            b_if: {right_if}\n      - run: h1_to_h2_ping_should_pass"
+                    )
+                else:
+                    example_drafts.append(
+                        "Example only: scenarios:\n  - id: break_primary_path\n    steps:\n      - run: h1_to_h2_ping_should_pass\n      - fault:\n          interface_down:\n            node: r1\n            if: eth1\n      - run: h1_to_h2_ping_should_pass"
+                    )
                 coaching_notes = [
                     "A validation plan is advisory only until each step is encoded as deterministic tests or scenarios."
                 ]
@@ -12143,9 +12191,17 @@ def cmd_ai_review(args) -> None:
                     "Second, re-run the key end-to-end proof before and after the fault step.",
                     "Not yet, do not add extra scenarios until the primary failure scenario proves a meaningful behavior change.",
                 ]
-                example_drafts = [
-                    "Example only: scenarios:\n  - id: break_primary_path\n    steps:\n      - run: h1_to_h2_ping_should_pass\n      - fault:\n          link_down:\n            a: r2\n            a_if: eth2\n            b: fw1\n            b_if: eth1\n      - run: h1_to_h2_ping_should_pass"
-                ]
+                if parallel_pairs:
+                    pair = parallel_pairs[0]
+                    details = pair_link_details.get(pair) or []
+                    left_if, right_if = details[0] if details else ("ethX", "ethY")
+                    example_drafts = [
+                        f"Example only: scenarios:\n  - id: break_primary_path\n    steps:\n      - run: h1_to_h2_ping_should_pass\n      - fault:\n          link_down:\n            a: {pair[0]}\n            a_if: {left_if}\n            b: {pair[1]}\n            b_if: {right_if}\n      - run: h1_to_h2_ping_should_pass"
+                    ]
+                else:
+                    example_drafts = [
+                        "Example only: scenarios:\n  - id: break_primary_path\n    steps:\n      - run: h1_to_h2_ping_should_pass\n      - fault:\n          interface_down:\n            node: r1\n            if: eth1\n      - run: h1_to_h2_ping_should_pass"
+                    ]
                 coaching_notes = [
                     "Missing-scenario advice is advisory only until the scenario is declared and proven by deterministic execution."
                 ]
@@ -12155,9 +12211,19 @@ def cmd_ai_review(args) -> None:
                     "Second, keep the invariant narrowly scoped to the specific route, peer, or attribute that matters.",
                     "Not yet, do not add multiple broad invariants before proving one high-value truth cleanly.",
                 ]
-                example_drafts = [
-                    "Example only: tests:\n  - name: r2_advertises_expected_prefix\n    kind: invariant\n    type: route_advertised_to\n    node: r2\n    peer: fw1\n    prefix: 192.168.2.0/24\n    expect: pass"
-                ]
+                if host_networks and parallel_pairs:
+                    pair = parallel_pairs[0]
+                    example_drafts = [
+                        f"Example only: tests:\n  - name: {pair[0]}_advertises_{host_networks[-1].replace('/', '_')}_to_{pair[1]}\n    kind: invariant\n    type: route_advertised_to\n    node: {pair[0]}\n    peer: {pair[1]}\n    prefix: {host_networks[-1]}\n    expect: pass"
+                    ]
+                elif host_networks:
+                    example_drafts = [
+                        f"Example only: tests:\n  - name: route_for_{host_networks[0].replace('/', '_')}_present\n    kind: invariant\n    type: route_advertised_to\n    node: r1\n    peer: r2\n    prefix: {host_networks[0]}\n    expect: pass"
+                    ]
+                else:
+                    example_drafts = [
+                        "Example only: tests:\n  - name: r2_advertises_expected_prefix\n    kind: invariant\n    type: route_advertised_to\n    node: r2\n    peer: fw1\n    prefix: 192.168.2.0/24\n    expect: pass"
+                    ]
                 coaching_notes = [
                     "Invariant suggestions are advisory only until the invariant is declared and proven by deterministic execution."
                 ]
@@ -12213,6 +12279,22 @@ def cmd_ai_review(args) -> None:
             if all_expect_fail:
                 notes.append("All declared tests currently expect failure, so the main gap is proving the intended success state, not just changing node shape.")
 
+            link_pair_counts: dict[tuple[str, str], int] = {}
+            for link in list(topo.get("links") or []):
+                if not isinstance(link, dict):
+                    continue
+                endpoints = list(link.get("endpoints") or [])
+                if len(endpoints) != 2:
+                    continue
+                try:
+                    left_node, _left_if = str(endpoints[0]).split(":", 1)
+                    right_node, _right_if = str(endpoints[1]).split(":", 1)
+                except ValueError:
+                    continue
+                pair = tuple(sorted([left_node, right_node]))
+                link_pair_counts[pair] = link_pair_counts.get(pair, 0) + 1
+            parallel_pairs = sorted([pair for pair, count in link_pair_counts.items() if count > 1])
+
             ranked_actions = [
                 "Use explicit tests and scenarios to validate intended behavior.",
                 "Keep suggestions advisory and prove them through deterministic tests.",
@@ -12227,6 +12309,10 @@ def cmd_ai_review(args) -> None:
             core_path = None
             if {"r1", "r2", "fw1", "r3"}.issubset(set(inv["node_names"])):
                 core_path = "r1 -> r2 -> fw1 -> r3"
+
+            if parallel_pairs:
+                pair_desc = " and ".join(f"{a}<->{b}" for a, b in parallel_pairs)
+                notes.append(f"Parallel links exist between {pair_desc}, so the topology already contains an explicit failover or ambiguity surface.")
 
             if all_expect_fail:
                 ranked_actions = [
@@ -12244,8 +12330,15 @@ def cmd_ai_review(args) -> None:
 
             if "improved topology" in question_l or "better topology" in question_l:
                 if core_path:
+                    draft_lines = [
+                        "Example only: topology guidance",
+                        f"- keep {core_path} as the core path",
+                    ]
+                    if parallel_pairs:
+                        draft_lines.append(f"- keep the parallel {parallel_pairs[0][0]}<->{parallel_pairs[0][1]} link only if you want failover or ambiguity testing")
+                        draft_lines.append("- otherwise remove the extra link to simplify proof intent")
                     example_drafts = [
-                        "Example only: topology guidance\n- keep r1 -> r2 -> fw1 -> r3 as the core path\n- keep the parallel r2<->fw1 link only if you want failover or ambiguity testing\n- otherwise remove the extra link to simplify proof intent",
+                        "\n".join(draft_lines),
                         "Example only: tests:\n  - name: h1_to_h2_ping_should_pass\n    kind: ping\n    src: h1\n    dst: h2\n    expect: pass\n    count: 2",
                         "Example only: scenarios:\n  - id: break_primary_path\n    steps:\n      - run: h1_to_h2_ping_should_pass\n      - fault:\n          link_down:\n            a: r2\n            a_if: eth2\n            b: fw1\n            b_if: eth1\n      - run: h1_to_h2_ping_should_pass"
                     ]
