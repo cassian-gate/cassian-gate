@@ -11754,24 +11754,47 @@ def cmd_ai_review(args) -> None:
             "next",
             "likely",
             "suggest",
+            "prove",
+            "test",
         )
         if "blast radius" in q:
             return "blast_radius_explain"
         if (
             "invariant" in q
-            and ("add" in q or "missing" in q or "help" in q or "draft" in q)
+            and (
+                "add" in q
+                or "missing" in q
+                or "help" in q
+                or "draft" in q
+                or "first" in q
+                or "would you" in q
+                or "should i" in q
+            )
         ):
             return "coverage_review"
         if "invariant" in q:
             return "invariant_explain"
-        if "scenario" in q and (
+        if (
+            "scenario" in q
+            or "failover" in q
+            or "fault should i inject" in q
+            or "failure scenario" in q
+        ) and (
             any(word in q for word in advisory_words)
             or "validate" in q
             or "add" in q
             or "missing" in q
             or "draft" in q
+            or "inject" in q
         ):
             return "coverage_review"
+        if (
+            "proof gap" in q
+            or "proof am i missing" in q
+            or "prove first" in q
+            or "what should i prove first" in q
+        ):
+            return "failure_explain"
         if "coverage" in q or (
             ("test" in q or "tests" in q) and any(word in q for word in advisory_words)
         ):
@@ -11779,7 +11802,15 @@ def cmd_ai_review(args) -> None:
         if (
             ("topology" in q or "design" in q)
             and any(word in q for word in advisory_words)
-        ) or ("topology" in q and "improved" in q):
+        ) or (
+            "topology" in q
+            and (
+                "improved" in q
+                or "improve this" in q
+                or "how would you improve" in q
+                or "make this better" in q
+            )
+        ):
             return "topology_review"
         if (
             "fail" in q
