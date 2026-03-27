@@ -12523,6 +12523,31 @@ def cmd_ai_review(args) -> None:
             print(text.rstrip())
             print("-----")
 
+        def _draft_label(idx: int, text: str) -> str:
+            stripped = text.lstrip()
+            lowered = stripped.lower()
+            if lowered.startswith("tests:\n"):
+                return f"Draft {idx} — test block"
+            if lowered.startswith("scenarios:\n"):
+                return f"Draft {idx} — scenario block"
+            if lowered.startswith("nodes:\n"):
+                return f"Draft {idx} — node block"
+            if lowered.startswith("links:\n"):
+                return f"Draft {idx} — link block"
+            if lowered.startswith("topology guidance"):
+                return f"Draft {idx} — topology guidance"
+            if lowered.startswith("firewall-side fix"):
+                return f"Draft {idx} — firewall-side fix"
+            if lowered.startswith("test-side fix"):
+                return f"Draft {idx} — test-side fix"
+            return f"Draft {idx}"
+
+        def _normalize_draft_text(text: str) -> str:
+            stripped = text.lstrip()
+            if stripped.startswith("Example only: "):
+                stripped = stripped[len("Example only: "):]
+            return stripped.rstrip()
+
         for line in banner_lines:
             print(line)
         print("")
@@ -12563,8 +12588,9 @@ def cmd_ai_review(args) -> None:
             print("")
             print("Example Drafts (Non-Authoritative / Human Review Only):")
             for idx, item in enumerate(example_drafts, start=1):
-                text = str(item)
-                print(f"Draft {idx}:")
+                original_text = str(item)
+                text = _normalize_draft_text(original_text)
+                print(_draft_label(idx, text))
                 if _looks_structured_block(text):
                     _print_draft_block(text)
                 else:
