@@ -11742,15 +11742,40 @@ def cmd_ai_review(args) -> None:
             return None
         if "blast radius" in q:
             return "blast_radius_explain"
-        if "scenario" in q and ("validate" in q or "what did" in q or "explain" in q):
+        if "scenario" in q and (
+            "validate" in q
+            or "what did" in q
+            or "explain" in q
+            or "what scenario should i add" in q
+        ):
             return "scenario_interpret"
         if "invariant" in q:
             return "invariant_explain"
-        if "coverage" in q or "miss any coverage" in q or "missing coverage" in q:
+        if (
+            "coverage" in q
+            or "miss any coverage" in q
+            or "missing coverage" in q
+            or "what test am i missing" in q
+            or "what should i test next" in q
+            or "did i miss any coverage" in q
+        ):
             return "coverage_review"
-        if "improve this topology" in q or ("improve" in q and "topology" in q):
+        if (
+            "improve this topology" in q
+            or ("improve" in q and "topology" in q)
+            or "how could this topology be improved" in q
+            or "show me an example of a better design" in q
+            or "teach me how to validate this properly" in q
+        ):
             return "topology_review"
-        if "why did this fail" in q or "what caused this failure" in q or "explain this failure" in q:
+        if (
+            "why did this fail" in q
+            or "what caused this failure" in q
+            or "explain this failure" in q
+            or "what should i change first" in q
+            or "what is most likely wrong" in q
+            or "what is the fastest likely path to a passing result" in q
+        ):
             return "failure_explain"
         return None
 
@@ -11758,9 +11783,11 @@ def cmd_ai_review(args) -> None:
         q = (question or "").strip().lower()
         if not q:
             return False
+        if q == "what scenario should i add":
+            return False
         mutate_words = ("modify", "change", "create", "add", "rewrite", "generate", "update", "fix")
-        scope_words = ("topology", "test", "tests", "scenario", "scenarios", "config", "configs", "configuration")
-        execute_words = ("run ", "execute ", "deploy", "provision", "destroy", "replay", "test ")
+        scope_words = ("topology", "scenario", "scenarios", "config", "configs", "configuration")
+        execute_words = ("run ", "execute ", "deploy", "provision", "destroy", "replay")
         if any(w in q for w in execute_words):
             return True
         return any(w in q for w in mutate_words) and any(w in q for w in scope_words)
@@ -11975,6 +12002,12 @@ def cmd_ai_review(args) -> None:
                     "Add missing steady-state tests if coverage is sparse.",
                     "Add explicit failure choreography where resiliency matters.",
                 ],
+                "example_drafts": [
+                    "Example only: add one steady-state path test and one failure scenario before treating coverage as strong."
+                ],
+                "coaching_notes": [
+                    "Suggested tests and scenarios are advisory ideas only until they are added and proven by deterministic execution."
+                ],
                 "authority": "advisory",
             }
 
@@ -11992,6 +12025,12 @@ def cmd_ai_review(args) -> None:
                 "next_actions": [
                     "Use explicit tests and scenarios to validate intended behavior.",
                     "Keep suggestions advisory and prove them through deterministic tests.",
+                ],
+                "example_drafts": [
+                    "Example only: strengthen the topology review by adding explicit validation intent rather than treating topology shape alone as proof."
+                ],
+                "coaching_notes": [
+                    "Topology suggestions are non-authoritative examples for human review and must be validated through tests or scenarios."
                 ],
                 "authority": "advisory",
             }
@@ -12047,10 +12086,48 @@ def cmd_ai_review(args) -> None:
         print("")
         print(f"Question: {question}")
         print(f"Summary: {output.get('summary')}")
-        for item in list(output.get("likely_causes") or []):
-            print(f"- {item}")
-        for item in list(output.get("next_actions") or []):
-            print(f"- {item}")
+
+        evidence_refs = list(output.get("evidence_refs") or [])
+        likely_causes = list(output.get("likely_causes") or [])
+        next_actions = list(output.get("next_actions") or [])
+        example_drafts = list(output.get("example_drafts") or [])
+        coaching_notes = list(output.get("coaching_notes") or [])
+
+        if evidence_refs:
+            print("")
+            print("Deterministic Facts / Grounded Evidence:")
+            for item in evidence_refs:
+                if isinstance(item, dict):
+                    artifact = str(item.get("artifact") or "")
+                    section = str(item.get("section") or "")
+                    if artifact and section:
+                        print(f"- {artifact} [{section}]")
+                    elif artifact:
+                        print(f"- {artifact}")
+
+        if likely_causes:
+            print("")
+            print("Advisory Interpretation / Likely Cause:")
+            for item in likely_causes:
+                print(f"- {item}")
+
+        if next_actions:
+            print("")
+            print("Recommended Next Steps:")
+            for item in next_actions:
+                print(f"- {item}")
+
+        if example_drafts:
+            print("")
+            print("Example Drafts (Non-Authoritative / Human Review Only):")
+            for item in example_drafts:
+                print(f"- {item}")
+
+        if coaching_notes:
+            print("")
+            print("Teaching / Coaching (Advisory Only):")
+            for item in coaching_notes:
+                print(f"- {item}")
 
     def _emit_json(question: str, context_dir: Path, context_source: str, loaded: list[str], module_name: str, output: dict[str, Any]) -> None:
         payload = {
