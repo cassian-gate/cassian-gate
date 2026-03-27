@@ -12097,45 +12097,33 @@ def cmd_ai_review(args) -> None:
             }
 
         if module_name == "coverage_review":
-            suggestions: list[str] = []
-            if inv["tests_count"] == 0:
-                suggestions.append("No tests are declared.")
-            if inv["scenarios_count"] == 0:
-                suggestions.append("No scenarios are declared.")
-            if len(inv["hosts"]) >= 2 and inv["tests_count"] > 0:
-                suggestions.append("Consider explicit steady-state and failover coverage between host endpoints.")
             question_l = (question or "").strip().lower()
             all_expect_fail = bool(tests) and all(str(t.get("expect", "")).strip().lower() == "fail" for t in tests)
-            next_actions = [
-                "Add missing steady-state tests if coverage is sparse.",
-                "Add explicit failure choreography where resiliency matters.",
-            ]
-            example_drafts = [
-                "Example only: add one steady-state path test and one failure scenario before treating coverage as strong."
-            ]
-            coaching_notes = [
-                "Suggested tests and scenarios are advisory ideas only until they are added and proven by deterministic execution."
-            ]
+            has_positive_tests = any(str(t.get("expect", "")).strip().lower() == "pass" for t in tests)
+            has_scenarios = bool(inv["scenarios_count"])
+            host_pair = "host endpoints" if len(inv["hosts"]) >= 2 else "declared endpoints"
+
+            insights: list[str] = []
+            if inv["tests_count"] == 0:
+                insights.append("No tests are declared, so the topology currently has no executable proof of intended behavior.")
+            if not has_scenarios:
+                insights.append("No scenarios are declared, so failure choreography and recovery behavior are not being proven.")
             if all_expect_fail:
-                suggestions = [
-                    "All current declared tests expect failure, so the topology does not yet prove any intended success path.",
-                    "The first useful improvement is usually to encode one positive steady-state behavior that should pass.",
-                ]
-                next_actions = [
-                    "Choose the first end-to-end behavior that should succeed in steady state and express it as a passing test.",
-                    "Keep the existing failure-expected tests as negative proofs, but do not treat them as proof of intended success.",
-                ]
-                example_drafts = [
-                    "Example only: tests:\n  - name: h1_to_h2_ping_should_pass\n    kind: ping\n    src: h1\n    dst: h2\n    expect: pass\n    count: 2"
-                ]
-                coaching_notes = [
-                    "When all declared tests expect failure, a full PASS mostly proves negative intent, not the design you want to succeed."
-                ]
+                insights.append("All current declared tests expect failure, so the topology does not yet prove any intended success path.")
+            elif not has_positive_tests and inv["tests_count"] > 0:
+                insights.append("There are declared tests, but none currently prove a clear positive steady-state success path.")
+            if len(inv["hosts"]) >= 2 and inv["tests_count"] > 0:
+                insights.append(f"The highest-value next proof is usually one explicit steady-state test across the {host_pair}.")
+
+            ranked_actions: list[str] = []
+            example_drafts: list[str] = []
+            coaching_notes: list[str] = []
+
             if "validation plan" in question_l or "validate this better" in question_l:
-                next_actions = [
-                    "Start with one explicit steady-state path proof for the intended successful flow.",
-                    "Add one negative-path proof for the traffic or policy that must fail.",
-                    "Add one scenario that injects the most important failure and re-runs the key proof.",
+                ranked_actions = [
+                    "First, add one explicit steady-state passing proof for the intended successful path.",
+                    "Second, add one negative-path proof for traffic or policy that must fail.",
+                    "Third, add one scenario that injects the most important failure and re-runs the key proof.",
                 ]
                 example_drafts = [
                     "Example only: validation plan = steady-state proof -> negative-path proof -> failure scenario -> deterministic replay."
@@ -12143,10 +12131,10 @@ def cmd_ai_review(args) -> None:
                 coaching_notes = [
                     "A validation plan is advisory only until each step is encoded as deterministic tests or scenarios."
                 ]
-            if "scenario" in question_l and ("missing" in question_l or "add" in question_l or "draft" in question_l):
-                next_actions = [
-                    "Add one scenario that breaks the most important dependency in the path.",
-                    "Re-run the key end-to-end proof before and after the fault step.",
+            elif "scenario" in question_l and ("missing" in question_l or "add" in question_l or "draft" in question_l):
+                ranked_actions = [
+                    "First, add one scenario that breaks the most important dependency in the path.",
+                    "Second, re-run the key end-to-end proof before and after the fault step.",
                 ]
                 example_drafts = [
                     "Example only: scenarios:\n  - id: break_primary_path\n    steps:\n      - run: h1_to_h2_ping_should_pass\n      - fault:\n          link_down:\n            a: r2\n            a_if: eth2\n            b: fw1\n            b_if: eth1\n      - run: h1_to_h2_ping_should_pass"
@@ -12154,10 +12142,10 @@ def cmd_ai_review(args) -> None:
                 coaching_notes = [
                     "Missing-scenario advice is advisory only until the scenario is declared and proven by deterministic execution."
                 ]
-            if "invariant" in question_l and ("help" in question_l or "add" in question_l or "missing" in question_l or "draft" in question_l):
-                next_actions = [
-                    "Add one invariant that proves the intended control-plane or policy truth directly.",
-                    "Keep the invariant narrowly scoped to the specific route, peer, or attribute that matters.",
+            elif "invariant" in question_l and ("help" in question_l or "add" in question_l or "missing" in question_l or "draft" in question_l):
+                ranked_actions = [
+                    "First, add one invariant that proves the intended control-plane or policy truth directly.",
+                    "Second, keep the invariant narrowly scoped to the specific route, peer, or attribute that matters.",
                 ]
                 example_drafts = [
                     "Example only: tests:\n  - name: r2_advertises_expected_prefix\n    kind: invariant\n    type: route_advertised_to\n    node: r2\n    peer: fw1\n    prefix: 192.168.2.0/24\n    expect: pass"
@@ -12165,6 +12153,30 @@ def cmd_ai_review(args) -> None:
                 coaching_notes = [
                     "Invariant suggestions are advisory only until the invariant is declared and proven by deterministic execution."
                 ]
+            else:
+                if all_expect_fail:
+                    ranked_actions = [
+                        "First, choose the first end-to-end behavior that should succeed in steady state and express it as a passing test.",
+                        "Second, keep the existing failure-expected tests as negative proofs, but do not treat them as proof of intended success.",
+                    ]
+                    example_drafts = [
+                        "Example only: tests:\n  - name: h1_to_h2_ping_should_pass\n    kind: ping\n    src: h1\n    dst: h2\n    expect: pass\n    count: 2"
+                    ]
+                    coaching_notes = [
+                        "When all declared tests expect failure, a full PASS mostly proves negative intent, not the design you want to succeed."
+                    ]
+                else:
+                    ranked_actions = [
+                        "First, add or strengthen the most important steady-state proof if coverage is sparse.",
+                        "Second, add explicit failure choreography where resiliency matters.",
+                    ]
+                    example_drafts = [
+                        "Example only: add one steady-state path test and one failure scenario before treating coverage as strong."
+                    ]
+                    coaching_notes = [
+                        "Suggested tests and scenarios are advisory ideas only until they are added and proven by deterministic execution."
+                    ]
+
             return {
                 "summary": f"Topology has {inv['tests_count']} tests and {inv['scenarios_count']} scenarios.",
                 "primary_failures": [],
@@ -12172,21 +12184,25 @@ def cmd_ai_review(args) -> None:
                     {"artifact": str(context_dir / "topology.resolved.yaml"), "section": "tests"},
                     {"artifact": str(context_dir / "topology.resolved.yaml"), "section": "scenarios"},
                 ],
-                "likely_causes": suggestions,
-                "next_actions": next_actions,
+                "likely_causes": insights,
+                "next_actions": ranked_actions,
                 "example_drafts": example_drafts,
                 "coaching_notes": coaching_notes,
                 "authority": "advisory",
             }
 
         if module_name == "topology_review":
+            question_l = (question or "").strip().lower()
+            all_expect_fail = bool(tests) and all(str(t.get("expect", "")).strip().lower() == "fail" for t in tests)
             notes: list[str] = []
             if len(inv["hosts"]) < 2:
                 notes.append("Topology has fewer than two host nodes; endpoint coverage may be limited.")
             if inv["scenarios_count"] == 0:
                 notes.append("No scenarios are declared.")
-            all_expect_fail = bool(tests) and all(str(t.get("expect", "")).strip().lower() == "fail" for t in tests)
-            next_actions = [
+            if all_expect_fail:
+                notes.append("All declared tests currently expect failure, so the main gap is proving the intended success state, not just changing node shape.")
+
+            ranked_actions = [
                 "Use explicit tests and scenarios to validate intended behavior.",
                 "Keep suggestions advisory and prove them through deterministic tests.",
             ]
@@ -12196,11 +12212,15 @@ def cmd_ai_review(args) -> None:
             coaching_notes = [
                 "Topology suggestions are non-authoritative examples for human review and must be validated through tests or scenarios."
             ]
+
+            core_path = None
+            if {"r1", "r2", "fw1", "r3"}.issubset(set(inv["node_names"])):
+                core_path = "r1 -> r2 -> fw1 -> r3"
+
             if all_expect_fail:
-                notes.append("All declared tests currently expect failure, so the main gap is proving the intended success state, not just changing node shape.")
-                next_actions = [
-                    "Keep the current shape if it matches the intended path, but add one explicit passing proof for the success behavior you actually want.",
-                    "Simplify only if the extra parallel link is not needed for failure-choreography or ambiguity testing.",
+                ranked_actions = [
+                    "First, keep the current shape if it already represents the intended path, and add one explicit passing proof for the success behavior you actually want.",
+                    "Second, simplify only if extra links are not needed for failure-choreography or ambiguity testing.",
                 ]
                 example_drafts = [
                     "Example only: keep the current node/link shape, but add a passing steady-state test such as h1_to_h2_ping_should_pass before expanding the topology."
@@ -12208,16 +12228,23 @@ def cmd_ai_review(args) -> None:
                 coaching_notes = [
                     "When all tests expect failure, improving proof quality is usually more valuable than adding more topology complexity."
                 ]
-            if "improved topology" in (question or "").strip().lower() or "better topology" in (question or "").strip().lower():
-                example_drafts = [
-                    "Example only: keep r1 -> r2 -> fw1 -> r3 as the core path, keep the parallel r2<->fw1 link only if you want failover/ambiguity testing, and add one passing steady-state proof plus one failure scenario instead of expanding node count first."
-                ]
+
+            if "improved topology" in question_l or "better topology" in question_l:
+                if core_path:
+                    example_drafts = [
+                        "Example only: keep r1 -> r2 -> fw1 -> r3 as the core path, keep the parallel r2<->fw1 link only if you want failover/ambiguity testing, and add one passing steady-state proof plus one failure scenario instead of expanding node count first."
+                    ]
+                else:
+                    example_drafts = [
+                        "Example only: keep the existing path shape if it matches intent, remove only links or nodes that are not buying proof value, and add one passing steady-state proof plus one failure scenario before expanding topology complexity."
+                    ]
+
             return {
                 "summary": f"Resolved topology contains {len(inv['node_names'])} nodes.",
                 "primary_failures": [],
                 "evidence_refs": [{"artifact": str(context_dir / "topology.resolved.yaml"), "section": "nodes"}],
                 "likely_causes": notes,
-                "next_actions": next_actions,
+                "next_actions": ranked_actions,
                 "example_drafts": example_drafts,
                 "coaching_notes": coaching_notes,
                 "authority": "advisory",
