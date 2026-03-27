@@ -12057,11 +12057,13 @@ def cmd_ai_review(args) -> None:
                     "The most likely issue is a port/policy mismatch between the test intent and the allowed service ports.",
                 ]
                 next_actions = [
-                    f"Decide whether the intended service should use port {requested_desc} or {allowed_desc}.",
-                    f"If {requested_desc} is correct, update the firewall allow list; if {allowed_desc} is correct, update the tcp proof port.",
+                    f"First, decide whether the intended service should use port {requested_desc} or {allowed_desc}.",
+                    f"Second, if {requested_desc} is correct, update the firewall allow list; if {allowed_desc} is correct, update the tcp proof port.",
+                    "Not yet: do not add more scenarios or topology complexity until the intended service port is aligned.",
                 ]
                 example_drafts = [
-                    f"Example only: change the tcp test port to {allowed_desc}, or change fw1 allow_tcp to include {requested_desc}."
+                    f"Example only: firewall-side fix\nnodes:\n  - name: fw1\n    type: nft-fw\n    allow_tcp: [{allowed_desc}, {requested_desc}]",
+                    f"Example only: test-side fix\ntests:\n  - name: h1_tcp_{allowed_desc.replace(', ', '_or_')}_to_h2_should_pass\n    kind: tcp\n    src: h1\n    dst: h2\n    port: {allowed_tcp_ports[0]}\n    listener: true\n    expect: pass",
                 ]
                 coaching_notes = [
                     "This is an advisory diagnosis only; the AI is pointing to the most likely mismatch from bounded artifacts and is not applying a change."
@@ -12072,11 +12074,12 @@ def cmd_ai_review(args) -> None:
                     "The biggest proof gap is usually missing positive intent: what should pass in steady state is not yet encoded as a passing proof.",
                 ]
                 next_actions = [
-                    "Decide the first steady-state behavior that should succeed and encode it as an explicit passing test.",
-                    "Keep failure-expected tests for negative intent, but separate them from the first success-path proof.",
+                    "First, decide the first steady-state behavior that should succeed and encode it as an explicit passing test.",
+                    "Second, keep failure-expected tests for negative intent, but separate them from the first success-path proof.",
+                    "Not yet: do not expand topology or add resiliency scenarios before one intended passing path is proven.",
                 ]
                 example_drafts = [
-                    "Example only: add one passing reachability or service test that represents the intended steady-state behavior, then keep the current failure-expected tests as negative proofs."
+                    "Example only: tests:\n  - name: h1_to_h2_ping_should_pass\n    kind: ping\n    src: h1\n    dst: h2\n    expect: pass\n    count: 2"
                 ]
                 coaching_notes = [
                     "A full PASS across failure-expected tests can still mean the topology lacks any proof of intended success."
@@ -12124,9 +12127,12 @@ def cmd_ai_review(args) -> None:
                     "First, add one explicit steady-state passing proof for the intended successful path.",
                     "Second, add one negative-path proof for traffic or policy that must fail.",
                     "Third, add one scenario that injects the most important failure and re-runs the key proof.",
+                    "Not yet, do not broaden topology complexity until these three proof layers exist.",
                 ]
                 example_drafts = [
-                    "Example only: validation plan = steady-state proof -> negative-path proof -> failure scenario -> deterministic replay."
+                    "Example only: tests:\n  - name: h1_to_h2_ping_should_pass\n    kind: ping\n    src: h1\n    dst: h2\n    expect: pass\n    count: 2",
+                    "Example only: tests:\n  - name: h1_to_h2_tcp_22_should_fail\n    kind: tcp\n    src: h1\n    dst: h2\n    port: 22\n    expect: fail",
+                    "Example only: scenarios:\n  - id: break_primary_path\n    steps:\n      - run: h1_to_h2_ping_should_pass\n      - fault:\n          link_down:\n            a: r2\n            a_if: eth2\n            b: fw1\n            b_if: eth1\n      - run: h1_to_h2_ping_should_pass"
                 ]
                 coaching_notes = [
                     "A validation plan is advisory only until each step is encoded as deterministic tests or scenarios."
@@ -12135,6 +12141,7 @@ def cmd_ai_review(args) -> None:
                 ranked_actions = [
                     "First, add one scenario that breaks the most important dependency in the path.",
                     "Second, re-run the key end-to-end proof before and after the fault step.",
+                    "Not yet, do not add extra scenarios until the primary failure scenario proves a meaningful behavior change.",
                 ]
                 example_drafts = [
                     "Example only: scenarios:\n  - id: break_primary_path\n    steps:\n      - run: h1_to_h2_ping_should_pass\n      - fault:\n          link_down:\n            a: r2\n            a_if: eth2\n            b: fw1\n            b_if: eth1\n      - run: h1_to_h2_ping_should_pass"
@@ -12146,6 +12153,7 @@ def cmd_ai_review(args) -> None:
                 ranked_actions = [
                     "First, add one invariant that proves the intended control-plane or policy truth directly.",
                     "Second, keep the invariant narrowly scoped to the specific route, peer, or attribute that matters.",
+                    "Not yet, do not add multiple broad invariants before proving one high-value truth cleanly.",
                 ]
                 example_drafts = [
                     "Example only: tests:\n  - name: r2_advertises_expected_prefix\n    kind: invariant\n    type: route_advertised_to\n    node: r2\n    peer: fw1\n    prefix: 192.168.2.0/24\n    expect: pass"
@@ -12158,9 +12166,11 @@ def cmd_ai_review(args) -> None:
                     ranked_actions = [
                         "First, choose the first end-to-end behavior that should succeed in steady state and express it as a passing test.",
                         "Second, keep the existing failure-expected tests as negative proofs, but do not treat them as proof of intended success.",
+                        "Not yet, do not add more coverage breadth before one positive proof exists.",
                     ]
                     example_drafts = [
-                        "Example only: tests:\n  - name: h1_to_h2_ping_should_pass\n    kind: ping\n    src: h1\n    dst: h2\n    expect: pass\n    count: 2"
+                        "Example only: tests:\n  - name: h1_to_h2_ping_should_pass\n    kind: ping\n    src: h1\n    dst: h2\n    expect: pass\n    count: 2",
+                        "Example only: tests:\n  - name: h1_to_h2_tcp_443_should_pass\n    kind: tcp\n    src: h1\n    dst: h2\n    port: 443\n    expect: pass"
                     ]
                     coaching_notes = [
                         "When all declared tests expect failure, a full PASS mostly proves negative intent, not the design you want to succeed."
@@ -12169,6 +12179,7 @@ def cmd_ai_review(args) -> None:
                     ranked_actions = [
                         "First, add or strengthen the most important steady-state proof if coverage is sparse.",
                         "Second, add explicit failure choreography where resiliency matters.",
+                        "Not yet, do not widen the proof surface until the highest-value steady-state and failure proofs are solid.",
                     ]
                     example_drafts = [
                         "Example only: add one steady-state path test and one failure scenario before treating coverage as strong."
@@ -12221,9 +12232,11 @@ def cmd_ai_review(args) -> None:
                 ranked_actions = [
                     "First, keep the current shape if it already represents the intended path, and add one explicit passing proof for the success behavior you actually want.",
                     "Second, simplify only if extra links are not needed for failure-choreography or ambiguity testing.",
+                    "Not yet, do not expand topology complexity before the current shape proves one intended success path.",
                 ]
                 example_drafts = [
-                    "Example only: keep the current node/link shape, but add a passing steady-state test such as h1_to_h2_ping_should_pass before expanding the topology."
+                    "Example only: keep the current node/link shape, but add a passing steady-state test such as h1_to_h2_ping_should_pass before expanding the topology.",
+                    "Example only: tests:\n  - name: h1_to_h2_ping_should_pass\n    kind: ping\n    src: h1\n    dst: h2\n    expect: pass\n    count: 2"
                 ]
                 coaching_notes = [
                     "When all tests expect failure, improving proof quality is usually more valuable than adding more topology complexity."
@@ -12232,7 +12245,9 @@ def cmd_ai_review(args) -> None:
             if "improved topology" in question_l or "better topology" in question_l:
                 if core_path:
                     example_drafts = [
-                        "Example only: keep r1 -> r2 -> fw1 -> r3 as the core path, keep the parallel r2<->fw1 link only if you want failover/ambiguity testing, and add one passing steady-state proof plus one failure scenario instead of expanding node count first."
+                        "Example only: topology guidance\n- keep r1 -> r2 -> fw1 -> r3 as the core path\n- keep the parallel r2<->fw1 link only if you want failover or ambiguity testing\n- otherwise remove the extra link to simplify proof intent",
+                        "Example only: tests:\n  - name: h1_to_h2_ping_should_pass\n    kind: ping\n    src: h1\n    dst: h2\n    expect: pass\n    count: 2",
+                        "Example only: scenarios:\n  - id: break_primary_path\n    steps:\n      - run: h1_to_h2_ping_should_pass\n      - fault:\n          link_down:\n            a: r2\n            a_if: eth2\n            b: fw1\n            b_if: eth1\n      - run: h1_to_h2_ping_should_pass"
                     ]
                 else:
                     example_drafts = [
