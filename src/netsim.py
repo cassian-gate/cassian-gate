@@ -12080,6 +12080,19 @@ def cmd_ai_review(args) -> None:
                             pass
             allowed_tcp_ports = sorted(set(allowed_tcp_ports))
 
+            failed_invariants = [
+                t for t in failed_tests
+                if str(t.get("kind", "")).strip().lower() == "invariant"
+            ]
+            declared_failed_invariants = [
+                t for t in declared_failed_tests
+                if str(t.get("kind", "")).strip().lower() == "invariant"
+            ]
+            failed_route_invariants = [
+                t for t in declared_failed_invariants
+                if str(t.get("type", "")).strip().lower() in {"route_advertised_to", "route_present", "route_not_advertised_to"}
+            ]
+
             if declared_failed_tcp_tests and requested_tcp_ports and allowed_tcp_ports and requested_tcp_ports != allowed_tcp_ports:
                 requested_desc = ", ".join(str(p) for p in requested_tcp_ports)
                 allowed_desc = ", ".join(str(p) for p in allowed_tcp_ports)
@@ -12098,6 +12111,27 @@ def cmd_ai_review(args) -> None:
                 ]
                 coaching_notes = [
                     "This is an advisory diagnosis only; the AI is pointing to the most likely mismatch from bounded artifacts and is not applying a change."
+                ]
+            elif failed_route_invariants:
+                inv0 = failed_route_invariants[0]
+                prefix = str(inv0.get("prefix") or "").strip()
+                node_name = str(inv0.get("node") or "").strip()
+                peer_name = str(inv0.get("peer") or "").strip()
+                inv_type = str(inv0.get("type") or "").strip()
+                likely_causes = [
+                    f"The failed {inv_type} proof is scoped to prefix {prefix} between {node_name} and {peer_name}.",
+                    "The most likely issue is either the wrong peer/prefix is being asserted, or the intended control-plane truth is not yet encoded in the topology under test.",
+                ]
+                next_actions = [
+                    f"First, verify that {prefix} is the exact route you intend {node_name} to advertise toward {peer_name}.",
+                    "Second, prove one route-focused truth before adding broader end-to-end or failover expectations.",
+                    "Not yet: do not add more invariants until the first peer/prefix control-plane assertion is confirmed correct.",
+                ]
+                example_drafts = [
+                    f"tests:\n  - name: {node_name}_advertises_{prefix.replace('/', '_')}_to_{peer_name}\n    kind: invariant\n    type: route_advertised_to\n    node: {node_name}\n    peer: {peer_name}\n    prefix: {prefix}\n    expect: pass"
+                ]
+                coaching_notes = [
+                    "A failed route-focused invariant often means the proof target itself should be checked before broadening the test surface."
                 ]
             elif all_expect_fail:
                 likely_causes = [
@@ -12129,6 +12163,7 @@ def cmd_ai_review(args) -> None:
                 "coaching_notes": coaching_notes,
                 "authority": "advisory",
             }
+
 
         if module_name == "coverage_review":
             question_l = (question or "").strip().lower()
@@ -12170,6 +12205,24 @@ def cmd_ai_review(args) -> None:
                     pass
             host_networks = sorted(set(host_networks))
 
+            scenario_ids = sorted(
+                str(s.get("id") or "").strip()
+                for s in list(topo.get("scenarios") or [])
+                if isinstance(s, dict) and str(s.get("id") or "").strip()
+            )
+            tests_by_kind: dict[str, list[dict[str, Any]]] = {}
+            for t in tests:
+                if not isinstance(t, dict):
+                    continue
+                kind = str(t.get("kind") or "").strip().lower()
+                tests_by_kind.setdefault(kind, []).append(t)
+
+            route_like_invariants = []
+            for t in tests_by_kind.get("invariant", []):
+                inv_type = str(t.get("type") or "").strip().lower()
+                if inv_type in {"route_advertised_to", "route_present", "route_not_advertised_to"}:
+                    route_like_invariants.append(t)
+
             insights: list[str] = []
             if inv["tests_count"] == 0:
                 insights.append("No tests are declared, so the topology currently has no executable proof of intended behavior.")
@@ -12186,6 +12239,12 @@ def cmd_ai_review(args) -> None:
                 insights.append(f"Parallel links exist between {pair_desc}, so the topology already encodes a failover or ambiguity surface that should be proven explicitly.")
             if host_networks and ("invariant" in question_l or "scenario" in question_l):
                 insights.append(f"Declared host subnets {', '.join(host_networks)} provide a bounded control-plane or path-intent surface for more targeted proofs.")
+            if "invariant" in question_l and not route_like_invariants and host_networks:
+                insights.append("No route-focused invariant is currently declared, so control-plane truth for the host subnets is still unproven.")
+            if "scenario" in question_l and parallel_pairs and not any("break_primary_path" == sid for sid in scenario_ids):
+                insights.append("The topology exposes a parallel-link fault surface, but there is no clearly named scenario that proves the primary-path failure behavior.")
+            if "invariant" in question_l and parallel_pairs and route_like_invariants:
+                insights.append("Control-plane checks should stay scoped to one peer/prefix truth first, rather than broadening into multiple parallel-link assertions at once.")
 
             ranked_actions: list[str] = []
             example_drafts: list[str] = []
@@ -12298,6 +12357,7 @@ def cmd_ai_review(args) -> None:
                 "coaching_notes": coaching_notes,
                 "authority": "advisory",
             }
+
 
         if module_name == "topology_review":
             question_l = (question or "").strip().lower()
