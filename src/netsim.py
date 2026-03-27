@@ -11740,41 +11740,41 @@ def cmd_ai_review(args) -> None:
         q = (question or "").strip().lower()
         if not q:
             return None
+        advisory_words = (
+            "why",
+            "what",
+            "how",
+            "explain",
+            "teach",
+            "review",
+            "improve",
+            "better",
+            "example",
+            "missing",
+            "next",
+            "likely",
+            "suggest",
+        )
         if "blast radius" in q:
             return "blast_radius_explain"
-        if "scenario" in q and (
-            "validate" in q
-            or "what did" in q
-            or "explain" in q
-            or "what scenario should i add" in q
-        ):
-            return "scenario_interpret"
         if "invariant" in q:
             return "invariant_explain"
-        if (
-            "coverage" in q
-            or "miss any coverage" in q
-            or "missing coverage" in q
-            or "what test am i missing" in q
-            or "what should i test next" in q
-            or "did i miss any coverage" in q
+        if "scenario" in q and (
+            any(word in q for word in advisory_words) or "validate" in q or "add" in q
+        ):
+            return "scenario_interpret"
+        if "coverage" in q or (
+            ("test" in q or "tests" in q) and any(word in q for word in advisory_words)
         ):
             return "coverage_review"
-        if (
-            "improve this topology" in q
-            or ("improve" in q and "topology" in q)
-            or "how could this topology be improved" in q
-            or "show me an example of a better design" in q
-            or "teach me how to validate this properly" in q
-        ):
+        if ("topology" in q or "design" in q) and any(word in q for word in advisory_words):
             return "topology_review"
         if (
-            "why did this fail" in q
-            or "what caused this failure" in q
-            or "explain this failure" in q
-            or "what should i change first" in q
-            or "what is most likely wrong" in q
-            or "what is the fastest likely path to a passing result" in q
+            "fail" in q
+            or "wrong" in q
+            or "cause" in q
+            or "change first" in q
+            or "path to a passing result" in q
         ):
             return "failure_explain"
         return None
@@ -11783,14 +11783,29 @@ def cmd_ai_review(args) -> None:
         q = (question or "").strip().lower()
         if not q:
             return False
-        if q == "what scenario should i add":
-            return False
+        advisory_words = (
+            "why",
+            "what",
+            "how",
+            "explain",
+            "teach",
+            "review",
+            "improve",
+            "better",
+            "example",
+            "missing",
+            "next",
+            "likely",
+            "suggest",
+        )
         mutate_words = ("modify", "change", "create", "add", "rewrite", "generate", "update", "fix")
         scope_words = ("topology", "scenario", "scenarios", "config", "configs", "configuration")
         execute_words = ("run ", "execute ", "deploy", "provision", "destroy", "replay")
         if any(w in q for w in execute_words):
             return True
-        return any(w in q for w in mutate_words) and any(w in q for w in scope_words)
+        if any(w in q for w in mutate_words) and any(w in q for w in scope_words):
+            return not any(w in q for w in advisory_words)
+        return False
 
     def _latest_artifacts_dir() -> tuple[Path | None, str]:
         labs_dir = Path("labs")
