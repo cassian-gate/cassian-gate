@@ -401,22 +401,20 @@ def _print_artifacts_footer_for_lab(lab_input: Path, *, authority_kind: str | No
         if (wrote_json or wrote_sum) and (not _INVOCATION_ARTIFACT_BLOCK_PRINTED):
             _INVOCATION_ARTIFACT_BLOCK_PRINTED = True
 
-            # WI-1 (Set 6): stable single-line artifact root for gate failures.
             if is_gate:
                 rel_root = rel_labs(adir).replace("\\", "/")
                 if not rel_root.endswith("/"):
                     rel_root += "/"
                 print(f"Artifacts: {rel_root}")
-                print("  - topology.resolved.yaml")
-                print("  - results.json")
-                print("  - results.summary.txt")
+                print("  - topology.resolved.yaml (generated execution model; non-authoritative)")
+                print("  - results.json (authoritative verdict artifact)")
+                print("  - results.summary.txt (human-readable summary; non-authoritative)")
             else:
-                # Non-gate (existing UX preserved)
                 print("Artifacts:")
                 if wrote_json:
-                    print(f"* {rel_labs(p_json)} (supporting evidence; non-authoritative)")
+                    print(f"* {rel_labs(p_json)} (authoritative verdict artifact)")
                 if wrote_sum:
-                    print(f"* {rel_labs(p_sum)} (human-readable)")
+                    print(f"* {rel_labs(p_sum)} (human-readable summary; non-authoritative)")
     except Exception:
         return
 
@@ -2430,7 +2428,6 @@ def cmd_test(args: argparse.Namespace) -> None:
                     out = lab_dir(lab_name) / "results.json"
                     summ = lab_dir(lab_name) / "results.summary.txt"
                     if (not out.exists()) or (not summ.exists()):
-                        # Fail closed: attempt deterministic fallback emission, then exit non-zero.
                         try:
                             _gate_write_hard_failure_results(
                                 phase="collect",
@@ -2441,6 +2438,19 @@ def cmd_test(args: argparse.Namespace) -> None:
                         except Exception:
                             pass
                         die("ERROR: gate artifact integrity failure (missing results.*)", code=1)
+
+                    try:
+                        rj = load_yaml(out)
+                    except Exception:
+                        rj = None
+
+                    if isinstance(rj, dict):
+                        tests_n = len(rj.get("tests") or [])
+                        scenarios_n = len(rj.get("scenarios") or [])
+                        if tests_n == 0 and scenarios_n == 0:
+                            print("Proof Scope: smoke-only deployment validation")
+                            print("Validated: resolve, generate, deploy, provision, collect, destroy")
+                            print("Not validated: connectivity, routing, policy, scenario behavior")
                 except SystemExit:
                     raise
                 except Exception as e:
@@ -8932,16 +8942,18 @@ def cmd_down(args: argparse.Namespace) -> None:
     if not out.exists():
         strict = bool(getattr(args, "strict", False))
 
-        if strict:
-            print(f"ERROR: lab '{lab_name}' not found")
-
         print("────────────────────────────────────────")
         print("ai-netsim Down Result")
         print("────────────────────────────────────────")
+        if used_topology:
+            print(f"Topology: {topo_path}")
+        print(f"Lab: {lab_name}")
         print(f"LAB DESCRIPTOR: labs/{lab_name}.clab.yaml")
         print("RESULT: NO-OP (lab not found)")
+        print("Meaning: nothing was destroyed")
 
         if strict:
+            print(f"ERROR: lab '{lab_name}' not found")
             raise SystemExit(2)
         return
 
@@ -8954,6 +8966,7 @@ def cmd_down(args: argparse.Namespace) -> None:
     print("Action: destroy runtime")
     _maybe_print_privilege_notice("A")
     _run_containerlab(["sudo", "containerlab", "destroy", "-t", str(out)], check=True)
+    print("RESULT: DESTROYED")
     print(f"OK  {lab_name}: destroyed")
 
     # Artifact policy (v2 gate integrity):
