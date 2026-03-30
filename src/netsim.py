@@ -406,15 +406,15 @@ def _print_artifacts_footer_for_lab(lab_input: Path, *, authority_kind: str | No
                 if not rel_root.endswith("/"):
                     rel_root += "/"
                 print(f"Artifacts: {rel_root}")
-                print("  - topology.resolved.yaml (generated execution model; non-authoritative)")
+                print("  - topology.resolved.yaml (generated execution model used for execution; non-authoritative)")
                 print("  - results.json (authoritative verdict artifact)")
-                print("  - results.summary.txt (human-readable summary; non-authoritative)")
+                print("  - results.summary.txt (human-readable summary only; non-authoritative)")
             else:
                 print("Artifacts:")
                 if wrote_json:
                     print(f"* {rel_labs(p_json)} (authoritative verdict artifact)")
                 if wrote_sum:
-                    print(f"* {rel_labs(p_sum)} (human-readable summary; non-authoritative)")
+                    print(f"* {rel_labs(p_sum)} (human-readable summary only; non-authoritative)")
     except Exception:
         return
 
