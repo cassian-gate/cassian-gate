@@ -1096,10 +1096,14 @@ def _candidate_parse_dir_or_die(topo: dict[str, Any], cand_dir: Path) -> list[di
     def _cand_misuse_invalid_structure() -> None:
         die(
             f"ERROR: Candidate config directory structure invalid: {cand_dir}\n"
+            "Meaning: this candidate-config surface is unsupported or malformed for the current command/topology.\n"
             "Expected structure:\n"
             "  <dir>/\n"
             "    <node-name>/\n"
             "      <config-files>\n"
+            "Support boundary:\n"
+            "  - supported current surfaces: generated FRR and nft-fw candidate files only\n"
+            "  - unsupported current surfaces: vendor NOS / sonic-vm candidate-config input\n"
             "See operator cheat sheet for exact structure.",
             code=2,
         )
