@@ -2455,6 +2455,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                             print("Proof Scope: smoke-only deployment validation")
                             print("Validated: resolve, generate, deploy, provision, collect, destroy")
                             print("Not validated: connectivity, routing, policy, scenario behavior")
+                            print("Next: add declared tests or scenarios to prove behavior beyond smoke")
                 except SystemExit:
                     raise
                 except Exception as e:
