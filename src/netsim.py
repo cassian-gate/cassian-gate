@@ -8709,6 +8709,8 @@ def cmd_replay(args: argparse.Namespace) -> None:
     print("")
     print(f"Run Source: {src}")
     if bool(getattr(args, "gate", False)):
+        print("Mode: replay (authoritative gate context)")
+        print("Authority: GATE (authoritative)")
         # Authoritative replay:
         # IMPORTANT: Gate-mode enforces clean-state destroy by LAB NAME. If we pass the source resolved
         # topology directly, the destroy step may purge the very source artifacts we're replaying from.
@@ -8854,6 +8856,9 @@ def cmd_replay(args: argparse.Namespace) -> None:
 
         return
 
+    print("Mode: replay (exploration artifacts)")
+    print("Authority: RUN (non-authoritative)")
+
     # Non-gate replay: deploy/provision using the resolved topology artifact; keep lab running.
     # IMPORTANT: reconfigure=True triggers destroy by LAB NAME. If we use the source resolved topology
     # directly, we may purge the source artifacts. Use a deterministic replay lab name and a temp
@@ -8876,8 +8881,6 @@ def cmd_replay(args: argparse.Namespace) -> None:
     src_doc2["name"] = replay_name
     write_file(tmp_resolved, yaml.safe_dump(src_doc2, sort_keys=False))
 
-    print("Authority: RUN (non-authoritative)")
-    print("Mode: replay (exploration artifacts)")
     print("Replay Context: non-gate replay keeps runtime up for inspection")
     print("")
 
@@ -10347,6 +10350,8 @@ def cmd_run(args: argparse.Namespace) -> None:
     else:
         # Default run behavior: destroy only on full success; keep lab on failure for debugging.
         lifecycle = "DESTROYED" if (exit_code is None) else "RETAINED"
+    print(f"Mode: run (exploration)")
+    print("Authority: RUN (non-authoritative)")
     print(f"Lab lifecycle: {lifecycle}")
 
     # Final reporting + exit behavior (never lie)
