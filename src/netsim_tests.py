@@ -3284,7 +3284,10 @@ def render_gate_result_block(results: dict, *, authority_kind: str | None = None
         out.append("RESULT: PASS (SMOKE)")
         out.append("Note: no tests or scenarios were executed.")
     else:
-        out.append(f"RESULT: {verdict_s}")
+        if verdict_s == "FAIL":
+            out.append("RESULT: FAIL (validation)")
+        else:
+            out.append(f"RESULT: {verdict_s}")
 
     # Failed assertions (execution order; no sorting)
     failed: list[dict] = []

@@ -401,22 +401,20 @@ def _print_artifacts_footer_for_lab(lab_input: Path, *, authority_kind: str | No
         if (wrote_json or wrote_sum) and (not _INVOCATION_ARTIFACT_BLOCK_PRINTED):
             _INVOCATION_ARTIFACT_BLOCK_PRINTED = True
 
-            # WI-1 (Set 6): stable single-line artifact root for gate failures.
             if is_gate:
                 rel_root = rel_labs(adir).replace("\\", "/")
                 if not rel_root.endswith("/"):
                     rel_root += "/"
                 print(f"Artifacts: {rel_root}")
-                print("  - topology.resolved.yaml")
-                print("  - results.json")
-                print("  - results.summary.txt")
+                print("  - topology.resolved.yaml (generated execution model used for execution; non-authoritative)")
+                print("  - results.json (authoritative verdict artifact)")
+                print("  - results.summary.txt (human-readable summary only; non-authoritative)")
             else:
-                # Non-gate (existing UX preserved)
                 print("Artifacts:")
                 if wrote_json:
-                    print(f"* {rel_labs(p_json)} (supporting evidence; non-authoritative)")
+                    print(f"* {rel_labs(p_json)} (authoritative verdict artifact)")
                 if wrote_sum:
-                    print(f"* {rel_labs(p_sum)} (human-readable)")
+                    print(f"* {rel_labs(p_sum)} (human-readable summary only; non-authoritative)")
     except Exception:
         return
 
@@ -1098,10 +1096,14 @@ def _candidate_parse_dir_or_die(topo: dict[str, Any], cand_dir: Path) -> list[di
     def _cand_misuse_invalid_structure() -> None:
         die(
             f"ERROR: Candidate config directory structure invalid: {cand_dir}\n"
+            "Meaning: this candidate-config surface is unsupported or malformed for the current command/topology.\n"
             "Expected structure:\n"
             "  <dir>/\n"
             "    <node-name>/\n"
             "      <config-files>\n"
+            "Support boundary:\n"
+            "  - supported current surfaces: generated FRR and nft-fw candidate files only\n"
+            "  - unsupported current surfaces: vendor NOS / sonic-vm candidate-config input\n"
             "See operator cheat sheet for exact structure.",
             code=2,
         )
@@ -2430,7 +2432,6 @@ def cmd_test(args: argparse.Namespace) -> None:
                     out = lab_dir(lab_name) / "results.json"
                     summ = lab_dir(lab_name) / "results.summary.txt"
                     if (not out.exists()) or (not summ.exists()):
-                        # Fail closed: attempt deterministic fallback emission, then exit non-zero.
                         try:
                             _gate_write_hard_failure_results(
                                 phase="collect",
@@ -2441,6 +2442,20 @@ def cmd_test(args: argparse.Namespace) -> None:
                         except Exception:
                             pass
                         die("ERROR: gate artifact integrity failure (missing results.*)", code=1)
+
+                    try:
+                        rj = load_yaml(out)
+                    except Exception:
+                        rj = None
+
+                    if isinstance(rj, dict):
+                        tests_n = len(rj.get("tests") or [])
+                        scenarios_n = len(rj.get("scenarios") or [])
+                        if tests_n == 0 and scenarios_n == 0:
+                            print("Proof Scope: smoke-only deployment validation")
+                            print("Validated: resolve, generate, deploy, provision, collect, destroy")
+                            print("Not validated: connectivity, routing, policy, scenario behavior")
+                            print("Next: add declared tests or scenarios to prove behavior beyond smoke")
                 except SystemExit:
                     raise
                 except Exception as e:
@@ -8699,6 +8714,8 @@ def cmd_replay(args: argparse.Namespace) -> None:
     print("")
     print(f"Run Source: {src}")
     if bool(getattr(args, "gate", False)):
+        print("Mode: replay (authoritative gate context)")
+        print("Authority: GATE (authoritative)")
         # Authoritative replay:
         # IMPORTANT: Gate-mode enforces clean-state destroy by LAB NAME. If we pass the source resolved
         # topology directly, the destroy step may purge the very source artifacts we're replaying from.
@@ -8844,6 +8861,9 @@ def cmd_replay(args: argparse.Namespace) -> None:
 
         return
 
+    print("Mode: replay (exploration artifacts)")
+    print("Authority: RUN (non-authoritative)")
+
     # Non-gate replay: deploy/provision using the resolved topology artifact; keep lab running.
     # IMPORTANT: reconfigure=True triggers destroy by LAB NAME. If we use the source resolved topology
     # directly, we may purge the source artifacts. Use a deterministic replay lab name and a temp
@@ -8866,8 +8886,6 @@ def cmd_replay(args: argparse.Namespace) -> None:
     src_doc2["name"] = replay_name
     write_file(tmp_resolved, yaml.safe_dump(src_doc2, sort_keys=False))
 
-    print("Authority: RUN (non-authoritative)")
-    print("Mode: replay (exploration artifacts)")
     print("Replay Context: non-gate replay keeps runtime up for inspection")
     print("")
 
@@ -8932,16 +8950,18 @@ def cmd_down(args: argparse.Namespace) -> None:
     if not out.exists():
         strict = bool(getattr(args, "strict", False))
 
-        if strict:
-            print(f"ERROR: lab '{lab_name}' not found")
-
         print("────────────────────────────────────────")
         print("ai-netsim Down Result")
         print("────────────────────────────────────────")
+        if used_topology:
+            print(f"Topology: {topo_path}")
+        print(f"Lab: {lab_name}")
         print(f"LAB DESCRIPTOR: labs/{lab_name}.clab.yaml")
         print("RESULT: NO-OP (lab not found)")
+        print("Meaning: nothing was destroyed")
 
         if strict:
+            print(f"ERROR: lab '{lab_name}' not found")
             raise SystemExit(2)
         return
 
@@ -8954,6 +8974,7 @@ def cmd_down(args: argparse.Namespace) -> None:
     print("Action: destroy runtime")
     _maybe_print_privilege_notice("A")
     _run_containerlab(["sudo", "containerlab", "destroy", "-t", str(out)], check=True)
+    print("RESULT: DESTROYED")
     print(f"OK  {lab_name}: destroyed")
 
     # Artifact policy (v2 gate integrity):
@@ -9100,16 +9121,16 @@ def cmd_destroy(args: argparse.Namespace) -> None:
         # WI-8.1 (Set 8): destructive NO-OP must be explicit and unambiguous.
         strict = bool(getattr(args, "strict", False))
 
-        if strict:
-            print(f"ERROR: lab '{lab_name}' not found")
-
         print("────────────────────────────────────────")
         print("ai-netsim Destroy Result")
         print("────────────────────────────────────────")
+        print(f"Lab: {lab_name}")
         print(f"LAB DESCRIPTOR: labs/{lab_name}.clab.yaml")
         print("RESULT: NO-OP (lab not found)")
+        print("Meaning: nothing was destroyed")
 
         if strict:
+            print(f"ERROR: lab '{lab_name}' not found")
             raise SystemExit(2)
         return
 
@@ -10334,6 +10355,8 @@ def cmd_run(args: argparse.Namespace) -> None:
     else:
         # Default run behavior: destroy only on full success; keep lab on failure for debugging.
         lifecycle = "DESTROYED" if (exit_code is None) else "RETAINED"
+    print(f"Mode: run (exploration)")
+    print("Authority: RUN (non-authoritative)")
     print(f"Lab lifecycle: {lifecycle}")
 
     # Final reporting + exit behavior (never lie)
