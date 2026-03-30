@@ -9116,16 +9116,16 @@ def cmd_destroy(args: argparse.Namespace) -> None:
         # WI-8.1 (Set 8): destructive NO-OP must be explicit and unambiguous.
         strict = bool(getattr(args, "strict", False))
 
-        if strict:
-            print(f"ERROR: lab '{lab_name}' not found")
-
         print("────────────────────────────────────────")
         print("ai-netsim Destroy Result")
         print("────────────────────────────────────────")
+        print(f"Lab: {lab_name}")
         print(f"LAB DESCRIPTOR: labs/{lab_name}.clab.yaml")
         print("RESULT: NO-OP (lab not found)")
+        print("Meaning: nothing was destroyed")
 
         if strict:
+            print(f"ERROR: lab '{lab_name}' not found")
             raise SystemExit(2)
         return
 
