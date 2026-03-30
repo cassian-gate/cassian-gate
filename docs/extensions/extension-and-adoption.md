@@ -1,302 +1,166 @@
-````markdown
-# ai-netsim — Extension & Adoption Guide
+# Extensions and Adoption
+
+ai-netsim is a deterministic network validation engine.
+
+This document defines the approved extension surface foundation introduced by Extension Set 1.
 
 ## Purpose
 
-ai-netsim is designed to be extended by engineers, teams, and vendors.
+The purpose of this extension surface is to make repository structure and contributor intent explicit without changing engine behavior.
 
-The goal is to make it easy to:
-- add validation coverage
-- model real-world network behavior
-- share reusable test logic
-- integrate new environments safely
+Extensions in this repository add declarative content and ecosystem organization only.
 
-This document explains **how to extend ai-netsim correctly**.
+They do not add execution authority.
 
----
+## Core boundary
 
-## Core Principle
+The ai-netsim core remains the only authority for:
 
-ai-netsim is a **deterministic validation engine**, not a lab platform.
+- lifecycle execution
+- pass/fail verdicts
+- exit codes
+- replay behavior
+- authoritative artifact semantics
+- AI authority boundaries
 
-Everything must remain:
-- explicit
-- reproducible
-- testable
-- deterministic
+Nothing under `contrib/` changes those core authority surfaces by existing in the repository.
 
-Extensions must **never change execution behavior or verdict logic**.
+## What extension surfaces are for
 
----
+The approved extension surfaces are bounded repository locations for declarative contribution content such as:
 
-## What You Can Extend
+- packs
+- scenarios
+- topologies
+- state profiles
+- future NOS bundle structure
 
-ai-netsim is intentionally extensible in a few key areas.
+These surfaces exist so contributors and maintainers can distinguish ecosystem content from core engine code.
 
-### 1. Invariants
+## What extension surfaces are not
 
-Invariants are deterministic validation checks.
+These surfaces are not:
 
-Examples:
-- route is present
-- route is not advertised
-- BGP attribute equals expected value
+- executable plugins
+- runtime hooks
+- lifecycle hooks
+- dynamic imports
+- auto-discovery inputs
+- implicit support claims
+- verdict logic
+- exit code control
+- artifact authority
 
-**Use when:**
-- you need strict, reusable validation logic
-- the behavior must be binary (pass/fail)
+ai-netsim does not support a plugin system here.
 
----
+## Set 1 boundary
 
-### 2. Test Packs (Invariant Packs)
+Extension Set 1 introduces structure and public contract only.
 
-Packs are reusable groups of invariants.
+It does not introduce:
 
-Example:
-```yaml
-packs:
-  - datacenter-bgp-safety
-````
+- runtime scanning
+- runtime loading
+- runtime registration
+- contrib validation commands
+- contrib schema enforcement
+- NOS runtime support
+- candidate-config extensions
+- CLI changes
+- artifact schema changes
 
-**Use when:**
+## Approved extension categories
 
-* you want to standardize validation across environments
-* you want to share best practices
+The approved structural categories are:
 
----
+- `contrib/packs/`
+- `contrib/scenarios/`
+- `contrib/topologies/`
+- `contrib/state-profiles/`
+- `contrib/nos/`
 
-### 3. Scenarios (Failure Choreography)
+These categories are structural only in Set 1.
 
-Scenarios define ordered failure testing.
+## Declarative content only
 
-Examples:
+Content under approved extension surfaces must remain declarative.
 
-* link down → verify failover → restore → verify recovery
-* node reboot → convergence → validation
+Examples include:
 
-**Use when:**
+- YAML
+- documentation
+- bounded examples
+- future-facing structural placeholders
 
-* testing resiliency
-* validating failover behavior
-* proving real-world change impact
+Declarative content does not gain execution authority by being present in the repository.
 
----
+## No lifecycle mutation
 
-### 4. Topologies
+Contrib content cannot modify:
 
-Topologies define:
+- resolve
+- generate
+- deploy
+- provision
+- test
+- collect
+- destroy
 
-* nodes
-* links
-* tests
-* scenarios
+The lifecycle remains fixed and core-owned.
 
-**Use when:**
+## No verdict or exit-code mutation
 
-* modeling real networks
-* creating reproducible validation environments
+Contrib content cannot modify:
 
----
+- pass/fail ownership
+- failure semantics
+- misuse semantics
+- exit code mapping
 
-### 5. State Profiles (Evidence Collection)
+## No artifact-authority mutation
 
-State profiles define what operational data to collect.
+Contrib content cannot make itself authoritative over:
 
-Examples:
+- `topology.resolved.yaml`
+- `results.json`
+- `results.summary.txt`
 
-* interfaces
-* routing tables
-* firewall rules
+Generated artifacts and authoritative artifacts remain core-defined.
 
-**Important:**
+## AI boundary unchanged
 
-* state is **supporting evidence only**
-* it does NOT affect pass/fail results
+Contrib content cannot change the AI boundary.
 
----
+AI remains advisory-only and non-authoritative.
 
-### 6. Candidate Config (Input Only)
+## `contrib/nos/` boundary
 
-Candidate config allows you to express intended changes.
+`contrib/nos/` is structural only in Set 1.
 
-**Important:**
+Its presence does not mean:
 
-* config is input only
-* behavior validation is what matters
-* config does NOT determine success
+- NOS bundles are operational in v2
+- runtime discovery exists
+- readiness integration exists
+- supported vendor onboarding exists
+- declarative NOS bundle execution exists
 
----
+Declarative NOS bundle support belongs to later post-v2 work.
 
-### 7. NOS Extensions (Advanced)
+## Adoption meaning
 
-Advanced users and vendors can add support for new NOS types.
+The extension surface should help contributors understand where future approved declarative content belongs.
 
-A NOS extension may include:
+It should also help maintainers review scope cleanly and reject accidental authority creep.
 
-* runtime definition (how it runs)
-* control-surface readiness
-* optional state capture support
-* optional invariant pack compatibility
+## Support claim boundary
 
-**Important:**
+Repository structure alone must never be interpreted as current runtime support.
 
-* NOS support must NOT change core execution behavior
-* all validation remains in the shared engine
-
----
-
-## What You CANNOT Extend
-
-The following are **strictly part of the core engine**:
-
-* lifecycle execution
-* pass/fail logic
-* exit codes
-* artifact authority
-* deterministic behavior
-
-Do NOT attempt to:
-
-* modify execution flow
-* override validation results
-* introduce hidden logic
-* create plugin-style runtime hooks
-
----
-
-## How to Contribute
-
-### Step 1 — Start with YAML
-
-Most extensions require **no code**.
-
-Start by creating:
-
-* a topology
-* tests or scenarios
-* optional packs
-
----
-
-### Step 2 — Validate Locally
-
-```bash
-netsim test <topology.yaml>
-```
-
-Ensure:
-
-* deterministic results
-* clear pass/fail behavior
-* no ambiguity
-
----
-
-### Step 3 — Add Reusable Logic
-
-If useful:
-
-* extract tests into packs
-* define scenarios
-* document usage
-
----
-
-### Step 4 — Share
-
-You can contribute:
-
-* example topologies
-* invariant packs
-* scenario patterns
-* NOS extensions (advanced)
-
----
-
-## Design Rules for Extensions
-
-All extensions must follow these rules:
-
-* explicit inputs only
-* no hidden defaults
-* deterministic output
-* reproducible results
-* no side effects
-* no authority over verdicts
-
----
-
-## Anti-Patterns (Avoid These)
-
-Do NOT:
-
-* mix validation and execution logic
-* introduce randomness or timing dependencies
-* rely on external state
-* hide behavior behind abstraction
-* create “magic” automation
-
----
-
-## Adoption Strategy
-
-The easiest way to adopt ai-netsim is:
-
-1. start with a small topology
-2. add simple tests
-3. introduce scenarios
-4. reuse packs
-5. expand coverage over time
-
----
-
-## Contribution Philosophy
-
-ai-netsim grows through:
-
-* shared validation logic
-* reusable scenarios
-* real-world examples
-* deterministic behavior
-
-Not through:
-
-* complex frameworks
-* plugin ecosystems
-* hidden abstractions
-
----
+Future direction described in documentation is not a claim that the engine already supports that behavior.
 
 ## Summary
 
-ai-netsim is designed to be:
+Extension Set 1 creates a bounded, reviewable, non-executable extension surface foundation.
 
-* simple to extend
-* strict in behavior
-* deterministic in execution
-* reliable for production validation
-
-If your extension:
-
-* improves validation clarity → good
-* improves reproducibility → good
-* improves real-world coverage → good
-
-If it:
-
-* introduces ambiguity → reject
-* weakens determinism → reject
-
----
-
-## Final Rule
-
-If you are unsure:
-
-→ prefer explicit, simple, deterministic solutions
-
-This is how ai-netsim remains trustworthy.
-
-```
-```
-
+It strengthens contributor clarity and adoption readiness without changing deterministic execution behavior.
