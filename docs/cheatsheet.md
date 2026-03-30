@@ -136,19 +136,24 @@ If the topology contains:
 - no `tests`
 - no `scenarios`
 
-Output:
+Current operator-visible meaning is:
 
 ```text
-Tests executed: 0
-Scenarios executed: 0
-RESULT: PASS
+RESULT: PASS (SMOKE)
+Note: no tests or scenarios were executed.
+NOTE: No tests/scenarios declared — PASS means deploy/provision succeeded only.
+Proof Scope: smoke-only deployment validation
+Validated: resolve, generate, deploy, provision, collect, destroy
+Not validated: connectivity, routing, policy, scenario behavior
+Next: add declared tests or scenarios to prove behavior beyond smoke
 ```
 
 Meaning:
 
-> Deployment succeeded (SMOKE validation only)
-
-No routing or connectivity validation occurred.
+- PASS here proves only deployment/provision lifecycle success
+- it does **not** prove traffic behavior
+- it does **not** prove routing correctness
+- it does **not** prove policy correctness
 
 ---
 
@@ -190,15 +195,16 @@ This preserves **gate / authoritative** context.
 Current operator-visible behavior includes authoritative gate-style output such as:
 
 ```text
-MODE: GATE | AUTHORITATIVE: YES | CLEAN-STATE: YES
+MODE: GATE | AUTHORITATIVE: YES | CLEAN-STATE: YES | DESTROY: YES
 Authority: GATE (authoritative)
+Mode: gate (clean-state topology)
 ```
 
-Use this when you want to:
+Meaning:
 
-- reproduce a prior gate result
-- verify deterministic gate behavior
-- confirm replay-stable authoritative outcomes
+- authoritative validation path
+- clean-state lifecycle
+- CI-safe verdict surface
 
 You can also verify deterministic result equivalence:
 
@@ -225,9 +231,15 @@ netsim replay labs/clab-<lab>
 Current operator-visible behavior includes non-authoritative replay labeling such as:
 
 ```text
-Authority: RUN (non-authoritative)
 Mode: replay (exploration artifacts)
+Authority: RUN (non-authoritative)
+Replay Context: non-gate replay keeps runtime up for inspection
 ```
+
+Meaning:
+
+- replayed exploration context remains non-authoritative
+- useful for inspection/debugging only
 
 This path is useful for:
 
@@ -273,6 +285,20 @@ Two approaches exist.
 ```bash
 netsim run <topology.yaml>
 ```
+
+Typical labeling:
+
+```text
+Authority: RUN (non-authoritative)
+Mode: run (workflow)
+Mode: run (exploration)
+```
+
+Meaning:
+
+- exploration only
+- non-authoritative
+- useful for debugging, not for proof
 
 This performs:
 
@@ -1684,6 +1710,13 @@ ERROR: Candidate config directory structure invalid: <dir>
 exit code: 2
 ```
 
+Meaning: this candidate-config surface is unsupported or malformed for the current command/topology.
+
+Support boundary:
+
+- supported current surfaces: generated FRR and nft-fw candidate files only
+- unsupported current surfaces: vendor NOS / sonic-vm candidate-config input
+
 Scope boundary:
 
 - candidate config support is currently proven only for the existing supported candidate-apply surfaces
@@ -1741,6 +1774,28 @@ netsim cleanup --all --yes
 ```
 
 Dry-run occurs unless `--yes` is provided.
+
+Example no-op outcome:
+
+```bash
+netsim destroy does-not-exist
+```
+
+Current operator-visible output:
+
+```text
+ai-netsim Destroy Result
+Lab: does-not-exist
+LAB DESCRIPTOR: labs/does-not-exist.clab.yaml
+RESULT: NO-OP (lab not found)
+Meaning: nothing was destroyed
+```
+
+Meaning:
+
+- no destructive action occurred
+- the command completed safely
+- this is explicit rather than ambiguous
 
 ---
 
@@ -1807,8 +1862,8 @@ Purpose:
 
 Authority:
 
-- Advisory only
-- Does **NOT** affect:
+- advisory only
+- does **not** affect:
   - verdicts
   - exit codes
   - execution
@@ -2145,6 +2200,21 @@ Artifacts are written to:
 ```text
 labs/clab-<lab-name>/
 ```
+
+Current surfaced artifact wording should be interpreted as:
+
+```text
+Artifacts: labs/clab-<lab>/
+  - topology.resolved.yaml (generated execution model used for execution; non-authoritative)
+  - results.json (authoritative verdict artifact)
+  - results.summary.txt (human-readable summary only; non-authoritative)
+```
+
+Meaning:
+
+- `topology.resolved.yaml` is generated execution input, not an authority source
+- `results.json` is the authoritative verdict surface
+- `results.summary.txt` is for humans only and does not determine verdicts
 
 Key files:
 
@@ -2515,9 +2585,56 @@ netsim ai --lab <lab> --online "why did this fail"
 Examples:
 
 - invariant truth mismatch → `1`
+- validation failure after declared proof ran → `1`
 - unsupported EVPN topology shape → `2`
 - invalid invariant declaration → `2`
 - incompatible pack contents → `2`
+
+Misuse / usage / contract error example:
+
+```bash
+netsim test does-not-exist.yaml
+```
+
+Typical output:
+
+```text
+ERROR: topology path not found: does-not-exist.yaml
+Detected:
+  looks like a topology path (contains '/' or ends with .yaml/.yml)
+Next:
+  Gate mode: netsim test <topology.yaml>
+  Lab mode:  netsim up <topology.yaml> --reconfigure ; netsim test <lab-name>
+exit=2
+```
+
+Meaning:
+
+- this is misuse / invalid invocation
+- validation did **not** run
+- exit code remains `2`
+
+Validation failure example:
+
+```text
+RESULT: FAIL (validation)
+```
+
+Meaning:
+
+- the system ran validation correctly
+- the declared proof failed
+- exit code remains `1`
+
+These UX clarifications do **not** change:
+
+- lifecycle order
+- authority model
+- verdict semantics
+- artifact schema
+- replay authority
+- deterministic execution
+- exit code contract
 
 ---
 
