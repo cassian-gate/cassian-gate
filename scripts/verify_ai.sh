@@ -250,16 +250,16 @@ grep -q "RESULT: FAIL" /tmp/verify_ai_dummy_gate.out
 grep -q "h1_tcp_443_to_h2_should_pass" /tmp/verify_ai_dummy_gate.out
 
 python src/netsim.py ai --lab ai-dummy-failure "draft me a concrete fix" >/tmp/verify_ai_concrete_fix.out 2>&1
-grep -q "Draft 1:" /tmp/verify_ai_concrete_fix.out
+grep -q "Draft 1 — firewall-side fix" /tmp/verify_ai_concrete_fix.out
 grep -q "allow_tcp: \[8443, 443\]" /tmp/verify_ai_concrete_fix.out
-grep -q "Draft 2:" /tmp/verify_ai_concrete_fix.out
+grep -q "Draft 2 — test-side fix" /tmp/verify_ai_concrete_fix.out
 grep -q "port: 8443" /tmp/verify_ai_concrete_fix.out
 grep -q "Not yet:" /tmp/verify_ai_concrete_fix.out
 
 python src/netsim.py ai --lab three-frr-two-hosts-fw-routed "what invariant would help here" >/tmp/verify_ai_invariant.out 2>&1
 grep -q "Parallel links exist between" /tmp/verify_ai_invariant.out
 grep -q "Declared host subnets 192.168.1.0/24, 192.168.2.0/24" /tmp/verify_ai_invariant.out
-grep -q "Draft 1:" /tmp/verify_ai_invariant.out
+grep -q "Draft 1 — test block" /tmp/verify_ai_invariant.out
 grep -q "type: route_advertised_to" /tmp/verify_ai_invariant.out
 grep -q "Not yet," /tmp/verify_ai_invariant.out
 
@@ -267,17 +267,22 @@ python src/netsim.py ai --lab three-frr-two-hosts-fw-routed "give me a concrete 
 grep -q "First, add one explicit steady-state passing proof" /tmp/verify_ai_validation_plan.out
 grep -q "Second, add one negative-path proof" /tmp/verify_ai_validation_plan.out
 grep -q "Third, add one scenario" /tmp/verify_ai_validation_plan.out
-grep -q "Draft 1:" /tmp/verify_ai_validation_plan.out
-grep -q "Draft 2:" /tmp/verify_ai_validation_plan.out
-grep -q "Draft 3:" /tmp/verify_ai_validation_plan.out
+grep -q "Draft 1 — test block" /tmp/verify_ai_validation_plan.out
+grep -q "Draft 2 — test block" /tmp/verify_ai_validation_plan.out
+grep -q "Draft 3 — scenario block" /tmp/verify_ai_validation_plan.out
 
 python src/netsim.py ai --lab three-frr-two-hosts-fw-routed "provide an improved topology" >/tmp/verify_ai_topology_render.out 2>&1
-grep -q "Draft 1:" /tmp/verify_ai_topology_render.out
-grep -q "Draft 2:" /tmp/verify_ai_topology_render.out
-grep -q "Draft 3:" /tmp/verify_ai_topology_render.out
+grep -q "Draft 1 — topology guidance" /tmp/verify_ai_topology_render.out
+grep -q "Draft 2 — test block" /tmp/verify_ai_topology_render.out
+grep -q "Draft 3 — scenario block" /tmp/verify_ai_topology_render.out
 grep -q -- "-----" /tmp/verify_ai_topology_render.out
 
-rm -f /tmp/verify_ai_dummy_gate.out /tmp/verify_ai_concrete_fix.out /tmp/verify_ai_invariant.out /tmp/verify_ai_validation_plan.out /tmp/verify_ai_topology_render.out
+python src/netsim.py ai --lab three-frr-two-hosts-fw-routed --online "what invariant would help here" >/tmp/verify_ai_online_invariant.out 2>&1
+grep -q "Advisory Interpretation / Likely Cause:" /tmp/verify_ai_online_invariant.out
+grep -q "Recommended Next Steps:" /tmp/verify_ai_online_invariant.out
+grep -q "route advertisement" /tmp/verify_ai_online_invariant.out
+
+rm -f /tmp/verify_ai_dummy_gate.out /tmp/verify_ai_concrete_fix.out /tmp/verify_ai_invariant.out /tmp/verify_ai_validation_plan.out /tmp/verify_ai_topology_render.out /tmp/verify_ai_online_invariant.out
 echo "OK: stronger advisory usefulness proofs"
 echo
 

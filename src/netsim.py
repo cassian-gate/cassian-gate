@@ -12712,23 +12712,34 @@ def cmd_ai_review(args) -> None:
                 print("")
                 print(f"Question: {question}")
                 print(f"Summary: {str(ai_output.get('summary') or '').strip()}")
-                for item in list(ai_output.get("findings") or []):
-                    if isinstance(item, dict):
-                        title = str(item.get("title") or "").strip()
-                        evidence = str(item.get("evidence") or "").strip()
-                        suggestion = str(item.get("suggestion") or "").strip()
-                        if title or evidence or suggestion:
-                            print(f"- Finding: {title}")
+
+                findings = list(ai_output.get("findings") or [])
+                suggested_next_tests = list(ai_output.get("suggested_next_tests") or [])
+
+                if findings:
+                    print("")
+                    print("Advisory Interpretation / Likely Cause:")
+                    for item in findings:
+                        if isinstance(item, dict):
+                            title = str(item.get("title") or "").strip()
+                            evidence = str(item.get("evidence") or "").strip()
+                            suggestion = str(item.get("suggestion") or "").strip()
+                            if title:
+                                print(f"- {title}")
                             if evidence:
                                 print(f"  Evidence: {evidence}")
                             if suggestion:
                                 print(f"  Advisory suggestion: {suggestion}")
-                for item in list(ai_output.get("suggested_next_tests") or []):
-                    if isinstance(item, dict):
-                        title = str(item.get("title") or "").strip()
-                        why = str(item.get("why") or "").strip()
-                        if title or why:
-                            print(f"- Suggested next test: {title}")
+
+                if suggested_next_tests:
+                    print("")
+                    print("Recommended Next Steps:")
+                    for item in suggested_next_tests:
+                        if isinstance(item, dict):
+                            title = str(item.get("title") or "").strip()
+                            why = str(item.get("why") or "").strip()
+                            if title:
+                                print(f"- Suggested next test: {title}")
                             if why:
                                 print(f"  Why: {why}")
             return

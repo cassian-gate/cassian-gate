@@ -77,28 +77,18 @@ netsim adapt terraform
 netsim adapt ansible
 ```
 
-````md
 ### AI Assistance (optional / advisory only)
 
 ```bash
-netsim ai "why did this fail"
-netsim ai --lab <lab> "why did this fail"
-netsim ai --artifacts <dir> "why did this fail"
-netsim ai --online "why did this fail"
-````
-
-AI is **advisory only** and **artifact-only**.
-
-It never affects:
-
-* execution
-* verdicts
-* authoritative command behavior
+netsim ai --lab <lab-name> "<question>"
+netsim ai --artifacts <path> "<question>"
+netsim ai "<question>"
+netsim ai --lab <lab-name> --online "<question>"
+netsim ai --artifacts <path> --online "<question>"
+```
 
 AI **never affects execution or verdicts**.
 
-```
-```
 ---
 
 # 3️⃣ Two Execution Modes (CRITICAL)
@@ -162,7 +152,6 @@ No routing or connectivity validation occurred.
 
 ---
 
-````md
 ## netsim replay — Deterministic replay of prior artifacts
 
 Replay re-executes a previous ai-netsim run from previously generated artifacts.
@@ -178,15 +167,15 @@ Replay consumes artifacts from a previous run:
 ```text
 topology.resolved.yaml
 results.json
-````
+```
 
 These are **generated replay inputs**.
 
 Important boundary:
 
-* artifact reuse for replay does **not** make replay a new source of authority
-* shared artifact shape does **not** imply shared authority
-* authority still depends on the replay mode and source context
+- artifact reuse for replay does **not** make replay a new source of authority
+- shared artifact shape does **not** imply shared authority
+- authority still depends on the replay mode and source context
 
 ### Gate replay (authoritative context preserved)
 
@@ -207,9 +196,9 @@ Authority: GATE (authoritative)
 
 Use this when you want to:
 
-* reproduce a prior gate result
-* verify deterministic gate behavior
-* confirm replay-stable authoritative outcomes
+- reproduce a prior gate result
+- verify deterministic gate behavior
+- confirm replay-stable authoritative outcomes
 
 You can also verify deterministic result equivalence:
 
@@ -242,10 +231,10 @@ Mode: replay (exploration artifacts)
 
 This path is useful for:
 
-* inspection
-* investigation
-* iterative debugging
-* bringing replayed runtime up for manual follow-up commands
+- inspection
+- investigation
+- iterative debugging
+- bringing replayed runtime up for manual follow-up commands
 
 This does **not** upgrade exploration artifacts into gate proof.
 
@@ -255,19 +244,19 @@ Use replay when you want deterministic reproduction of a prior run.
 
 Typical uses:
 
-* reproducing a prior authoritative gate result
-* replaying a prior exploration run for investigation
-* checking deterministic stability
-* debugging unexpected behavior from existing artifacts
+- reproducing a prior authoritative gate result
+- replaying a prior exploration run for investigation
+- checking deterministic stability
+- debugging unexpected behavior from existing artifacts
 
 ### Important boundary
 
 Replay:
 
-* preserves prior context
-* does not create a parallel authority model
-* does not make exploration authoritative
-* does not change verdict/exit semantics by itself
+- preserves prior context
+- does not create a parallel authority model
+- does not make exploration authoritative
+- does not change verdict/exit semantics by itself
 
 ---
 
@@ -1799,8 +1788,39 @@ It never affects:
 
 ---
 
-````md
-````md
+## AI Advisory (Optional, Non-Authoritative)
+
+```bash
+netsim ai --lab <lab-name> "<question>"
+netsim ai --artifacts <path> "<question>"
+netsim ai "<question>"
+```
+
+Purpose:
+
+- Provides **advisory explanations and guidance** based on artifacts
+- Helps interpret:
+  - failures
+  - coverage gaps
+  - missing tests/scenarios
+  - control-plane intent
+
+Authority:
+
+- Advisory only
+- Does **NOT** affect:
+  - verdicts
+  - exit codes
+  - execution
+  - artifacts
+
+Input:
+
+- `topology.resolved.yaml`
+- `results.json`
+
+---
+
 ## Unified AI Assistance
 
 Use the same conversational entrypoint for failure explanation, coverage review, topology review, scenario interpretation, invariant explanation, and blast-radius explanation.
@@ -1809,7 +1829,7 @@ Use the same conversational entrypoint for failure explanation, coverage review,
 
 ```bash
 netsim ai "why did this fail"
-````
+```
 
 Uses the most recent valid artifact context when available.
 
@@ -1841,17 +1861,17 @@ netsim ai --artifacts <dir> --online "why did this fail"
 
 Rules:
 
-* online-enriched rendering is explicit opt-in only
-* local advisory rendering remains the baseline behavior
-* online rendering does not change authority, verdicts, or execution behavior
-* if online rendering is explicitly requested but unavailable, `netsim ai` refuses with exit code `2`
+- online-enriched rendering is explicit opt-in only
+- local advisory rendering remains the baseline behavior
+- online rendering does not change authority, verdicts, or execution behavior
+- if online rendering is explicitly requested but unavailable, `netsim ai` refuses with exit code `2`
 
 ### Rendering modes
 
 `netsim ai` discloses the rendering mode it used:
 
-* `local advisory rendering`
-* `online-enriched advisory rendering`
+- `local advisory rendering`
+- `online-enriched advisory rendering`
 
 Both remain advisory-only.
 
@@ -1876,18 +1896,245 @@ If the required artifacts are missing, `netsim ai` refuses with a deterministic 
 
 `netsim ai`:
 
-* reads artifacts only
-* does not execute lifecycle actions
-* does not modify topology, tests, scenarios, or configs
-* does not affect verdicts
-* remains advisory-only
+- reads artifacts only
+- does not execute lifecycle actions
+- does not modify topology, tests, scenarios, or configs
+- does not affect verdicts
+- remains advisory-only
 
-```
+---
+
+## AI Output Structure (Deterministic)
+
+All `netsim ai` outputs follow a **stable, deterministic structure**:
+
+```text
+Summary:
+
+Deterministic Facts / Grounded Evidence:
+
+Advisory Interpretation / Likely Cause:
+
+Recommended Next Steps:
+
+Example Drafts (Non-Authoritative / Human Review Only):
+
+Teaching / Coaching (Advisory Only):
 ```
 
+Important:
 
+- section order is fixed
+- structure is identical across runs
+- same input → same output shape
+
+---
+
+## Draft Format (Copy-Paste Ready)
+
+Drafts are structured and labeled:
+
+```text
+Draft 1 — <type>
+-----
+<content>
+-----
 ```
+
+Common draft types:
+
+- `topology guidance`
+- `test block`
+- `scenario block`
+- `firewall-side fix`
+- `test-side fix`
+
+Example:
+
+```text
+Draft 1 — test block
+-----
+tests:
+  - name: h1_to_h2_ping_should_pass
+    kind: ping
+    src: h1
+    dst: h2
+    expect: pass
+-----
 ```
+
+Notes:
+
+- drafts are safe to copy/paste
+- drafts are non-authoritative
+- drafts require human review
+
+---
+
+## Supported Question Styles (Flexible)
+
+`netsim ai` supports **multiple phrasings** for the same intent.
+
+### Scenario Questions
+
+- "what scenario am I missing"
+- "what scenario should I add"
+- "how would you test failover here"
+
+### Invariant Questions
+
+- "what invariant would help here"
+- "what invariant should I add first"
+
+### Coverage / Validation
+
+- "what tests should I add next"
+- "give me a concrete validation plan"
+
+### Failure Analysis
+
+- "why did this fail"
+- "what should I change first"
+- "what should I prove first"
+
+### Topology Improvement
+
+- "how would you improve this topology"
+- "provide an improved topology"
+
+Behavior:
+
+- different phrasing → same deterministic reasoning path
+- no randomness in module selection
+
+---
+
+## Local vs Online Rendering
+
+### Local (default)
+
+```bash
+netsim ai --lab <lab> "<question>"
+```
+
+- deterministic, built-in reasoning
+- no external dependency
+- always available
+
+### Online (optional)
+
+```bash
+netsim ai --lab <lab> --online "<question>"
+```
+
+Requirements:
+
+- `AI_NETSIM_AI_PROVIDER`
+- `AI_NETSIM_AI_API_KEY`
+
+Behavior:
+
+- same reasoning structure as local
+- may provide:
+  - richer explanations
+  - improved phrasing
+
+Guarantees:
+
+- same conclusions as local
+- same section structure
+- no change to:
+  - verdicts
+  - artifacts
+  - execution
+
+---
+
+## How to Use AI Effectively
+
+Best practice flow:
+
+1. Run deterministic gate:
+
+```bash
+netsim test <topology.yaml>
+```
+
+2. If failure:
+
+```bash
+netsim ai --lab <lab> "why did this fail"
+```
+
+3. Improve coverage:
+
+```bash
+netsim ai --lab <lab> "what should I prove first"
+```
+
+4. Expand validation:
+
+```bash
+netsim ai --lab <lab> "give me a concrete validation plan"
+```
+
+### Key Insight
+
+- passing tests ≠ proven design
+- AI helps identify:
+  - missing **positive proofs**
+  - missing **failure scenarios**
+  - missing **control-plane invariants**
+
+---
+
+## AI Guardrails
+
+- AI is **never authoritative**
+- AI cannot:
+  - run commands
+  - modify topology
+  - change configs
+  - alter results
+- AI output must always be:
+  - human-reviewed
+  - explicitly applied
+
+---
+
+## Verification Behavior
+
+- `verify_ai.sh` runs fully **offline by default**
+- online checks are optional:
+
+```bash
+AI_NETSIM_VERIFY_ONLINE_OK=1 ./scripts/verify_ai.sh
+```
+
+---
+
+## Example: AI Identifies Missing Invariant
+
+AI may suggest:
+
+```text
+Draft 1 — test block
+-----
+tests:
+  - name: fw1_advertises_192.168.2.0_24_to_r2
+    kind: invariant
+    type: route_advertised_to
+    node: fw1
+    peer: r2
+    prefix: 192.168.2.0/24
+    expect: pass
+-----
+```
+
+Meaning:
+
+- you are not proving control-plane correctness yet
+- add route-level proof before expanding scenarios
 
 ---
 
@@ -2231,6 +2478,30 @@ netsim test topologies/three-frr-two-hosts-fw-routed.yaml \
 python -m json.tool labs/clab-three-frr-two-hosts-fw-routed/artifacts/state-diff/state_diff.json
 ```
 
+Use AI to explain a failure from the most recent run:
+
+```bash
+netsim ai "why did this fail"
+```
+
+Use AI against a specific lab:
+
+```bash
+netsim ai --lab <lab> "what should I prove first"
+```
+
+Use AI to expand validation coverage:
+
+```bash
+netsim ai --lab <lab> "give me a concrete validation plan"
+```
+
+Use optional online-enriched AI rendering:
+
+```bash
+netsim ai --lab <lab> --online "why did this fail"
+```
+
 ---
 
 # 1️⃣8️⃣ Exit Codes
@@ -2272,6 +2543,12 @@ For EVPN runtime + proof:
 ```bash
 netsim validate topologies/evpn_runtime_generation.yaml
 netsim test topologies/evpn_mac_route_present.yaml
+```
+
+For AI-assisted explanation after a gate run:
+
+```bash
+netsim ai "why did this fail"
 ```
 
 ---
