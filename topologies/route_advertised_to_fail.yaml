@@ -1,0 +1,43 @@
+name: route-advertised-to-fail
+
+nodes:
+  - name: r1
+    type: frr
+    asn: 65001
+    router_id: 1.1.1.1
+    networks:
+      - 10.10.10.0/24
+    bgp:
+      neighbors:
+        - peer: r2
+          remote_as: 65002
+
+  - name: r2
+    type: frr
+    asn: 65002
+    router_id: 2.2.2.2
+    bgp:
+      neighbors:
+        - peer: r1
+          remote_as: 65001
+
+  - name: h1
+    type: host
+    ip: 10.10.10.10/24
+    gw: 10.10.10.1
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["192.0.2.1/31", "192.0.2.0/31"]
+
+  - endpoints: ["h1:eth1", "r1:eth2"]
+    ipv4: ["10.10.10.10/24", "10.10.10.1/24"]
+
+tests:
+  - name: r1_advertises_10_10_20_0_24_to_r2
+    kind: invariant
+    type: route_advertised_to
+    node: r1
+    peer: r2
+    prefix: 10.10.20.0/24
+    expect: pass

@@ -11754,29 +11754,82 @@ def cmd_ai_review(args) -> None:
             "next",
             "likely",
             "suggest",
+            "prove",
+            "test",
         )
         if "blast radius" in q:
             return "blast_radius_explain"
+        if (
+            "invariant" in q
+            and (
+                "add" in q
+                or "missing" in q
+                or "help" in q
+                or "draft" in q
+                or "first" in q
+                or "would you" in q
+                or "should i" in q
+            )
+        ):
+            return "coverage_review"
         if "invariant" in q:
             return "invariant_explain"
-        if "scenario" in q and (
-            any(word in q for word in advisory_words) or "validate" in q or "add" in q
+        if (
+            "scenario" in q
+            or "failover" in q
+            or "fault should i inject" in q
+            or "failure scenario" in q
+        ) and (
+            any(word in q for word in advisory_words)
+            or "validate" in q
+            or "add" in q
+            or "missing" in q
+            or "draft" in q
+            or "inject" in q
         ):
-            return "scenario_interpret"
+            return "coverage_review"
+        if (
+            "proof gap" in q
+            or "proof am i missing" in q
+            or "prove first" in q
+            or "what should i prove first" in q
+        ):
+            return "failure_explain"
         if "coverage" in q or (
             ("test" in q or "tests" in q) and any(word in q for word in advisory_words)
         ):
             return "coverage_review"
-        if ("topology" in q or "design" in q) and any(word in q for word in advisory_words):
+        if (
+            ("topology" in q or "design" in q)
+            and any(word in q for word in advisory_words)
+        ) or (
+            "topology" in q
+            and (
+                "improved" in q
+                or "improve this" in q
+                or "how would you improve" in q
+                or "make this better" in q
+            )
+        ):
             return "topology_review"
         if (
             "fail" in q
             or "wrong" in q
             or "cause" in q
             or "change first" in q
+            or "what should i change first" in q
             or "path to a passing result" in q
+            or "failure mechanism" in q
+            or "inspect first" in q
+            or "concrete fix" in q
         ):
             return "failure_explain"
+        if (
+            "validation plan" in q
+            or "validate this better" in q
+            or "what tests should i add next" in q
+        ):
+            return "coverage_review"
         return None
 
     def _is_out_of_scope(question: str) -> bool:
@@ -11802,6 +11855,8 @@ def cmd_ai_review(args) -> None:
         scope_words = ("topology", "scenario", "scenarios", "config", "configs", "configuration")
         execute_words = ("run ", "execute ", "deploy", "provision", "destroy", "replay")
         if any(w in q for w in execute_words):
+            return True
+        if "apply the best fix now" in q:
             return True
         if any(w in q for w in mutate_words) and any(w in q for w in scope_words):
             return not any(w in q for w in advisory_words)
@@ -11841,8 +11896,6 @@ def cmd_ai_review(args) -> None:
             tp = lab_dir / "topology.resolved.yaml"
             if rp.exists() and tp.exists():
                 return lab_dir, "explicit_lab"
-            if latest_dir is not None:
-                return latest_dir, "most_recent_run"
             return lab_dir, "explicit_lab"
         if latest_dir is not None:
             return latest_dir, latest_source
@@ -11968,6 +12021,7 @@ def cmd_ai_review(args) -> None:
         inv = _inventory(topo)
         failed_tests = _failed_tests(results)
         failed_steps = _failed_scenario_steps(results)
+        tests = list(topo.get("tests") or [])
         scenarios = sorted(
             [
                 str(s.get("id") or "")
@@ -11979,32 +12033,317 @@ def cmd_ai_review(args) -> None:
         blast_radius_path = context_dir / "artifacts" / "blast-radius" / "blast_radius.json"
 
         if module_name == "failure_explain":
+            all_expect_fail = bool(tests) and all(str(t.get("expect", "")).strip().lower() == "fail" for t in tests)
+            likely_causes = [
+                "Validation failures are derived from existing authoritative artifacts only.",
+                "Review the named failed tests or scenario steps first; AI does not redefine verdicts.",
+            ]
+            next_actions = [
+                "Inspect the failed test or scenario entries in results.json.",
+                "Use deterministic replay or gate rerun to reproduce if needed.",
+            ]
+            example_drafts = []
+            coaching_notes = []
+
+            failed_test_names = {
+                str(t.get("name") or "").strip()
+                for t in failed_tests
+                if str(t.get("name") or "").strip()
+            }
+            declared_failed_tests = [
+                t for t in tests
+                if isinstance(t, dict) and str(t.get("name") or "").strip() in failed_test_names
+            ]
+            declared_failed_tcp_tests = [
+                t for t in declared_failed_tests
+                if str(t.get("kind", "")).strip().lower() == "tcp"
+            ]
+
+            requested_tcp_ports: list[int] = []
+            for t in declared_failed_tcp_tests:
+                try:
+                    requested_tcp_ports.append(int(t.get("port")))
+                except Exception:
+                    pass
+            requested_tcp_ports = sorted(set(requested_tcp_ports))
+
+            allowed_tcp_ports: list[int] = []
+            for node in list(topo.get("nodes") or []):
+                if not isinstance(node, dict):
+                    continue
+                ports = node.get("allow_tcp")
+                if isinstance(ports, list):
+                    for port in ports:
+                        try:
+                            allowed_tcp_ports.append(int(port))
+                        except Exception:
+                            pass
+            allowed_tcp_ports = sorted(set(allowed_tcp_ports))
+
+            failed_invariants = [
+                t for t in failed_tests
+                if str(t.get("kind", "")).strip().lower() == "invariant"
+            ]
+            declared_failed_invariants = [
+                t for t in declared_failed_tests
+                if str(t.get("kind", "")).strip().lower() == "invariant"
+            ]
+            failed_route_invariants = [
+                t for t in declared_failed_invariants
+                if str(t.get("type", "")).strip().lower() in {"route_advertised_to", "route_present", "route_not_advertised_to"}
+            ]
+
+            if declared_failed_tcp_tests and requested_tcp_ports and allowed_tcp_ports and requested_tcp_ports != allowed_tcp_ports:
+                requested_desc = ", ".join(str(p) for p in requested_tcp_ports)
+                allowed_desc = ", ".join(str(p) for p in allowed_tcp_ports)
+                likely_causes = [
+                    f"The failed tcp proof expects port {requested_desc}, but the declared firewall policy allows TCP on {allowed_desc}.",
+                    "The most likely issue is a port/policy mismatch between the test intent and the allowed service ports.",
+                ]
+                next_actions = [
+                    f"First, decide whether the intended service should use port {requested_desc} or {allowed_desc}.",
+                    f"Second, if {requested_desc} is correct, update the firewall allow list; if {allowed_desc} is correct, update the tcp proof port.",
+                    "Not yet: do not add more scenarios or topology complexity until the intended service port is aligned.",
+                ]
+                example_drafts = [
+                    f"Example only: firewall-side fix\nnodes:\n  - name: fw1\n    type: nft-fw\n    allow_tcp: [{allowed_desc}, {requested_desc}]",
+                    f"Example only: test-side fix\ntests:\n  - name: h1_tcp_{allowed_desc.replace(', ', '_or_')}_to_h2_should_pass\n    kind: tcp\n    src: h1\n    dst: h2\n    port: {allowed_tcp_ports[0]}\n    listener: true\n    expect: pass",
+                ]
+                coaching_notes = [
+                    "This is an advisory diagnosis only; the AI is pointing to the most likely mismatch from bounded artifacts and is not applying a change."
+                ]
+            elif failed_route_invariants:
+                inv0 = failed_route_invariants[0]
+                prefix = str(inv0.get("prefix") or "").strip()
+                node_name = str(inv0.get("node") or "").strip()
+                peer_name = str(inv0.get("peer") or "").strip()
+                inv_type = str(inv0.get("type") or "").strip()
+                likely_causes = [
+                    f"The failed {inv_type} proof is scoped to prefix {prefix} between {node_name} and {peer_name}.",
+                    "The most likely issue is either the wrong peer/prefix is being asserted, or the intended control-plane truth is not yet encoded in the topology under test.",
+                ]
+                next_actions = [
+                    f"First, verify that {prefix} is the exact route you intend {node_name} to advertise toward {peer_name}.",
+                    "Second, prove one route-focused truth before adding broader end-to-end or failover expectations.",
+                    "Not yet: do not add more invariants until the first peer/prefix control-plane assertion is confirmed correct.",
+                ]
+                example_drafts = [
+                    f"tests:\n  - name: {node_name}_advertises_{prefix.replace('/', '_')}_to_{peer_name}\n    kind: invariant\n    type: route_advertised_to\n    node: {node_name}\n    peer: {peer_name}\n    prefix: {prefix}\n    expect: pass"
+                ]
+                coaching_notes = [
+                    "A failed route-focused invariant often means the proof target itself should be checked before broadening the test surface."
+                ]
+            elif all_expect_fail:
+                likely_causes = [
+                    "All declared tests currently expect failure, so a full PASS does not yet prove an intended success path.",
+                    "The biggest proof gap is usually missing positive intent: what should pass in steady state is not yet encoded as a passing proof.",
+                ]
+                next_actions = [
+                    "First, decide the first steady-state behavior that should succeed and encode it as an explicit passing test.",
+                    "Second, keep failure-expected tests for negative intent, but separate them from the first success-path proof.",
+                    "Not yet: do not expand topology or add resiliency scenarios before one intended passing path is proven.",
+                ]
+                example_drafts = [
+                    "Example only: tests:\n  - name: h1_to_h2_ping_should_pass\n    kind: ping\n    src: h1\n    dst: h2\n    expect: pass\n    count: 2"
+                ]
+                coaching_notes = [
+                    "A full PASS across failure-expected tests can still mean the topology lacks any proof of intended success."
+                ]
+
             return {
                 "summary": f"Overall result is {overall}. Failed tests: {len(failed_tests)}. Failed scenario steps: {len(failed_steps)}.",
                 "primary_failures": failed_tests[:10],
                 "evidence_refs": [
                     {"artifact": str(context_dir / "results.json"), "section": "tests"},
-                    {"artifact": str(context_dir / "results.json"), "section": "scenarios"},
+                    {"artifact": str(context_dir / "topology.resolved.yaml"), "section": "nodes"},
                 ],
-                "likely_causes": [
-                    "Validation failures are derived from existing authoritative artifacts only.",
-                    "Review the named failed tests or scenario steps first; AI does not redefine verdicts.",
-                ],
-                "next_actions": [
-                    "Inspect the failed test or scenario entries in results.json.",
-                    "Use deterministic replay or gate rerun to reproduce if needed.",
-                ],
+                "likely_causes": likely_causes,
+                "next_actions": next_actions,
+                "example_drafts": example_drafts,
+                "coaching_notes": coaching_notes,
                 "authority": "advisory",
             }
 
+
         if module_name == "coverage_review":
-            suggestions: list[str] = []
+            question_l = (question or "").strip().lower()
+            all_expect_fail = bool(tests) and all(str(t.get("expect", "")).strip().lower() == "fail" for t in tests)
+            has_positive_tests = any(str(t.get("expect", "")).strip().lower() == "pass" for t in tests)
+            has_scenarios = bool(inv["scenarios_count"])
+            host_pair = "host endpoints" if len(inv["hosts"]) >= 2 else "declared endpoints"
+
+            link_pair_counts: dict[tuple[str, str], int] = {}
+            pair_link_details: dict[tuple[str, str], list[tuple[str, str]]] = {}
+            for link in list(topo.get("links") or []):
+                if not isinstance(link, dict):
+                    continue
+                endpoints = list(link.get("endpoints") or [])
+                if len(endpoints) != 2:
+                    continue
+                try:
+                    left_node, left_if = str(endpoints[0]).split(":", 1)
+                    right_node, right_if = str(endpoints[1]).split(":", 1)
+                except ValueError:
+                    continue
+                pair = tuple(sorted([left_node, right_node]))
+                link_pair_counts[pair] = link_pair_counts.get(pair, 0) + 1
+                pair_link_details.setdefault(pair, []).append((left_if, right_if))
+            parallel_pairs = sorted([pair for pair, count in link_pair_counts.items() if count > 1])
+
+            host_networks: list[str] = []
+            for node in list(topo.get("nodes") or []):
+                if not isinstance(node, dict):
+                    continue
+                if str(node.get("type") or "").strip() != "host":
+                    continue
+                ip_v = str(node.get("ip") or "").strip()
+                if not ip_v:
+                    continue
+                try:
+                    host_networks.append(str(ipaddress.ip_interface(ip_v).network))
+                except Exception:
+                    pass
+            host_networks = sorted(set(host_networks))
+
+            scenario_ids = sorted(
+                str(s.get("id") or "").strip()
+                for s in list(topo.get("scenarios") or [])
+                if isinstance(s, dict) and str(s.get("id") or "").strip()
+            )
+            tests_by_kind: dict[str, list[dict[str, Any]]] = {}
+            for t in tests:
+                if not isinstance(t, dict):
+                    continue
+                kind = str(t.get("kind") or "").strip().lower()
+                tests_by_kind.setdefault(kind, []).append(t)
+
+            route_like_invariants = []
+            for t in tests_by_kind.get("invariant", []):
+                inv_type = str(t.get("type") or "").strip().lower()
+                if inv_type in {"route_advertised_to", "route_present", "route_not_advertised_to"}:
+                    route_like_invariants.append(t)
+
+            insights: list[str] = []
             if inv["tests_count"] == 0:
-                suggestions.append("No tests are declared.")
-            if inv["scenarios_count"] == 0:
-                suggestions.append("No scenarios are declared.")
+                insights.append("No tests are declared, so the topology currently has no executable proof of intended behavior.")
+            if not has_scenarios:
+                insights.append("No scenarios are declared, so failure choreography and recovery behavior are not being proven.")
+            if all_expect_fail:
+                insights.append("All current declared tests expect failure, so the topology does not yet prove any intended success path.")
+            elif not has_positive_tests and inv["tests_count"] > 0:
+                insights.append("There are declared tests, but none currently prove a clear positive steady-state success path.")
             if len(inv["hosts"]) >= 2 and inv["tests_count"] > 0:
-                suggestions.append("Consider explicit steady-state and failover coverage between host endpoints.")
+                insights.append(f"The highest-value next proof is usually one explicit steady-state test across the {host_pair}.")
+            if parallel_pairs:
+                pair_desc = " and ".join(f"{a}<->{b}" for a, b in parallel_pairs)
+                insights.append(f"Parallel links exist between {pair_desc}, so the topology already encodes a failover or ambiguity surface that should be proven explicitly.")
+            if host_networks and ("invariant" in question_l or "scenario" in question_l):
+                insights.append(f"Declared host subnets {', '.join(host_networks)} provide a bounded control-plane or path-intent surface for more targeted proofs.")
+            if "invariant" in question_l and not route_like_invariants and host_networks:
+                insights.append("No route-focused invariant is currently declared, so control-plane truth for the host subnets is still unproven.")
+            if "scenario" in question_l and parallel_pairs and not any("break_primary_path" == sid for sid in scenario_ids):
+                insights.append("The topology exposes a parallel-link fault surface, but there is no clearly named scenario that proves the primary-path failure behavior.")
+            if "invariant" in question_l and parallel_pairs and route_like_invariants:
+                insights.append("Control-plane checks should stay scoped to one peer/prefix truth first, rather than broadening into multiple parallel-link assertions at once.")
+
+            ranked_actions: list[str] = []
+            example_drafts: list[str] = []
+            coaching_notes: list[str] = []
+
+            if "validation plan" in question_l or "validate this better" in question_l:
+                ranked_actions = [
+                    "First, add one explicit steady-state passing proof for the intended successful path.",
+                    "Second, add one negative-path proof for traffic or policy that must fail.",
+                    "Third, add one scenario that injects the most important failure and re-runs the key proof.",
+                    "Not yet, do not broaden topology complexity until these three proof layers exist.",
+                ]
+                example_drafts = [
+                    "Example only: tests:\n  - name: h1_to_h2_ping_should_pass\n    kind: ping\n    src: h1\n    dst: h2\n    expect: pass\n    count: 2",
+                    "Example only: tests:\n  - name: h1_to_h2_tcp_22_should_fail\n    kind: tcp\n    src: h1\n    dst: h2\n    port: 22\n    expect: fail",
+                ]
+                if parallel_pairs:
+                    pair = parallel_pairs[0]
+                    details = pair_link_details.get(pair) or []
+                    left_if, right_if = details[0] if details else ("ethX", "ethY")
+                    example_drafts.append(
+                        f"Example only: scenarios:\n  - id: break_primary_path\n    steps:\n      - run: h1_to_h2_ping_should_pass\n      - fault:\n          link_down:\n            a: {pair[0]}\n            a_if: {left_if}\n            b: {pair[1]}\n            b_if: {right_if}\n      - run: h1_to_h2_ping_should_pass"
+                    )
+                else:
+                    example_drafts.append(
+                        "Example only: scenarios:\n  - id: break_primary_path\n    steps:\n      - run: h1_to_h2_ping_should_pass\n      - fault:\n          interface_down:\n            node: r1\n            if: eth1\n      - run: h1_to_h2_ping_should_pass"
+                    )
+                coaching_notes = [
+                    "A validation plan is advisory only until each step is encoded as deterministic tests or scenarios."
+                ]
+            elif "scenario" in question_l and ("missing" in question_l or "add" in question_l or "draft" in question_l):
+                ranked_actions = [
+                    "First, add one scenario that breaks the most important dependency in the path.",
+                    "Second, re-run the key end-to-end proof before and after the fault step.",
+                    "Not yet, do not add extra scenarios until the primary failure scenario proves a meaningful behavior change.",
+                ]
+                if parallel_pairs:
+                    pair = parallel_pairs[0]
+                    details = pair_link_details.get(pair) or []
+                    left_if, right_if = details[0] if details else ("ethX", "ethY")
+                    example_drafts = [
+                        f"Example only: scenarios:\n  - id: break_primary_path\n    steps:\n      - run: h1_to_h2_ping_should_pass\n      - fault:\n          link_down:\n            a: {pair[0]}\n            a_if: {left_if}\n            b: {pair[1]}\n            b_if: {right_if}\n      - run: h1_to_h2_ping_should_pass"
+                    ]
+                else:
+                    example_drafts = [
+                        "Example only: scenarios:\n  - id: break_primary_path\n    steps:\n      - run: h1_to_h2_ping_should_pass\n      - fault:\n          interface_down:\n            node: r1\n            if: eth1\n      - run: h1_to_h2_ping_should_pass"
+                    ]
+                coaching_notes = [
+                    "Missing-scenario advice is advisory only until the scenario is declared and proven by deterministic execution."
+                ]
+            elif "invariant" in question_l and ("help" in question_l or "add" in question_l or "missing" in question_l or "draft" in question_l):
+                ranked_actions = [
+                    "First, add one invariant that proves the intended control-plane or policy truth directly.",
+                    "Second, keep the invariant narrowly scoped to the specific route, peer, or attribute that matters.",
+                    "Not yet, do not add multiple broad invariants before proving one high-value truth cleanly.",
+                ]
+                if host_networks and parallel_pairs:
+                    pair = parallel_pairs[0]
+                    example_drafts = [
+                        f"Example only: tests:\n  - name: {pair[0]}_advertises_{host_networks[-1].replace('/', '_')}_to_{pair[1]}\n    kind: invariant\n    type: route_advertised_to\n    node: {pair[0]}\n    peer: {pair[1]}\n    prefix: {host_networks[-1]}\n    expect: pass"
+                    ]
+                elif host_networks:
+                    example_drafts = [
+                        f"Example only: tests:\n  - name: route_for_{host_networks[0].replace('/', '_')}_present\n    kind: invariant\n    type: route_advertised_to\n    node: r1\n    peer: r2\n    prefix: {host_networks[0]}\n    expect: pass"
+                    ]
+                else:
+                    example_drafts = [
+                        "Example only: tests:\n  - name: r2_advertises_expected_prefix\n    kind: invariant\n    type: route_advertised_to\n    node: r2\n    peer: fw1\n    prefix: 192.168.2.0/24\n    expect: pass"
+                    ]
+                coaching_notes = [
+                    "Invariant suggestions are advisory only until the invariant is declared and proven by deterministic execution."
+                ]
+            else:
+                if all_expect_fail:
+                    ranked_actions = [
+                        "First, choose the first end-to-end behavior that should succeed in steady state and express it as a passing test.",
+                        "Second, keep the existing failure-expected tests as negative proofs, but do not treat them as proof of intended success.",
+                        "Not yet, do not add more coverage breadth before one positive proof exists.",
+                    ]
+                    example_drafts = [
+                        "Example only: tests:\n  - name: h1_to_h2_ping_should_pass\n    kind: ping\n    src: h1\n    dst: h2\n    expect: pass\n    count: 2",
+                        "Example only: tests:\n  - name: h1_to_h2_tcp_443_should_pass\n    kind: tcp\n    src: h1\n    dst: h2\n    port: 443\n    expect: pass"
+                    ]
+                    coaching_notes = [
+                        "When all declared tests expect failure, a full PASS mostly proves negative intent, not the design you want to succeed."
+                    ]
+                else:
+                    ranked_actions = [
+                        "First, add or strengthen the most important steady-state proof if coverage is sparse.",
+                        "Second, add explicit failure choreography where resiliency matters.",
+                        "Not yet, do not widen the proof surface until the highest-value steady-state and failure proofs are solid.",
+                    ]
+                    example_drafts = [
+                        "Example only: add one steady-state path test and one failure scenario before treating coverage as strong."
+                    ]
+                    coaching_notes = [
+                        "Suggested tests and scenarios are advisory ideas only until they are added and proven by deterministic execution."
+                    ]
+
             return {
                 "summary": f"Topology has {inv['tests_count']} tests and {inv['scenarios_count']} scenarios.",
                 "primary_failures": [],
@@ -12012,41 +12351,101 @@ def cmd_ai_review(args) -> None:
                     {"artifact": str(context_dir / "topology.resolved.yaml"), "section": "tests"},
                     {"artifact": str(context_dir / "topology.resolved.yaml"), "section": "scenarios"},
                 ],
-                "likely_causes": suggestions,
-                "next_actions": [
-                    "Add missing steady-state tests if coverage is sparse.",
-                    "Add explicit failure choreography where resiliency matters.",
-                ],
-                "example_drafts": [
-                    "Example only: add one steady-state path test and one failure scenario before treating coverage as strong."
-                ],
-                "coaching_notes": [
-                    "Suggested tests and scenarios are advisory ideas only until they are added and proven by deterministic execution."
-                ],
+                "likely_causes": insights,
+                "next_actions": ranked_actions,
+                "example_drafts": example_drafts,
+                "coaching_notes": coaching_notes,
                 "authority": "advisory",
             }
 
+
         if module_name == "topology_review":
+            question_l = (question or "").strip().lower()
+            all_expect_fail = bool(tests) and all(str(t.get("expect", "")).strip().lower() == "fail" for t in tests)
             notes: list[str] = []
             if len(inv["hosts"]) < 2:
                 notes.append("Topology has fewer than two host nodes; endpoint coverage may be limited.")
             if inv["scenarios_count"] == 0:
                 notes.append("No scenarios are declared.")
+            if all_expect_fail:
+                notes.append("All declared tests currently expect failure, so the main gap is proving the intended success state, not just changing node shape.")
+
+            link_pair_counts: dict[tuple[str, str], int] = {}
+            for link in list(topo.get("links") or []):
+                if not isinstance(link, dict):
+                    continue
+                endpoints = list(link.get("endpoints") or [])
+                if len(endpoints) != 2:
+                    continue
+                try:
+                    left_node, _left_if = str(endpoints[0]).split(":", 1)
+                    right_node, _right_if = str(endpoints[1]).split(":", 1)
+                except ValueError:
+                    continue
+                pair = tuple(sorted([left_node, right_node]))
+                link_pair_counts[pair] = link_pair_counts.get(pair, 0) + 1
+            parallel_pairs = sorted([pair for pair, count in link_pair_counts.items() if count > 1])
+
+            ranked_actions = [
+                "Use explicit tests and scenarios to validate intended behavior.",
+                "Keep suggestions advisory and prove them through deterministic tests.",
+            ]
+            example_drafts = [
+                "Example only: strengthen the topology review by adding explicit validation intent rather than treating topology shape alone as proof."
+            ]
+            coaching_notes = [
+                "Topology suggestions are non-authoritative examples for human review and must be validated through tests or scenarios."
+            ]
+
+            core_path = None
+            if {"r1", "r2", "fw1", "r3"}.issubset(set(inv["node_names"])):
+                core_path = "r1 -> r2 -> fw1 -> r3"
+
+            if parallel_pairs:
+                pair_desc = " and ".join(f"{a}<->{b}" for a, b in parallel_pairs)
+                notes.append(f"Parallel links exist between {pair_desc}, so the topology already contains an explicit failover or ambiguity surface.")
+
+            if all_expect_fail:
+                ranked_actions = [
+                    "First, keep the current shape if it already represents the intended path, and add one explicit passing proof for the success behavior you actually want.",
+                    "Second, simplify only if extra links are not needed for failure-choreography or ambiguity testing.",
+                    "Not yet, do not expand topology complexity before the current shape proves one intended success path.",
+                ]
+                example_drafts = [
+                    "Example only: keep the current node/link shape, but add a passing steady-state test such as h1_to_h2_ping_should_pass before expanding the topology.",
+                    "Example only: tests:\n  - name: h1_to_h2_ping_should_pass\n    kind: ping\n    src: h1\n    dst: h2\n    expect: pass\n    count: 2"
+                ]
+                coaching_notes = [
+                    "When all tests expect failure, improving proof quality is usually more valuable than adding more topology complexity."
+                ]
+
+            if "improved topology" in question_l or "better topology" in question_l:
+                if core_path:
+                    draft_lines = [
+                        "Example only: topology guidance",
+                        f"- keep {core_path} as the core path",
+                    ]
+                    if parallel_pairs:
+                        draft_lines.append(f"- keep the parallel {parallel_pairs[0][0]}<->{parallel_pairs[0][1]} link only if you want failover or ambiguity testing")
+                        draft_lines.append("- otherwise remove the extra link to simplify proof intent")
+                    example_drafts = [
+                        "\n".join(draft_lines),
+                        "Example only: tests:\n  - name: h1_to_h2_ping_should_pass\n    kind: ping\n    src: h1\n    dst: h2\n    expect: pass\n    count: 2",
+                        "Example only: scenarios:\n  - id: break_primary_path\n    steps:\n      - run: h1_to_h2_ping_should_pass\n      - fault:\n          link_down:\n            a: r2\n            a_if: eth2\n            b: fw1\n            b_if: eth1\n      - run: h1_to_h2_ping_should_pass"
+                    ]
+                else:
+                    example_drafts = [
+                        "Example only: keep the existing path shape if it matches intent, remove only links or nodes that are not buying proof value, and add one passing steady-state proof plus one failure scenario before expanding topology complexity."
+                    ]
+
             return {
                 "summary": f"Resolved topology contains {len(inv['node_names'])} nodes.",
                 "primary_failures": [],
                 "evidence_refs": [{"artifact": str(context_dir / "topology.resolved.yaml"), "section": "nodes"}],
                 "likely_causes": notes,
-                "next_actions": [
-                    "Use explicit tests and scenarios to validate intended behavior.",
-                    "Keep suggestions advisory and prove them through deterministic tests.",
-                ],
-                "example_drafts": [
-                    "Example only: strengthen the topology review by adding explicit validation intent rather than treating topology shape alone as proof."
-                ],
-                "coaching_notes": [
-                    "Topology suggestions are non-authoritative examples for human review and must be validated through tests or scenarios."
-                ],
+                "next_actions": ranked_actions,
+                "example_drafts": example_drafts,
+                "coaching_notes": coaching_notes,
                 "authority": "advisory",
             }
 
@@ -12078,6 +12477,9 @@ def cmd_ai_review(args) -> None:
                 "evidence_refs": [{"artifact": str(context_dir / "topology.resolved.yaml"), "section": "scenarios"}],
                 "likely_causes": ["Scenario interpretation is based only on declared scenarios and recorded scenario results."],
                 "next_actions": ["Review failed scenario steps in results.json for exact step ordering and errors."],
+                "example_drafts": [
+                    "Example only: add one scenario that injects the key failure and re-runs the primary proof before and after the fault."
+                ],
                 "authority": "advisory",
             }
 
@@ -12089,6 +12491,9 @@ def cmd_ai_review(args) -> None:
                 "evidence_refs": [{"artifact": str(context_dir / "results.json"), "section": "tests"}],
                 "likely_causes": ["Invariant explanations are derived from existing failed invariant entries only."],
                 "next_actions": ["Inspect the failed invariant entries in results.json and replay deterministically if needed."],
+                "example_drafts": [
+                    "Example only: add one narrowly scoped invariant that proves the intended route, peer, or attribute truth directly."
+                ],
                 "authority": "advisory",
             }
 
@@ -12096,6 +12501,53 @@ def cmd_ai_review(args) -> None:
         sys.exit(2)
 
     def _emit_text(question: str, banner_lines: list[str], module_name: str, output: dict[str, Any]) -> None:
+        def _looks_structured_block(text: str) -> bool:
+            if "\n" not in text:
+                return False
+            stripped = text.strip()
+            if not stripped:
+                return False
+            structured_markers = (
+                "tests:\n",
+                "scenarios:\n",
+                "nodes:\n",
+                "links:\n",
+                "vlans:\n",
+                "fabric:\n",
+                "packs:\n",
+            )
+            return stripped.startswith(structured_markers) or "\n  - " in stripped or "\n    " in stripped
+
+        def _print_draft_block(text: str) -> None:
+            print("-----")
+            print(text.rstrip())
+            print("-----")
+
+        def _draft_label(idx: int, text: str) -> str:
+            stripped = text.lstrip()
+            lowered = stripped.lower()
+            if lowered.startswith("tests:\n"):
+                return f"Draft {idx} — test block"
+            if lowered.startswith("scenarios:\n"):
+                return f"Draft {idx} — scenario block"
+            if lowered.startswith("nodes:\n"):
+                return f"Draft {idx} — node block"
+            if lowered.startswith("links:\n"):
+                return f"Draft {idx} — link block"
+            if lowered.startswith("topology guidance"):
+                return f"Draft {idx} — topology guidance"
+            if lowered.startswith("firewall-side fix"):
+                return f"Draft {idx} — firewall-side fix"
+            if lowered.startswith("test-side fix"):
+                return f"Draft {idx} — test-side fix"
+            return f"Draft {idx}"
+
+        def _normalize_draft_text(text: str) -> str:
+            stripped = text.lstrip()
+            if stripped.startswith("Example only: "):
+                stripped = stripped[len("Example only: "):]
+            return stripped.rstrip()
+
         for line in banner_lines:
             print(line)
         print("")
@@ -12135,8 +12587,14 @@ def cmd_ai_review(args) -> None:
         if example_drafts:
             print("")
             print("Example Drafts (Non-Authoritative / Human Review Only):")
-            for item in example_drafts:
-                print(f"- {item}")
+            for idx, item in enumerate(example_drafts, start=1):
+                original_text = str(item)
+                text = _normalize_draft_text(original_text)
+                print(_draft_label(idx, text))
+                if _looks_structured_block(text):
+                    _print_draft_block(text)
+                else:
+                    print(text)
 
         if coaching_notes:
             print("")
@@ -12254,23 +12712,34 @@ def cmd_ai_review(args) -> None:
                 print("")
                 print(f"Question: {question}")
                 print(f"Summary: {str(ai_output.get('summary') or '').strip()}")
-                for item in list(ai_output.get("findings") or []):
-                    if isinstance(item, dict):
-                        title = str(item.get("title") or "").strip()
-                        evidence = str(item.get("evidence") or "").strip()
-                        suggestion = str(item.get("suggestion") or "").strip()
-                        if title or evidence or suggestion:
-                            print(f"- Finding: {title}")
+
+                findings = list(ai_output.get("findings") or [])
+                suggested_next_tests = list(ai_output.get("suggested_next_tests") or [])
+
+                if findings:
+                    print("")
+                    print("Advisory Interpretation / Likely Cause:")
+                    for item in findings:
+                        if isinstance(item, dict):
+                            title = str(item.get("title") or "").strip()
+                            evidence = str(item.get("evidence") or "").strip()
+                            suggestion = str(item.get("suggestion") or "").strip()
+                            if title:
+                                print(f"- {title}")
                             if evidence:
                                 print(f"  Evidence: {evidence}")
                             if suggestion:
                                 print(f"  Advisory suggestion: {suggestion}")
-                for item in list(ai_output.get("suggested_next_tests") or []):
-                    if isinstance(item, dict):
-                        title = str(item.get("title") or "").strip()
-                        why = str(item.get("why") or "").strip()
-                        if title or why:
-                            print(f"- Suggested next test: {title}")
+
+                if suggested_next_tests:
+                    print("")
+                    print("Recommended Next Steps:")
+                    for item in suggested_next_tests:
+                        if isinstance(item, dict):
+                            title = str(item.get("title") or "").strip()
+                            why = str(item.get("why") or "").strip()
+                            if title:
+                                print(f"- Suggested next test: {title}")
                             if why:
                                 print(f"  Why: {why}")
             return

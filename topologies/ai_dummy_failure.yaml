@@ -1,0 +1,42 @@
+name: ai-dummy-failure
+
+nodes:
+  - name: h1
+    type: host
+    ip: 192.168.1.10/24
+    gw: 192.168.1.1
+
+  - name: h2
+    type: host
+    ip: 192.168.2.10/24
+    gw: 192.168.2.1
+
+  - name: fw1
+    type: nft-fw
+    routed: true
+    interfaces:
+      eth1: 192.168.1.1/24
+      eth2: 192.168.2.1/24
+    allow_icmp: true
+    allow_tcp: [8443]
+
+links:
+  - endpoints: ["h1:eth1", "fw1:eth1"]
+  - endpoints: ["h2:eth1", "fw1:eth2"]
+
+tests:
+  - name: h1_tcp_443_to_h2_should_pass
+    kind: tcp
+    src: h1
+    dst: h2
+    port: 443
+    listener: true
+    expect: pass
+
+  - name: h2_tcp_443_to_h1_should_pass
+    kind: tcp
+    src: h2
+    dst: h1
+    port: 443
+    listener: true
+    expect: pass
