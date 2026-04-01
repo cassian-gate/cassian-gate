@@ -1,14 +1,24 @@
-# contrib/state-profiles
+# State Profiles
 
-Reserved declarative extension surface for state profile content.
+This directory contains supporting state-capture profile content.
 
-Set 1 status:
+State profiles are secondary adoption content.
+They do not replace failure-demonstrating examples, the official first-run proof family, or the recipe bridge.
 
-- structural only
-- non-executable
-- non-authoritative
-- no runtime discovery
-- no runtime loading
-- no plugin behavior
+## Current supporting profile
 
-Content placed here does not change lifecycle behavior, verdicts, exit codes, replay semantics, or artifact authority by existing in the repository.
+- `frr-routing-basic.yaml`
+
+## Non-authoritative boundary
+
+State profiles are explicitly non-authoritative.
+
+They may support evidence collection.
+They do not:
+
+- determine pass/fail
+- change exit codes
+- replace `results.json`
+- become a separate authority source
+
+Use them only as supporting evidence within existing current engine behavior.

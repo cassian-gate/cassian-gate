@@ -1,0 +1,18 @@
+name: datacenter-bgp-safety
+
+purpose: Supporting invariant pack for bounded EVPN/BGP safety checks used by current core-supported semantics only.
+
+tests:
+  - name: leaf1_evpn_session_to_spine1_up
+    kind: invariant
+    type: evpn_bgp_session_up
+    node: leaf1
+    peer: spine1
+    expect: pass
+
+  - name: leaf2_evpn_session_to_spine1_up
+    kind: invariant
+    type: evpn_bgp_session_up
+    node: leaf2
+    peer: spine1
+    expect: pass

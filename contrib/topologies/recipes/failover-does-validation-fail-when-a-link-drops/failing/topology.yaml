@@ -1,4 +1,4 @@
-name: recipe-failover-fail
+name: recipe-failover-link-drop-fail
 
 nodes:
   - name: h1
@@ -6,61 +6,54 @@ nodes:
     ip: 192.168.1.10/24
     gw: 192.168.1.1
 
-  - name: h2
-    type: host
-    ip: 192.168.2.10/24
-    gw: 192.168.2.1
-
   - name: fw1
     type: nft-fw
     routed: true
     interfaces:
       eth1: 192.168.1.1/24
-      eth2: 192.168.2.1/24
     allow_icmp: true
-    allow_tcp: [8443]
 
 links:
   - endpoints: ["h1:eth1", "fw1:eth1"]
-  - endpoints: ["h2:eth1", "fw1:eth2"]
 
 tests:
-  - name: blocked_service_is_expected_to_fail_before_fault
-    kind: tcp
+  - name: h1_to_fw1_ping_should_pass
+    kind: ping
     src: h1
-    dst: h2
-    port: 2222
-    listener: true
+    dst: fw1
     expect: fail
-
-  - name: blocked_service_should_pass_after_link_drop
-    kind: tcp
-    src: h1
-    dst: h2
-    port: 2222
-    listener: true
-    expect: pass
+    count: 1
 
 scenarios:
-  - id: drop_direct_link_but_expect_success
-    description: Drop the h1 to fw1 link and intentionally expect the wrong post-fault outcome
+  - id: link_drop_failover_recovers
+    description: "Use the same direct interface bounce choreography but keep an intentionally wrong declared expectation so validation fails."
     steps:
-      - run: blocked_service_is_expected_to_fail_before_fault
+      - run: h1_to_fw1_ping_should_pass
 
       - fault:
-          link_down:
-            a: h1
-            a_if: eth1
-            b: fw1
-            b_if: eth1
+          interface_down:
+            node: fw1
+            if: eth1
 
       - wait_for:
-          type: tcp
+          type: ping
           from: h1
-          to: h2
-          port: 2222
+          to: 192.168.1.1
           expect: fail
           timeout: 10
-          interval_s: 1
+          interval_s: 1.0
 
-      - run: blocked_service_should_pass_after_link_drop
+      - fault:
+          interface_up:
+            node: fw1
+            if: eth1
+
+      - wait_for:
+          type: ping
+          from: h1
+          to: 192.168.1.1
+          expect: pass
+          timeout: 10
+          interval_s: 1.0
+
+      - run: h1_to_fw1_ping_should_pass

@@ -1,14 +1,29 @@
-# contrib/packs
+# Invariant Packs
 
-Reserved declarative extension surface for pack content.
+This directory contains supporting adoption content.
 
-Set 1 status:
+Packs are secondary surfaces.
+They are not the official first-run proof.
+They do not replace failure-demonstrating examples or scenario content.
 
-- structural only
-- non-executable
-- non-authoritative
-- no runtime discovery
-- no runtime loading
-- no plugin behavior
+## Current supporting pack
 
-Content placed here does not change lifecycle behavior, verdicts, exit codes, replay semantics, or artifact authority by existing in the repository.
+- `datacenter-bgp-safety.yaml`
+
+## Purpose
+
+This pack groups only already-supported invariant semantics.
+It is a bounded reusable artifact for current EVPN/BGP session safety checks.
+
+## Authority boundary
+
+Packs are declarative shortcuts only.
+
+They do not:
+
+- determine verdicts by themselves
+- change lifecycle behavior
+- change authority boundaries
+- act as authoritative artifacts
+
+Truth still comes from the resulting invariant verdicts in normal gate execution.
