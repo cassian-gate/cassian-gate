@@ -1,69 +1,88 @@
-# Does validation fail when a link drops?
+# Failover — Does validation fail when a link drops?
 
-This recipe answers a first-use question:
+This is supporting Set 2 scenario content.
 
-**Does validation fail when a link drops?**
+It is not the official first-run proof.
+It is not the primary recipe bridge.
+It exists to show one bounded deterministic failure-choreography example using the normal authoritative gate path only.
 
-This recipe uses current deterministic scenario semantics only.
-It is the next-step bridge after the official first-run proof.
-It does not replace that first-run proof.
+## User question answered
 
-## What the passing variant proves
+Does ai-netsim catch the difference between a deterministic fault sequence that recovers correctly and one that does not?
 
-The passing variant proves that a declared scenario can validate an expected failed service check before and after an explicit link failure.
+## What this demonstrates
 
-Run:
+A very small directly connected reachability topology with a deliberate interface bounce scenario.
 
-    python src/netsim.py test contrib/topologies/recipes/failover-does-validation-fail-when-a-link-drops/passing/topology.yaml --all-scenarios
+The scenario uses only currently supported behavior:
 
-Expected result:
+- `run`
+- `fault.interface_down`
+- `fault.interface_up`
+- `wait_for`
 
-- PASS
-- the pre-fault TCP check correctly fails
-- the explicit link-down fault is applied
-- the post-fault wait and post-fault test correctly observe failure
+No new scenario actions, waits, convergence behavior, or verdict logic are introduced.
 
-## What the failing variant shows
+## Fault sequence
 
-The failing variant shows a meaningful scenario validation failure:
+1. Run a passing ping test from `h1` to directly connected `fw1`.
+2. Bring down `fw1:eth1`.
+3. Wait until that ping fails.
+4. Bring `fw1:eth1` back up.
+5. Wait until the ping passes again.
+6. Run the same ping test again.
 
-- the same link is dropped
-- the declared post-fault expectation incorrectly says the service check should pass
+The failing variant keeps the same topology shape and the same choreography shape, but intentionally declares the final test expectation incorrectly so the scenario run ends in a validation failure rather than a syntax or runtime error.
 
-Run:
+## Files to inspect first
 
-    python src/netsim.py test contrib/topologies/recipes/failover-does-validation-fail-when-a-link-drops/failing/topology.yaml --all-scenarios
+Inspect or copy one of these first:
 
-Expected result:
+- `passing/topology.yaml`
+- `failing/topology.yaml`
 
-- FAIL (validation)
-- the failure comes from the declared scenario expectation not matching observed behavior
+## Exact commands
 
-## Which file to copy or edit first
+Passing variant:
 
-Start from this file:
+    python src/netsim.py test contrib/topologies/recipes/failover-does-validation-fail-when-a-link-drops/passing/topology.yaml
+    echo "exit=$?"
 
-    contrib/topologies/recipes/failover-does-validation-fail-when-a-link-drops/passing/topology.yaml
+Failing variant:
 
-Copy it first, then change:
+    python src/netsim.py test contrib/topologies/recipes/failover-does-validation-fail-when-a-link-drops/failing/topology.yaml
+    echo "exit=$?"
 
-- endpoints
-- fault target
-- wait expectations
-- scenario ID
-- test names
+## Expected outcome difference
+
+Passing variant:
+
+- gate run succeeds
+- scenario passes
+- exit code uses existing success semantics
+
+Failing variant:
+
+- gate run executes normally
+- scenario fails by validation outcome
+- exit code uses existing validation-failure semantics
+
+The failing variant is intentionally a validation failure.
+It is not meant to fail because of invalid YAML, unsupported fields, or backend/runtime breakage.
 
 ## Support boundary
 
-This recipe demonstrates one bounded fault-choreography validation question using existing scenario semantics only.
+This is a bounded single-purpose fault-sequence example only.
 
-It does **not** introduce:
+It does not claim:
 
-- new scenario actions
-- new wait behavior
-- hidden retries
-- broad resiliency guarantees
-- authority over verdicts or artifacts
+- broad failover coverage
+- protocol completeness
+- NOS certification
+- general scenario completeness
 
-Recipe docs are explanatory only.
-Engine execution and generated artifacts remain authoritative.
+## Supporting surfaces
+
+Set 2 also includes reusable supporting content such as invariant packs and state profiles.
+Those are secondary surfaces.
+They do not replace the official first-run proof family, the recipe bridge, or this scenario example as the main failure-demonstrating artifact in this slice.
