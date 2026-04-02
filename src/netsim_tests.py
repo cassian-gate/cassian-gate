@@ -3565,6 +3565,20 @@ def write_test_summary_artifact(lab: str, results: dict) -> Path:
                 obs = str((s.get("observed") or "")).strip().lower() or "unknown"
                 fail_lines.append(f"FAIL: scenario={sid} expected={exp} observed={obs}")
 
+    validated_parts: list[str] = ["declared tests" if tests_executed > 0 else "no declared tests"]
+    if scenarios_executed > 0:
+        validated_parts.append("declared scenarios")
+    else:
+        validated_parts.append("no declared scenarios")
+
+    not_validated_parts: list[str] = []
+    if tests_executed == 0 and scenarios_executed == 0:
+        not_validated_parts.extend(["connectivity behavior", "routing behavior", "policy behavior", "scenario behavior"])
+    elif tests_executed == 0:
+        not_validated_parts.append("declared test behavior")
+    elif scenarios_executed == 0:
+        not_validated_parts.append("scenario behavior")
+
     stable_keys = (
         "\n"
         "=== STABLE SUMMARY KEYS (v2) ===\n"
@@ -3574,6 +3588,9 @@ def write_test_summary_artifact(lab: str, results: dict) -> Path:
         f"Tests executed: {tests_executed}\n"
         f"Scenarios executed: {scenarios_executed}\n"
         f"Failures: {failures}\n"
+        f"Validated: {', '.join(validated_parts)}\n"
+        f"Not validated: {', '.join(not_validated_parts) if not_validated_parts else '(none declared outside executed scope)'}\n"
+        "Authority: results.summary.txt is non-authoritative; results.json is authoritative\n"
     )
     if fail_lines:
         stable_keys += "\n" + "\n".join(fail_lines) + "\n"
