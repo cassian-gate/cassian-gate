@@ -171,6 +171,7 @@ from netsim_model import (
     resolve_topology,
     adapt_terraform_plan_json,
     adapt_ansible_rendered_dir,
+    validate_contrib_path,
 )
 
 from netsim_tests import (
@@ -8116,8 +8117,48 @@ def cmd_validate(args: argparse.Namespace) -> None:
 
     # module-global flag used by die() (moved to netsim_common)
 
-    topo_path = (TOPO_DIR / args.topology) if not Path(args.topology).is_file() else Path(args.topology)
     want_json: bool = bool(getattr(args, "json", False))
+    contrib_path_arg = getattr(args, "contrib_path", None)
+
+    if contrib_path_arg is not None:
+        contrib_path = Path(str(contrib_path_arg))
+        prev_quiet = bool(getattr(netsim_common, "_QUIET_DIE", False))
+        netsim_common._QUIET_DIE = want_json
+        try:
+            validate_contrib_path(contrib_path)
+            if want_json:
+                payload = {
+                    "command": "validate-contrib",
+                    "result": "pass",
+                    "error": "",
+                    "schema_version": "1",
+                    "path": str(contrib_path),
+                }
+                print(json.dumps(payload, indent=2, sort_keys=True))
+                return
+            return
+        except SystemExit as e:
+            raw_code = e.code
+            code = raw_code if isinstance(raw_code, int) else 2
+            msg = str(e).strip() or "contrib validation failed"
+            if code == 1:
+                code = 2
+            if want_json:
+                payload = {
+                    "command": "validate-contrib",
+                    "result": "fail",
+                    "error": msg,
+                    "schema_version": "1",
+                    "path": str(contrib_path),
+                }
+                print(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False))
+            else:
+                print(f"ERROR: {msg}", file=sys.stderr)
+            raise SystemExit(code)
+        finally:
+            netsim_common._QUIET_DIE = prev_quiet
+
+    topo_path = (TOPO_DIR / args.topology) if not Path(args.topology).is_file() else Path(args.topology)
 
     def emit(result: str, error: str = "") -> None:
         payload = {
@@ -12856,6 +12897,12 @@ def main() -> None:
     p_val.add_argument("topology", help="Topology YAML filename under ./topologies or a full path")
     p_val.add_argument("--json", action="store_true", help="Emit machine-readable JSON (CI-friendly)")
     p_val.set_defaults(func=cmd_validate)
+
+    # validate-contrib
+    p_vc = sub.add_parser("validate-contrib", help="Validate contrib content structurally (no lifecycle, no artifacts)")
+    p_vc.add_argument("contrib_path", help="Explicit contrib path to validate")
+    p_vc.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+    p_vc.set_defaults(func=cmd_validate)
 
     # doctor (read-only environment readiness; no mutation)
     p_doc = sub.add_parser("doctor", help="Read-only environment readiness checks (no mutation)")

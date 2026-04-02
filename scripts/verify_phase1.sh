@@ -79,6 +79,30 @@ if [ "$wf_defs" -ne 1 ] || [ "$wf_all" -ne 2 ] || [ "$wf_py" -ne 0 ]; then
   exit 1
 fi
 
+echo "=== 0b) Guardrail: validate-contrib structural verification ==="
+# Invariant:
+#  - validate-contrib command exists as an explicit surface
+#  - model exposes validate_contrib_path
+#  - supported contrib roots are enforced in deterministic code
+if ! grep -q 'add_parser("validate-contrib"' src/netsim.py; then
+  echo "FAIL: missing validate-contrib parser in src/netsim.py"
+  exit 1
+fi
+if ! grep -q 'validate_contrib_path' src/netsim.py; then
+  echo "FAIL: src/netsim.py does not reference validate_contrib_path"
+  exit 1
+fi
+if ! grep -q 'def validate_contrib_path(' src/netsim_model.py; then
+  echo "FAIL: missing validate_contrib_path in src/netsim_model.py"
+  exit 1
+fi
+for sym in '"topologies"' '"packs"' '"state-profiles"'; do
+  if ! grep -q "$sym" src/netsim_model.py; then
+    echo "FAIL: missing supported contrib root $sym in src/netsim_model.py"
+    exit 1
+  fi
+done
+
 echo "=== 0c) Guardrail: grey-failure scenario invariant ==="
 # Invariant:
 #  - schema validator knows the four grey-failure actions
@@ -428,22 +452,23 @@ if [ "$is_wsl2" -eq 1 ]; then
     exit 1
   }
 
-  if [ "$vm_test_rc" -ne 1 ]; then
-    echo "FAIL: expected VM test to fail with exit 1 on WSL2"
+  if [ "$vm_test_rc" -ne 2 ]; then
+    echo "FAIL: expected VM test to fail with exit 2 on WSL2 (zero-assertion gate rejection)"
     echo "$vm_test_out"
     exit 1
   fi
-  echo "$vm_test_out" | grep -Fq "Failure phase: DEPLOY" || {
-    echo "FAIL: expected DEPLOY failure phase during VM test on WSL2"
+  echo "$vm_test_out" | grep -Fq "ERROR: no assertions defined" || {
+    echo "FAIL: expected zero-assertion gate rejection during VM test on WSL2"
     echo "$vm_test_out"
     exit 1
   }
-  echo "$vm_test_out" | grep -Fq "VM runtime is not supported on WSL2." || {
-    echo "FAIL: expected WSL2 VM runtime gate message during test"
+  echo "$vm_test_out" | grep -Fq "A validation gate must include at least one test or scenario." || {
+    echo "FAIL: expected zero-assertion gate guidance during VM test on WSL2"
     echo "$vm_test_out"
     exit 1
   }
-  echo "OK: VM runtime gate triggers at deploy on WSL2"
+  echo "OK: VM up gate triggers at deploy on WSL2"
+  echo "OK: VM test path is rejected earlier by zero-assertion gate guardrail on WSL2"
 elif [ "$has_kvm" -eq 0 ]; then
   set +e
   vm_up_out="$($NS up topologies/vm-smoke.yaml 2>&1)"
