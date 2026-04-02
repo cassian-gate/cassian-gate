@@ -3594,6 +3594,38 @@ def write_test_summary_artifact(lab: str, results: dict) -> Path:
         f"  Not validated: {', '.join(scope_not_validated) if scope_not_validated else '(none declared outside executed scope)'}\n"
     )
 
+    failure_meaning_lines: list[str] = []
+    if verdict_s == "PASS":
+        pass_meaning_block = (
+            "\n"
+            "PASS means:\n"
+            "  All executed declared checks matched their expected outcomes within the scope shown above\n"
+            "\n"
+            "PASS does not mean:\n"
+            "  Full network correctness outside the executed scope\n"
+        )
+        fail_meaning_block = ""
+    else:
+        hard_failure = results.get("hard_failure") or {}
+        hard_failure_occurred = bool(
+            isinstance(hard_failure, dict) and hard_failure.get("occurred") is True
+        )
+        if hard_failure_occurred:
+            failure_meaning_lines.append("  A system/runtime failure interrupted validation")
+            phase = str(hard_failure.get("phase") or "").strip()
+            if phase:
+                failure_meaning_lines.append(f"  Failure phase: {phase.upper()}")
+        else:
+            failure_meaning_lines.append("  One or more declared checks did not match expected outcomes")
+            failure_meaning_lines.append("  This is a validation failure, not a system/runtime failure")
+        pass_meaning_block = ""
+        fail_meaning_block = (
+            "\n"
+            "FAIL means:\n"
+            + "\n".join(failure_meaning_lines)
+            + "\n"
+        )
+
     validation_summary_block = (
         "\n"
         "Validation summary:\n"
@@ -3608,11 +3640,28 @@ def write_test_summary_artifact(lab: str, results: dict) -> Path:
 
     authority_block = (
         "\n"
-        "Authority disclaimer:\n"
-        "  results.summary.txt is non-authoritative; results.json is authoritative\n"
+        "Authority:\n"
+        "  results.json is the authoritative verdict artifact\n"
+        "\n"
+        "Summary:\n"
+        "  results.summary.txt is explanatory only and does not determine verdicts\n"
     )
 
-    stable_keys = result_block + scope_block + validation_summary_block + authority_block
+    share_block = (
+        "\n"
+        "Share this:\n"
+        f"  {artifact_root}/results.json\n"
+    )
+
+    stable_keys = (
+        result_block
+        + authority_block
+        + scope_block
+        + pass_meaning_block
+        + fail_meaning_block
+        + validation_summary_block
+        + share_block
+    )
 
     out.write_text(ci_header + header + body + stable_keys, encoding="utf-8")
     return out
