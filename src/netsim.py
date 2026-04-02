@@ -2244,6 +2244,16 @@ def cmd_test(args: argparse.Namespace) -> None:
         if not lab_name:
             die(f"Topology missing required 'name': {topo_gate_path}")
 
+        tests_preview = resolved_preview.get("tests") or []
+        scenarios_preview = resolved_preview.get("scenarios") or []
+        if (not args.list_scenarios) and (len(tests_preview) == 0) and (len(scenarios_preview) == 0):
+            die(
+                "no assertions defined\n\n"
+                "A validation gate must include at least one test or scenario.\n"
+                "This run would produce a vacuous PASS and is therefore rejected.",
+                code=2,
+            )
+
         # Phase 3 (WI-6): list scenarios directly from the resolved topology (no lab artifacts, no runtime).
         if bool(getattr(args, "list_scenarios", False)):
             topo = resolved_preview
