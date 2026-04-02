@@ -46,6 +46,7 @@ ai-netsim **IS NOT**
 ```bash
 netsim doctor
 netsim validate <topology.yaml>
+netsim validate-contrib <path>
 netsim preflight <topology.yaml>
 ```
 
@@ -2489,6 +2490,12 @@ Validate a topology:
 netsim validate topology.yaml
 ```
 
+Validate contrib content structurally:
+
+```bash
+netsim validate-contrib contrib/
+```
+
 Run validation gate:
 
 ```bash
@@ -2640,6 +2647,78 @@ netsim ai --lab <lab> --online "why did this fail"
 
 ---
 
+## `netsim validate-contrib` — Structural validation for contrib content
+
+Validate supported contrib content without running any lifecycle phases.
+
+Command:
+
+```bash
+netsim validate-contrib <path>
+```
+
+Purpose:
+
+- checks contrib content structurally
+- rejects malformed or unsupported contrib layout
+- does not deploy anything
+- does not create lab artifacts
+- does not affect verdicts, replay, or authority
+
+Important boundary:
+
+`validate-contrib` is:
+
+- structural only
+- non-authoritative
+- explicit only
+
+It does **not**:
+
+- run resolve → deploy → test lifecycle phases
+- produce PASS / FAIL validation verdicts
+- generate `results.json`
+- validate runtime behavior
+- score content quality
+- infer meaning or intent
+
+Supported contrib surfaces:
+
+```text
+contrib/topologies/...
+contrib/packs/...
+contrib/state-profiles/...
+```
+
+Current behavior:
+
+- validates only the path you explicitly pass
+- accepts supported contrib root/container shapes already present in the repo
+- fails fast on unsupported file layout or missing required structure
+
+Examples:
+
+```bash
+netsim validate-contrib contrib/
+netsim validate-contrib contrib/packs
+netsim validate-contrib contrib/state-profiles
+netsim validate-contrib contrib/topologies/first-run-proof
+```
+
+Exit behavior:
+
+- valid supported contrib content → exit `0`
+- invalid or unsupported contrib content → exit `2`
+
+Example failure:
+
+```text
+ERROR: missing required file passing/topology.yaml
+exit=2
+```
+
+---
+
 # 1️⃣8️⃣ Exit Codes
 
 | Code | Meaning                |
@@ -2656,6 +2735,8 @@ Examples:
 - invalid invariant declaration → `2`
 - incompatible pack contents → `2`
 - zero-assertion gate run (`netsim test <topology.yaml>` with no tests/scenarios) → `2`
+- valid contrib validation (`netsim validate-contrib contrib/`) → `0`
+- invalid contrib structure (`netsim validate-contrib <broken-path>`) → `2`
 
 Misuse / usage / contract error example:
 
