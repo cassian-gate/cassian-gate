@@ -22,6 +22,7 @@ from netsim_common import (
 from netsim_artifacts import (
     node_cfg_dir,
     write_file,
+    load_yaml,
 )
 
 # -------------------------
@@ -256,6 +257,237 @@ def adapt_ansible_rendered_dir(root_dir: Path) -> dict[str, Any]:
 # -------------------------
 # YAML + validation
 # -------------------------
+def validate_contrib_path(path: Path) -> None:
+    """
+    Deterministic structural-only contrib validation.
+
+    Supported roots:
+      - contrib/topologies/...
+      - contrib/packs/...
+      - contrib/state-profiles/...
+
+    Rules are structural only:
+      - required files / required top-level keys
+      - forbidden/unexpected structure
+      - valid YAML shape where applicable
+
+    No runtime/lifecycle/artifact coupling.
+    """
+    p = Path(path)
+    if not p.exists():
+        die(f"contrib path not found: {p}", code=2)
+
+    parts = list(p.parts)
+    try:
+        contrib_i = parts.index("contrib")
+    except ValueError:
+        die(f"unsupported contrib path (must be under contrib/): {p}", code=2)
+
+    rel_parts = parts[contrib_i:]
+    if len(rel_parts) < 2:
+        supported_roots = []
+        for child in sorted(p.iterdir(), key=lambda x: x.name):
+            if child.is_dir() and child.name in ("topologies", "packs", "state-profiles"):
+                supported_roots.append(child)
+
+        if not supported_roots:
+            die(f"unsupported contrib path (must target a supported contrib type): {p}", code=2)
+
+        for child in supported_roots:
+            if child.name == "topologies":
+                _validate_contrib_topologies_path(child)
+                continue
+            if child.name == "packs":
+                _validate_contrib_pack_path(child)
+                continue
+            if child.name == "state-profiles":
+                _validate_contrib_state_profile_path(child)
+        return
+
+    kind = rel_parts[1]
+
+    if kind == "topologies":
+        _validate_contrib_topologies_path(p)
+        return
+    if kind == "packs":
+        _validate_contrib_pack_path(p)
+        return
+    if kind == "state-profiles":
+        _validate_contrib_state_profile_path(p)
+        return
+
+    die(f"unsupported contrib path type under contrib/: {kind}", code=2)
+
+
+def _validate_contrib_topologies_path(path: Path) -> None:
+    """
+    Structural-only validation for contrib/topologies paths.
+
+    Supported shapes:
+      - contrib/topologies/                    -> validate supported children
+      - contrib/topologies/<recipe>/          -> recipe directory
+      - contrib/topologies/recipes/           -> validate recipe children
+      - contrib/topologies/recipes/<recipe>/  -> recipe directory
+    """
+    p = Path(path)
+
+    if p.is_file():
+        die(f"topology contrib path must be a directory, not a file: {p}", code=2)
+
+    rel = p.as_posix()
+    if rel.endswith("/contrib/topologies") or rel == "contrib/topologies":
+        allowed_child_dirs = {"recipes"}
+        allowed_root_files = {"README.md"}
+
+        recipe_dirs: list[Path] = []
+        for child in sorted(p.iterdir(), key=lambda x: x.name):
+            name = child.name
+            if child.is_file():
+                if name not in allowed_root_files:
+                    die(f"unexpected file {name}", code=2)
+                continue
+            if not child.is_dir():
+                die(f"unexpected path {name}", code=2)
+            if name in allowed_child_dirs:
+                _validate_contrib_topologies_path(child)
+                continue
+            recipe_dirs.append(child)
+
+        for recipe_dir in sorted(recipe_dirs, key=lambda x: x.as_posix()):
+            _validate_contrib_topologies_path(recipe_dir)
+        return
+
+    if rel.endswith("/contrib/topologies/recipes") or rel == "contrib/topologies/recipes":
+        allowed_root_files = {"README.md"}
+        recipe_dirs: list[Path] = []
+        for child in sorted(p.iterdir(), key=lambda x: x.name):
+            name = child.name
+            if child.is_file():
+                if name not in allowed_root_files:
+                    die(f"unexpected file {name}", code=2)
+                continue
+            if not child.is_dir():
+                die(f"unexpected path {name}", code=2)
+            recipe_dirs.append(child)
+
+        for recipe_dir in sorted(recipe_dirs, key=lambda x: x.as_posix()):
+            _validate_contrib_topologies_path(recipe_dir)
+        return
+
+    required = [
+        p / "README.md",
+        p / "passing" / "topology.yaml",
+        p / "failing" / "topology.yaml",
+    ]
+    for req in required:
+        if not req.exists() or not req.is_file():
+            rel_req = req.relative_to(p)
+            die(f"missing required file {rel_req.as_posix()}", code=2)
+
+    allowed_files = {
+        "README.md",
+        "passing/topology.yaml",
+        "failing/topology.yaml",
+    }
+
+    for item in sorted(p.rglob("*"), key=lambda x: x.as_posix()):
+        rel_item = item.relative_to(p).as_posix()
+        if item.is_dir():
+            if rel_item not in ("passing", "failing"):
+                die(f"unexpected directory {rel_item}", code=2)
+            continue
+        if rel_item not in allowed_files:
+            die(f"unexpected file {rel_item}", code=2)
+
+    for topo_file in [p / "passing" / "topology.yaml", p / "failing" / "topology.yaml"]:
+        topo = load_yaml(topo_file)
+        if not isinstance(topo, dict):
+            die(f"invalid topology YAML structure in {topo_file}", code=2)
+
+
+def _validate_contrib_pack_path(path: Path) -> None:
+    """
+    Structural-only pack validation:
+      - path may be a YAML file or directory containing YAML files
+      - each YAML document must be a mapping
+      - required top-level keys are limited to the minimal supported pack shape
+    """
+    p = Path(path)
+
+    if p.is_dir():
+        readme = p / "README.md"
+        if readme.exists():
+            if not readme.is_file():
+                die(f"unexpected path {readme.relative_to(p).as_posix()}", code=2)
+        yaml_files: list[Path] = []
+        for item in sorted(p.rglob("*"), key=lambda x: x.as_posix()):
+            if item.is_dir():
+                continue
+            if item.name == "README.md" and item.parent == p:
+                continue
+            if item.suffix.lower() not in (".yaml", ".yml"):
+                die(f"unexpected file {item.relative_to(p).as_posix()}", code=2)
+            yaml_files.append(item)
+    else:
+        if p.suffix.lower() not in (".yaml", ".yml"):
+            die(f"unsupported pack file type: {p.name}", code=2)
+        yaml_files = [p]
+
+    if not yaml_files:
+        die(f"no pack YAML files found under {p}", code=2)
+
+    for yf in yaml_files:
+        doc = load_yaml(yf)
+        if not isinstance(doc, dict):
+            die(f"pack YAML must be a mapping: {yf}", code=2)
+        for key in ("name", "tests"):
+            if key not in doc:
+                die(f"pack missing required top-level key '{key}': {yf}", code=2)
+
+
+def _validate_contrib_state_profile_path(path: Path) -> None:
+    """
+    Structural-only state-profile validation:
+      - path may be a YAML file or directory containing YAML files
+      - each YAML document must be a mapping
+      - required top-level key: commands
+      - commands must be a non-empty list
+    """
+    p = Path(path)
+
+    if p.is_dir():
+        readme = p / "README.md"
+        if readme.exists():
+            if not readme.is_file():
+                die(f"unexpected path {readme.relative_to(p).as_posix()}", code=2)
+        yaml_files: list[Path] = []
+        for item in sorted(p.rglob("*"), key=lambda x: x.as_posix()):
+            if item.is_dir():
+                continue
+            if item.name == "README.md" and item.parent == p:
+                continue
+            if item.suffix.lower() not in (".yaml", ".yml"):
+                die(f"unexpected file {item.relative_to(p).as_posix()}", code=2)
+            yaml_files.append(item)
+    else:
+        if p.suffix.lower() not in (".yaml", ".yml"):
+            die(f"unsupported state-profile file type: {p.name}", code=2)
+        yaml_files = [p]
+
+    if not yaml_files:
+        die(f"no state-profile YAML files found under {p}", code=2)
+
+    for yf in yaml_files:
+        doc = load_yaml(yf)
+        if not isinstance(doc, dict):
+            die(f"state-profile YAML must be a mapping: {yf}", code=2)
+        if "commands" not in doc:
+            die(f"state-profile missing required top-level key 'commands': {yf}", code=2)
+        commands = doc.get("commands")
+        if not isinstance(commands, list) or not commands:
+            die(f"state-profile 'commands' must be a non-empty list: {yf}", code=2)
+
+
 def _is_direct_link(topo: dict, a: str, b: str) -> bool:
     for link in topo.get("links", []) or []:
         eps = link.get("endpoints") or []
