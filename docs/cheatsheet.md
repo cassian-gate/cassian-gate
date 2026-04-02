@@ -127,6 +127,22 @@ You **do NOT run `netsim up` first**.
 
 Gate mode owns the lifecycle.
 
+### Important summary boundary
+
+The human-readable `results.summary.txt` file is not the verdict authority.
+
+Use:
+
+- `results.json` for authoritative verdict sharing in CI, tickets, and PRs
+- `results.summary.txt` for human-readable explanation only
+
+The summary now explicitly states:
+
+- what PASS means
+- what PASS does not mean
+- what FAIL means
+- which artifact to share
+
 ---
 
 ### PASS with 0 tests
@@ -261,6 +277,16 @@ Typical uses:
 - checking deterministic stability
 - debugging unexpected behavior from existing artifacts
 
+### Replay summary boundary
+
+Replay preserves the same authority boundary messaging in `results.summary.txt`.
+
+Meaning:
+
+- replay does not create a new authority model
+- `results.json` remains authoritative
+- `results.summary.txt` remains explanatory only
+
 ### Important boundary
 
 Replay:
@@ -313,6 +339,13 @@ Keep the lab running:
 ```bash
 netsim run <topology.yaml> --keep
 ```
+
+### Exploration summary boundary
+
+Even when run mode produces results artifacts, `results.summary.txt` remains explanatory only.
+
+Use `results.json` as the authoritative verdict artifact when you need the exact recorded result.
+Run mode itself remains non-authoritative as a workflow mode.
 
 ---
 
@@ -2214,7 +2247,30 @@ Meaning:
 
 - `topology.resolved.yaml` is generated execution input, not an authority source
 - `results.json` is the authoritative verdict surface
-- `results.summary.txt` is for humans only and does not determine verdicts
+- `results.summary.txt` is explanatory only and does not determine verdicts
+
+Current `results.summary.txt` boundary block:
+
+```text
+Authority:
+- results.json is the authoritative verdict artifact
+
+Summary:
+- results.summary.txt is explanatory only and does not determine verdicts
+
+PASS means:
+- all executed declared checks matched their expected outcomes within the scope shown in the summary
+
+PASS does not mean:
+- full network correctness outside the executed scope
+
+FAIL means:
+- if declared checks did not match expected outcomes, this is a validation failure
+- if a hard/system failure is recorded, the summary will state that validation was interrupted by a system/runtime failure
+
+Share this:
+- labs/clab-<lab>/results.json
+```
 
 Key files:
 
