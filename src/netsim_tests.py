@@ -3565,18 +3565,54 @@ def write_test_summary_artifact(lab: str, results: dict) -> Path:
                 obs = str((s.get("observed") or "")).strip().lower() or "unknown"
                 fail_lines.append(f"FAIL: scenario={sid} expected={exp} observed={obs}")
 
-    stable_keys = (
+    result_block = (
         "\n"
-        "=== STABLE SUMMARY KEYS (v2) ===\n"
-        f"RESULT: {verdict_s}\n"
-        f"Lab: {lab}\n"
-        f"Artifacts: {artifact_root}\n"
-        f"Tests executed: {tests_executed}\n"
-        f"Scenarios executed: {scenarios_executed}\n"
-        f"Failures: {failures}\n"
+        "Result:\n"
+        f"  RESULT: {verdict_s}\n"
+    )
+
+    scope_validated: list[str] = []
+    if tests_executed > 0:
+        scope_validated.append("declared tests")
+    if scenarios_executed > 0:
+        scope_validated.append("declared scenarios")
+    if not scope_validated:
+        scope_validated.append("deploy/provision only")
+
+    scope_not_validated: list[str] = []
+    if tests_executed == 0 and scenarios_executed == 0:
+        scope_not_validated.extend(["connectivity behavior", "routing behavior", "policy behavior", "scenario behavior"])
+    elif tests_executed == 0:
+        scope_not_validated.append("declared test behavior")
+    elif scenarios_executed == 0:
+        scope_not_validated.append("scenario behavior")
+
+    scope_block = (
+        "\n"
+        "Scope:\n"
+        f"  Validated: {', '.join(scope_validated)}\n"
+        f"  Not validated: {', '.join(scope_not_validated) if scope_not_validated else '(none declared outside executed scope)'}\n"
+    )
+
+    validation_summary_block = (
+        "\n"
+        "Validation summary:\n"
+        f"  Lab: {lab}\n"
+        f"  Artifacts: {artifact_root}\n"
+        f"  Tests executed: {tests_executed}\n"
+        f"  Scenarios executed: {scenarios_executed}\n"
+        f"  Failures: {failures}\n"
     )
     if fail_lines:
-        stable_keys += "\n" + "\n".join(fail_lines) + "\n"
+        validation_summary_block += "".join(f"  {line}\n" for line in fail_lines)
+
+    authority_block = (
+        "\n"
+        "Authority disclaimer:\n"
+        "  results.summary.txt is non-authoritative; results.json is authoritative\n"
+    )
+
+    stable_keys = result_block + scope_block + validation_summary_block + authority_block
 
     out.write_text(ci_header + header + body + stable_keys, encoding="utf-8")
     return out
