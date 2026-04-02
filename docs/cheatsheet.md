@@ -145,31 +145,36 @@ The summary now explicitly states:
 
 ---
 
-### PASS with 0 tests
+### Zero-assertion gate runs are rejected
 
 If the topology contains:
 
 - no `tests`
 - no `scenarios`
 
-Current operator-visible meaning is:
+then:
 
 ```text
-RESULT: PASS (SMOKE)
-Note: no tests or scenarios were executed.
-NOTE: No tests/scenarios declared — PASS means deploy/provision succeeded only.
-Proof Scope: smoke-only deployment validation
-Validated: resolve, generate, deploy, provision, collect, destroy
-Not validated: connectivity, routing, policy, scenario behavior
-Next: add declared tests or scenarios to prove behavior beyond smoke
+ERROR: no assertions defined
+
+A validation gate must include at least one test or scenario.
+This run would produce a vacuous PASS and is therefore rejected.
 ```
 
 Meaning:
 
-- PASS here proves only deployment/provision lifecycle success
-- it does **not** prove traffic behavior
-- it does **not** prove routing correctness
-- it does **not** prove policy correctness
+- `netsim test <topology.yaml>` requires at least one declared assertion
+- a zero-assertion topology is not a valid validation gate
+- no PASS or FAIL verdict is produced
+- no lifecycle execution begins
+- no lab/artifacts are created
+- exit code is `2` (usage / contract error)
+
+Important boundary:
+
+- this rule applies to authoritative gate execution with `netsim test <topology.yaml>`
+- it does **not** block `netsim run <topology.yaml>`
+- it does **not** change replay behavior
 
 ---
 
@@ -2490,6 +2495,11 @@ Run validation gate:
 netsim test topology.yaml
 ```
 
+Note:
+
+- `netsim test <topology.yaml>` now requires at least one declared test or scenario
+- if you only want to prove deploy/provision smoke behavior, use exploration mode instead of gate mode
+
 Validate invariant-pack compatibility:
 
 ```bash
@@ -2645,6 +2655,7 @@ Examples:
 - unsupported EVPN topology shape → `2`
 - invalid invariant declaration → `2`
 - incompatible pack contents → `2`
+- zero-assertion gate run (`netsim test <topology.yaml>` with no tests/scenarios) → `2`
 
 Misuse / usage / contract error example:
 
@@ -2703,6 +2714,11 @@ netsim doctor
 netsim validate topology.yaml
 netsim test topology.yaml
 ```
+
+Note:
+
+- `netsim test <topology.yaml>` now requires at least one declared test or scenario
+- if you only want to prove deploy/provision smoke behavior, use exploration mode instead of gate mode
 
 For exploration:
 
