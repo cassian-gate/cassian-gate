@@ -2602,8 +2602,8 @@ def cmd_test(args: argparse.Namespace) -> None:
             "Detected:\n"
             "  looks like a topology path (contains '/' or ends with .yaml/.yml)\n"
             "Next:\n"
-            "  Gate mode: netsim test <topology.yaml>\n"
-            "  Lab mode:  netsim up <topology.yaml> --reconfigure ; netsim test <lab-name>",
+            "  Gate mode: cassian test <topology.yaml>\n"
+            "  Lab mode:  cassian up <topology.yaml> --reconfigure ; cassian test <lab-name>",
             code=2,
         )
     # ------------------------------------------------------------
@@ -9317,9 +9317,9 @@ def cmd_exec(args: argparse.Namespace) -> None:
         die(
             "ERROR: missing required arguments.\n"
             "Usage:\n"
-            "  netsim exec <lab-name> <node> -- <cmd...>\n"
+            "  cassian exec <lab-name> <node> -- <cmd...>\n"
             "Next:\n"
-            "  Run: netsim status <lab-name>  (to list nodes)",
+            "  Run: cassian status <lab-name>  (to list nodes)",
             code=2,
         )
 
@@ -9362,10 +9362,10 @@ def cmd_exec(args: argparse.Namespace) -> None:
             + str(lab)
             + "/topology.resolved.yaml\n"
             "Next:\n"
-            "  Gate mode: netsim test <topology.yaml>\n"
-            "  Lab mode:  netsim up <topology.yaml> --reconfigure\n"
+            "  Gate mode: cassian test <topology.yaml>\n"
+            "  Lab mode:  cassian up <topology.yaml> --reconfigure\n"
             "Hint:\n"
-            "  Use: netsim status <lab-name>",
+            "  Use: cassian status <lab-name>",
             code=2,
         )
 
@@ -9373,7 +9373,7 @@ def cmd_exec(args: argparse.Namespace) -> None:
         die(
             f"ERROR: invalid node '{node}' for lab '{lab}'\n"
             f"Valid nodes: {', '.join(valid_nodes)}\n"
-            f"Try: netsim status {lab}",
+            f"Try: cassian status {lab}",
             code=2,
         )
 
@@ -9384,16 +9384,16 @@ def cmd_exec(args: argparse.Namespace) -> None:
             if not rt.exists_id(node_id):
                 die(
                     f"ERROR: lab runtime missing for '{lab}' (container {node_id} not found)\n"
-                    f"Try: netsim status {lab}\n"
-                    "Hint: Run 'netsim up <topology.yaml> --reconfigure' (or 'netsim run <topology.yaml> --keep') then retry.\n"
-                    "If artifacts are stale: netsim cleanup --all --yes",
+                    f"Try: cassian status {lab}\n"
+                    "Hint: Run 'cassian up <topology.yaml> --reconfigure' (or 'cassian run <topology.yaml> --keep') then retry.\n"
+                    "If artifacts are stale: cassian cleanup --all --yes",
                     code=2,
                 )
         except SystemExit:
             raise
         except Exception:
             # Keep deterministic and actionable without exposing backend exceptions.
-            die(f"ERROR: unable to verify runtime for lab '{lab}' (use 'netsim status {lab}')", code=2)
+            die(f"ERROR: unable to verify runtime for lab '{lab}' (use 'cassian status {lab}')", code=2)
 
     if not args.command:
         # Interactive shell (runtime decides how)
@@ -9502,10 +9502,10 @@ def cmd_status(args: argparse.Namespace) -> None:
         die(
             "ERROR: missing LAB NAME.\n"
             "Usage:\n"
-            "  netsim status <lab-name>\n"
+            "  cassian status <lab-name>\n"
             "Next:\n"
-            "  If you have a topology: netsim test <topology.yaml>  (gate)\n"
-            "  If you already deployed: netsim status <lab-name>",
+            "  If you have a topology: cassian test <topology.yaml>  (gate)\n"
+            "  If you already deployed: cassian status <lab-name>",
             code=2,
         )
 
@@ -9590,7 +9590,7 @@ def cmd_status(args: argparse.Namespace) -> None:
         expected_clab = f"labs/{lab}.clab.yaml"
         sys.stdout.write(
             "────────────────────────────────────────\n"
-            "ai-netsim Status\n"
+            "Cassian Gate Status\n"
             "────────────────────────────────────────\n"
             f"Lab: {lab}\n"
             "RESULT: NOT FOUND\n"
@@ -9598,7 +9598,7 @@ def cmd_status(args: argparse.Namespace) -> None:
             "Expected:\n"
             f"  {expected_clab}\n"
             "Next:\n"
-            "  netsim test <topology.yaml>\n"
+            "  cassian test <topology.yaml>\n"
         )
         raise SystemExit(2)
 
@@ -9873,7 +9873,7 @@ def cmd_status(args: argparse.Namespace) -> None:
             topo_path = topo_arg
 
     print("────────────────────────────────────────")
-    print("ai-netsim Status")
+    print("Cassian Status")
     print("────────────────────────────────────────")
     print(f"Lab: {lab}")
 
@@ -9919,23 +9919,23 @@ def cmd_status(args: argparse.Namespace) -> None:
             print(f"Summary: containers {running_nodes}/{total_nodes} running")
         print("Next:")
         if topo_path:
-            print(f"  netsim test {topo_path}  (gate)")
+            print(f"  cassian test {topo_path}  (gate)")
         else:
-            print("  netsim test <topology.yaml>  (gate)")
+            print("  cassian test <topology.yaml>  (gate)")
         return
 
     print("Next:")
     if result == "OK":
-        print(f"  netsim test {lab}  (lab mode)")
-        print(f"  netsim exec {lab} <node> -- <cmd...>")
-        print(f"  netsim down {lab}")
+        print(f"  cassian test {lab}  (lab mode)")
+        print(f"  cassian exec {lab} <node> -- <cmd...>")
+        print(f"  cassian down {lab}")
     else:
         if topo_path:
-            print(f"  netsim test {topo_path}  (gate)")
-            print(f"  netsim up {topo_path} --reconfigure")
+            print(f"  cassian test {topo_path}  (gate)")
+            print(f"  cassian up {topo_path} --reconfigure")
         else:
-            print("  netsim test <topology.yaml>  (gate)")
-        print(f"  netsim status {lab}")
+            print("  cassian test <topology.yaml>  (gate)")
+        print(f"  cassian status {lab}")
 
     print("Nodes:")
     for node_rec in out_doc["nodes"]:
