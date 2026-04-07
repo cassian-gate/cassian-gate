@@ -2550,7 +2550,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             raise SystemExit(exit_code)
 
         finally:
-            # Always cleanup after gate-style runs (equivalent to: netsim down <lab>)
+            # Always cleanup after gate-style runs (equivalent to: cassian down <lab>)
             try:
                 cmd_down(argparse.Namespace(name=lab_name))
             except SystemExit:
