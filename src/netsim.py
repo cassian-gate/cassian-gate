@@ -2614,8 +2614,8 @@ def cmd_test(args: argparse.Namespace) -> None:
         if not adir.exists():
             die(
                 f"Lab artifacts not found for lab={lab}. Expected: {adir}/topology.resolved.yaml\n"
-                "Hint: Run 'netsim up <topology.yaml> --reconfigure' then 'netsim test <lab-name>', or run "
-                "'netsim test <topology.yaml>' to create artifacts.",
+                "Hint: Run 'cassian up <topology.yaml> --reconfigure' then 'cassian test <lab-name>', or run "
+                "'cassian test <topology.yaml>' to create artifacts.",
                 code=2,
             )
 
@@ -2623,8 +2623,8 @@ def cmd_test(args: argparse.Namespace) -> None:
         if not rpath.exists():
             die(
                 f"Lab artifacts not found for lab={lab}. Expected: {rpath}\n"
-                "Hint: Run 'netsim up <topology.yaml> --reconfigure' then 'netsim test <lab-name>', or run "
-                "'netsim test <topology.yaml>' to create artifacts.",
+                "Hint: Run 'cassian up <topology.yaml> --reconfigure' then 'cassian test <lab-name>', or run "
+                "'cassian test <topology.yaml>' to create artifacts.",
                 code=2,
             )
 
