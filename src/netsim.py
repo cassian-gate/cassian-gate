@@ -8627,7 +8627,7 @@ def cmd_up(args: argparse.Namespace) -> None:
                     f"Runtime: PARTIAL ({running}/{total} running; {missing}/{total} missing; {stopped}/{total} stopped)"
                 )
     except Exception:
-        runtime_line = f"Runtime: UNKNOWN (use 'netsim status {lab_name}')"
+        runtime_line = f"Runtime: UNKNOWN (use 'cassian status {lab_name}')"
 
     if not bool(getattr(args, "_from_gate", False)):
         print("────────────────────────────────────────")
@@ -9437,7 +9437,7 @@ def _load_resolved_topology(lab_name: str) -> dict[str, Any]:
         # and the message must be deterministic + actionable (no Docker scanning).
         die(
             f"Lab artifacts not found for lab={lab_name}. Expected: {topo_path}\n"
-            "Hint: Run 'netsim up <topology.yaml>' (or 'netsim run <topology.yaml> --keep') then retry.",
+            "Hint: Run 'cassian up <topology.yaml>' (or 'cassian run <topology.yaml> --keep') then retry.",
             code=2,
         )
     return load_yaml(topo_path)
@@ -10326,7 +10326,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                 elif _lab_any_exists(lab_name, node_names):
                     print(
                         f"ERROR: lab '{lab_name}' already exists but is not fully running. "
-                        f"Use '--reconfigure' to rebuild it (or run 'netsim down {lab_name}' first).",
+                        f"Use '--reconfigure' to rebuild it (or run 'cassian down {lab_name}' first).",
                         file=sys.stderr,
                     )
                     record_failure(1)
@@ -13110,7 +13110,7 @@ def main() -> None:
         "--capture-config",
         action="store_true",
         help="Exploration evidence only (writes labs/<lab>/artifacts/capture_config/**). "
-             "Forbidden in netsim test; will exit 2 if used.",
+             "Forbidden in cassian test; will exit 2 if used.",
     )
     p_test.add_argument("--scenario-verbose", action="store_true", help="Print each scenario step as it runs (human-only; does not change artifacts)",)
     p_test.add_argument(
