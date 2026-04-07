@@ -1943,7 +1943,7 @@ def _two_run_compare(*, baseline_dir: Path, change_dir: Path, base_name: str) ->
 
     # Deterministic human summary
     lines: list[str] = []
-    lines.append("ai-netsim two-run diff (evidence-only)")
+    lines.append("Cassian Gate two-run diff (evidence-only)")
     lines.append(f"base_lab: {base_name}")
     lines.append(f"baseline_overall: {b_results.get('result')}")
     lines.append(f"change_overall: {c_results.get('result')}")
@@ -8591,7 +8591,7 @@ def cmd_up(args: argparse.Namespace) -> None:
             if nm not in node_names:
                 node_names.append(nm)
 
-    runtime_line = f"Runtime: not verified (use 'netsim status {lab_name}')"
+    runtime_line = f"Runtime: not verified (use 'cassian status {lab_name}')"
     try:
         total = len(node_names)
         # Runtime summary is best-effort; must not add retries or waits.
@@ -13207,7 +13207,7 @@ def main() -> None:
         _PRIV_NOTICE_PRINTED = False
         _invocation_reset_written_artifacts()
 
-        # Footer (WI-1a): gate-mode-only artifact footer (netsim test <topology.yaml>)
+        # Footer (WI-1a): gate-mode-only artifact footer (cassian test <topology.yaml>)
         if str(getattr(args, "cmd", "") or "") == "test":
             if not bool(getattr(args, "two_run", False)) and not bool(getattr(args, "list_scenarios", False)):
                 footer_lab = str(getattr(args, "lab", "") or "").strip()
