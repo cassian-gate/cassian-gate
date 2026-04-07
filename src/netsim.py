@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ai-netsim execution engine
+Cassian Gate execution engine
 
 Design contract (must not be violated):
 - Deterministic lifecycle (resolve → generate → deploy → provision → test → collect → destroy)
@@ -1943,7 +1943,7 @@ def _two_run_compare(*, baseline_dir: Path, change_dir: Path, base_name: str) ->
 
     # Deterministic human summary
     lines: list[str] = []
-    lines.append("ai-netsim two-run diff (evidence-only)")
+    lines.append("Cassian Gate two-run diff (evidence-only)")
     lines.append(f"base_lab: {base_name}")
     lines.append(f"baseline_overall: {b_results.get('result')}")
     lines.append(f"change_overall: {c_results.get('result')}")
@@ -2138,8 +2138,8 @@ def cmd_test(args: argparse.Namespace) -> None:
 
     - Default behavior unchanged: readiness + optional BGP + declared tests (steady-state).
     - Opt-in scenarios:
-        * netsim test --scenario <id>
-        * netsim test --all-scenarios
+        * cassian test --scenario <id>
+        * cassian test --all-scenarios
     When a scenario is requested, cmd_test executes declared steady-state tests first,
     then executes the requested scenario(s).
       Scenario steps call existing atomic tests via `run: <test_name>`.
@@ -2150,7 +2150,7 @@ def cmd_test(args: argparse.Namespace) -> None:
     """
     # v1.5 hard guardrail: capture-config is exploration evidence only (never allowed in gate-first test)
     if bool(getattr(args, "capture_config", False)):
-        die("--capture-config is exploration evidence only and is not allowed in netsim test", code=2)
+        die("--capture-config is exploration evidence only and is not allowed in cassian test", code=2)
 
     # -------------------------------------------------------------------------
     # Two-run gate orchestrator (v1.5): baseline vs change (evidence-only)
@@ -2178,20 +2178,20 @@ def cmd_test(args: argparse.Namespace) -> None:
         die(
             "ERROR: missing LAB NAME.\n\n"
             "Usage:\n"
-            "  netsim test <lab-name> [options]\n\n"
+            "  cassian test <lab-name> [options]\n\n"
             "Examples:\n"
-            "  netsim up topologies/foo.yaml --reconfigure\n"
-            "  netsim test foo\n\n"
+            "  cassian up topologies/foo.yaml --reconfigure\n"
+            "  cassian test foo\n\n"
             "Note:\n"
             "  If you want the baseline-vs-change gate, use:\n"
-            "    netsim test --two-run --two-run-topology <topology.yaml> --candidate-config <dir>\n",
+            "    cassian test --two-run --two-run-topology <topology.yaml> --candidate-config <dir>\n",
             code=2,
         )
 
     # ------------------------------------------------------------
     # v2 UX hardening (First 10 Minutes):
-    # Allow: netsim test <topology.yaml> as an authoritative clean-state gate.
-    # Preserve: netsim test <lab-name> behavior (existing lab required).
+    # Allow: cassian test <topology.yaml> as an authoritative clean-state gate.
+    # Preserve: cassian test <lab-name> behavior (existing lab required).
     # ------------------------------------------------------------
     lab_raw = str(lab or "").strip()
 
@@ -2550,7 +2550,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             raise SystemExit(exit_code)
 
         finally:
-            # Always cleanup after gate-style runs (equivalent to: netsim down <lab>)
+            # Always cleanup after gate-style runs (equivalent to: cassian down <lab>)
             try:
                 cmd_down(argparse.Namespace(name=lab_name))
             except SystemExit:
@@ -2570,15 +2570,15 @@ def cmd_test(args: argparse.Namespace) -> None:
         die(
             "ERROR: missing LAB NAME.\n\n"
             "Usage:\n"
-            "  netsim test <lab-name> [options]\n"
-            "  netsim test <topology.yaml> [options]\n\n"
+            "  cassian test <lab-name> [options]\n"
+            "  cassian test <topology.yaml> [options]\n\n"
             "Examples:\n"
-            "  netsim up topologies/foo.yaml --reconfigure\n"
-            "  netsim test foo\n\n"
-            "  netsim test examples/dci-failover.yaml\n\n"
+            "  cassian up topologies/foo.yaml --reconfigure\n"
+            "  cassian test foo\n\n"
+            "  cassian test examples/dci-failover.yaml\n\n"
             "Note:\n"
             "  If you want the baseline-vs-change gate, use:\n"
-            "    netsim test --two-run --two-run-topology <topology.yaml> --candidate-config <dir>\n",
+            "    cassian test --two-run --two-run-topology <topology.yaml> --candidate-config <dir>\n",
             code=2,
         )
 
@@ -2602,8 +2602,8 @@ def cmd_test(args: argparse.Namespace) -> None:
             "Detected:\n"
             "  looks like a topology path (contains '/' or ends with .yaml/.yml)\n"
             "Next:\n"
-            "  Gate mode: netsim test <topology.yaml>\n"
-            "  Lab mode:  netsim up <topology.yaml> --reconfigure ; netsim test <lab-name>",
+            "  Gate mode: cassian test <topology.yaml>\n"
+            "  Lab mode:  cassian up <topology.yaml> --reconfigure ; cassian test <lab-name>",
             code=2,
         )
     # ------------------------------------------------------------
@@ -2614,8 +2614,8 @@ def cmd_test(args: argparse.Namespace) -> None:
         if not adir.exists():
             die(
                 f"Lab artifacts not found for lab={lab}. Expected: {adir}/topology.resolved.yaml\n"
-                "Hint: Run 'netsim up <topology.yaml> --reconfigure' then 'netsim test <lab-name>', or run "
-                "'netsim test <topology.yaml>' to create artifacts.",
+                "Hint: Run 'cassian up <topology.yaml> --reconfigure' then 'cassian test <lab-name>', or run "
+                "'cassian test <topology.yaml>' to create artifacts.",
                 code=2,
             )
 
@@ -2623,8 +2623,8 @@ def cmd_test(args: argparse.Namespace) -> None:
         if not rpath.exists():
             die(
                 f"Lab artifacts not found for lab={lab}. Expected: {rpath}\n"
-                "Hint: Run 'netsim up <topology.yaml> --reconfigure' then 'netsim test <lab-name>', or run "
-                "'netsim test <topology.yaml>' to create artifacts.",
+                "Hint: Run 'cassian up <topology.yaml> --reconfigure' then 'cassian test <lab-name>', or run "
+                "'cassian test <topology.yaml>' to create artifacts.",
                 code=2,
             )
 
@@ -8591,7 +8591,7 @@ def cmd_up(args: argparse.Namespace) -> None:
             if nm not in node_names:
                 node_names.append(nm)
 
-    runtime_line = f"Runtime: not verified (use 'netsim status {lab_name}')"
+    runtime_line = f"Runtime: not verified (use 'cassian status {lab_name}')"
     try:
         total = len(node_names)
         # Runtime summary is best-effort; must not add retries or waits.
@@ -8627,20 +8627,20 @@ def cmd_up(args: argparse.Namespace) -> None:
                     f"Runtime: PARTIAL ({running}/{total} running; {missing}/{total} missing; {stopped}/{total} stopped)"
                 )
     except Exception:
-        runtime_line = f"Runtime: UNKNOWN (use 'netsim status {lab_name}')"
+        runtime_line = f"Runtime: UNKNOWN (use 'cassian status {lab_name}')"
 
     if not bool(getattr(args, "_from_gate", False)):
         print("────────────────────────────────────────")
-        print("ai-netsim Up Result")
+        print("Cassian Gate Up Result")
         print("────────────────────────────────────────")
         print(f"Lab: {lab_name}")
         print("RESULT: UP OK")
         print(runtime_line)
         print("Next:")
-        print(f"  netsim status {lab_name}")
-        print(f"  netsim test {lab_name}")
-        print(f"  netsim exec {lab_name} <node>")
-        print(f"  netsim down {lab_name}")
+        print(f"  cassian status {lab_name}")
+        print(f"  cassian test {lab_name}")
+        print(f"  cassian exec {lab_name} <node>")
+        print(f"  cassian down {lab_name}")
 
 def cmd_replay(args: argparse.Namespace) -> None:
     """
@@ -8761,7 +8761,7 @@ def cmd_replay(args: argparse.Namespace) -> None:
                 replay_scenario = scen_ids[0]
 
     # Minimal stable banner (quiet-mode safe).
-    print("ai-netsim Replay Run")
+    print("Cassian Gate Replay Run")
     print("")
     print(f"Run Source: {src}")
     if bool(getattr(args, "gate", False)):
@@ -9173,7 +9173,7 @@ def cmd_destroy(args: argparse.Namespace) -> None:
         strict = bool(getattr(args, "strict", False))
 
         print("────────────────────────────────────────")
-        print("ai-netsim Destroy Result")
+        print("Cassian Gate Destroy Result")
         print("────────────────────────────────────────")
         print(f"Lab: {lab_name}")
         print(f"LAB DESCRIPTOR: labs/{lab_name}.clab.yaml")
@@ -9188,10 +9188,10 @@ def cmd_destroy(args: argparse.Namespace) -> None:
 def cmd_cleanup(args: argparse.Namespace) -> None:
     """
     v1.x ops helper (non-authoritative):
-      netsim cleanup --all [--yes]
+      cassian cleanup --all [--yes]
 
     Safety:
-      - ONLY targets ai-netsim labs that have artifacts under labs/clab-*
+      - ONLY targets Cassian Gate labs that have artifacts under labs/clab-*
       - Dry-run by default; --yes required to execute
       - Never touches labs not present in labs/ (no Docker scans)
       - On execute: attempts runtime teardown (if .clab.yaml exists) AND purges artifacts under labs/clab-*
@@ -9199,7 +9199,7 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
       - Optional machine-readable report: labs/_cleanup/cleanup.json
     """
     if not getattr(args, "all", False):
-        die("cleanup requires --all. This command only targets ai-netsim labs present in labs/ (labs/clab-*).")
+        die("cleanup requires --all. This command only targets Cassian Gate labs present in labs/ (labs/clab-*).")
 
     candidates = list_owned_labs_from_artifacts()
 
@@ -9207,7 +9207,7 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
     print("Cleanup plan (execute):" if do_exec else "Cleanup plan (dry-run):")
 
     if not candidates:
-        print("- (none)  No ai-netsim lab artifacts found under labs/clab-*")
+        print("- (none)  No Cassian Gate lab artifacts found under labs/clab-*")
         return
 
     for lab, artifact_dir in candidates:
@@ -9317,9 +9317,9 @@ def cmd_exec(args: argparse.Namespace) -> None:
         die(
             "ERROR: missing required arguments.\n"
             "Usage:\n"
-            "  netsim exec <lab-name> <node> -- <cmd...>\n"
+            "  cassian exec <lab-name> <node> -- <cmd...>\n"
             "Next:\n"
-            "  Run: netsim status <lab-name>  (to list nodes)",
+            "  Run: cassian status <lab-name>  (to list nodes)",
             code=2,
         )
 
@@ -9362,10 +9362,10 @@ def cmd_exec(args: argparse.Namespace) -> None:
             + str(lab)
             + "/topology.resolved.yaml\n"
             "Next:\n"
-            "  Gate mode: netsim test <topology.yaml>\n"
-            "  Lab mode:  netsim up <topology.yaml> --reconfigure\n"
+            "  Gate mode: cassian test <topology.yaml>\n"
+            "  Lab mode:  cassian up <topology.yaml> --reconfigure\n"
             "Hint:\n"
-            "  Use: netsim status <lab-name>",
+            "  Use: cassian status <lab-name>",
             code=2,
         )
 
@@ -9373,7 +9373,7 @@ def cmd_exec(args: argparse.Namespace) -> None:
         die(
             f"ERROR: invalid node '{node}' for lab '{lab}'\n"
             f"Valid nodes: {', '.join(valid_nodes)}\n"
-            f"Try: netsim status {lab}",
+            f"Try: cassian status {lab}",
             code=2,
         )
 
@@ -9384,16 +9384,16 @@ def cmd_exec(args: argparse.Namespace) -> None:
             if not rt.exists_id(node_id):
                 die(
                     f"ERROR: lab runtime missing for '{lab}' (container {node_id} not found)\n"
-                    f"Try: netsim status {lab}\n"
-                    "Hint: Run 'netsim up <topology.yaml> --reconfigure' (or 'netsim run <topology.yaml> --keep') then retry.\n"
-                    "If artifacts are stale: netsim cleanup --all --yes",
+                    f"Try: cassian status {lab}\n"
+                    "Hint: Run 'cassian up <topology.yaml> --reconfigure' (or 'cassian run <topology.yaml> --keep') then retry.\n"
+                    "If artifacts are stale: cassian cleanup --all --yes",
                     code=2,
                 )
         except SystemExit:
             raise
         except Exception:
             # Keep deterministic and actionable without exposing backend exceptions.
-            die(f"ERROR: unable to verify runtime for lab '{lab}' (use 'netsim status {lab}')", code=2)
+            die(f"ERROR: unable to verify runtime for lab '{lab}' (use 'cassian status {lab}')", code=2)
 
     if not args.command:
         # Interactive shell (runtime decides how)
@@ -9414,9 +9414,9 @@ def cmd_vty(args: argparse.Namespace) -> None:
         die(
             "ERROR: missing required arguments.\n"
             "Usage:\n"
-            '  netsim vty <lab-name> <node> "<command>"\n'
+            '  cassian vty <lab-name> <node> "<command>"\n'
             "Next:\n"
-            "  Run: netsim status <lab-name>  (to list nodes)",
+            "  Run: cassian status <lab-name>  (to list nodes)",
             code=2,
         )
 
@@ -9437,7 +9437,7 @@ def _load_resolved_topology(lab_name: str) -> dict[str, Any]:
         # and the message must be deterministic + actionable (no Docker scanning).
         die(
             f"Lab artifacts not found for lab={lab_name}. Expected: {topo_path}\n"
-            "Hint: Run 'netsim up <topology.yaml>' (or 'netsim run <topology.yaml> --keep') then retry.",
+            "Hint: Run 'cassian up <topology.yaml>' (or 'cassian run <topology.yaml> --keep') then retry.",
             code=2,
         )
     return load_yaml(topo_path)
@@ -9502,10 +9502,10 @@ def cmd_status(args: argparse.Namespace) -> None:
         die(
             "ERROR: missing LAB NAME.\n"
             "Usage:\n"
-            "  netsim status <lab-name>\n"
+            "  cassian status <lab-name>\n"
             "Next:\n"
-            "  If you have a topology: netsim test <topology.yaml>  (gate)\n"
-            "  If you already deployed: netsim status <lab-name>",
+            "  If you have a topology: cassian test <topology.yaml>  (gate)\n"
+            "  If you already deployed: cassian status <lab-name>",
             code=2,
         )
 
@@ -9590,7 +9590,7 @@ def cmd_status(args: argparse.Namespace) -> None:
         expected_clab = f"labs/{lab}.clab.yaml"
         sys.stdout.write(
             "────────────────────────────────────────\n"
-            "ai-netsim Status\n"
+            "Cassian Gate Status\n"
             "────────────────────────────────────────\n"
             f"Lab: {lab}\n"
             "RESULT: NOT FOUND\n"
@@ -9598,7 +9598,7 @@ def cmd_status(args: argparse.Namespace) -> None:
             "Expected:\n"
             f"  {expected_clab}\n"
             "Next:\n"
-            "  netsim test <topology.yaml>\n"
+            "  cassian test <topology.yaml>\n"
         )
         raise SystemExit(2)
 
@@ -9873,7 +9873,7 @@ def cmd_status(args: argparse.Namespace) -> None:
             topo_path = topo_arg
 
     print("────────────────────────────────────────")
-    print("ai-netsim Status")
+    print("Cassian Status")
     print("────────────────────────────────────────")
     print(f"Lab: {lab}")
 
@@ -9919,23 +9919,23 @@ def cmd_status(args: argparse.Namespace) -> None:
             print(f"Summary: containers {running_nodes}/{total_nodes} running")
         print("Next:")
         if topo_path:
-            print(f"  netsim test {topo_path}  (gate)")
+            print(f"  cassian test {topo_path}  (gate)")
         else:
-            print("  netsim test <topology.yaml>  (gate)")
+            print("  cassian test <topology.yaml>  (gate)")
         return
 
     print("Next:")
     if result == "OK":
-        print(f"  netsim test {lab}  (lab mode)")
-        print(f"  netsim exec {lab} <node> -- <cmd...>")
-        print(f"  netsim down {lab}")
+        print(f"  cassian test {lab}  (lab mode)")
+        print(f"  cassian exec {lab} <node> -- <cmd...>")
+        print(f"  cassian down {lab}")
     else:
         if topo_path:
-            print(f"  netsim test {topo_path}  (gate)")
-            print(f"  netsim up {topo_path} --reconfigure")
+            print(f"  cassian test {topo_path}  (gate)")
+            print(f"  cassian up {topo_path} --reconfigure")
         else:
-            print("  netsim test <topology.yaml>  (gate)")
-        print(f"  netsim status {lab}")
+            print("  cassian test <topology.yaml>  (gate)")
+        print(f"  cassian status {lab}")
 
     print("Nodes:")
     for node_rec in out_doc["nodes"]:
@@ -10326,7 +10326,7 @@ def cmd_run(args: argparse.Namespace) -> None:
                 elif _lab_any_exists(lab_name, node_names):
                     print(
                         f"ERROR: lab '{lab_name}' already exists but is not fully running. "
-                        f"Use '--reconfigure' to rebuild it (or run 'netsim down {lab_name}' first).",
+                        f"Use '--reconfigure' to rebuild it (or run 'cassian down {lab_name}' first).",
                         file=sys.stderr,
                     )
                     record_failure(1)
@@ -12869,15 +12869,19 @@ def cmd_ai_coach(args) -> None:
     _ai_finalize_and_emit("coach", bundle, args)
 
 def main() -> None:
+    # LEGACY COMPATIBILITY: transitional alias remains available during migration.
     parser = argparse.ArgumentParser(
-        prog="netsim",
-        description="ai-netsim: deterministic network change validation gate",
+        prog="cassian",
+        description="Cassian Gate: deterministic network change validation gate",
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=(
             "Quick help:\n"
-            "  netsim test <topology.yaml>              (authoritative gate)\n"
-            "  netsim replay <artifact-dir> --gate      (authoritative replay)\n"
-            "  netsim replay -h                         (replay options)\n"
+            "  cassian test <topology.yaml>              (authoritative gate)\n"
+            "  cassian replay <artifact-dir> --gate      (authoritative replay)\n"
+            "  cassian replay -h                         (replay options)\n"
+            "\n"
+            "Legacy compatibility:\n"
+            "  netsim remains available temporarily as a legacy alias during migration.\n"
         ),
     )
     parser.add_argument(
@@ -12998,12 +13002,12 @@ def main() -> None:
     # cleanup
     p_cleanup = sub.add_parser(
         "cleanup",
-        help="Safely clean up ai-netsim-owned labs found under labs/ (dry-run unless --yes)",
+        help="Safely clean up Cassian Gate-owned labs found under labs/ (dry-run unless --yes)",
     )
     p_cleanup.add_argument(
         "--all",
         action="store_true",
-        help="Required. Only targets ai-netsim labs with artifact dirs under labs/clab-* (never scans Docker).",
+        help="Required. Only targets Cassian Gate labs with artifact dirs under labs/clab-* (never scans Docker).",
     )
     p_cleanup.add_argument(
         "--yes",
@@ -13014,7 +13018,7 @@ def main() -> None:
 
     # exec
     p_exec = sub.add_parser("exec", help="Exec a command inside a node container; if no command, open bash")
-    # Make positionals optional at parse-time so quiet-mode misuse is netsim-owned (no argparse dumps).
+    # Make positionals optional at parse-time so quiet-mode misuse is Cassian Gate-owned (no argparse dumps).
     p_exec.add_argument("lab", nargs="?", help="Lab name (topology 'name')")
     p_exec.add_argument("node", nargs="?", help="Node name (e.g. r1)")
     p_exec.add_argument("command", nargs=argparse.REMAINDER, help="Command to run inside container")
@@ -13027,7 +13031,7 @@ def main() -> None:
 
     # vty
     p_vty = sub.add_parser("vty", help="Run a vtysh command easily")
-    # Make positionals optional at parse-time so quiet-mode misuse is netsim-owned (no argparse dumps).
+    # Make positionals optional at parse-time so quiet-mode misuse is Cassian Gate-owned (no argparse dumps).
     p_vty.add_argument("lab", nargs="?", help="Lab name (topology 'name')")
     p_vty.add_argument("node", nargs="?", help="Node name (e.g. r1)")
     p_vty.add_argument("command", nargs="?", help='vtysh command as one string, e.g. "show bgp summary"')
@@ -13035,7 +13039,7 @@ def main() -> None:
 
     # status
     p_status = sub.add_parser("status", help="Show lab status (containers + optional BGP summary)")
-    # Make positional optional at parse-time so quiet-mode misuse is netsim-owned (no argparse dumps).
+    # Make positional optional at parse-time so quiet-mode misuse is Cassian Gate-owned (no argparse dumps).
     p_status.add_argument("lab", nargs="?", help="Lab name (topology 'name')")
     p_status.add_argument("--bgp", action="store_true", help="Include 'show bgp summary' for FRR nodes")
     p_status.add_argument("--bgp-verbose", action="store_true", help="Print full 'show bgp summary' output")
@@ -13090,8 +13094,8 @@ def main() -> None:
 "Directory contract: frr/<node>.conf and/or nft/<node>.nft|.ruleset",
     )
     # Support both forms:
-    #   netsim --verbose test ...
-    #   netsim test ... --verbose
+    #   cassian --verbose test ...
+    #   cassian test ... --verbose
     p_test.add_argument(
         "--verbose",
         action="store_true",
@@ -13106,7 +13110,7 @@ def main() -> None:
         "--capture-config",
         action="store_true",
         help="Exploration evidence only (writes labs/<lab>/artifacts/capture_config/**). "
-             "Forbidden in netsim test; will exit 2 if used.",
+             "Forbidden in cassian test; will exit 2 if used.",
     )
     p_test.add_argument("--scenario-verbose", action="store_true", help="Print each scenario step as it runs (human-only; does not change artifacts)",)
     p_test.add_argument(
@@ -13144,8 +13148,8 @@ def main() -> None:
     p_run = sub.add_parser("run", help="Ephemeral workflow: up -> test -> collect -> down (CI-friendly)")
     p_run.add_argument("topology", help="Topology YAML filename under ./topologies or a full path")
     # Support both forms:
-    #   netsim --verbose run ...
-    #   netsim run ... --verbose
+    #   cassian --verbose run ...
+    #   cassian run ... --verbose
     p_run.add_argument(
         "--verbose",
         action="store_true",
@@ -13203,7 +13207,7 @@ def main() -> None:
         _PRIV_NOTICE_PRINTED = False
         _invocation_reset_written_artifacts()
 
-        # Footer (WI-1a): gate-mode-only artifact footer (netsim test <topology.yaml>)
+        # Footer (WI-1a): gate-mode-only artifact footer (cassian test <topology.yaml>)
         if str(getattr(args, "cmd", "") or "") == "test":
             if not bool(getattr(args, "two_run", False)) and not bool(getattr(args, "list_scenarios", False)):
                 footer_lab = str(getattr(args, "lab", "") or "").strip()
