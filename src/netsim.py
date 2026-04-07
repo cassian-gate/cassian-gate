@@ -13018,7 +13018,7 @@ def main() -> None:
 
     # exec
     p_exec = sub.add_parser("exec", help="Exec a command inside a node container; if no command, open bash")
-    # Make positionals optional at parse-time so quiet-mode misuse is netsim-owned (no argparse dumps).
+    # Make positionals optional at parse-time so quiet-mode misuse is Cassian Gate-owned (no argparse dumps).
     p_exec.add_argument("lab", nargs="?", help="Lab name (topology 'name')")
     p_exec.add_argument("node", nargs="?", help="Node name (e.g. r1)")
     p_exec.add_argument("command", nargs=argparse.REMAINDER, help="Command to run inside container")
@@ -13031,7 +13031,7 @@ def main() -> None:
 
     # vty
     p_vty = sub.add_parser("vty", help="Run a vtysh command easily")
-    # Make positionals optional at parse-time so quiet-mode misuse is netsim-owned (no argparse dumps).
+    # Make positionals optional at parse-time so quiet-mode misuse is Cassian Gate-owned (no argparse dumps).
     p_vty.add_argument("lab", nargs="?", help="Lab name (topology 'name')")
     p_vty.add_argument("node", nargs="?", help="Node name (e.g. r1)")
     p_vty.add_argument("command", nargs="?", help='vtysh command as one string, e.g. "show bgp summary"')
@@ -13039,7 +13039,7 @@ def main() -> None:
 
     # status
     p_status = sub.add_parser("status", help="Show lab status (containers + optional BGP summary)")
-    # Make positional optional at parse-time so quiet-mode misuse is netsim-owned (no argparse dumps).
+    # Make positional optional at parse-time so quiet-mode misuse is Cassian Gate-owned (no argparse dumps).
     p_status.add_argument("lab", nargs="?", help="Lab name (topology 'name')")
     p_status.add_argument("--bgp", action="store_true", help="Include 'show bgp summary' for FRR nodes")
     p_status.add_argument("--bgp-verbose", action="store_true", help="Print full 'show bgp summary' output")
@@ -13094,8 +13094,8 @@ def main() -> None:
 "Directory contract: frr/<node>.conf and/or nft/<node>.nft|.ruleset",
     )
     # Support both forms:
-    #   netsim --verbose test ...
-    #   netsim test ... --verbose
+    #   cassian --verbose test ...
+    #   cassian test ... --verbose
     p_test.add_argument(
         "--verbose",
         action="store_true",
@@ -13148,8 +13148,8 @@ def main() -> None:
     p_run = sub.add_parser("run", help="Ephemeral workflow: up -> test -> collect -> down (CI-friendly)")
     p_run.add_argument("topology", help="Topology YAML filename under ./topologies or a full path")
     # Support both forms:
-    #   netsim --verbose run ...
-    #   netsim run ... --verbose
+    #   cassian --verbose run ...
+    #   cassian run ... --verbose
     p_run.add_argument(
         "--verbose",
         action="store_true",
