@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ai-netsim execution engine
+Cassian Gate execution engine
 
 Design contract (must not be violated):
 - Deterministic lifecycle (resolve → generate → deploy → provision → test → collect → destroy)
@@ -9173,7 +9173,7 @@ def cmd_destroy(args: argparse.Namespace) -> None:
         strict = bool(getattr(args, "strict", False))
 
         print("────────────────────────────────────────")
-        print("ai-netsim Destroy Result")
+        print("Cassian Gate Destroy Result")
         print("────────────────────────────────────────")
         print(f"Lab: {lab_name}")
         print(f"LAB DESCRIPTOR: labs/{lab_name}.clab.yaml")
@@ -9188,10 +9188,10 @@ def cmd_destroy(args: argparse.Namespace) -> None:
 def cmd_cleanup(args: argparse.Namespace) -> None:
     """
     v1.x ops helper (non-authoritative):
-      netsim cleanup --all [--yes]
+      cassian cleanup --all [--yes]
 
     Safety:
-      - ONLY targets ai-netsim labs that have artifacts under labs/clab-*
+      - ONLY targets Cassian Gate labs that have artifacts under labs/clab-*
       - Dry-run by default; --yes required to execute
       - Never touches labs not present in labs/ (no Docker scans)
       - On execute: attempts runtime teardown (if .clab.yaml exists) AND purges artifacts under labs/clab-*
@@ -9199,7 +9199,7 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
       - Optional machine-readable report: labs/_cleanup/cleanup.json
     """
     if not getattr(args, "all", False):
-        die("cleanup requires --all. This command only targets ai-netsim labs present in labs/ (labs/clab-*).")
+        die("cleanup requires --all. This command only targets Cassian Gate labs present in labs/ (labs/clab-*).")
 
     candidates = list_owned_labs_from_artifacts()
 
@@ -9207,7 +9207,7 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
     print("Cleanup plan (execute):" if do_exec else "Cleanup plan (dry-run):")
 
     if not candidates:
-        print("- (none)  No ai-netsim lab artifacts found under labs/clab-*")
+        print("- (none)  No Cassian Gate lab artifacts found under labs/clab-*")
         return
 
     for lab, artifact_dir in candidates:
@@ -13002,12 +13002,12 @@ def main() -> None:
     # cleanup
     p_cleanup = sub.add_parser(
         "cleanup",
-        help="Safely clean up ai-netsim-owned labs found under labs/ (dry-run unless --yes)",
+        help="Safely clean up Cassian Gate-owned labs found under labs/ (dry-run unless --yes)",
     )
     p_cleanup.add_argument(
         "--all",
         action="store_true",
-        help="Required. Only targets ai-netsim labs with artifact dirs under labs/clab-* (never scans Docker).",
+        help="Required. Only targets Cassian Gate labs with artifact dirs under labs/clab-* (never scans Docker).",
     )
     p_cleanup.add_argument(
         "--yes",
