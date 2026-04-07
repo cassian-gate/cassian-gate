@@ -2138,8 +2138,8 @@ def cmd_test(args: argparse.Namespace) -> None:
 
     - Default behavior unchanged: readiness + optional BGP + declared tests (steady-state).
     - Opt-in scenarios:
-        * netsim test --scenario <id>
-        * netsim test --all-scenarios
+        * cassian test --scenario <id>
+        * cassian test --all-scenarios
     When a scenario is requested, cmd_test executes declared steady-state tests first,
     then executes the requested scenario(s).
       Scenario steps call existing atomic tests via `run: <test_name>`.
@@ -2150,7 +2150,7 @@ def cmd_test(args: argparse.Namespace) -> None:
     """
     # v1.5 hard guardrail: capture-config is exploration evidence only (never allowed in gate-first test)
     if bool(getattr(args, "capture_config", False)):
-        die("--capture-config is exploration evidence only and is not allowed in netsim test", code=2)
+        die("--capture-config is exploration evidence only and is not allowed in cassian test", code=2)
 
     # -------------------------------------------------------------------------
     # Two-run gate orchestrator (v1.5): baseline vs change (evidence-only)
@@ -12869,7 +12869,7 @@ def cmd_ai_coach(args) -> None:
     _ai_finalize_and_emit("coach", bundle, args)
 
 def main() -> None:
-    # LEGACY COMPATIBILITY: 'netsim' remains a transitional alias intended for later removal.
+    # LEGACY COMPATIBILITY: transitional alias remains available during migration.
     parser = argparse.ArgumentParser(
         prog="cassian",
         description="Cassian Gate: deterministic network change validation gate",
