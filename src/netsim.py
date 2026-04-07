@@ -2190,8 +2190,8 @@ def cmd_test(args: argparse.Namespace) -> None:
 
     # ------------------------------------------------------------
     # v2 UX hardening (First 10 Minutes):
-    # Allow: netsim test <topology.yaml> as an authoritative clean-state gate.
-    # Preserve: netsim test <lab-name> behavior (existing lab required).
+    # Allow: cassian test <topology.yaml> as an authoritative clean-state gate.
+    # Preserve: cassian test <lab-name> behavior (existing lab required).
     # ------------------------------------------------------------
     lab_raw = str(lab or "").strip()
 
@@ -8631,16 +8631,16 @@ def cmd_up(args: argparse.Namespace) -> None:
 
     if not bool(getattr(args, "_from_gate", False)):
         print("────────────────────────────────────────")
-        print("ai-netsim Up Result")
+        print("Cassian Gate Up Result")
         print("────────────────────────────────────────")
         print(f"Lab: {lab_name}")
         print("RESULT: UP OK")
         print(runtime_line)
         print("Next:")
-        print(f"  netsim status {lab_name}")
-        print(f"  netsim test {lab_name}")
-        print(f"  netsim exec {lab_name} <node>")
-        print(f"  netsim down {lab_name}")
+        print(f"  cassian status {lab_name}")
+        print(f"  cassian test {lab_name}")
+        print(f"  cassian exec {lab_name} <node>")
+        print(f"  cassian down {lab_name}")
 
 def cmd_replay(args: argparse.Namespace) -> None:
     """
@@ -8761,7 +8761,7 @@ def cmd_replay(args: argparse.Namespace) -> None:
                 replay_scenario = scen_ids[0]
 
     # Minimal stable banner (quiet-mode safe).
-    print("ai-netsim Replay Run")
+    print("Cassian Gate Replay Run")
     print("")
     print(f"Run Source: {src}")
     if bool(getattr(args, "gate", False)):
