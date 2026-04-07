@@ -2178,13 +2178,13 @@ def cmd_test(args: argparse.Namespace) -> None:
         die(
             "ERROR: missing LAB NAME.\n\n"
             "Usage:\n"
-            "  netsim test <lab-name> [options]\n\n"
+            "  cassian test <lab-name> [options]\n\n"
             "Examples:\n"
-            "  netsim up topologies/foo.yaml --reconfigure\n"
-            "  netsim test foo\n\n"
+            "  cassian up topologies/foo.yaml --reconfigure\n"
+            "  cassian test foo\n\n"
             "Note:\n"
             "  If you want the baseline-vs-change gate, use:\n"
-            "    netsim test --two-run --two-run-topology <topology.yaml> --candidate-config <dir>\n",
+            "    cassian test --two-run --two-run-topology <topology.yaml> --candidate-config <dir>\n",
             code=2,
         )
 
@@ -2570,15 +2570,15 @@ def cmd_test(args: argparse.Namespace) -> None:
         die(
             "ERROR: missing LAB NAME.\n\n"
             "Usage:\n"
-            "  netsim test <lab-name> [options]\n"
-            "  netsim test <topology.yaml> [options]\n\n"
+            "  cassian test <lab-name> [options]\n"
+            "  cassian test <topology.yaml> [options]\n\n"
             "Examples:\n"
-            "  netsim up topologies/foo.yaml --reconfigure\n"
-            "  netsim test foo\n\n"
-            "  netsim test examples/dci-failover.yaml\n\n"
+            "  cassian up topologies/foo.yaml --reconfigure\n"
+            "  cassian test foo\n\n"
+            "  cassian test examples/dci-failover.yaml\n\n"
             "Note:\n"
             "  If you want the baseline-vs-change gate, use:\n"
-            "    netsim test --two-run --two-run-topology <topology.yaml> --candidate-config <dir>\n",
+            "    cassian test --two-run --two-run-topology <topology.yaml> --candidate-config <dir>\n",
             code=2,
         )
 
@@ -9414,9 +9414,9 @@ def cmd_vty(args: argparse.Namespace) -> None:
         die(
             "ERROR: missing required arguments.\n"
             "Usage:\n"
-            '  netsim vty <lab-name> <node> "<command>"\n'
+            '  cassian vty <lab-name> <node> "<command>"\n'
             "Next:\n"
-            "  Run: netsim status <lab-name>  (to list nodes)",
+            "  Run: cassian status <lab-name>  (to list nodes)",
             code=2,
         )
 
@@ -12869,15 +12869,19 @@ def cmd_ai_coach(args) -> None:
     _ai_finalize_and_emit("coach", bundle, args)
 
 def main() -> None:
+    # LEGACY COMPATIBILITY: 'netsim' remains a transitional alias intended for later removal.
     parser = argparse.ArgumentParser(
-        prog="netsim",
-        description="ai-netsim: deterministic network change validation gate",
+        prog="cassian",
+        description="Cassian Gate: deterministic network change validation gate",
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=(
             "Quick help:\n"
-            "  netsim test <topology.yaml>              (authoritative gate)\n"
-            "  netsim replay <artifact-dir> --gate      (authoritative replay)\n"
-            "  netsim replay -h                         (replay options)\n"
+            "  cassian test <topology.yaml>              (authoritative gate)\n"
+            "  cassian replay <artifact-dir> --gate      (authoritative replay)\n"
+            "  cassian replay -h                         (replay options)\n"
+            "\n"
+            "Legacy compatibility:\n"
+            "  netsim remains available temporarily as a legacy alias during migration.\n"
         ),
     )
     parser.add_argument(
