@@ -63,7 +63,7 @@ def die(msg: str, code: int = 1) -> None:
     global _QUIET_DIE
     global LAST_ERROR_MSG
 
-    # Record last netsim-owned error message deterministically for gate artifact emission.
+    # Record last Cassian Gate-owned error message deterministically for gate artifact emission.
     # This MUST be set even in quiet mode (where we raise SystemExit(str(msg))).
     LAST_ERROR_MSG = str(msg).strip()
 
@@ -89,7 +89,7 @@ def fail(msg: str, code: int = 1) -> None:
     global _QUIET_DIE
     global LAST_ERROR_MSG
 
-    # Record last netsim-owned failure message deterministically for gate artifact emission.
+    # Record last Cassian Gate-owned failure message deterministically for gate artifact emission.
     LAST_ERROR_MSG = str(msg).strip()
 
     if _QUIET_DIE:

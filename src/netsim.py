@@ -12840,7 +12840,7 @@ def cmd_ai_review(args) -> None:
     except SystemExit:
         raise
     except Exception as e:
-        print(f"ERROR: ai interface failure: {e!s}", file=sys.stderr)
+        print(f"ERROR: Cassian Gate AI interface failure: {e!s}", file=sys.stderr)
         sys.exit(1)
 
 def cmd_ai_coach(args) -> None:

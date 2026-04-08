@@ -849,7 +849,7 @@ def ensure_valid_topology(topo: dict) -> None:
         if runtime == "vm":
             # For v1.5 foundation, support SONiC VM via containerlab's 'sonic-vm' kind.
             # Contract: node.image MUST be an explicit container image reference (vrnetlab-built or equivalent).
-            # Contract: filesystem paths are forbidden; ai-netsim does not auto-build/convert/import VM images.
+            # Contract: filesystem paths are forbidden; Cassian Gate does not auto-build/convert/import VM images.
             node_name = str(n.get("name") or "<unnamed>").strip()
 
             if (n.get("type") or "").strip().lower() != "sonic-vm":
@@ -1152,7 +1152,7 @@ def ensure_valid_topology(topo: dict) -> None:
                     "Topology invalid: multi-hop ping test(s) declare expect: pass, but Cassian Gate v1 does not infer routing "
                     "intent or auto-configure routing protocols, so multi-hop pass cannot be proven from topology alone. "
                     "Fix: either (a) change these tests to expect: fail, (b) limit tests to directly-connected reachability, "
-                    "or (c) run with an equivalent pre-configured device image/config outside ai-netsim v1. "
+                    "or (c) run with an equivalent pre-configured device image/config outside Cassian Gate v1. "
                     f"Affected tests: {', '.join(offenders)}"
                 )
 
