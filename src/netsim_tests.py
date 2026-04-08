@@ -812,7 +812,7 @@ def configure_frr_static_routes_from_topology(rt: "Runtime", lab: str, topo: dic
     This function is intentionally hard-disabled in v1/v1.x to prevent accidental
     authority creep (static routing derived from topology).
     """
-    die("v1 contract: static routing from topology is not supported. Use preconfigured images/config outside ai-netsim v1.")
+    die("v1 contract: static routing from topology is not supported. Use preconfigured images/config outside Cassian Gate v1.")
 
     # Unreachable: retained only as a historical stub (do not remove without a versioned contract change).
     nodes = _node_index_by_name(topo)
@@ -836,7 +836,7 @@ def configure_frr_bgp_from_topology(rt: "Runtime", lab: str, topo: dict[str, Any
     This function is intentionally hard-disabled in v1/v1.x to prevent accidental
     authority creep (BGP provisioning derived from topology).
     """
-    die("v1 contract: BGP provisioning from topology is not supported. Use preconfigured images/config outside ai-netsim v1.")
+    die("v1 contract: BGP provisioning from topology is not supported. Use preconfigured images/config outside Cassian Gate v1.")
 
     # Unreachable: retained only as a historical stub (do not remove without a versioned contract change).
     nodes = _node_index_by_name(topo)
@@ -3175,16 +3175,16 @@ def render_gate_result_block(results: dict, *, authority_kind: str | None = None
 
     ak = str(authority_kind or "gate").strip().lower()
     if ak in ("gate", "authoritative", "topology"):
-        heading = "ai-netsim Gate Result"
+        heading = "Cassian Gate Result"
         authority_line = "Authority: GATE (authoritative)"
         mode_line = "Mode: gate (clean-state topology)"
     elif ak in ("run", "explore", "exploration"):
-        heading = "ai-netsim Run Result"
+        heading = "Cassian Run Result"
         authority_line = "Authority: RUN (non-authoritative)"
         mode_line = "Mode: run (workflow)"
     else:
         # default: existing runtime checks against an existing lab
-        heading = "ai-netsim Lab Test Result"
+        heading = "Cassian Lab Test Result"
         authority_line = "Authority: LAB-TEST (non-authoritative)"
         mode_line = "Mode: lab (existing runtime)"
 

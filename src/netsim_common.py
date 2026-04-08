@@ -63,7 +63,7 @@ def die(msg: str, code: int = 1) -> None:
     global _QUIET_DIE
     global LAST_ERROR_MSG
 
-    # Record last netsim-owned error message deterministically for gate artifact emission.
+    # Record last Cassian Gate-owned error message deterministically for gate artifact emission.
     # This MUST be set even in quiet mode (where we raise SystemExit(str(msg))).
     LAST_ERROR_MSG = str(msg).strip()
 
@@ -89,7 +89,7 @@ def fail(msg: str, code: int = 1) -> None:
     global _QUIET_DIE
     global LAST_ERROR_MSG
 
-    # Record last netsim-owned failure message deterministically for gate artifact emission.
+    # Record last Cassian Gate-owned failure message deterministically for gate artifact emission.
     LAST_ERROR_MSG = str(msg).strip()
 
     if _QUIET_DIE:
@@ -137,9 +137,9 @@ def assert_vm_runtime_supported(vm_node: str | None = None) -> None:
             f"node: {node}\n"
             "reason: unsupported environment (WSL2)\n"
             "detail: runtime=vm requires a Linux host/VM with KVM (WSL2 is unsupported)\n"
-            "required: run ai-netsim inside a Linux host/VM with KVM enabled and accessible\n"
+            "required: run Cassian Gate inside a Linux host/VM with KVM enabled and accessible\n"
             "notes: VM runtime is not supported on WSL2. "
-            "Run ai-netsim inside a Linux host/VM with KVM enabled (e.g., Windows Hyper-V + Ubuntu VM)."
+            "Run Cassian Gate inside a Linux host/VM with KVM enabled (e.g., Windows Hyper-V + Ubuntu VM)."
         )
 
     if not has_kvm():

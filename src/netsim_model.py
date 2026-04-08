@@ -849,7 +849,7 @@ def ensure_valid_topology(topo: dict) -> None:
         if runtime == "vm":
             # For v1.5 foundation, support SONiC VM via containerlab's 'sonic-vm' kind.
             # Contract: node.image MUST be an explicit container image reference (vrnetlab-built or equivalent).
-            # Contract: filesystem paths are forbidden; ai-netsim does not auto-build/convert/import VM images.
+            # Contract: filesystem paths are forbidden; Cassian Gate does not auto-build/convert/import VM images.
             node_name = str(n.get("name") or "<unnamed>").strip()
 
             if (n.get("type") or "").strip().lower() != "sonic-vm":
@@ -872,7 +872,7 @@ def ensure_valid_topology(topo: dict) -> None:
                     "reason: missing required image reference\n"
                     "detail: image is missing or empty\n"
                     "required: set node.image to a container image reference (vrnetlab-built or equivalent)\n"
-                    "notes: Filesystem paths are not supported for VM node.image. ai-netsim will not auto-build or convert VM images."
+                    "notes: Filesystem paths are not supported for VM node.image. Cassian Gate will not auto-build or convert VM images."
                 )
 
             # Reject filesystem paths (absolute/relative/file:///tilde/Windows drive forms) deterministically.
@@ -893,7 +893,7 @@ def ensure_valid_topology(topo: dict) -> None:
                     "reason: image must be a container image reference (not a filesystem path)\n"
                     f"detail: image={img_s!r}\n"
                     "required: set node.image to a vrnetlab-built container image reference (e.g., ghcr.io/org/sonic-vm:tag)\n"
-                    "notes: Filesystem paths are not supported for VM node.image. ai-netsim will not auto-build or convert VM images."
+                    "notes: Filesystem paths are not supported for VM node.image. Cassian Gate will not auto-build or convert VM images."
                 )
 
             # Plausible container image reference check (format gate only; do NOT probe pull/existence).
@@ -905,7 +905,7 @@ def ensure_valid_topology(topo: dict) -> None:
                     "reason: invalid container image reference (whitespace)\n"
                     f"detail: image={img_s!r}\n"
                     "required: set node.image to a valid OCI image reference (no whitespace)\n"
-                    "notes: ai-netsim validates format only; image pull/existence is handled by the runtime."
+                    "notes: Cassian Gate validates format only; image pull/existence is handled by the runtime."
                 )
 
             allowed_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-/:@")
@@ -917,7 +917,7 @@ def ensure_valid_topology(topo: dict) -> None:
                     "reason: invalid container image reference (unsupported characters)\n"
                     f"detail: image={img_s!r} bad_chars={bad!r}\n"
                     "required: set node.image to a valid OCI image reference using only [A-Za-z0-9._-/:@]\n"
-                    "notes: ai-netsim does not auto-fix or rewrite image references."
+                    "notes: Cassian Gate does not auto-fix or rewrite image references."
                 )
 
             # Reject any fields that would imply auto-build/import/conversion (if present).
@@ -932,7 +932,7 @@ def ensure_valid_topology(topo: dict) -> None:
                         "reason: implicit VM image build/import is not supported\n"
                         f"detail: forbidden_field={k!r} value={n.get(k)!r}\n"
                         "required: provide a pre-built VM container image and reference it via node.image\n"
-                        "notes: ai-netsim must never auto-build, download, convert, or import VM images during deploy."
+                        "notes: Cassian Gate must never auto-build, download, convert, or import VM images during deploy."
                     )
 
     # v1.x guardrail hardening (clarified):
@@ -952,7 +952,7 @@ def ensure_valid_topology(topo: dict) -> None:
         if "static_routes" in n and n.get("static_routes") not in (None, [], {}):
             die(
                 f"Topology invalid: nodes[{i}] '{name}': 'static_routes' is not allowed. "
-                f"v1 boundary: routing mechanics must come from device configuration outside ai-netsim v1 "
+                f"v1 boundary: routing mechanics must come from device configuration outside Cassian Gate v1 "
                 f"(preconfigured images/config or manual exploration), and must be proven via tests."
             )
 
@@ -1101,10 +1101,10 @@ def ensure_valid_topology(topo: dict) -> None:
                     )
 
     # v1.x fail-fast educational guardrail (v1-truthful):
-    # - ai-netsim v1 does NOT infer routing intent and does NOT auto-configure routing protocols.
+    # - Cassian Gate v1 does NOT infer routing intent and does NOT auto-configure routing protocols.
     # - Therefore, multi-hop reachability cannot be *proven* to pass from topology alone.
     # - If a multi-hop test expects PASS, it must rely on an equivalent pre-configured device image/config
-    #   outside ai-netsim v1, otherwise the expectation is invalid and should be changed.
+    #   outside Cassian Gate v1, otherwise the expectation is invalid and should be changed.
     #
     # v1.x exception:
     # - If ALL FRR nodes in the topology are explicitly declared as frr_mode: preconfigured,
@@ -1149,10 +1149,10 @@ def ensure_valid_topology(topo: dict) -> None:
 
             if offenders:
                 die(
-                    "Topology invalid: multi-hop ping test(s) declare expect: pass, but ai-netsim v1 does not infer routing "
+                    "Topology invalid: multi-hop ping test(s) declare expect: pass, but Cassian Gate v1 does not infer routing "
                     "intent or auto-configure routing protocols, so multi-hop pass cannot be proven from topology alone. "
                     "Fix: either (a) change these tests to expect: fail, (b) limit tests to directly-connected reachability, "
-                    "or (c) run with an equivalent pre-configured device image/config outside ai-netsim v1. "
+                    "or (c) run with an equivalent pre-configured device image/config outside Cassian Gate v1. "
                     f"Affected tests: {', '.join(offenders)}"
                 )
 
