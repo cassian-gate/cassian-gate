@@ -2351,7 +2351,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             try:
                 results.setdefault("results_schema", "results.v1")
                 results.setdefault("results_schema_version", "1.0.0")
-                results.setdefault("tool", "ai-netsim")
+                results.setdefault("tool", "cassian-gate")
                 results.setdefault("command", "test")
 
                 topo_obj = results.get("topology")
@@ -3281,7 +3281,7 @@ def cmd_test(args: argparse.Namespace) -> None:
         try:
             results.setdefault("results_schema", "results.v1")
             results.setdefault("results_schema_version", "1.0.0")
-            results.setdefault("tool", "ai-netsim")
+            results.setdefault("tool", "cassian-gate")
             results.setdefault("command", "test")
 
             topo_obj = results.get("topology")
@@ -8040,7 +8040,7 @@ def _finalize_results_schema(
     results.setdefault("results_schema_version", RESULTS_SCHEMA_VERSION)
 
     # 2) Identity (additive)
-    results.setdefault("tool", "ai-netsim")
+    results.setdefault("tool", "cassian-gate")
     results.setdefault("command", str(command))
 
     # Keep existing "lab": <string> as-is; add a structured lab object additively.
@@ -8685,7 +8685,7 @@ def cmd_replay(args: argparse.Namespace) -> None:
         die("ERROR: Replay artifacts invalid or incomplete", code=2)
 
     # WI-6: Replay must refuse non-artifact directories deterministically (before any runtime work).
-    # Identity check: results.json must be a valid ai-netsim results payload (schema-stable keys only).
+    # Identity check: results.json must be a valid Cassian Gate results payload (schema-stable keys only).
     import json
 
     try:
@@ -9002,7 +9002,7 @@ def cmd_down(args: argparse.Namespace) -> None:
         strict = bool(getattr(args, "strict", False))
 
         print("────────────────────────────────────────")
-        print("ai-netsim Down Result")
+        print("Cassian Down Result")
         print("────────────────────────────────────────")
         if used_topology:
             print(f"Topology: {topo_path}")
@@ -10696,7 +10696,7 @@ def _ai_provider_openai(
 
         # Deterministic prompt object: bundle-only input.
         prompt_obj = {
-            "task": "ai-netsim advisory analysis",
+            "task": "Cassian Gate advisory analysis",
             "rules": {
                 "authority": "advisory",
                 "non_authoritative": True,
@@ -10713,8 +10713,8 @@ def _ai_provider_openai(
                     "Return JSON only. No YAML, no markdown, no prose outside the JSON object.",
                     "Never claim correctness or safety. Do NOT use words like: validated, correct, safe, approved, guaranteed.",
                     "Anchor claims to observed evidence (tests/scenarios/results pointers) where possible. Config text is context only.",
-                    "Candidate changes are context-only and are never executed/simulated/validated by ai-netsim.",
-                    "Suggested tests MUST be actionable: include a copy-paste YAML snippet that fits ai-netsim v1 schema.",
+                    "Candidate changes are context-only and are never executed/simulated/validated by Cassian Gate.",
+                    "Suggested tests MUST be actionable: include a copy-paste YAML snippet that fits Cassian Gate v1 schema.",
                 ],
                 "schema": {
                     "summary": "string",

@@ -137,9 +137,9 @@ def assert_vm_runtime_supported(vm_node: str | None = None) -> None:
             f"node: {node}\n"
             "reason: unsupported environment (WSL2)\n"
             "detail: runtime=vm requires a Linux host/VM with KVM (WSL2 is unsupported)\n"
-            "required: run ai-netsim inside a Linux host/VM with KVM enabled and accessible\n"
+            "required: run Cassian Gate inside a Linux host/VM with KVM enabled and accessible\n"
             "notes: VM runtime is not supported on WSL2. "
-            "Run ai-netsim inside a Linux host/VM with KVM enabled (e.g., Windows Hyper-V + Ubuntu VM)."
+            "Run Cassian Gate inside a Linux host/VM with KVM enabled (e.g., Windows Hyper-V + Ubuntu VM)."
         )
 
     if not has_kvm():
