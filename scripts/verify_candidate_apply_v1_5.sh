@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+NS="./src/cassian.py"
+
 LAB="ex-evpn-outcome-only"
 
 REAL_CAND="tests/fixtures/evpn-real-cand"
@@ -11,8 +13,8 @@ ART="labs/clab-${LAB}/artifacts/apply"
 LEAF1_JSON="${ART}/leaf1.apply.json"
 
 echo "=== [RESET LAB] ==="
-./src/netsim.py down "${LAB}" || true
-./src/netsim.py up "topologies/${LAB}.yaml"
+python3 $NS down "${LAB}" || true
+python3 $NS up "topologies/${LAB}.yaml"
 
 # Per-case evidence capture (prevents later runs overwriting labs/clab-${LAB}/results.json)
 EVID_DIR="artifacts/verify_candidate_apply_v1_5"
@@ -51,14 +53,14 @@ assert_hard_gate_fail() {
 }
 
 echo "=== [BASELINE MUST PASS] ==="
-./src/netsim.py test "${LAB}"
+python3 $NS test "${LAB}"
 save_case_artifacts "baseline_pass"
 echo "OK: baseline artifacts archived to ${EVID_DIR}/baseline_pass.*"
 
 ###############################################################################
 echo "=== [CASE 1: VALID CANDIDATE MUST PASS] ==="
 ###############################################################################
-./src/netsim.py test "${LAB}" --candidate-config "${REAL_CAND}"
+python3 $NS test "${LAB}" --candidate-config "${REAL_CAND}"
 
 # Valid candidate: vtysh path succeeds end-to-end
 jq -e '
@@ -78,7 +80,7 @@ echo "OK: case1 artifacts archived to ${EVID_DIR}/case1_valid_candidate.*"
 echo "=== [CASE 2: INVALID COMMAND MUST FAIL] ==="
 ###############################################################################
 set +e
-./src/netsim.py test "${LAB}" --candidate-config "${NEG_INVALID}"
+python3 $NS test "${LAB}" --candidate-config "${NEG_INVALID}"
 rc=$?
 set -e
 
@@ -106,7 +108,7 @@ echo "OK: CASE 2 hard-gate proven in ${EVID_DIR}/case2_invalid_command.results.j
 echo "=== [CASE 3: WRAPPER-ONLY CONFIG MUST FAIL] ==="
 ###############################################################################
 set +e
-./src/netsim.py test "${LAB}" --candidate-config "${NEG_WRAPPER}"
+python3 $NS test "${LAB}" --candidate-config "${NEG_WRAPPER}"
 rc=$?
 set -e
 

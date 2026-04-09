@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+NS="./src/cassian.py"
+
 # Usage:
 #   ./scripts/verify_ai.sh [lab-name]
 #
@@ -111,17 +113,17 @@ if [ "$AI_NETSIM_UPDATE_GOLDENS" = "1" ]; then
   mkdir -p tests/ai/fixtures
 
   echo "Updating: tests/ai/fixtures/explain.bundle.json"
-  ./src/netsim.py ai explain "$LAB" --bundle | jq -S . > tests/ai/fixtures/explain.bundle.json
+  python3 $NS ai explain "$LAB" --bundle | jq -S . > tests/ai/fixtures/explain.bundle.json
 
   if [ -f "$TOPO" ]; then
     echo "Updating: tests/ai/fixtures/review.bundle.json"
-    ./src/netsim.py ai review "$TOPO" --bundle | jq -S . > tests/ai/fixtures/review.bundle.json
+    python3 $NS ai review "$TOPO" --bundle | jq -S . > tests/ai/fixtures/review.bundle.json
   else
     echo "WARN: skipping review golden update (missing $TOPO)"
   fi
 
   echo "Updating: tests/ai/fixtures/coach.bundle.json"
-  ./src/netsim.py ai coach --bundle | jq -S . > tests/ai/fixtures/coach.bundle.json
+  python3 $NS ai coach --bundle | jq -S . > tests/ai/fixtures/coach.bundle.json
 
   echo "OK: golden fixtures updated"
   echo "Next:"
@@ -137,7 +139,7 @@ awk '
   /^def (cmd_ai_|_ai_)/ {p=1}
   p {print}
   p && /^def / && $0 !~ /^def (cmd_ai_|_ai_)/ {p=0}
-' src/netsim.py \
+' src/cassian.py \
   | grep -nE '\bcontainerlab\b|\bcmd_up\b|\bcmd_test\b|\bcmd_run\b|\bContainerRuntime\b|\brt\.exec\b|\bdocker\s+(exec|inspect|logs)\b' \
   && { echo "FAIL: ai code references runtime/deploy primitives"; exit 1; } \
   || echo "OK: ai code is artifact-only (no runtime/deploy refs)"
@@ -147,13 +149,13 @@ echo
 echo "=== AI) Smoke: unified netsim ai surface ==="
 
 echo "INFO: produce deterministic artifact context"
-if ! python3 src/netsim.py test topologies/three-frr-two-hosts-fw-routed.yaml >/dev/null; then
+if ! python3 $NS test topologies/three-frr-two-hosts-fw-routed.yaml >/dev/null; then
   echo "FAIL: prerequisite test run for ai verification failed"
   exit 1
 fi
 
 tmp="$(mktemp)"
-if ! python3 src/netsim.py ai --artifacts labs/clab-three-frr-two-hosts-fw-routed "why did this fail" >"$tmp"; then
+if ! python3 $NS ai --artifacts labs/clab-three-frr-two-hosts-fw-routed "why did this fail" >"$tmp"; then
   echo "FAIL: unified ai --artifacts command failed"
   rm -f "$tmp"
   exit 1
@@ -177,7 +179,7 @@ echo "OK: unified ai --artifacts advisory/context lines"
 rm -f "$tmp"
 
 tmp="$(mktemp)"
-if ! python3 src/netsim.py ai --lab three-frr-two-hosts-fw-routed "why did this fail" >"$tmp"; then
+if ! python3 $NS ai --lab three-frr-two-hosts-fw-routed "why did this fail" >"$tmp"; then
   echo "FAIL: unified ai --lab command failed"
   rm -f "$tmp"
   exit 1
@@ -191,7 +193,7 @@ echo "OK: unified ai --lab context line"
 rm -f "$tmp"
 
 tmp="$(mktemp)"
-if ! python3 src/netsim.py ai "why did this fail" >"$tmp"; then
+if ! python3 $NS ai "why did this fail" >"$tmp"; then
   echo "FAIL: unified ai common path failed"
   rm -f "$tmp"
   exit 1
@@ -205,7 +207,7 @@ echo "OK: unified ai common path context line"
 rm -f "$tmp"
 
 set +e
-python3 src/netsim.py ai "modify this topology to fix the problem" >/tmp/verify_ai_blocked.out 2>&1
+python3 $NS ai "modify this topology to fix the problem" >/tmp/verify_ai_blocked.out 2>&1
 rc=$?
 set -e
 if [ "$rc" -ne 2 ]; then
@@ -222,7 +224,7 @@ rm -f /tmp/verify_ai_blocked.out
 echo "OK: blocked out-of-scope request"
 
 set +e
-python3 src/netsim.py ai --artifacts labs/does-not-exist "why did this fail" >/tmp/verify_ai_missing.out 2>&1
+python3 $NS ai --artifacts labs/does-not-exist "why did this fail" >/tmp/verify_ai_missing.out 2>&1
 rc=$?
 set -e
 if [ "$rc" -ne 2 ]; then
@@ -245,25 +247,25 @@ echo "OK: deterministic missing-artifact refusal"
 echo
 
 echo "=== AI) Stronger advisory usefulness proofs ==="
-python src/netsim.py test topologies/ai_dummy_failure.yaml >/tmp/verify_ai_dummy_gate.out 2>&1 || true
+python3 $NS test topologies/ai_dummy_failure.yaml >/tmp/verify_ai_dummy_gate.out 2>&1 || true
 grep -q "RESULT: FAIL" /tmp/verify_ai_dummy_gate.out
 grep -q "h1_tcp_443_to_h2_should_pass" /tmp/verify_ai_dummy_gate.out
 
-python src/netsim.py ai --lab ai-dummy-failure "draft me a concrete fix" >/tmp/verify_ai_concrete_fix.out 2>&1
+python3 $NS ai --lab ai-dummy-failure "draft me a concrete fix" >/tmp/verify_ai_concrete_fix.out 2>&1
 grep -q "Draft 1 — firewall-side fix" /tmp/verify_ai_concrete_fix.out
 grep -q "allow_tcp: \[8443, 443\]" /tmp/verify_ai_concrete_fix.out
 grep -q "Draft 2 — test-side fix" /tmp/verify_ai_concrete_fix.out
 grep -q "port: 8443" /tmp/verify_ai_concrete_fix.out
 grep -q "Not yet:" /tmp/verify_ai_concrete_fix.out
 
-python src/netsim.py ai --lab three-frr-two-hosts-fw-routed "what invariant would help here" >/tmp/verify_ai_invariant.out 2>&1
+python3 $NS ai --lab three-frr-two-hosts-fw-routed "what invariant would help here" >/tmp/verify_ai_invariant.out 2>&1
 grep -q "Parallel links exist between" /tmp/verify_ai_invariant.out
 grep -q "Declared host subnets 192.168.1.0/24, 192.168.2.0/24" /tmp/verify_ai_invariant.out
 grep -q "Draft 1 — test block" /tmp/verify_ai_invariant.out
 grep -q "type: route_advertised_to" /tmp/verify_ai_invariant.out
 grep -q "Not yet," /tmp/verify_ai_invariant.out
 
-python src/netsim.py ai --lab three-frr-two-hosts-fw-routed "give me a concrete validation plan" >/tmp/verify_ai_validation_plan.out 2>&1
+python3 $NS ai --lab three-frr-two-hosts-fw-routed "give me a concrete validation plan" >/tmp/verify_ai_validation_plan.out 2>&1
 grep -q "First, add one explicit steady-state passing proof" /tmp/verify_ai_validation_plan.out
 grep -q "Second, add one negative-path proof" /tmp/verify_ai_validation_plan.out
 grep -q "Third, add one scenario" /tmp/verify_ai_validation_plan.out
@@ -271,14 +273,14 @@ grep -q "Draft 1 — test block" /tmp/verify_ai_validation_plan.out
 grep -q "Draft 2 — test block" /tmp/verify_ai_validation_plan.out
 grep -q "Draft 3 — scenario block" /tmp/verify_ai_validation_plan.out
 
-python src/netsim.py ai --lab three-frr-two-hosts-fw-routed "provide an improved topology" >/tmp/verify_ai_topology_render.out 2>&1
+python3 $NS ai --lab three-frr-two-hosts-fw-routed "provide an improved topology" >/tmp/verify_ai_topology_render.out 2>&1
 grep -q "Draft 1 — topology guidance" /tmp/verify_ai_topology_render.out
 grep -q "Draft 2 — test block" /tmp/verify_ai_topology_render.out
 grep -q "Draft 3 — scenario block" /tmp/verify_ai_topology_render.out
 grep -q -- "-----" /tmp/verify_ai_topology_render.out
 
 if [ -n "${AI_NETSIM_AI_API_KEY:-${OPENAI_API_KEY:-}}" ]; then
-  AI_NETSIM_AI_PROVIDER=openai AI_NETSIM_AI_API_KEY="${AI_NETSIM_AI_API_KEY:-${OPENAI_API_KEY:-}}" python src/netsim.py ai --lab three-frr-two-hosts-fw-routed --online "what invariant would help here" >/tmp/verify_ai_online_invariant.out 2>&1
+  AI_NETSIM_AI_PROVIDER=openai AI_NETSIM_AI_API_KEY="${AI_NETSIM_AI_API_KEY:-${OPENAI_API_KEY:-}}" python3 $NS ai --lab three-frr-two-hosts-fw-routed --online "what invariant would help here" >/tmp/verify_ai_online_invariant.out 2>&1
   grep -q "Advisory Interpretation / Likely Cause:" /tmp/verify_ai_online_invariant.out
   grep -q "Recommended Next Steps:" /tmp/verify_ai_online_invariant.out
   grep -q "route advertisement" /tmp/verify_ai_online_invariant.out
@@ -300,7 +302,7 @@ echo "=== AI) Key redaction (must not leak API key) ==="
   export AI_NETSIM_AI_API_KEY="$FAKE_KEY"
   export AI_NETSIM_AI_MODEL="${AI_NETSIM_AI_MODEL:-gpt-4.1-mini}"
 
-  ai_err="$(./src/netsim.py ai --lab "$LAB" "why did this fail" --format json | jq -r '.ai_error' || true)"
+  ai_err="$(python3 $NS ai --lab "$LAB" "why did this fail" --format json | jq -r '.ai_error' || true)"
 
   echo "$ai_err" | grep -Fq "$FAKE_KEY" \
     && { echo "FAIL: ai_error leaked raw API key"; echo "$ai_err"; exit 1; } \
@@ -320,12 +322,12 @@ echo "=== AI) Unified surface stability + non-AI non-regression ==="
 
 tmp1="$(mktemp)"
 tmp2="$(mktemp)"
-if ! python3 src/netsim.py ai --artifacts labs/clab-three-frr-two-hosts-fw-routed "why did this fail" >"$tmp1"; then
+if ! python3 $NS ai --artifacts labs/clab-three-frr-two-hosts-fw-routed "why did this fail" >"$tmp1"; then
   echo "FAIL: first unified ai stability run failed"
   rm -f "$tmp1" "$tmp2"
   exit 1
 fi
-if ! python3 src/netsim.py ai --artifacts labs/clab-three-frr-two-hosts-fw-routed "why did this fail" >"$tmp2"; then
+if ! python3 $NS ai --artifacts labs/clab-three-frr-two-hosts-fw-routed "why did this fail" >"$tmp2"; then
   echo "FAIL: second unified ai stability run failed"
   rm -f "$tmp1" "$tmp2"
   exit 1
@@ -340,7 +342,7 @@ echo "OK: unified ai stable across repeated identical invocations"
 
 echo "=== AI) Non-AI command non-regression smoke ==="
 set +e
-python3 src/netsim.py validate topologies/three-frr-two-hosts-fw-routed.yaml >/dev/null 2>&1
+python3 $NS validate topologies/three-frr-two-hosts-fw-routed.yaml >/dev/null 2>&1
 rc=$?
 set -e
 if [ "$rc" -ne 0 ]; then
@@ -362,7 +364,7 @@ if [ "${AI_NETSIM_VERIFY_ONLINE_OK:-0}" = "1" ]; then
     exit 1
   fi
 
-  j="$(AI_NETSIM_AI_PROVIDER=openai ./src/netsim.py ai --lab "$LAB" "why did this fail" --format json)"
+  j="$(AI_NETSIM_AI_PROVIDER=openai python3 $NS ai --lab "$LAB" "why did this fail" --format json)"
   status="$(echo "$j" | jq -r 'if has("response") then "ok" elif (.ai_status? != null) then .ai_status else "null" end')"
   if [ "$status" != "ok" ]; then
     skip_or_fail_invalid_key "online check" "$j"
@@ -411,7 +413,7 @@ if [ "${AI_NETSIM_VERIFY_ONLINE_OK:-0}" = "1" ] && [ "${AI_NETSIM_VERIFY_SANITIZ
     exit 1
   fi
 
-  j2="$(AI_NETSIM_AI_PROVIDER=openai ./src/netsim.py ai --lab "$LAB" "why did this fail" --format json)"
+  j2="$(AI_NETSIM_AI_PROVIDER=openai python3 $NS ai --lab "$LAB" "why did this fail" --format json)"
   status2="$(echo "$j2" | jq -r 'if has("response") then "ok" elif (.ai_status? != null) then .ai_status else "null" end')"
   if [ "$status2" != "ok" ]; then
     skip_or_fail_invalid_key "fixture check" "$j2"
