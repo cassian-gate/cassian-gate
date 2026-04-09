@@ -1,0 +1,35 @@
+ACTIVE CANONICAL DOCS
+docs/README.md
+docs/design-contract.md
+docs/quickstart.md
+docs/cheatsheet.md
+docs/cli-reference-v1.md
+docs/topology-schema-v1.md
+docs/admin-guide-v1.md
+docs/extensions/extension-and-adoption.md
+docs/examples/first-run-proof-failure-narrative.md
+docs/ci/GITHUB_ACTIONS.md
+docs/ci/GITLAB_CI.md
+
+ACTIVE SUPPORTING DOCS
+docs/input-adapters.md
+docs/vm-runtime-capabilities.md
+docs/ai/README.md
+docs/ai/guardrails.md
+docs/ai/cli-contract-ai.md
+docs/ai/online_ai.md
+contrib/**
+examples/**
+README.md
+
+NON-CANONICAL CANDIDATES
+docs/strategy_handover.md
+docs/change_context.md
+docs/future/change-context-future.md
+docs/extensions/extension-strategy-internal.md
+docs/ai/decisions.md
+docs/ai/now.md
+docs/ai/pr-checklist.md
+docs/ai/prompts.md
+docs/ai/tasks.md
+docs/ai/workflow.md
