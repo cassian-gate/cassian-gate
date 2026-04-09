@@ -3,14 +3,16 @@
 ## Prereqs
 - Docker
 - containerlab
-- Python venv set up for ai-netsim
+- Python venv set up for Cassian Gate
 
 ## 1) Build demo images (one-time)
 ```bash
-docker build -t netsim/frr-demo-bgp-r1:latest images/frr-demo-bgp-r1
-docker build -t netsim/frr-demo-bgp-r2:latest images/frr-demo-bgp-r2
-docker build -t netsim/frr-demo-static-r1:latest images/frr-demo-static-r1
-docker build -t netsim/frr-demo-static-r2:latest images/frr-demo-static-r2
+docker build -t cassian/frr-demo-bgp-r1:latest images/frr-demo-bgp-r1
+docker build -t cassian/frr-demo-bgp-r2:latest images/frr-demo-bgp-r2
+docker build -t cassian/frr-demo-static-r1:latest images/frr-demo-static-r1
+docker build -t cassian/frr-demo-static-r2:latest images/frr-demo-static-r2
+Note: the canonical CLI name is `cassian`, but the current source-tree examples below still invoke `./src/netsim.py` because that is the present repository entrypoint in this repo.
+
 2) Run the simplest gate (connected + negative test)
 ./src/netsim.py up examples/01_connected_smoke.yaml --reconfigure
 ./src/netsim.py test ex01-connected-smoke

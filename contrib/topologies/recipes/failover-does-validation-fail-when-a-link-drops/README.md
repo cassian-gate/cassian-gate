@@ -8,7 +8,7 @@ It exists to show one bounded deterministic failure-choreography example using t
 
 ## User question answered
 
-Does ai-netsim catch the difference between a deterministic fault sequence that recovers correctly and one that does not?
+Does Cassian Gate catch the difference between a deterministic fault sequence that recovers correctly and one that does not?
 
 ## What this demonstrates
 

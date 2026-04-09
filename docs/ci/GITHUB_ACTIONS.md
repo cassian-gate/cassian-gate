@@ -1,6 +1,6 @@
-# GitHub Actions — ai-netsim official gate template (OSS)
+# GitHub Actions — Cassian Gate official gate template (OSS)
 
-This repository includes an official GitHub Actions workflow that runs **ai-netsim** as a
+This repository includes an official GitHub Actions workflow that runs **Cassian Gate** as a
 **deterministic, clean-state validation gate**.
 
 ## What this workflow does (stable contract)
@@ -21,8 +21,8 @@ The workflow:
 
 ### Authority rules (important)
 
-- **Pass/fail is determined by ai-netsim (`netsim test`) and/or the repo oracle script.**
-- CI must not run `netsim run` as a gate.
+- **Pass/fail is determined by Cassian Gate (`cassian test`) and/or the repo oracle script.**
+- CI must not run `cassian run` as a gate.
 - `labs/` is generated evidence only; authoritative inputs are `topologies/` and `src/`.
 
 ## Runner requirements (OSS-friendly)

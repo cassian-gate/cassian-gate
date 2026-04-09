@@ -1,12 +1,12 @@
-# ai-netsim v79 — Operator Cheat Sheet
+# Cassian Gate v79 — Operator Cheat Sheet
 
 *(Authoritative Operator Reference)*
 
-This document defines the **user-facing execution contract** for ai-netsim.
+This document defines the **user-facing execution contract** for Cassian Gate.
 
 It reflects **implemented CLI behavior only**.
 
-ai-netsim is a:
+Cassian Gate is a:
 
 > **Deterministic Network Change Validation Gate**
 
@@ -20,16 +20,16 @@ Execution is:
 
 ---
 
-# 1️⃣ What ai-netsim Is (and Is Not)
+# 1️⃣ What Cassian Gate Is (and Is Not)
 
-ai-netsim **IS**
+Cassian Gate **IS**
 
 - a network change validation gate
 - a deterministic execution engine
 - a CI pipeline safety check
 - a behavior validation system
 
-ai-netsim **IS NOT**
+Cassian Gate **IS NOT**
 
 - a general network lab builder
 - a chaos framework
@@ -44,48 +44,48 @@ ai-netsim **IS NOT**
 ### Environment
 
 ```bash
-netsim doctor
-netsim validate <topology.yaml>
-netsim validate-contrib <path>
-netsim preflight <topology.yaml>
+cassian doctor
+cassian validate <topology.yaml>
+cassian validate-contrib <path>
+cassian preflight <topology.yaml>
 ```
 
 ### Execution (Validation)
 
 ```bash
-netsim test <topology.yaml>
-netsim replay <artifacts-dir>
-netsim run <topology.yaml>
-netsim up <topology.yaml>
-netsim down <lab>
-netsim destroy <lab>
-netsim cleanup --all
+cassian test <topology.yaml>
+cassian replay <artifacts-dir>
+cassian run <topology.yaml>
+cassian up <topology.yaml>
+cassian down <lab>
+cassian destroy <lab>
+cassian cleanup --all
 ```
 
 ### Inspection
 
 ```bash
-netsim status <lab>
-netsim exec <lab> <node>
-netsim vty <lab> <node> "<command>"
-netsim collect <lab>
+cassian status <lab>
+cassian exec <lab> <node>
+cassian vty <lab> <node> "<command>"
+cassian collect <lab>
 ```
 
 ### DevOps Integration
 
 ```bash
-netsim adapt terraform
-netsim adapt ansible
+cassian adapt terraform
+cassian adapt ansible
 ```
 
 ### AI Assistance (optional / advisory only)
 
 ```bash
-netsim ai --lab <lab-name> "<question>"
-netsim ai --artifacts <path> "<question>"
-netsim ai "<question>"
-netsim ai --lab <lab-name> --online "<question>"
-netsim ai --artifacts <path> --online "<question>"
+cassian ai --lab <lab-name> "<question>"
+cassian ai --artifacts <path> "<question>"
+cassian ai "<question>"
+cassian ai --lab <lab-name> --online "<question>"
+cassian ai --artifacts <path> --online "<question>"
 ```
 
 AI **never affects execution or verdicts**.
@@ -103,7 +103,7 @@ Understanding this distinction is mandatory.
 Command:
 
 ```bash
-netsim test <topology.yaml>
+cassian test <topology.yaml>
 ```
 
 Gate mode automatically performs:
@@ -124,7 +124,7 @@ Gate mode is used for:
 - change validation
 - baseline vs candidate comparison
 
-You **do NOT run `netsim up` first**.
+You **do NOT run `cassian up` first**.
 
 Gate mode owns the lifecycle.
 
@@ -164,7 +164,7 @@ This run would produce a vacuous PASS and is therefore rejected.
 
 Meaning:
 
-- `netsim test <topology.yaml>` requires at least one declared assertion
+- `cassian test <topology.yaml>` requires at least one declared assertion
 - a zero-assertion topology is not a valid validation gate
 - no PASS or FAIL verdict is produced
 - no lifecycle execution begins
@@ -173,15 +173,15 @@ Meaning:
 
 Important boundary:
 
-- this rule applies to authoritative gate execution with `netsim test <topology.yaml>`
-- it does **not** block `netsim run <topology.yaml>`
+- this rule applies to authoritative gate execution with `cassian test <topology.yaml>`
+- it does **not** block `cassian run <topology.yaml>`
 - it does **not** change replay behavior
 
 ---
 
-## netsim replay — Deterministic replay of prior artifacts
+## cassian replay — Deterministic replay of prior artifacts
 
-Replay re-executes a previous ai-netsim run from previously generated artifacts.
+Replay re-executes a previous Cassian Gate run from previously generated artifacts.
 
 Replay is a **reproduction/analysis surface**, not a new authority path.
 
@@ -209,7 +209,7 @@ Important boundary:
 Replay a prior authoritative gate run:
 
 ```bash
-netsim replay labs/clab-<lab> --gate
+cassian replay labs/clab-<lab> --gate
 ```
 
 This preserves **gate / authoritative** context.
@@ -231,7 +231,7 @@ Meaning:
 You can also verify deterministic result equivalence:
 
 ```bash
-netsim replay labs/clab-<lab> --gate --verify-results
+cassian replay labs/clab-<lab> --gate --verify-results
 ```
 
 If the replayed verdict core differs from the source result, replay exits with:
@@ -247,7 +247,7 @@ Replay without `--gate` keeps replay in a **non-authoritative** exploration cont
 Example:
 
 ```bash
-netsim replay labs/clab-<lab>
+cassian replay labs/clab-<lab>
 ```
 
 Current operator-visible behavior includes non-authoritative replay labeling such as:
@@ -315,7 +315,7 @@ Two approaches exist.
 ### Option A — `run`
 
 ```bash
-netsim run <topology.yaml>
+cassian run <topology.yaml>
 ```
 
 Typical labeling:
@@ -343,7 +343,7 @@ By default the lab is destroyed.
 Keep the lab running:
 
 ```bash
-netsim run <topology.yaml> --keep
+cassian run <topology.yaml> --keep
 ```
 
 ### Exploration summary boundary
@@ -358,10 +358,10 @@ Run mode itself remains non-authoritative as a workflow mode.
 ### Option B — Explicit Lifecycle
 
 ```bash
-netsim up <topology.yaml>
-netsim status <lab>
-netsim test <lab>
-netsim down <lab>
+cassian up <topology.yaml>
+cassian status <lab>
+cassian test <lab>
+cassian down <lab>
 ```
 
 Use this when you want:
@@ -393,12 +393,12 @@ Many commands accept **different inputs**.
 ## Commands That Use a Topology File
 
 ```bash
-netsim gen <topology.yaml>
-netsim validate <topology.yaml>
-netsim preflight <topology.yaml>
-netsim up <topology.yaml>
-netsim run <topology.yaml>
-netsim test <topology.yaml>
+cassian gen <topology.yaml>
+cassian validate <topology.yaml>
+cassian preflight <topology.yaml>
+cassian up <topology.yaml>
+cassian run <topology.yaml>
+cassian test <topology.yaml>
 ```
 
 ---
@@ -406,12 +406,12 @@ netsim test <topology.yaml>
 ## Commands That Use a Lab Name
 
 ```bash
-netsim status <lab>
-netsim exec <lab> <node>
-netsim vty <lab> <node>
-netsim collect <lab>
-netsim down <lab>
-netsim destroy <lab>
+cassian status <lab>
+cassian exec <lab> <node>
+cassian vty <lab> <node>
+cassian collect <lab>
+cassian down <lab>
+cassian destroy <lab>
 ```
 
 ---
@@ -434,7 +434,7 @@ Lab: demo-lab
 
 # 5️⃣ Topology Authoring
 
-ai-netsim consumes **YAML topology definitions**.
+Cassian Gate consumes **YAML topology definitions**.
 
 ---
 
@@ -485,7 +485,7 @@ Optional:
 
 ## Invariant Packs (Loaded and Expanded During Resolve)
 
-ai-netsim supports declarative invariant packs that are **loaded from the supported local pack surface**, compatibility-checked, and then expanded into explicit invariant declarations during **Resolve**.
+Cassian Gate supports declarative invariant packs that are **loaded from the supported local pack surface**, compatibility-checked, and then expanded into explicit invariant declarations during **Resolve**.
 
 Packs are optional authoring shortcuts. The authoritative validation still comes later from the expanded invariant verdicts.
 
@@ -610,20 +610,20 @@ tests: []
 Validate local pack loading and compatibility enforcement:
 
 ```bash
-netsim validate topologies/pack_local_compatibility_ok.yaml
+cassian validate topologies/pack_local_compatibility_ok.yaml
 ```
 
 Run authoritative gate execution of the accepted expanded invariants:
 
 ```bash
-netsim test topologies/pack_local_compatibility_ok.yaml
+cassian test topologies/pack_local_compatibility_ok.yaml
 ```
 
 Negative misuse proofs:
 
 ```bash
-netsim validate topologies/neg/pack_unknown_reference.yaml
-netsim validate topologies/neg/pack_incompatible_contents.yaml
+cassian validate topologies/neg/pack_unknown_reference.yaml
+cassian validate topologies/neg/pack_incompatible_contents.yaml
 ```
 
 Expected behavior:
@@ -686,7 +686,7 @@ labs/clab-<lab>/topology.resolved.yaml
 
 # 8️⃣ EVPN Runtime Substrate (Generation Support)
 
-ai-netsim supports a **deterministic EVPN topology/config generation substrate** for a limited, explicit proof shape.
+Cassian Gate supports a **deterministic EVPN topology/config generation substrate** for a limited, explicit proof shape.
 
 This support exists to produce runtime EVPN control-plane state for later validation work.
 
@@ -833,7 +833,7 @@ This support is intended to produce:
 
 ## Unsupported / Rejected Shapes
 
-ai-netsim fails fast on unsupported EVPN topology intent.
+Cassian Gate fails fast on unsupported EVPN topology intent.
 
 Examples include:
 
@@ -918,32 +918,32 @@ tests: []
 Validate the EVPN topology:
 
 ```bash
-netsim validate topologies/evpn_runtime_generation.yaml
+cassian validate topologies/evpn_runtime_generation.yaml
 ```
 
 Bring up EVPN runtime substrate:
 
 ```bash
-netsim up topologies/evpn_runtime_generation.yaml
+cassian up topologies/evpn_runtime_generation.yaml
 ```
 
 Run authoritative gate proof:
 
 ```bash
-netsim test topologies/evpn_runtime_generation.yaml
+cassian test topologies/evpn_runtime_generation.yaml
 ```
 
 Replay deterministically:
 
 ```bash
-netsim replay labs/clab-evpn-runtime-generation --gate --verify-results
+cassian replay labs/clab-evpn-runtime-generation --gate --verify-results
 ```
 
 Negative misuse proofs:
 
 ```bash
-netsim test topologies/neg/evpn_invalid_vni.yaml
-netsim test topologies/neg/evpn_invalid_roles.yaml
+cassian test topologies/neg/evpn_invalid_vni.yaml
+cassian test topologies/neg/evpn_invalid_roles.yaml
 ```
 
 ---
@@ -974,7 +974,7 @@ Use later tests/invariants to establish truth.
 
 # 9️⃣ Tests and Invariants
 
-ai-netsim supports both:
+Cassian Gate supports both:
 
 - active behavior tests
 - deterministic invariant checks
@@ -1130,7 +1130,7 @@ Determinism guarantees:
 
 - invariant evaluation occurs during the **TEST** phase
 - results are deterministic under identical topology, code version, and runtime conditions
-- replay verification (`netsim replay --gate --verify-results`) must reproduce identical results
+- replay verification (`cassian replay --gate --verify-results`) must reproduce identical results
 
 ### Route Advertised To Invariant
 
@@ -1201,7 +1201,7 @@ Replay:
 This invariant is replay-verifiable with standard gate replay:
 
 ```bash
-netsim replay labs/clab-route-advertised-to --gate --verify-results
+cassian replay labs/clab-route-advertised-to --gate --verify-results
 ```
 
 Scope boundary:
@@ -1284,7 +1284,7 @@ Replay:
 This invariant is replay-verifiable with standard gate replay:
 
 ```bash
-netsim replay labs/clab-route-not-advertised-to --gate --verify-results
+cassian replay labs/clab-route-not-advertised-to --gate --verify-results
 ```
 
 Scope boundary:
@@ -1302,7 +1302,7 @@ It does **not** by itself prove:
 
 ## EVPN Invariants
 
-ai-netsim supports deterministic EVPN invariant checks as standard authoritative test results.
+Cassian Gate supports deterministic EVPN invariant checks as standard authoritative test results.
 
 ### EVPN MAC Route Present
 
@@ -1420,21 +1420,21 @@ The check is deterministic and replay-safe.
 ### Positive proof examples
 
 ```bash
-netsim test topologies/evpn_mac_route_present.yaml
-netsim test topologies/evpn_vni_route_present.yaml
-netsim test topologies/evpn_bgp_session_up.yaml
+cassian test topologies/evpn_mac_route_present.yaml
+cassian test topologies/evpn_vni_route_present.yaml
+cassian test topologies/evpn_bgp_session_up.yaml
 ```
 
 ### Negative validation example
 
 ```bash
-netsim test topologies/evpn_mac_route_absent_expected_present.yaml
+cassian test topologies/evpn_mac_route_absent_expected_present.yaml
 ```
 
 ### Negative misuse example
 
 ```bash
-netsim test topologies/neg/evpn_invalid_mac_invariant.yaml
+cassian test topologies/neg/evpn_invalid_mac_invariant.yaml
 ```
 
 ### Replay
@@ -1442,9 +1442,9 @@ netsim test topologies/neg/evpn_invalid_mac_invariant.yaml
 These invariants are replay-verifiable with standard gate replay:
 
 ```bash
-netsim replay labs/clab-evpn-mac-route-present --gate --verify-results
-netsim replay labs/clab-evpn-vni-route-present --gate --verify-results
-netsim replay labs/clab-evpn-bgp-session-up --gate --verify-results
+cassian replay labs/clab-evpn-mac-route-present --gate --verify-results
+cassian replay labs/clab-evpn-vni-route-present --gate --verify-results
+cassian replay labs/clab-evpn-bgp-session-up --gate --verify-results
 ```
 
 ### Scope boundary
@@ -1659,13 +1659,13 @@ Invalid values fail fast with exit code `2`.
 ### How to Run
 
 ```bash
-netsim test topologies/fixtures/grey_failure_direct_pass.yaml --scenario loss5_ping_still_passes
+cassian test topologies/fixtures/grey_failure_direct_pass.yaml --scenario loss5_ping_still_passes
 ```
 
 Replay deterministically:
 
 ```bash
-netsim replay labs/clab-grey-failure-direct-pass --gate --verify-results
+cassian replay labs/clab-grey-failure-direct-pass --gate --verify-results
 ```
 
 ---
@@ -1698,7 +1698,7 @@ This provides deterministic evidence that the degradation was applied before the
 Apply candidate changes during validation.
 
 ```bash
-netsim test <topology.yaml> \
+cassian test <topology.yaml> \
   --candidate-config <dir>
 ```
 
@@ -1738,7 +1738,7 @@ Important current boundary for vendor NOS VM nodes:
 Example of current unsupported behavior:
 
 ```bash
-netsim test topologies/vendor_nos_smoke.yaml \
+cassian test topologies/vendor_nos_smoke.yaml \
   --candidate-config tests/fixtures/vendor-nos-cand-neg-unsupported
 ```
 
@@ -1769,7 +1769,7 @@ Scope boundary:
 Inspect running labs.
 
 ```bash
-netsim status <lab>
+cassian status <lab>
 ```
 
 Useful options:
@@ -1786,7 +1786,7 @@ Useful options:
 Example:
 
 ```bash
-netsim status demo-lab --summary
+cassian status demo-lab --summary
 ```
 
 ---
@@ -1796,20 +1796,20 @@ netsim status demo-lab --summary
 Destroy a running lab:
 
 ```bash
-netsim down <lab>
+cassian down <lab>
 ```
 
 Force destroy + artifact purge:
 
 ```bash
-netsim destroy <lab> --purge-artifacts
+cassian destroy <lab> --purge-artifacts
 ```
 
 Clean up abandoned labs:
 
 ```bash
-netsim cleanup --all
-netsim cleanup --all --yes
+cassian cleanup --all
+cassian cleanup --all --yes
 ```
 
 Dry-run occurs unless `--yes` is provided.
@@ -1817,13 +1817,13 @@ Dry-run occurs unless `--yes` is provided.
 Example no-op outcome:
 
 ```bash
-netsim destroy does-not-exist
+cassian destroy does-not-exist
 ```
 
 Current operator-visible output:
 
 ```text
-ai-netsim Destroy Result
+Cassian Gate Destroy Result
 Lab: does-not-exist
 LAB DESCRIPTOR: labs/does-not-exist.clab.yaml
 RESULT: NO-OP (lab not found)
@@ -1847,7 +1847,7 @@ Generate adapter artifacts.
 ## Terraform
 
 ```bash
-netsim adapt terraform \
+cassian adapt terraform \
   --plan plan.json
 ```
 
@@ -1862,7 +1862,7 @@ terraform show -json
 ## Ansible
 
 ```bash
-netsim adapt ansible \
+cassian adapt ansible \
   --dir rendered_configs/
 ```
 
@@ -1885,9 +1885,9 @@ It never affects:
 ## AI Advisory (Optional, Non-Authoritative)
 
 ```bash
-netsim ai --lab <lab-name> "<question>"
-netsim ai --artifacts <path> "<question>"
-netsim ai "<question>"
+cassian ai --lab <lab-name> "<question>"
+cassian ai --artifacts <path> "<question>"
+cassian ai "<question>"
 ```
 
 Purpose:
@@ -1922,7 +1922,7 @@ Use the same conversational entrypoint for failure explanation, coverage review,
 ### Common human path
 
 ```bash
-netsim ai "why did this fail"
+cassian ai "why did this fail"
 ```
 
 Uses the most recent valid artifact context when available.
@@ -1930,7 +1930,7 @@ Uses the most recent valid artifact context when available.
 ### Explicit lab path
 
 ```bash
-netsim ai --lab <lab> "why did this fail"
+cassian ai --lab <lab> "why did this fail"
 ```
 
 Uses the specified lab when it contains the required artifacts.
@@ -1938,7 +1938,7 @@ Uses the specified lab when it contains the required artifacts.
 ### Explicit artifacts path
 
 ```bash
-netsim ai --artifacts <dir> "why did this fail"
+cassian ai --artifacts <dir> "why did this fail"
 ```
 
 This is the most explicit override and is useful for proof/debug workflows.
@@ -1948,9 +1948,9 @@ This is the most explicit override and is useful for proof/debug workflows.
 Enable online-enriched advisory rendering explicitly:
 
 ```bash
-netsim ai --online "why did this fail"
-netsim ai --lab <lab> --online "why did this fail"
-netsim ai --artifacts <dir> --online "why did this fail"
+cassian ai --online "why did this fail"
+cassian ai --lab <lab> --online "why did this fail"
+cassian ai --artifacts <dir> --online "why did this fail"
 ```
 
 Rules:
@@ -1958,11 +1958,11 @@ Rules:
 - online-enriched rendering is explicit opt-in only
 - local advisory rendering remains the baseline behavior
 - online rendering does not change authority, verdicts, or execution behavior
-- if online rendering is explicitly requested but unavailable, `netsim ai` refuses with exit code `2`
+- if online rendering is explicitly requested but unavailable, `cassian ai` refuses with exit code `2`
 
 ### Rendering modes
 
-`netsim ai` discloses the rendering mode it used:
+`cassian ai` discloses the rendering mode it used:
 
 - `local advisory rendering`
 - `online-enriched advisory rendering`
@@ -1984,11 +1984,11 @@ topology.resolved.yaml
 results.json
 ```
 
-If the required artifacts are missing, `netsim ai` refuses with a deterministic advisory error.
+If the required artifacts are missing, `cassian ai` refuses with a deterministic advisory error.
 
 ### Important boundary
 
-`netsim ai`:
+`cassian ai`:
 
 - reads artifacts only
 - does not execute lifecycle actions
@@ -2000,7 +2000,7 @@ If the required artifacts are missing, `netsim ai` refuses with a deterministic 
 
 ## AI Output Structure (Deterministic)
 
-All `netsim ai` outputs follow a **stable, deterministic structure**:
+All `cassian ai` outputs follow a **stable, deterministic structure**:
 
 ```text
 Summary:
@@ -2067,7 +2067,7 @@ Notes:
 
 ## Supported Question Styles (Flexible)
 
-`netsim ai` supports **multiple phrasings** for the same intent.
+`cassian ai` supports **multiple phrasings** for the same intent.
 
 ### Scenario Questions
 
@@ -2108,7 +2108,7 @@ Behavior:
 ### Local (default)
 
 ```bash
-netsim ai --lab <lab> "<question>"
+cassian ai --lab <lab> "<question>"
 ```
 
 - deterministic, built-in reasoning
@@ -2118,7 +2118,7 @@ netsim ai --lab <lab> "<question>"
 ### Online (optional)
 
 ```bash
-netsim ai --lab <lab> --online "<question>"
+cassian ai --lab <lab> --online "<question>"
 ```
 
 Requirements:
@@ -2151,25 +2151,25 @@ Best practice flow:
 1. Run deterministic gate:
 
 ```bash
-netsim test <topology.yaml>
+cassian test <topology.yaml>
 ```
 
 2. If failure:
 
 ```bash
-netsim ai --lab <lab> "why did this fail"
+cassian ai --lab <lab> "why did this fail"
 ```
 
 3. Improve coverage:
 
 ```bash
-netsim ai --lab <lab> "what should I prove first"
+cassian ai --lab <lab> "what should I prove first"
 ```
 
 4. Expand validation:
 
 ```bash
-netsim ai --lab <lab> "give me a concrete validation plan"
+cassian ai --lab <lab> "give me a concrete validation plan"
 ```
 
 ### Key Insight
@@ -2304,7 +2304,7 @@ Includes:
 
 ## Structured State Diff (Advisory Only)
 
-ai-netsim can produce a **structured pre/post operational state diff** when state capture is explicitly enabled for both phases.
+Cassian Gate can produce a **structured pre/post operational state diff** when state capture is explicitly enabled for both phases.
 
 This artifact is:
 
@@ -2322,7 +2322,7 @@ It does **not**:
 
 ### How it works
 
-When enabled, ai-netsim captures the declared command/profile state:
+When enabled, Cassian Gate captures the declared command/profile state:
 
 - once before tests (`pre`)
 - once after tests (`post`)
@@ -2346,7 +2346,7 @@ It is **not** a diff between:
 ### Command Example
 
 ```bash
-netsim test topologies/three-frr-two-hosts-fw-routed.yaml \
+cassian test topologies/three-frr-two-hosts-fw-routed.yaml \
   --state-capture both \
   --state-profile linux-net-basic \
   --state-profile frr-interfaces-basic \
@@ -2390,7 +2390,7 @@ Keep the authority boundary clear:
 
 ## Blast Radius (Advisory Only)
 
-ai-netsim can produce a **blast radius artifact** that shows:
+Cassian Gate can produce a **blast radius artifact** that shows:
 
 - what the executed tests/scenarios directly covered
 - what additional nodes/links are potentially affected based on deterministic topology connectivity
@@ -2459,7 +2459,7 @@ Use this artifact when you want to understand:
 ### Example
 
 ```bash
-netsim test topologies/blast_radius_ok.yaml
+cassian test topologies/blast_radius_ok.yaml
 
 python -m json.tool \
   labs/clab-blast-radius-ok/artifacts/blast-radius/blast_radius.json
@@ -2487,118 +2487,118 @@ It does **not** currently prove:
 Validate a topology:
 
 ```bash
-netsim validate topology.yaml
+cassian validate topology.yaml
 ```
 
 Validate contrib content structurally:
 
 ```bash
-netsim validate-contrib contrib/
+cassian validate-contrib contrib/
 ```
 
 Run validation gate:
 
 ```bash
-netsim test topology.yaml
+cassian test topology.yaml
 ```
 
 Note:
 
-- `netsim test <topology.yaml>` now requires at least one declared test or scenario
+- `cassian test <topology.yaml>` now requires at least one declared test or scenario
 - if you only want to prove deploy/provision smoke behavior, use exploration mode instead of gate mode
 
 Validate invariant-pack compatibility:
 
 ```bash
-netsim validate topologies/pack_local_compatibility_ok.yaml
+cassian validate topologies/pack_local_compatibility_ok.yaml
 ```
 
 Run invariant-pack gate proof:
 
 ```bash
-netsim test topologies/pack_local_compatibility_ok.yaml
+cassian test topologies/pack_local_compatibility_ok.yaml
 ```
 
 Validate invalid pack misuse handling:
 
 ```bash
-netsim validate topologies/neg/pack_unknown_reference.yaml
-netsim validate topologies/neg/pack_incompatible_contents.yaml
+cassian validate topologies/neg/pack_unknown_reference.yaml
+cassian validate topologies/neg/pack_incompatible_contents.yaml
 ```
 
 Replay a previous gate deterministically:
 
 ```bash
-netsim replay labs/clab-<lab> --gate
+cassian replay labs/clab-<lab> --gate
 ```
 
 Explore a lab interactively:
 
 ```bash
-netsim run topology.yaml --keep
-netsim status <lab>
-netsim exec <lab> r1
+cassian run topology.yaml --keep
+cassian status <lab>
+cassian exec <lab> r1
 ```
 
 Bring up EVPN runtime substrate:
 
 ```bash
-netsim up topologies/evpn_runtime_generation.yaml
+cassian up topologies/evpn_runtime_generation.yaml
 ```
 
 Run a routing attribute invariant proof:
 
 ```bash
-netsim test topologies/bgp_localpref_equals.yaml
+cassian test topologies/bgp_localpref_equals.yaml
 ```
 
 Run a route advertisement invariant proof:
 
 ```bash
-netsim test topologies/route_advertised_to.yaml
-netsim test topologies/route_not_advertised_to.yaml
+cassian test topologies/route_advertised_to.yaml
+cassian test topologies/route_not_advertised_to.yaml
 ```
 
 Run an EVPN invariant proof:
 
 ```bash
-netsim test topologies/evpn_mac_route_present.yaml
+cassian test topologies/evpn_mac_route_present.yaml
 ```
 
 Replay an EVPN proof deterministically:
 
 ```bash
-netsim replay labs/clab-evpn-mac-route-present --gate --verify-results
+cassian replay labs/clab-evpn-mac-route-present --gate --verify-results
 ```
 
 Clean up labs:
 
 ```bash
-netsim cleanup --all --yes
+cassian cleanup --all --yes
 ```
 
 Run scenario testing:
 
 ```bash
-netsim test topology.yaml --all-scenarios
+cassian test topology.yaml --all-scenarios
 ```
 
 Run a grey-failure scenario:
 
 ```bash
-netsim test topologies/fixtures/grey_failure_direct_pass.yaml --scenario loss5_ping_still_passes
+cassian test topologies/fixtures/grey_failure_direct_pass.yaml --scenario loss5_ping_still_passes
 ```
 
 Replay the same grey-failure scenario deterministically:
 
 ```bash
-netsim replay labs/clab-grey-failure-direct-pass --gate --verify-results
+cassian replay labs/clab-grey-failure-direct-pass --gate --verify-results
 ```
 
 Run a blast radius proof:
 
 ```bash
-netsim test topologies/blast_radius_ok.yaml
+cassian test topologies/blast_radius_ok.yaml
 ```
 
 Inspect blast radius output:
@@ -2611,7 +2611,7 @@ python -m json.tool \
 Inspect structured state diff output:
 
 ```bash
-netsim test topologies/three-frr-two-hosts-fw-routed.yaml \
+cassian test topologies/three-frr-two-hosts-fw-routed.yaml \
   --state-capture both \
   --state-profile linux-net-basic \
   --state-profile frr-interfaces-basic \
@@ -2624,37 +2624,37 @@ python -m json.tool labs/clab-three-frr-two-hosts-fw-routed/artifacts/state-diff
 Use AI to explain a failure from the most recent run:
 
 ```bash
-netsim ai "why did this fail"
+cassian ai "why did this fail"
 ```
 
 Use AI against a specific lab:
 
 ```bash
-netsim ai --lab <lab> "what should I prove first"
+cassian ai --lab <lab> "what should I prove first"
 ```
 
 Use AI to expand validation coverage:
 
 ```bash
-netsim ai --lab <lab> "give me a concrete validation plan"
+cassian ai --lab <lab> "give me a concrete validation plan"
 ```
 
 Use optional online-enriched AI rendering:
 
 ```bash
-netsim ai --lab <lab> --online "why did this fail"
+cassian ai --lab <lab> --online "why did this fail"
 ```
 
 ---
 
-## `netsim validate-contrib` — Structural validation for contrib content
+## `cassian validate-contrib` — Structural validation for contrib content
 
 Validate supported contrib content without running any lifecycle phases.
 
 Command:
 
 ```bash
-netsim validate-contrib <path>
+cassian validate-contrib <path>
 ```
 
 Purpose:
@@ -2699,10 +2699,10 @@ Current behavior:
 Examples:
 
 ```bash
-netsim validate-contrib contrib/
-netsim validate-contrib contrib/packs
-netsim validate-contrib contrib/state-profiles
-netsim validate-contrib contrib/topologies/first-run-proof
+cassian validate-contrib contrib/
+cassian validate-contrib contrib/packs
+cassian validate-contrib contrib/state-profiles
+cassian validate-contrib contrib/topologies/first-run-proof
 ```
 
 Exit behavior:
@@ -2734,14 +2734,14 @@ Examples:
 - unsupported EVPN topology shape → `2`
 - invalid invariant declaration → `2`
 - incompatible pack contents → `2`
-- zero-assertion gate run (`netsim test <topology.yaml>` with no tests/scenarios) → `2`
-- valid contrib validation (`netsim validate-contrib contrib/`) → `0`
-- invalid contrib structure (`netsim validate-contrib <broken-path>`) → `2`
+- zero-assertion gate run (`cassian test <topology.yaml>` with no tests/scenarios) → `2`
+- valid contrib validation (`cassian validate-contrib contrib/`) → `0`
+- invalid contrib structure (`cassian validate-contrib <broken-path>`) → `2`
 
 Misuse / usage / contract error example:
 
 ```bash
-netsim test does-not-exist.yaml
+cassian test does-not-exist.yaml
 ```
 
 Typical output:
@@ -2751,8 +2751,8 @@ ERROR: topology path not found: does-not-exist.yaml
 Detected:
   looks like a topology path (contains '/' or ends with .yaml/.yml)
 Next:
-  Gate mode: netsim test <topology.yaml>
-  Lab mode:  netsim up <topology.yaml> --reconfigure ; netsim test <lab-name>
+  Gate mode: cassian test <topology.yaml>
+  Lab mode:  cassian up <topology.yaml> --reconfigure ; cassian test <lab-name>
 exit=2
 ```
 
@@ -2791,36 +2791,36 @@ These UX clarifications do **not** change:
 Recommended onboarding workflow:
 
 ```bash
-netsim doctor
-netsim validate topology.yaml
-netsim test topology.yaml
+cassian doctor
+cassian validate topology.yaml
+cassian test topology.yaml
 ```
 
 Note:
 
-- `netsim test <topology.yaml>` now requires at least one declared test or scenario
+- `cassian test <topology.yaml>` now requires at least one declared test or scenario
 - if you only want to prove deploy/provision smoke behavior, use exploration mode instead of gate mode
 
 For exploration:
 
 ```bash
-netsim run topology.yaml --keep
-netsim status <lab>
+cassian run topology.yaml --keep
+cassian status <lab>
 ```
 
 For EVPN runtime + proof:
 
 ```bash
-netsim validate topologies/evpn_runtime_generation.yaml
-netsim test topologies/evpn_mac_route_present.yaml
+cassian validate topologies/evpn_runtime_generation.yaml
+cassian test topologies/evpn_mac_route_present.yaml
 ```
 
 For AI-assisted explanation after a gate run:
 
 ```bash
-netsim ai "why did this fail"
+cassian ai "why did this fail"
 ```
 
 ---
 
-# End of ai-netsim v79 Operator Cheat Sheet
+# End of Cassian Gate v79 Operator Cheat Sheet

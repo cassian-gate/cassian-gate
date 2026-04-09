@@ -33,8 +33,8 @@ Expected verdict difference:
 
 What the failing result shows:
 
-- ai-netsim is not just approving deployment
-- ai-netsim is catching a declared service-reachability failure through the normal authoritative gate path
+- Cassian Gate is not just approving deployment
+- Cassian Gate is catching a declared service-reachability failure through the normal authoritative gate path
 - the failure is a validation failure, not a YAML error, unsupported feature, or boot/runtime failure
 
 Authoritative artifacts produced by each run:

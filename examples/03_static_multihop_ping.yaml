@@ -5,12 +5,12 @@ nodes:
   - name: r1
     type: frr
     frr_mode: preconfigured
-    image: ghcr.io/andrew-ai-netsim/ai-netsim/frr-demo-static-r1:v1x
+    image: ghcr.io/andrew-Cassian Gate/Cassian Gate/frr-demo-static-r1:v1x
 
   - name: r2
     type: frr
     frr_mode: preconfigured
-    image: ghcr.io/andrew-ai-netsim/ai-netsim/frr-demo-static-r2:v1x
+    image: ghcr.io/andrew-Cassian Gate/Cassian Gate/frr-demo-static-r2:v1x
 
   - name: h1
     type: host

@@ -1,13 +1,13 @@
 # VM Runtime Capabilities (Non-Authoritative)
 
 This document is **guidance only**.
-Authoritative behavior is defined by the ai-netsim Design Contract and `results.json`.
+Authoritative behavior is defined by the Cassian Gate Design Contract and `results.json`.
 
 ## Requirements (VM runtime)
 
 Supported host:
 - Linux host with KVM available and accessible (`/dev/kvm` readable+writable)
-- Container runtime and containerlab available per ai-netsim setup
+- Container runtime and containerlab available per Cassian Gate setup
 
 Unsupported:
 - WSL2 (VM runtime must fail fast)

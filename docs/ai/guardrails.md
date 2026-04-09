@@ -6,25 +6,25 @@
 - The boundary must never blur.
 
 ### Deterministic core (authoritative)
-- `netsim test` verdict + exit code semantics
+- `cassian test` verdict + exit code semantics
 - scenario execution + fault orchestration
 - results.json and resolved topology
 - fail-fast validation rules
 
 ### Probabilistic edge (advisory)
-- `netsim ai explain/review/coach`
+- `cassian ai explain/review/coach`
 - evidence summarization
 - coverage suggestions
 - human guidance
 
 ## Gate-first UX (locked)
-- `netsim test`:
+- `cassian test`:
   - runs from clean state
   - destroys any existing lab
   - executes deterministically
   - returns binary verdict
   - produces authoritative artifacts
-- `netsim run`:
+- `cassian run`:
   - explicitly non-authoritative
   - for exploration/debug only
 
@@ -33,7 +33,7 @@
 - Any ambiguity must error before execution.
 - Any schema addition must be deterministic and validated.
 
-## What ai-netsim is NOT
+## What Cassian Gate is NOT
 - not a general-purpose lab tool
 - not chaos engineering
 - not a packet analyzer / Wireshark replacement

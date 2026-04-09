@@ -1,6 +1,6 @@
 # Extensions and Adoption
 
-ai-netsim is a deterministic network validation engine.
+Cassian Gate is a deterministic network validation engine.
 
 This document defines the approved extension surface foundation introduced by Extension Set 1.
 
@@ -14,7 +14,7 @@ They do not add execution authority.
 
 ## Core boundary
 
-The ai-netsim core remains the only authority for:
+The Cassian Gate core remains the only authority for:
 
 - lifecycle execution
 - pass/fail verdicts
@@ -51,7 +51,7 @@ These surfaces are not:
 - exit code control
 - artifact authority
 
-ai-netsim does not support a plugin system here.
+Cassian Gate does not support a plugin system here.
 
 ## Set 1 boundary
 

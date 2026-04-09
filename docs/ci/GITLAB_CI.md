@@ -1,6 +1,6 @@
-# GitLab CI — ai-netsim official gate template (OSS)
+# GitLab CI — Cassian Gate official gate template (OSS)
 
-This repository includes an official GitLab CI pipeline that runs **ai-netsim** as a
+This repository includes an official GitLab CI pipeline that runs **Cassian Gate** as a
 **deterministic, clean-state validation gate**.
 
 ## What this pipeline does (stable contract)
@@ -20,8 +20,8 @@ The pipeline:
 
 ### Authority rules (important)
 
-- **Pass/fail is determined by ai-netsim (`netsim test`) and/or the repo oracle script.**
-- CI must not run `netsim run` as a gate.
+- **Pass/fail is determined by Cassian Gate (`cassian test`) and/or the repo oracle script.**
+- CI must not run `cassian run` as a gate.
 - `labs/` is generated evidence only; authoritative inputs are `topologies/` and `src/`.
 
 ## Runner requirements
@@ -33,7 +33,7 @@ The pipeline:
 - Sufficient privileges for containerlab networking
 
 If you use GitLab Runner Docker executor, it must be configured in a privileged way
-(and typically with Docker socket access). This is org-specific and not mandated by ai-netsim.
+(and typically with Docker socket access). This is org-specific and not mandated by Cassian Gate.
 
 The template fails fast if `containerlab` is missing.
 

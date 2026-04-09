@@ -1,6 +1,6 @@
 # Online AI Support (BYO Key) — Advisory Only
 
-This document explains how **optional online AI** works in **ai-netsim**.
+This document explains how **optional online AI** works in **Cassian Gate**.
 
 Online AI is **assistive only** and **never authoritative**.  
 It exists to improve explainability and onboarding — **not correctness**.
@@ -9,21 +9,21 @@ It exists to improve explainability and onboarding — **not correctness**.
 
 **Online AI must never affect pass/fail outcomes, exit codes, or execution.**
 
-If online AI is unavailable for any reason, ai-netsim must behave identically to offline mode (same deterministic bundle, same semantics, same gate behavior).
+If online AI is unavailable for any reason, Cassian Gate must behave identically to offline mode (same deterministic bundle, same semantics, same gate behavior).
 
 This is enforced by code, verification scripts, and golden-file fixtures.
 
 ## What Online AI Is Used For
 
 When explicitly enabled, online AI may:
-- produce clearer explanations of failures (`netsim ai explain`)
-- provide richer reasoning and context for suggestions (`netsim ai review`)
-- give onboarding and workflow guidance (`netsim ai coach`)
+- produce clearer explanations of failures (`cassian ai explain`)
+- provide richer reasoning and context for suggestions (`cassian ai review`)
+- give onboarding and workflow guidance (`cassian ai coach`)
 
 Online AI only consumes deterministic artifacts such as:
 - `results.json`
 - `topology.resolved.yaml`
-- deterministic bundles produced by ai-netsim
+- deterministic bundles produced by Cassian Gate
 
 Online AI does **not**:
 - run tests
@@ -35,7 +35,7 @@ Online AI does **not**:
 
 ## Offline-First Design (Authoritative)
 
-ai-netsim is fully functional without AI.
+Cassian Gate is fully functional without AI.
 
 Offline mode always:
 - builds deterministic bundles
@@ -47,7 +47,7 @@ Online AI is a pure overlay on top of this foundation.
 
 ## BYO Key Model (Required)
 
-ai-netsim does not ship API keys and does not manage credentials.
+Cassian Gate does not ship API keys and does not manage credentials.
 
 Users provide their own API key via environment variables.
 There is:
@@ -66,7 +66,7 @@ Install the OpenAI SDK locally:
 pip install openai
 ````
 
-ai-netsim will not import or use the SDK unless `--online` is specified.
+Cassian Gate will not import or use the SDK unless `--online` is specified.
 
 ## Configuration
 
@@ -89,7 +89,7 @@ export AI_NETSIM_AI_MODEL="gpt-4.1-mini"
 export AI_NETSIM_AI_BASE_URL="https://api.openai.com/v1"
 ```
 
-If any required value is missing or invalid, ai-netsim:
+If any required value is missing or invalid, Cassian Gate:
 
 * reports `ai_status: unavailable`
 * reports a reason in `ai_error`
@@ -103,19 +103,19 @@ Enable online AI per command using `--online`.
 Explain (post-execution):
 
 ```bash
-netsim ai explain three-frr-two-hosts-fw-routed --online --format json
+cassian ai explain three-frr-two-hosts-fw-routed --online --format json
 ```
 
 Review (topology-only):
 
 ```bash
-netsim ai review topologies/my-topology.yaml --online --format json
+cassian ai review topologies/my-topology.yaml --online --format json
 ```
 
 Coach (onboarding):
 
 ```bash
-netsim ai coach --online --format json
+cassian ai coach --online --format json
 ```
 
 Online AI is never enabled by default.
@@ -178,7 +178,7 @@ This guarantees reproducibility, auditability, and offline equivalence.
 
 ## Security & Privacy
 
-ai-netsim:
+Cassian Gate:
 
 * never logs raw API keys (errors are sanitized)
 * never stores credentials
@@ -197,7 +197,7 @@ Online AI is CI-safe by design (non-gating), but recommended practice is:
 
 ## Why Online AI Is Optional
 
-ai-netsim’s authority comes from deterministic execution, not AI.
+Cassian Gate’s authority comes from deterministic execution, not AI.
 
 Online AI exists to:
 
@@ -206,7 +206,7 @@ Online AI exists to:
 * accelerate onboarding
 * explain failures more clearly
 
-If AI disappeared tomorrow, ai-netsim would remain fully functional.
+If AI disappeared tomorrow, Cassian Gate would remain fully functional.
 
 ## Future Extensions (Non-Binding)
 
@@ -220,7 +220,7 @@ All future AI features must obey the rules in this document.
 
 ## One-Sentence Summary
 
-Online AI in ai-netsim is a strictly optional, advisory explanation layer that can fail safely without affecting correctness, determinism, or trust.
+Online AI in Cassian Gate is a strictly optional, advisory explanation layer that can fail safely without affecting correctness, determinism, or trust.
 
 ````
 

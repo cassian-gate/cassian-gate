@@ -10,7 +10,7 @@ This contract prevents AI from becoming authoritative.
 
 ## Commands
 
-### `netsim ai explain <lab|topology>`
+### `cassian ai explain <lab|topology>`
 Inputs (artifact-only):
 - labs/clab-<lab>/results.json
 - labs/clab-<lab>/topology.resolved.yaml
@@ -22,7 +22,7 @@ Outputs:
 - never invents facts
 - provides “evidence summary” even if AI is disabled/unavailable
 
-### `netsim ai review <topology.yaml> [--against <results.json>]`
+### `cassian ai review <topology.yaml> [--against <results.json>]`
 Inputs:
 - topology (or resolved topology)
 - optionally results.json for “what ran vs what exists”
@@ -32,7 +32,7 @@ Outputs:
 - bounded suggestions (copy-paste snippets allowed)
 - advisory only; never gating
 
-### `netsim ai coach [<topology|lab>]`
+### `cassian ai coach [<topology|lab>]`
 Purpose:
 - onboarding and guidance (human learning)
 Restrictions:
