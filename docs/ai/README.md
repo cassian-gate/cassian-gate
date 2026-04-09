@@ -1,24 +1,49 @@
-# AI Discipline Pack (Repo Source of Truth)
+# AI Documentation
 
-These documents encode the **existing** Cassian Gate workflow and guardrails so AI assistance remains:
-- stateless
-- reproducible
+This directory contains the active AI-related documentation for **Cassian Gate**.
+
+AI in Cassian Gate is:
+- optional
+- advisory only
 - artifact-driven
-- CI-friendly
-- enterprise-aligned
+- outside the authority chain
 
-## Reading order
-1) `AGENTS.md`
-2) `docs/design-contract.md`
-3) `docs/ai/GUARDRAILS.md`
-4) `docs/ai/NOW.md`
-5) `docs/ai/TASKS.md`
-6) `docs/ai/DECISIONS.md` (as needed)
+AI does not:
+- execute lifecycle phases
+- change pass/fail outcomes
+- mutate authoritative inputs
+- mutate authoritative artifacts
 
-## What to update when
-- Changing focus: update `NOW.md`
-- Locking a decision: append to `DECISIONS.md`
-- Adding/removing tasks: update `TASKS.md`
-- Changing AI CLI rules: update `CLI-CONTRACT-AI.md`
-- Any meaningful PR: use `PR-CHECKLIST.md`
+---
 
+## Active AI docs
+
+Read these files in this order:
+
+1. `docs/design-contract.md`  
+   The authoritative system contract.
+
+2. `docs/ai/guardrails.md`  
+   The behavioral boundaries AI must obey.
+
+3. `docs/ai/cli-contract-ai.md`  
+   The CLI-level AI contract.
+
+4. `docs/ai/online_ai.md`  
+   Optional online AI behavior and constraints.
+
+---
+
+## Internal AI working material
+
+Additional AI planning and maintainer material now lives under:
+
+- `docs/ai/internal/`
+
+That area is not the primary active AI docs surface.
+
+---
+
+## Summary
+
+> **AI in Cassian Gate explains and assists, but never becomes authority.**
