@@ -29,7 +29,7 @@ Expected verdict difference:
 - `failing/topology.yaml` -> FAIL (validation)
 - `passing/topology.yaml` -> PASS
 
-Where authoritative artifacts appear:
+Where artifacts appear:
 
 - `labs/clab-first-run-proof-failing/`
 - `labs/clab-first-run-proof-passing/`

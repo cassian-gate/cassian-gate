@@ -63,4 +63,4 @@ It does **not** claim:
 - authority over verdicts or artifacts
 
 Recipe docs are explanatory only.
-Engine execution and generated artifacts remain authoritative.
+`results.json` remains the authoritative verdict artifact; generated artifacts do not become authoritative inputs.
