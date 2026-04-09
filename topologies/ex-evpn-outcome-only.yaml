@@ -7,7 +7,7 @@ name: ex-evpn-outcome-only
 fabric:
   evpn:
     enabled: true
-    mode: evpn
+    mode: vlan-aware
 
 nodes:
   # Generic FRR nodes. In v1.5, ai-netsim does not assign EVPN roles.
