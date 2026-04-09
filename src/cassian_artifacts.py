@@ -6,7 +6,7 @@ from pathlib import Path
 import json
 import yaml
 
-from netsim_common import LABS_DIR, TOPO_DIR, die
+from cassian_common import LABS_DIR, TOPO_DIR, die
 
 # -------------------------
 # Paths for generated lab artifacts

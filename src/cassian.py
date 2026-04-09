@@ -32,8 +32,8 @@ from typing import Any
 
 import yaml
 
-import netsim_common
-from netsim_common import (
+import cassian_common
+from cassian_common import (
     BASE_DIR, TOPO_DIR, LABS_DIR,
     DEFAULT_IMAGES,
     run, die, fail,
@@ -77,11 +77,11 @@ def _run_containerlab(cmd: list[str], *, check: bool = True) -> subprocess.Compl
 
     - Default (quiet): suppress containerlab INFO spam by capturing output.
       On failure (when check=True), emit a short deterministic error and stop.
-    - Verbose: preserve current raw streaming behavior (delegates to netsim_common.run).
+    - Verbose: preserve current raw streaming behavior (delegates to cassian_common.run).
     """
     # Verbose mode: stream containerlab stdout/stderr, filtering only known non-fatal banners.
     # Command echo must remain transparent.
-    if not netsim_common.QUIET_RUN:
+    if not cassian_common.QUIET_RUN:
         print("+", " ".join(cmd))
 
         p = subprocess.Popen(
@@ -154,13 +154,13 @@ def _run_containerlab(cmd: list[str], *, check: bool = True) -> subprocess.Compl
 
     return cp
 
-from netsim_artifacts import (
+from cassian_artifacts import (
     lab_dir, node_cfg_dir, write_file, write_json_canonical,
     load_yaml,
     topo_path_for_lab,
 )
 
-from netsim_model import (
+from cassian_model import (
     _validate_fabric_evpn_presence_only,
     ensure_valid_topology,
     gen_frr_daemons,
@@ -174,7 +174,7 @@ from netsim_model import (
     validate_contrib_path,
 )
 
-from netsim_tests import (
+from cassian_tests import (
     ensure_nc,
     ip_no_mask,
     find_nodes_by_type,
@@ -227,7 +227,7 @@ from netsim_tests import (
     _preflight_format_text,
 )
 
-from netsim_runtime_container import (
+from cassian_runtime_container import (
     gen_nft_fw_rules,
     _coverage_canonical_link_id,
     _coverage_inventory_nodes,
@@ -2490,7 +2490,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                         try:
                             _gate_write_hard_failure_results(
                                 phase="test",
-                                err=str(getattr(netsim_common, "LAST_ERROR_MSG", "") or "gate test failed"),
+                                err=str(getattr(cassian_common, "LAST_ERROR_MSG", "") or "gate test failed"),
                                 code=exit_code,
                             )
                         except Exception:
@@ -2509,7 +2509,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 exit_code = 1
 
             try:
-                err_msg = str(getattr(netsim_common, "LAST_ERROR_MSG", "") or "").strip()
+                err_msg = str(getattr(cassian_common, "LAST_ERROR_MSG", "") or "").strip()
             except Exception:
                 err_msg = ""
 
@@ -6480,7 +6480,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             if "pcap_start" in step or "pcap_stop" in step:
                 # NOTE: cmd_test already imports json/time; do not re-import here because it shadows
                 # the outer 'time' and breaks earlier time.time() usage (UnboundLocalError).
-                from netsim_artifacts import pcap_session_paths, write_file
+                from cassian_artifacts import pcap_session_paths, write_file
 
                 # Non-gating invariant: any runtime/pcap failure becomes evidence only.
                 # Scenario must continue.
@@ -8115,15 +8115,15 @@ def cmd_validate(args: argparse.Namespace) -> None:
     import json
     import sys  # keep (often used elsewhere)
 
-    # module-global flag used by die() (moved to netsim_common)
+    # module-global flag used by die() (moved to cassian_common)
 
     want_json: bool = bool(getattr(args, "json", False))
     contrib_path_arg = getattr(args, "contrib_path", None)
 
     if contrib_path_arg is not None:
         contrib_path = Path(str(contrib_path_arg))
-        prev_quiet = bool(getattr(netsim_common, "_QUIET_DIE", False))
-        netsim_common._QUIET_DIE = want_json
+        prev_quiet = bool(getattr(cassian_common, "_QUIET_DIE", False))
+        cassian_common._QUIET_DIE = want_json
         try:
             validate_contrib_path(contrib_path)
             if want_json:
@@ -8156,7 +8156,7 @@ def cmd_validate(args: argparse.Namespace) -> None:
                 print(f"ERROR: {msg}", file=sys.stderr)
             raise SystemExit(code)
         finally:
-            netsim_common._QUIET_DIE = prev_quiet
+            cassian_common._QUIET_DIE = prev_quiet
 
     topo_path = (TOPO_DIR / args.topology) if not Path(args.topology).is_file() else Path(args.topology)
 
@@ -8177,8 +8177,8 @@ def cmd_validate(args: argparse.Namespace) -> None:
             else:
                 die(error or "validation failed")
 
-    prev_quiet = bool(getattr(netsim_common, "_QUIET_DIE", False))
-    netsim_common._QUIET_DIE = want_json
+    prev_quiet = bool(getattr(cassian_common, "_QUIET_DIE", False))
+    cassian_common._QUIET_DIE = want_json
     try:
         topo = load_yaml(topo_path)
         ensure_valid_topology(topo)
@@ -8230,7 +8230,7 @@ def cmd_validate(args: argparse.Namespace) -> None:
         die(msg)
 
     finally:
-        netsim_common._QUIET_DIE = prev_quiet
+        cassian_common._QUIET_DIE = prev_quiet
 
 def cmd_doctor(args: argparse.Namespace) -> None:
     """
@@ -8364,7 +8364,7 @@ def cmd_preflight(args: argparse.Namespace) -> None:
 
         if fmt == "json":
             # Canonical JSON serialization for deterministic artifacts (advisory output; stable bytes).
-            from netsim_artifacts import write_json_canonical
+            from cassian_artifacts import write_json_canonical
             write_json_canonical(out_path, report)
         else:
             out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -9539,9 +9539,9 @@ def cmd_status(args: argparse.Namespace) -> None:
     routes_verbose = bool(getattr(args, "routes_verbose", False))
 
     # Suppress "+ <cmd>" echoes during JSON mode (so JSON is clean)
-    old_quiet = netsim_common.QUIET_RUN
+    old_quiet = cassian_common.QUIET_RUN
     if as_json:
-        netsim_common.QUIET_RUN = True
+        cassian_common.QUIET_RUN = True
 
     # ------------------------------------------------------------
     # Truthful status: derive expected nodes deterministically from
@@ -10014,7 +10014,7 @@ def cmd_status(args: argparse.Namespace) -> None:
     if strict and strict_fail:
         raise SystemExit(2)
 
-    netsim_common.QUIET_RUN = old_quiet
+    cassian_common.QUIET_RUN = old_quiet
 
 def cmd_collect(args: argparse.Namespace) -> None:
     import json
@@ -13196,8 +13196,8 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    old_quiet = netsim_common.QUIET_RUN
-    netsim_common.QUIET_RUN = (not bool(getattr(args, "verbose", False)))
+    old_quiet = cassian_common.QUIET_RUN
+    cassian_common.QUIET_RUN = (not bool(getattr(args, "verbose", False)))
 
     footer_lab = ""
     footer_authority = ""
@@ -13239,7 +13239,7 @@ def main() -> None:
             die(f"ERROR: {msg}", code=1)
     finally:
         # Restore global quiet flag deterministically (commands may override temporarily)
-        netsim_common.QUIET_RUN = old_quiet
+        cassian_common.QUIET_RUN = old_quiet
 
         if footer_lab:
             _print_artifacts_footer_for_lab(footer_lab, authority_kind=footer_authority)

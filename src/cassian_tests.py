@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from netsim_common import (
+from cassian_common import (
     run,
     die,
     is_ip_literal,
@@ -14,10 +14,10 @@ from netsim_common import (
     classify_invalid_target,
 )
 
-from netsim_artifacts import (
+from cassian_artifacts import (
     lab_dir,
 )
-from netsim_runtime_container import (
+from cassian_runtime_container import (
     _normalize_prefix,
     scenario_apply_fault,
     scenario_clear_fault_state,

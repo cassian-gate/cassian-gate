@@ -10,9 +10,9 @@ from typing import Any
 
 import yaml
 
-from netsim_common import LABS_DIR, TOPO_DIR, run, die
-from netsim_artifacts import lab_dir, load_yaml, write_file
-from netsim_model import ensure_valid_topology, resolve_topology, topo_to_containerlab
+from cassian_common import LABS_DIR, TOPO_DIR, run, die
+from cassian_artifacts import lab_dir, load_yaml, write_file
+from cassian_model import ensure_valid_topology, resolve_topology, topo_to_containerlab
 
 def gen_nft_fw_rules(node: dict) -> str:
     """
@@ -458,7 +458,7 @@ def build_coverage_model(resolved: dict[str, Any], topo_path: Path) -> dict[str,
     Pure, declared-only coverage model computed from resolved topology.
     MUST NOT call runtime/deploy/provision/test.
     """
-    from netsim_tests import _coverage_test_ids, _coverage_scenario_ids, _coverage_touch_nodes_from_test
+    from cassian_tests import _coverage_test_ids, _coverage_scenario_ids, _coverage_touch_nodes_from_test
 
     # Inventory
     node_list = _coverage_inventory_nodes(resolved)
@@ -828,7 +828,7 @@ def write_containerlab_file(topo_path: Path) -> Path:
     # and SKIP resolve. This preserves lifecycle order and semantics while enabling exact re-exec.
     is_resolved_input = (topo_path.name == "topology.resolved.yaml")
 
-    from netsim_tests import validate_scenarios
+    from cassian_tests import validate_scenarios
 
     if is_resolved_input:
         resolved = topo
@@ -863,8 +863,8 @@ def write_containerlab_file(topo_path: Path) -> Path:
     # WI-2 (v2-gate-no-absolute-path-wrote-lines-in-quiet):
     # - Quiet mode must not print absolute paths.
     # - Verbose mode may print full paths for debugging.
-    import netsim_common
-    if not netsim_common.QUIET_RUN:
+    import cassian_common
+    if not cassian_common.QUIET_RUN:
         print(f"Wrote: {out_path}")
 
     return out_path
@@ -1213,7 +1213,7 @@ def verify_lab_ready(rt: Runtime, topo: dict, lab: str) -> None:
         if t == "host":
             verify_host_ready(rt, lab, name)
         elif t == "nft-fw":
-            from netsim_tests import verify_fw_routed_ready
+            from cassian_tests import verify_fw_routed_ready
             verify_fw_routed_ready(rt, lab, name)
         elif t == "frr":
             verify_frr_ready(rt, lab, name, require_evpn_bgp=require_evpn_bgp)
