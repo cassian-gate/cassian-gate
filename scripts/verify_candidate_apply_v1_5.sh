@@ -55,7 +55,13 @@ assert_hard_gate_fail() {
 echo "=== [BASELINE MUST PASS] ==="
 python3 $NS test "${LAB}"
 save_case_artifacts "baseline_pass"
-echo "OK: baseline artifacts archived to ${EVID_DIR}/baseline_pass.*"
+
+jq -e '
+  .overall.verdict == "pass"
+  and (.tests | map(select(.name == "spine1_to_leaf1_underlay_ping" and .verdict == "pass")) | length == 1)
+' "${EVID_DIR}/baseline_pass.results.json" >/dev/null
+
+echo "OK: baseline underlay proof passed and artifacts archived to ${EVID_DIR}/baseline_pass.*"
 
 ###############################################################################
 echo "=== [CASE 1: VALID CANDIDATE MUST PASS] ==="
