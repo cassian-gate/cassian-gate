@@ -1,22 +1,22 @@
 
 ---
 
-# ai-netsim v1 Administrator Guide
+# Cassian Gate v1 Administrator Guide
 
 **Version:** v1 / v1.x
 **Status:** STABLE
 **Audience:** Network engineers, platform engineers, CI/CD operators
-**Scope:** Operating ai-netsim v1 safely, correctly, and intentionally
+**Scope:** Operating Cassian Gate v1 safely, correctly, and intentionally
 
-This document explains **what ai-netsim v1 is**, **how it is meant to be used**, and **how to interpret its results**.
+This document explains **what Cassian Gate v1 is**, **how it is meant to be used**, and **how to interpret its results**.
 
 It is written for engineers who want **deterministic proof before production**, not a flexible lab.
 
 ---
 
-## 1) What ai-netsim Is (and Is Not)
+## 1) What Cassian Gate Is (and Is Not)
 
-ai-netsim is a:
+Cassian Gate is a:
 
 * **deterministic network change-validation gate**
 * **CI-first** and **artifact-driven**
@@ -24,15 +24,15 @@ ai-netsim is a:
 * **engineer-first**, not lab-first
 * **AI-assisted**, never AI-driven
 
-ai-netsim answers one question:
+Cassian Gate answers one question:
 
 > *“Given this intent, does the network behave the way I expect?”*
 
 ---
 
-### What ai-netsim Is NOT
+### What Cassian Gate Is NOT
 
-ai-netsim is **not**:
+Cassian Gate is **not**:
 
 * a general-purpose network lab
 * a routing simulator
@@ -41,13 +41,13 @@ ai-netsim is **not**:
 * an AI that decides correctness
 * an auto-remediation system
 
-If you want exploration, improvisation, or heuristic behavior, ai-netsim is the wrong tool — **by design**.
+If you want exploration, improvisation, or heuristic behavior, Cassian Gate is the wrong tool — **by design**.
 
 ---
 
 ## 2) Authority Model (Critical)
 
-ai-netsim has a **strict authority model**.
+Cassian Gate has a **strict authority model**.
 
 **Only these things decide correctness:**
 
@@ -66,7 +66,7 @@ Everything else exists to support that authority.
 
 > **AI never decides pass/fail.**
 
-If AI is disabled, unavailable, or removed, ai-netsim still works identically.
+If AI is disabled, unavailable, or removed, Cassian Gate still works identically.
 
 ---
 
@@ -75,11 +75,11 @@ If AI is disabled, unavailable, or removed, ai-netsim still works identically.
 Given:
 
 * identical topology YAML
-* identical ai-netsim version
+* identical Cassian Gate version
 * identical container images
 * identical timeouts
 
-ai-netsim **must produce**:
+Cassian Gate **must produce**:
 
 * identical resolved topology
 * identical test verdicts
@@ -93,15 +93,15 @@ There is:
 * no heuristic guessing
 * no silent defaults
 
-If something is ambiguous, **ai-netsim fails fast**.
+If something is ambiguous, **Cassian Gate fails fast**.
 
 ---
 
 ## 4) Gate-First Workflow
 
-### Authoritative path: `netsim test`
+### Authoritative path: `cassian test`
 
-`netsim test` is the **gate**.
+`cassian test` is the **gate**.
 
 It:
 
@@ -114,16 +114,16 @@ It:
 Example:
 
 ```bash
-netsim test three-frr-two-hosts-fw-routed
+cassian test three-frr-two-hosts-fw-routed
 ```
 
 If this command fails, the change **must not be deployed**.
 
 ---
 
-### Exploratory path: `netsim run`
+### Exploratory path: `cassian run`
 
-`netsim run` exists for **debugging only**.
+`cassian run` exists for **debugging only**.
 
 It:
 
@@ -141,7 +141,7 @@ Topology YAML files declare **intent**.
 
 They are one of the **only inputs** that can affect validation outcomes.
 
-ai-netsim v1 will:
+Cassian Gate v1 will:
 
 * validate schema strictly
 * reject unknown fields
@@ -173,7 +173,7 @@ nodes:
 
 ### Node Types (v1)
 
-ai-netsim v1 supports a **small, explicit set of node types**.
+Cassian Gate v1 supports a **small, explicit set of node types**.
 
 No others are allowed.
 
@@ -204,7 +204,7 @@ FRR nodes have **two mutually exclusive modes**:
 
 ##### `frr_mode: generated` (default)
 
-* ai-netsim generates minimal FRR config
+* Cassian Gate generates minimal FRR config
 * no routing intent is inferred
 * suitable for routing-neutral validation
 
@@ -215,7 +215,7 @@ This keeps v1 **honest and routing-agnostic**.
 ##### `frr_mode: preconfigured`
 
 * routing config is baked into the image
-* ai-netsim does not touch `/etc/frr/*`
+* Cassian Gate does not touch `/etc/frr/*`
 * required for multi-hop `expect: pass` tests
 
 This mode exists **only** to support demos and onboarding.
@@ -247,7 +247,7 @@ Rules:
 * endpoints must be explicit
 * exactly two endpoints per link
 * ambiguity fails fast
-* ai-netsim never guesses
+* Cassian Gate never guesses
 
 ---
 
@@ -307,7 +307,7 @@ Unless **all routers in the path** declare:
 frr_mode: preconfigured
 ```
 
-ai-netsim never assumes routing exists.
+Cassian Gate never assumes routing exists.
 
 ---
 
@@ -450,9 +450,9 @@ Logs and state capture are **evidence only** — never gating.
 
 AI commands:
 
-* `netsim ai explain`
-* `netsim ai review`
-* `netsim ai coach`
+* `cassian ai explain`
+* `cassian ai review`
+* `cassian ai coach`
 
 AI:
 
@@ -461,7 +461,7 @@ AI:
 * never affects verdicts
 * never affects exit codes
 
-If AI fails, ai-netsim still exits `0`.
+If AI fails, Cassian Gate still exits `0`.
 
 ---
 
@@ -485,11 +485,11 @@ These belong to **v1.5+**.
 * routing lives outside v1 authority
 * determinism is sacred
 
-If ai-netsim fails, it is telling you something **important**.
+If Cassian Gate fails, it is telling you something **important**.
 
 ---
 
-**End of ai-netsim v1 Administrator Guide**
+**End of Cassian Gate v1 Administrator Guide**
 
 ---
 

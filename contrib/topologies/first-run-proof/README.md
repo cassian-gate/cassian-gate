@@ -1,16 +1,16 @@
 # First-Run Proof
 
-This is the official first-run adoption proof family for ai-netsim.
+This is the official first-run adoption proof family for Cassian Gate.
 
 Failure-first path:
 
-1. Run the failing variant first to see ai-netsim catch a real validation problem.
+1. Run the failing variant first to see Cassian Gate catch a real validation problem.
 2. Run the passing variant second to see the same proof succeed when the policy is correct.
 
 What this example proves:
 
-- ai-netsim can run an authoritative gate through the normal `netsim test` path
-- ai-netsim can catch a real service-reachability failure caused by incorrect firewall policy
+- Cassian Gate can run an authoritative gate through the normal `cassian test` path
+- Cassian Gate can catch a real service-reachability failure caused by incorrect firewall policy
 - the same bounded topology can produce a clean PASS when the policy is corrected
 
 What the failure represents:

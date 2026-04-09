@@ -1,6 +1,6 @@
 ---
 
-# ai-netsim v1 CLI Reference
+# Cassian Gate v1 CLI Reference
 
 **Version:** v1 / v1.x
 **Status:** STABLE
@@ -12,7 +12,7 @@ This document lists supported CLI commands and their semantics in v1 / v1.x.
 
 ## 1) Core Commands
 
-### `netsim gen <topology.yaml>`
+### `cassian gen <topology.yaml>`
 
 **Purpose:** Generate containerlab artifacts from a topology.
 
@@ -21,7 +21,7 @@ This document lists supported CLI commands and their semantics in v1 / v1.x.
 
 ---
 
-### `netsim validate <topology.yaml> [--json]`
+### `cassian validate <topology.yaml> [--json]`
 
 **Purpose:** Validate topology + scenarios without deploying containers.
 
@@ -32,7 +32,7 @@ Flags:
 
 ---
 
-### `netsim up <topology.yaml> [--reconfigure]`
+### `cassian up <topology.yaml> [--reconfigure]`
 
 **Purpose:** Generate and deploy a lab.
 
@@ -43,7 +43,7 @@ Flags:
 
 ---
 
-### `netsim down <name>`
+### `cassian down <name>`
 
 **Purpose:** Destroy a deployed lab by name.
 
@@ -53,14 +53,14 @@ Arguments:
 
 ---
 
-### `netsim cleanup --all [--yes]`
+### `cassian cleanup --all [--yes]`
 
-**Purpose:** Safely clean up ai-netsim-owned labs found under `labs/`.
+**Purpose:** Safely clean up Cassian Gate-owned labs found under `labs/`.
 
 Flags:
 
 * `--all` (required)
-  Only targets ai-netsim labs that have artifact dirs under `labs/clab-*`.
+  Only targets Cassian Gate labs that have artifact dirs under `labs/clab-*`.
   **Never scans Docker globally.**
 
 * `--yes`
@@ -75,7 +75,7 @@ Default behavior:
 
 ## 2) Exec and Inspection Helpers
 
-### `netsim exec <lab> <node> [command...]`
+### `cassian exec <lab> <node> [command...]`
 
 **Purpose:** Execute a command inside a container.
 
@@ -91,7 +91,7 @@ Behavior:
 
 ---
 
-### `netsim vty <lab> <node> "<vtysh command>"`
+### `cassian vty <lab> <node> "<vtysh command>"`
 
 **Purpose:** Run a vtysh command on an FRR node.
 
@@ -103,7 +103,7 @@ Arguments:
 
 ---
 
-### `netsim status <lab> [flags]`
+### `cassian status <lab> [flags]`
 
 **Purpose:** Show lab status (containers + optional FRR info).
 
@@ -135,7 +135,7 @@ Flags:
 
 ---
 
-### `netsim collect <lab>`
+### `cassian collect <lab>`
 
 **Purpose:** Collect runtime artifacts for a lab.
 
@@ -151,7 +151,7 @@ Notes:
 
 ## 3) Gate Command
 
-### `netsim test <lab> [flags]`
+### `cassian test <lab> [flags]`
 
 **Purpose:** Run declared tests and scenarios for a lab.
 
@@ -204,7 +204,7 @@ Listing:
 
 ## 4) One-shot Workflow (Non-authoritative)
 
-### `netsim run <topology.yaml> [flags]`
+### `cassian run <topology.yaml> [flags]`
 
 **Purpose:** Ephemeral workflow: `up → test → collect → down`.
 
@@ -228,7 +228,7 @@ Flags:
 
 ## 5) Assistive AI (Advisory Only)
 
-### `netsim ai explain <target> [flags]`
+### `cassian ai explain <target> [flags]`
 
 **Purpose:** Explain a prior run using artifacts only.
 
@@ -263,7 +263,7 @@ Explain-only flags:
 
 ---
 
-### `netsim ai review <topology.yaml> [flags]`
+### `cassian ai review <topology.yaml> [flags]`
 
 **Purpose:** Review topology tests/scenarios coverage (no execution).
 
@@ -278,7 +278,7 @@ Flags:
 
 ---
 
-### `netsim ai coach [flags]`
+### `cassian ai coach [flags]`
 
 **Purpose:** Onboarding and guidance (no YAML generation).
 
@@ -301,6 +301,6 @@ Flags:
 
 ---
 
-**End of ai-netsim v1 CLI Reference**
+**End of Cassian Gate v1 CLI Reference**
 
 ---

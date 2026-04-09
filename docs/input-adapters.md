@@ -1,6 +1,6 @@
 # Input Adapters (Read-Only) — Terraform Plan JSON + Rendered Ansible Output
 
-This feature lets ai-netsim ingest external change context (Terraform plan JSON, rendered Ansible output)
+This feature lets Cassian Gate ingest external change context (Terraform plan JSON, rendered Ansible output)
 as non-authoritative, advisory-only metadata.
 
 Adapters are designed to improve:
@@ -13,7 +13,7 @@ They never change:
 * lifecycle phases
 * test/scenario selection
 * pass/fail verdicts
-* exit codes of `netsim test`
+* exit codes of `cassian test`
 
 Adapters are read-only, offline-first, deterministic parsers.
 
@@ -118,7 +118,7 @@ Adapters are optional context only, explicitly passed:
 Rules:
 
 * Missing/unreadable adapter path is an AI usage error (exit 2).
-* Adapters never affect gate results; `netsim test` remains authoritative.
+* Adapters never affect gate results; `cassian test` remains authoritative.
 
 ---
 
@@ -130,7 +130,7 @@ Run adapters and preflight as separate advisory steps before the authoritative g
 # Produce adapter inputs (done by your pipeline — may require terraform/ansible there)
 terraform show -json plan.out > plan.json
 
-# Convert to normalized advisory context (ai-netsim does not run terraform)
+# Convert to normalized advisory context (Cassian Gate does not run terraform)
 ./src/netsim.py adapt terraform --plan plan.json
 
 # Optional: preflight with adapter context

@@ -1,6 +1,6 @@
 # AI Discipline Pack (Repo Source of Truth)
 
-These documents encode the **existing** ai-netsim workflow and guardrails so AI assistance remains:
+These documents encode the **existing** Cassian Gate workflow and guardrails so AI assistance remains:
 - stateless
 - reproducible
 - artifact-driven
