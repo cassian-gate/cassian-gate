@@ -11,7 +11,7 @@ import re
 import ipaddress
 import yaml
 
-from netsim_common import (
+from cassian_common import (
     DEFAULT_IMAGES,
     assert_vm_runtime_supported,
     die,
@@ -19,7 +19,7 @@ from netsim_common import (
     validate_ip_literal,
 )
 
-from netsim_artifacts import (
+from cassian_artifacts import (
     node_cfg_dir,
     write_file,
     load_yaml,

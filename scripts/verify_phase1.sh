@@ -6,8 +6,8 @@ set -euo pipefail
 # ------------------------------------------------------------------------------
 export PYTHONPATH="src${PYTHONPATH:+:$PYTHONPATH}"
 
-# Always invoke netsim through this wrapper (no direct ./src/netsim.py calls)
-NS="./src/netsim.py"
+# Always invoke cassian through this wrapper (no direct ./src/cassian.py calls)
+NS="./src/cassian.py"
 
 # ------------------------------------------------------------------------------
 # Usage:
@@ -58,22 +58,22 @@ dump_pair_if_nonempty() {
 
 # ------------------------------------------------------------------------------
 echo "=== 0) py_compile ==="
-python -m py_compile src/netsim.py src/netsim_tests.py src/netsim_artifacts.py
+python -m py_compile src/cassian.py src/cassian_tests.py src/cassian_artifacts.py
 echo "OK: py_compile"
 echo
 
 # ------------------------------------------------------------------------------
 echo "=== 0b) Guardrail: wait_for_condition wiring invariant ==="
 # Invariant:
-#  - defined exactly once in netsim_tests.py
+#  - defined exactly once in cassian_tests.py
 #  - exactly one call site there (def + call = 2)
-#  - zero occurrences in netsim.py
-wf_defs="$({ grep -nE '^[[:space:]]*def[[:space:]]+wait_for_condition[[:space:]]*\(' src/netsim_tests.py || true; } | wc -l | tr -d ' ')"
-wf_all="$({ grep -nE '\bwait_for_condition[[:space:]]*\(' src/netsim_tests.py || true; } | wc -l | tr -d ' ')"
-wf_py="$({ grep -nE '\bwait_for_condition[[:space:]]*\(' src/netsim.py || true; } | wc -l | tr -d ' ')"
-echo "wait_for_condition defs in netsim_tests.py = $wf_defs"
-echo "wait_for_condition total refs in netsim_tests.py = $wf_all"
-echo "wait_for_condition refs in netsim.py = $wf_py"
+#  - zero occurrences in cassian.py
+wf_defs="$({ grep -nE '^[[:space:]]*def[[:space:]]+wait_for_condition[[:space:]]*\(' src/cassian_tests.py || true; } | wc -l | tr -d ' ')"
+wf_all="$({ grep -nE '\bwait_for_condition[[:space:]]*\(' src/cassian_tests.py || true; } | wc -l | tr -d ' ')"
+wf_py="$({ grep -nE '\bwait_for_condition[[:space:]]*\(' src/cassian.py || true; } | wc -l | tr -d ' ')"
+echo "wait_for_condition defs in cassian_tests.py = $wf_defs"
+echo "wait_for_condition total refs in cassian_tests.py = $wf_all"
+echo "wait_for_condition refs in cassian.py = $wf_py"
 if [ "$wf_defs" -ne 1 ] || [ "$wf_all" -ne 2 ] || [ "$wf_py" -ne 0 ]; then
   echo "FAIL: wait_for_condition wiring invariant broken"
   exit 1
@@ -84,21 +84,21 @@ echo "=== 0b) Guardrail: validate-contrib structural verification ==="
 #  - validate-contrib command exists as an explicit surface
 #  - model exposes validate_contrib_path
 #  - supported contrib roots are enforced in deterministic code
-if ! grep -q 'add_parser("validate-contrib"' src/netsim.py; then
-  echo "FAIL: missing validate-contrib parser in src/netsim.py"
+if ! grep -q 'add_parser("validate-contrib"' src/cassian.py; then
+  echo "FAIL: missing validate-contrib parser in src/cassian.py"
   exit 1
 fi
-if ! grep -q 'validate_contrib_path' src/netsim.py; then
-  echo "FAIL: src/netsim.py does not reference validate_contrib_path"
+if ! grep -q 'validate_contrib_path' src/cassian.py; then
+  echo "FAIL: src/cassian.py does not reference validate_contrib_path"
   exit 1
 fi
-if ! grep -q 'def validate_contrib_path(' src/netsim_model.py; then
-  echo "FAIL: missing validate_contrib_path in src/netsim_model.py"
+if ! grep -q 'def validate_contrib_path(' src/cassian_model.py; then
+  echo "FAIL: missing validate_contrib_path in src/cassian_model.py"
   exit 1
 fi
 for sym in '"topologies"' '"packs"' '"state-profiles"'; do
-  if ! grep -q "$sym" src/netsim_model.py; then
-    echo "FAIL: missing supported contrib root $sym in src/netsim_model.py"
+  if ! grep -q "$sym" src/cassian_model.py; then
+    echo "FAIL: missing supported contrib root $sym in src/cassian_model.py"
     exit 1
   fi
 done
@@ -110,34 +110,34 @@ echo "=== 0c) Guardrail: grey-failure scenario invariant ==="
 #  - runtime exposes scenario_apply_fault + scenario_clear_fault_state
 #  - scenario executor uses scenario_apply_fault and cleanup
 for sym in '"packet_loss"' '"latency"' '"bandwidth_cap"' '"prefix_blackhole"'; do
-  if ! grep -q "$sym" src/netsim_tests.py; then
-    echo "FAIL: missing grey-failure action $sym in src/netsim_tests.py"
+  if ! grep -q "$sym" src/cassian_tests.py; then
+    echo "FAIL: missing grey-failure action $sym in src/cassian_tests.py"
     exit 1
   fi
-  if ! grep -q "$sym" src/netsim_runtime_container.py; then
-    echo "FAIL: missing grey-failure action $sym in src/netsim_runtime_container.py"
+  if ! grep -q "$sym" src/cassian_runtime_container.py; then
+    echo "FAIL: missing grey-failure action $sym in src/cassian_runtime_container.py"
     exit 1
   fi
 done
 
-if ! grep -q 'def scenario_apply_fault(' src/netsim_runtime_container.py; then
-  echo "FAIL: missing scenario_apply_fault in src/netsim_runtime_container.py"
+if ! grep -q 'def scenario_apply_fault(' src/cassian_runtime_container.py; then
+  echo "FAIL: missing scenario_apply_fault in src/cassian_runtime_container.py"
   exit 1
 fi
-if ! grep -q 'def scenario_clear_fault_state(' src/netsim_runtime_container.py; then
-  echo "FAIL: missing scenario_clear_fault_state in src/netsim_runtime_container.py"
+if ! grep -q 'def scenario_clear_fault_state(' src/cassian_runtime_container.py; then
+  echo "FAIL: missing scenario_clear_fault_state in src/cassian_runtime_container.py"
   exit 1
 fi
-if ! grep -q 'scenario_apply_fault' src/netsim_tests.py; then
-  echo "FAIL: src/netsim_tests.py does not reference scenario_apply_fault"
+if ! grep -q 'scenario_apply_fault' src/cassian_tests.py; then
+  echo "FAIL: src/cassian_tests.py does not reference scenario_apply_fault"
   exit 1
 fi
-if ! grep -q 'scenario_clear_fault_state' src/netsim_tests.py; then
-  echo "FAIL: src/netsim_tests.py does not reference scenario_clear_fault_state"
+if ! grep -q 'scenario_clear_fault_state' src/cassian_tests.py; then
+  echo "FAIL: src/cassian_tests.py does not reference scenario_clear_fault_state"
   exit 1
 fi
-if ! grep -q 'active_fault_states' src/netsim_tests.py; then
-  echo "FAIL: src/netsim_tests.py missing active_fault_states tracking"
+if ! grep -q 'active_fault_states' src/cassian_tests.py; then
+  echo "FAIL: src/cassian_tests.py missing active_fault_states tracking"
   exit 1
 fi
 
@@ -149,14 +149,14 @@ rm -rf \
   labs/clab-pack-unknown-reference \
   labs/clab-pack-incompatible-contents
 
-src/netsim.py validate topologies/pack_resolve_expansion.yaml >"${TMPROOT}/verify_pack_validate.out" 2>"${TMPROOT}/verify_pack_validate.err"
+$NS validate topologies/pack_resolve_expansion.yaml >"${TMPROOT}/verify_pack_validate.out" 2>"${TMPROOT}/verify_pack_validate.err"
 rc=$?
 if [ "$rc" -ne 0 ]; then
   dump_pair_if_nonempty "${TMPROOT}/verify_pack_validate.out" "${TMPROOT}/verify_pack_validate.err"
   fail "pack_resolve_expansion validate exited $rc"
 fi
 
-src/netsim.py validate topologies/pack_local_compatibility_ok.yaml >"${TMPROOT}/verify_pack_local_ok.out" 2>"${TMPROOT}/verify_pack_local_ok.err"
+$NS validate topologies/pack_local_compatibility_ok.yaml >"${TMPROOT}/verify_pack_local_ok.out" 2>"${TMPROOT}/verify_pack_local_ok.err"
 rc=$?
 if [ "$rc" -ne 0 ]; then
   dump_pair_if_nonempty "${TMPROOT}/verify_pack_local_ok.out" "${TMPROOT}/verify_pack_local_ok.err"
@@ -164,7 +164,7 @@ if [ "$rc" -ne 0 ]; then
 fi
 
 set +e
-src/netsim.py validate topologies/neg/pack_unknown_reference.yaml >"${TMPROOT}/verify_pack_neg.out" 2>"${TMPROOT}/verify_pack_neg.err"
+$NS validate topologies/neg/pack_unknown_reference.yaml >"${TMPROOT}/verify_pack_neg.out" 2>"${TMPROOT}/verify_pack_neg.err"
 rc=$?
 set -e
 if [ "$rc" -ne 2 ]; then
@@ -173,7 +173,7 @@ if [ "$rc" -ne 2 ]; then
 fi
 
 set +e
-src/netsim.py validate topologies/neg/pack_incompatible_contents.yaml >"${TMPROOT}/verify_pack_incompat.out" 2>"${TMPROOT}/verify_pack_incompat.err"
+$NS validate topologies/neg/pack_incompatible_contents.yaml >"${TMPROOT}/verify_pack_incompat.out" 2>"${TMPROOT}/verify_pack_incompat.err"
 rc=$?
 set -e
 if [ "$rc" -ne 2 ]; then
@@ -184,7 +184,7 @@ echo "OK: pack compatibility negative validation failed as expected (exit 2)"
 
 rm -rf labs/clab-pack-resolve-expansion
 set +e
-src/netsim.py test topologies/pack_resolve_expansion.yaml >"${TMPROOT}/verify_pack_test.out" 2>"${TMPROOT}/verify_pack_test.err"
+$NS test topologies/pack_resolve_expansion.yaml >"${TMPROOT}/verify_pack_test.out" 2>"${TMPROOT}/verify_pack_test.err"
 rc=$?
 set -e
 if [ "$rc" -ne 0 ]; then
@@ -215,7 +215,7 @@ fi
 echo "OK: invariant pack loading and compatibility guardrails"
 
 echo "=== 0e) Guardrail: blast radius awareness ==="
-python src/netsim.py test topologies/blast_radius_ok.yaml >${TMPROOT}/blast_radius_ok.out 2>&1
+python3 $NS test topologies/blast_radius_ok.yaml >${TMPROOT}/blast_radius_ok.out 2>&1
 br_exit=$?
 if [ "$br_exit" -ne 0 ]; then
   cat ${TMPROOT}/blast_radius_ok.out
@@ -260,7 +260,7 @@ if [ "$?" -ne 0 ]; then
 fi
 echo "OK: blast radius artifact + results surfaces valid"
 
-python src/netsim.py replay labs/clab-blast-radius-ok --gate --verify-results >${TMPROOT}/blast_radius_replay.out 2>&1
+$NS replay labs/clab-blast-radius-ok --gate --verify-results >${TMPROOT}/blast_radius_replay.out 2>&1
 replay_exit=$?
 if [ "$replay_exit" -ne 0 ]; then
   cat ${TMPROOT}/blast_radius_replay.out
@@ -270,7 +270,7 @@ fi
 echo "OK: blast radius replay verification passed"
 
 set +e
-python src/netsim.py test topologies/neg/blast_radius_ambiguous_fault_target.yaml >${TMPROOT}/blast_radius_ambiguous_fault_target.out 2>&1
+python3 $NS test topologies/neg/blast_radius_ambiguous_fault_target.yaml >${TMPROOT}/blast_radius_ambiguous_fault_target.out 2>&1
 neg_exit=$?
 set -e
 if [ "$neg_exit" -ne 2 ]; then
@@ -299,7 +299,7 @@ awk '
   /^def cmd_test\(/{p=1}
   p{print}
   /^def [a-zA-Z0-9_]+\(/ && $0 !~ /^def cmd_test/{exit}
-' src/netsim.py \
+' src/cassian.py \
 | grep -nE 'docker\s+(exec|inspect|logs)|container_name\(' \
 && { echo "FAIL: cmd_test hard-codes docker/container_name"; exit 1; } \
 || echo "OK: cmd_test clean"
@@ -315,7 +315,7 @@ for fn in "${FUNCS[@]}"; do
     $0 ~ ("^def "FN"\\("){p=1}
     p{print}
     /^def [a-zA-Z0-9_]+\(/ && $0 !~ ("^def "FN"\\(") {exit}
-  ' src/netsim.py \
+  ' src/cassian.py \
   | grep -nE 'docker\s+(exec|inspect|logs)|container_name\(' \
   && { echo "FAIL: $fn hard-codes docker/container_name"; exit 1; } \
   || echo "OK: $fn clean"
@@ -324,9 +324,9 @@ echo
 
 # ------------------------------------------------------------------------------
 echo "=== 4) docker exec/inspect/logs only inside ContainerRuntime ==="
-all_docker_lines="$(grep -nE '\bdocker\s+(exec|inspect|logs)\b' src/netsim.py | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
+all_docker_lines="$(grep -nE '\bdocker\s+(exec|inspect|logs)\b' src/cassian.py | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
 
-runtime_start="$(grep -nE '^class[[:space:]]+ContainerRuntime\b' src/netsim.py | head -n1 | cut -d: -f1 || true)"
+runtime_start="$(grep -nE '^class[[:space:]]+ContainerRuntime\b' src/cassian.py | head -n1 | cut -d: -f1 || true)"
 [ -n "$runtime_start" ] || { echo "FAIL: ContainerRuntime not found"; exit 1; }
 
 runtime_end="$(awk -v start="$runtime_start" '
@@ -334,7 +334,7 @@ runtime_end="$(awk -v start="$runtime_start" '
   /^class /{print NR-1; exit}
   /^def /{print NR-1; exit}
   END{print NR}
-' src/netsim.py)"
+' src/cassian.py)"
 
 bad=""
 if [ -n "$all_docker_lines" ]; then
@@ -1232,7 +1232,7 @@ diff -u ${TMPROOT}/route_not_advertised_to.results.run1.json ${TMPROOT}/route_no
   || { echo "FAIL: route_not_advertised_to replay results.json drift"; diff -u ${TMPROOT}/route_not_advertised_to.results.run1.json ${TMPROOT}/route_not_advertised_to.results.replay.json || true; exit 1; }
 
 echo
-echo "=== 7) Cleanup smoke (netsim cleanup --all) ==="
+echo "=== 7) Cleanup smoke (cassian cleanup --all) ==="
 
 # 7a) Dry-run must show a plan and exit 0
 cleanup_out="$($NS cleanup --all 2>&1)"
