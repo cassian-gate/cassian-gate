@@ -1,0 +1,17 @@
+name: wi1-unknown-key-topology
+
+nodes:
+  - name: r1
+    type: frr
+
+links: []
+
+tests:
+  - name: self_tcp_dummy
+    kind: tcp
+    src: r1
+    dst: r1
+    port: 443
+    expect: fail
+
+mystery_key: true

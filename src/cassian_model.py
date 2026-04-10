@@ -810,6 +810,25 @@ def ensure_valid_topology(topo: dict) -> None:
         if k not in topo:
             die(f"Missing required key: '{k}'")
 
+    allowed_top_level_keys = {
+        "name",
+        "nodes",
+        "links",
+        "tests",
+        "scenarios",
+        "packs",
+        "fabric",
+        "candidate_changes",
+        "vlans",
+    }
+    unknown_top_level_keys = sorted(k for k in topo.keys() if k not in allowed_top_level_keys)
+    if unknown_top_level_keys:
+        die(
+            "Topology invalid: unknown top-level key(s): "
+            + ", ".join(repr(k) for k in unknown_top_level_keys),
+            code=2,
+        )
+
     packs = topo.get("packs", [])
     if packs is None:
         packs = []

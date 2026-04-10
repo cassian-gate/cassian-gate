@@ -1,0 +1,6 @@
+name: wi1-malformed-yaml
+nodes:
+  - name: r1
+    type: frr
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"
