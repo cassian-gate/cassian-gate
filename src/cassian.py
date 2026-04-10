@@ -348,6 +348,13 @@ def _print_artifacts_footer_for_lab(lab_input: Path, *, authority_kind: str | No
         dname = raw_path.name
         dname_l = dname.lower()
 
+        # WI-5: Never resolve topology-path footer inputs unless this invocation
+        # actually wrote artifact files. This avoids a second owned invalid-input
+        # emission on malformed-YAML gate failures where no footer can be printed.
+        w = [str(x).replace("\\", "/") for x in (_INVOCATION_WRITTEN_ARTIFACTS or [])]
+        wrote_json = any(s.endswith("/results.json") or s.endswith("results.json") for s in w)
+        wrote_sum = any(s.endswith("/results.summary.txt") or s.endswith("results.summary.txt") for s in w)
+
         # Default: assume caller gave us a lab name or a labs/* path.
         adir: Path | None = None
 
@@ -357,14 +364,19 @@ def _print_artifacts_footer_for_lab(lab_input: Path, *, authority_kind: str | No
 
         # If it looks like a topology path (examples/foo.yaml), resolve to lab name and
         # print labs/clab-<labname>/...
-        if adir is None and ("/" in raw or "\\" in raw or dname_l.endswith((".yaml", ".yml"))):
-            try:
-                topo = load_topology_yaml(raw)
-                lab_name = str(topo.get("name") or Path(raw).stem).strip()
-                if lab_name:
-                    adir = lab_dir(lab_name)  # from netsim_artifacts.py
-            except Exception:
-                adir = None
+        if wrote_json or wrote_sum:
+            if adir is None and ("/" in raw or "\\" in raw or dname_l.endswith((".yaml", ".yml"))):
+                try:
+                    topo = load_topology_yaml(raw)
+                    lab_name = str(topo.get("name") or Path(raw).stem).strip()
+                    if lab_name:
+                        adir = lab_dir(lab_name)  # from netsim_artifacts.py
+                except SystemExit:
+                    # WI-5: do not re-emit owned invalid-input errors during final footer rendering.
+                    # If topology loading already failed earlier in the invocation, suppress footer resolution only.
+                    adir = None
+                except Exception:
+                    adir = None
 
         # Fallback: treat input as lab name
         if adir is None:
@@ -2239,7 +2251,11 @@ def cmd_test(args: argparse.Namespace) -> None:
             resolved_preview = resolve_topology(topo_preview)
             validate_scenarios(resolved_preview)
         except SystemExit as e:
-            raise SystemExit(2 if int(getattr(e, "code", 1) or 1) == 1 else int(getattr(e, "code", 1) or 1))
+            try:
+                preview_code = int(getattr(e, "code", 1) or 1)
+            except Exception:
+                preview_code = 1
+            raise SystemExit(2 if preview_code == 1 else preview_code)
 
         lab_name = str((resolved_preview or {}).get("name") or "").strip()
         if not lab_name:
@@ -2513,14 +2529,38 @@ def cmd_test(args: argparse.Namespace) -> None:
             except Exception:
                 err_msg = ""
 
-            if exit_code == 1 and err_msg.lower().startswith("topology invalid:"):
+            err_msg_l = err_msg.lower()
+
+            if exit_code == 1 and (
+                err_msg_l.startswith("topology invalid:")
+                or err_msg_l.startswith("invalid yaml:")
+                or err_msg_l.startswith("coverage:")
+                or err_msg_l.startswith("schema:")
+                or err_msg_l.startswith("scenario ")
+            ):
                 exit_code = 2
 
             # IMPORTANT (WI-1): only emit a synthetic "hard failure" record when we are NOT in the test stage
             # (deploy/provision/runtime faults) OR when upstream uses the hard-failure exit band.
             # Normal test-stage failures (exit=1) already have authoritative results written by cmd_test()
             # and MUST NOT be duplicated.
-            should_emit_hard_failure = (str(gate_phase) != "test") or (int(exit_code) == 2)
+            #
+            # WI-5: resolve-time invalid-input paths already print a cassian-owned error message via die().
+            # Do not emit the synthetic hard-failure gate record for those resolve-time misuse/invalid-input
+            # cases, or quiet mode will print the same owned error twice.
+            is_resolve_invalid_input = (
+                err_msg_l.startswith("invalid yaml:")
+                or err_msg_l.startswith("topology invalid:")
+                or err_msg_l.startswith("coverage:")
+                or err_msg_l.startswith("schema:")
+                or err_msg_l.startswith("scenario ")
+            )
+
+            should_emit_hard_failure = (
+                (str(gate_phase) != "test")
+                and (not is_resolve_invalid_input)
+                and (int(exit_code) != 2)
+            )
 
             if should_emit_hard_failure:
                 # Best-effort: render a gate-style hard failure record under the derived lab name.
@@ -2664,11 +2704,11 @@ def cmd_test(args: argparse.Namespace) -> None:
         s = lab.strip()
         if s.endswith((".yaml", ".yml")) or "/" in s or s.startswith("topologies/") or s.startswith("./") or s.startswith("../"):
             die(
-                "ERROR: netsim test expects a lab name, not a topology file.\n\n"
-                f"You ran:\n  netsim test {lab}\n\n"
+                "ERROR: cassian test expects a lab name, not a topology file.\n\n"
+                f"You ran:\n  cassian test {lab}\n\n"
                 "Did you mean:\n"
-                f"  netsim up {lab} --reconfigure\n"
-                f"  netsim test <lab-name>\n\n"
+                f"  cassian up {lab} --reconfigure\n"
+                f"  cassian test <lab-name>\n\n"
                 "Tip: lab name usually matches the topology 'name:' field."
             )
     filter_name: str | None = getattr(args, "name", None)
@@ -9031,14 +9071,14 @@ def cmd_down(args: argparse.Namespace) -> None:
     # Artifact policy (v2 gate integrity):
     # - Runtime teardown must NOT delete labs/clab-<lab> evidence.
     # - Explicit deletion is handled only by:
-    #     * netsim destroy <lab> --purge-artifacts
-    #     * netsim cleanup --all --yes
+    #     * cassian destroy <lab> --purge-artifacts
+    #     * cassian cleanup --all --yes
     return
 
 def cmd_destroy(args: argparse.Namespace) -> None:
     """
     Explicit ops command (non-authoritative):
-      netsim destroy <lab> [--purge-artifacts]
+      cassian destroy <lab> [--purge-artifacts]
 
     Semantics:
       - Attempts runtime teardown using containerlab destroy when the generated <lab>.clab.yaml exists.
@@ -9365,7 +9405,7 @@ def cmd_exec(args: argparse.Namespace) -> None:
             "  Gate mode: cassian test <topology.yaml>\n"
             "  Lab mode:  cassian up <topology.yaml> --reconfigure\n"
             "Hint:\n"
-            "  Use: cassian status <lab-name>",
+            "  If artifacts are stale: cassian cleanup --all --yes",
             code=2,
         )
 
@@ -9599,6 +9639,8 @@ def cmd_status(args: argparse.Namespace) -> None:
             f"  {expected_clab}\n"
             "Next:\n"
             "  cassian test <topology.yaml>\n"
+            "Hint:\n"
+            "  If artifacts are stale: cassian cleanup --all --yes\n"
         )
         raise SystemExit(2)
 

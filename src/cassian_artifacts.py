@@ -99,8 +99,11 @@ def write_json_canonical(path: Path, obj: object) -> None:
     path.write_text(s, encoding="utf-8")
 
 def load_yaml(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        die(f"Invalid YAML: {path}: {e}", code=2)
     if data is None:
         die(f"Empty YAML file: {path}")
     return data
