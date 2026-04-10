@@ -7208,7 +7208,7 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         else:
 # Default behavior: run declared tests (steady-state)
-            if not declared_tests:
+            if not declared_tests and not want_scenarios:
                 results["result"] = "pass"
                 finished_at = time.time()
                 results["summary"]["finished_at"] = finished_at
@@ -7771,38 +7771,27 @@ def cmd_test(args: argparse.Namespace) -> None:
         results["summary"]["finished_at"] = finished_at
         results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
 
-        # Atomic tests are authoritative (results["tests"])
-        total = len(results["tests"])
-        failed_count = sum(1 for r in results["tests"] if r.get("verdict") == "fail")
-        passed_count = total - failed_count
+        test_total = len(results["tests"])
+        test_failed = sum(1 for r in results["tests"] if r.get("verdict") == "fail")
+        test_passed = test_total - test_failed
+
+        scenario_results = results.get("scenarios") or []
+        if not isinstance(scenario_results, list):
+            scenario_results = []
+
+        scenario_total = len(scenario_results)
+        scenario_failed = sum(1 for s in scenario_results if isinstance(s, dict) and s.get("verdict") == "fail")
+        scenario_passed = scenario_total - scenario_failed
+
+        total = test_total + scenario_total
+        failed_count = test_failed + scenario_failed
+        passed_count = test_passed + scenario_passed
 
         results["summary"]["total"] = total
         results["summary"]["passed"] = passed_count
         results["summary"]["failed"] = failed_count
 
-        # If scenarios were requested and any scenario failed but no atomic test recorded failure,
-        # mark overall fail by injecting a visibility record.
-        scenario_failed = any(s.get("verdict") == "fail" for s in (results.get("scenarios") or []))
-        if want_scenarios and scenario_failed and failed_count == 0:
-            record_test(
-                name="scenarios:verdict",
-                kind="scenario",
-                src="",
-                dst="",
-                expected="pass",
-                observed="fail",
-                verdict="fail",
-                duration_ms=0,
-                error="one or more scenarios failed (see results.scenarios)",
-            )
-            total = len(results["tests"])
-            failed_count = sum(1 for r in results["tests"] if r.get("verdict") == "fail")
-            passed_count = total - failed_count
-            results["summary"]["total"] = total
-            results["summary"]["passed"] = passed_count
-            results["summary"]["failed"] = failed_count
-
-        results["result"] = "fail" if results["summary"]["failed"] > 0 else "pass"
+        results["result"] = "fail" if failed_count > 0 else "pass"
         write_results()
 
     except SystemExit:
