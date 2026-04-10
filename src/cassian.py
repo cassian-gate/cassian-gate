@@ -2251,15 +2251,15 @@ def cmd_test(args: argparse.Namespace) -> None:
             resolved_preview = resolve_topology(topo_preview)
             validate_scenarios(resolved_preview)
         except SystemExit as e:
-            try:
-                preview_code = int(getattr(e, "code", 1) or 1)
-            except Exception:
-                preview_code = 1
-            raise SystemExit(2 if preview_code == 1 else preview_code)
+            raw_code = getattr(e, "code", 1)
+            preview_code = raw_code if isinstance(raw_code, int) else 2
+            if preview_code == 1:
+                preview_code = 2
+            raise SystemExit(preview_code)
 
         lab_name = str((resolved_preview or {}).get("name") or "").strip()
         if not lab_name:
-            die(f"Topology missing required 'name': {topo_gate_path}")
+            die(f"Topology missing required 'name': {topo_gate_path}", code=2)
 
         tests_preview = resolved_preview.get("tests") or []
         scenarios_preview = resolved_preview.get("scenarios") or []
