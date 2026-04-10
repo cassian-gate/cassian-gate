@@ -2664,11 +2664,11 @@ def cmd_test(args: argparse.Namespace) -> None:
         s = lab.strip()
         if s.endswith((".yaml", ".yml")) or "/" in s or s.startswith("topologies/") or s.startswith("./") or s.startswith("../"):
             die(
-                "ERROR: netsim test expects a lab name, not a topology file.\n\n"
-                f"You ran:\n  netsim test {lab}\n\n"
+                "ERROR: cassian test expects a lab name, not a topology file.\n\n"
+                f"You ran:\n  cassian test {lab}\n\n"
                 "Did you mean:\n"
-                f"  netsim up {lab} --reconfigure\n"
-                f"  netsim test <lab-name>\n\n"
+                f"  cassian up {lab} --reconfigure\n"
+                f"  cassian test <lab-name>\n\n"
                 "Tip: lab name usually matches the topology 'name:' field."
             )
     filter_name: str | None = getattr(args, "name", None)
@@ -9031,14 +9031,14 @@ def cmd_down(args: argparse.Namespace) -> None:
     # Artifact policy (v2 gate integrity):
     # - Runtime teardown must NOT delete labs/clab-<lab> evidence.
     # - Explicit deletion is handled only by:
-    #     * netsim destroy <lab> --purge-artifacts
-    #     * netsim cleanup --all --yes
+    #     * cassian destroy <lab> --purge-artifacts
+    #     * cassian cleanup --all --yes
     return
 
 def cmd_destroy(args: argparse.Namespace) -> None:
     """
     Explicit ops command (non-authoritative):
-      netsim destroy <lab> [--purge-artifacts]
+      cassian destroy <lab> [--purge-artifacts]
 
     Semantics:
       - Attempts runtime teardown using containerlab destroy when the generated <lab>.clab.yaml exists.
@@ -9365,7 +9365,7 @@ def cmd_exec(args: argparse.Namespace) -> None:
             "  Gate mode: cassian test <topology.yaml>\n"
             "  Lab mode:  cassian up <topology.yaml> --reconfigure\n"
             "Hint:\n"
-            "  Use: cassian status <lab-name>",
+            "  If artifacts are stale: cassian cleanup --all --yes",
             code=2,
         )
 
@@ -9599,6 +9599,8 @@ def cmd_status(args: argparse.Namespace) -> None:
             f"  {expected_clab}\n"
             "Next:\n"
             "  cassian test <topology.yaml>\n"
+            "Hint:\n"
+            "  If artifacts are stale: cassian cleanup --all --yes\n"
         )
         raise SystemExit(2)
 
