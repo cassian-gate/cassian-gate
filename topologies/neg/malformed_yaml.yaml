@@ -1,0 +1,12 @@
+name: malformed-yaml
+nodes:
+  - name: r1
+    type: frr
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"
+tests:
+  - name: should_never_run
+    kind: ping
+    src: r1
+    dst: r2
+    expect: pass
