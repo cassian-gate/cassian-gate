@@ -1,0 +1,22 @@
+name: blocked-precheck-bgp-results
+
+nodes:
+  - name: r1
+    type: frr
+    asn: 65001
+
+  - name: r2
+    type: frr
+    asn: 65002
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["10.0.0.0/31", "10.0.0.1/31"]
+
+tests:
+  - name: r1_to_r2_direct_ping_blocked_by_bgp_precheck
+    kind: ping
+    src: r1
+    dst: r2
+    expect: pass
+    count: 1
