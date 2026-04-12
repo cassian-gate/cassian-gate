@@ -805,10 +805,10 @@ def _validate_fabric_evpn_presence_only(topo: dict) -> dict[str, Any] | None:
 
 def ensure_valid_topology(topo: dict) -> None:
     if not isinstance(topo, dict):
-        die("Topology YAML must be a mapping.")
+        die("Topology YAML must be a mapping.", code=2)
     for k in ("name", "nodes", "links"):
         if k not in topo:
-            die(f"Missing required key: '{k}'")
+            die(f"Missing required key: '{k}'", code=2)
 
     allowed_top_level_keys = {
         "name",

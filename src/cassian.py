@@ -2251,15 +2251,15 @@ def cmd_test(args: argparse.Namespace) -> None:
             resolved_preview = resolve_topology(topo_preview)
             validate_scenarios(resolved_preview)
         except SystemExit as e:
-            try:
-                preview_code = int(getattr(e, "code", 1) or 1)
-            except Exception:
-                preview_code = 1
-            raise SystemExit(2 if preview_code == 1 else preview_code)
+            raw_code = getattr(e, "code", 1)
+            preview_code = raw_code if isinstance(raw_code, int) else 2
+            if preview_code == 1:
+                preview_code = 2
+            raise SystemExit(preview_code)
 
         lab_name = str((resolved_preview or {}).get("name") or "").strip()
         if not lab_name:
-            die(f"Topology missing required 'name': {topo_gate_path}")
+            die(f"Topology missing required 'name': {topo_gate_path}", code=2)
 
         tests_preview = resolved_preview.get("tests") or []
         scenarios_preview = resolved_preview.get("scenarios") or []
@@ -7083,16 +7083,60 @@ def cmd_test(args: argparse.Namespace) -> None:
             results["summary"]["finished_at"] = finished_at
             results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
 
-            # Summary counts must be consistent with the authoritative tests recorded so far
-            total = len(results["tests"])
-            failed_count = sum(1 for r in results["tests"] if r.get("verdict") == "fail")
-            passed_count = total - failed_count
+            if not (results.get("tests") or []):
+                for t in declared_tests:
+                    if not isinstance(t, dict):
+                        continue
+                    results["tests"].append(
+                        {
+                            "name": str(t.get("name") or "<unnamed>"),
+                            "kind": str(t.get("kind") or t.get("type") or ""),
+                            "expected": str(t.get("expect") or "pass"),
+                            "observed": "blocked",
+                            "verdict": "fail",
+                            "error": "blocked before execution",
+                            "duration_ms": 0,
+                        }
+                    )
+
+            if want_scenarios and not (results.get("scenarios") or []):
+                scenario_items = []
+                if selected_scenario:
+                    scenario_items = [s for s in (scenarios or []) if isinstance(s, dict) and str(s.get("id") or "").strip() == selected_scenario]
+                elif run_all_scenarios:
+                    scenario_items = [s for s in (scenarios or []) if isinstance(s, dict)]
+                for s in scenario_items:
+                    results["scenarios"].append(
+                        {
+                            "id": str(s.get("id") or ""),
+                            "description": str(s.get("description") or ""),
+                            "steps": [],
+                            "verdict": "fail",
+                            "status": "blocked",
+                            "error": "blocked before execution",
+                            "duration_ms": 0,
+                        }
+                    )
+
+            test_total = len(results["tests"])
+            test_failed = sum(1 for r in results["tests"] if r.get("verdict") == "fail")
+            test_passed = test_total - test_failed
+
+            scenario_results = results.get("scenarios") or []
+            if not isinstance(scenario_results, list):
+                scenario_results = []
+
+            scenario_total = len(scenario_results)
+            scenario_failed = sum(1 for s in scenario_results if isinstance(s, dict) and s.get("verdict") == "fail")
+            scenario_passed = scenario_total - scenario_failed
+
+            total = test_total + scenario_total
+            failed_count = test_failed + scenario_failed
+            passed_count = test_passed + scenario_passed
 
             results["summary"]["total"] = total
             results["summary"]["passed"] = passed_count
             results["summary"]["failed"] = failed_count
-
-            # Optional/defensive: make explicit that steady-state tests did not run
             results["summary"]["tests_executed"] = 0
 
             write_results()
@@ -7138,6 +7182,66 @@ def cmd_test(args: argparse.Namespace) -> None:
             finished_at = time.time()
             results["summary"]["finished_at"] = finished_at
             results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
+
+            if not (results.get("tests") or []):
+                for t in declared_tests:
+                    if not isinstance(t, dict):
+                        continue
+                    results["tests"].append(
+                        {
+                            "name": str(t.get("name") or "<unnamed>"),
+                            "kind": str(t.get("kind") or t.get("type") or ""),
+                            "expected": str(t.get("expect") or "pass"),
+                            "observed": "blocked",
+                            "verdict": "fail",
+                            "error": "blocked before execution",
+                            "duration_ms": 0,
+                        }
+                    )
+
+            if want_scenarios and not (results.get("scenarios") or []):
+                scenario_items = []
+                if selected_scenario:
+                    scenario_items = [
+                        s for s in (scenarios or [])
+                        if isinstance(s, dict) and str(s.get("id") or "").strip() == selected_scenario
+                    ]
+                elif run_all_scenarios:
+                    scenario_items = [s for s in (scenarios or []) if isinstance(s, dict)]
+                for s in scenario_items:
+                    results["scenarios"].append(
+                        {
+                            "id": str(s.get("id") or ""),
+                            "description": str(s.get("description") or ""),
+                            "steps": [],
+                            "verdict": "fail",
+                            "status": "blocked",
+                            "error": "blocked before execution",
+                            "duration_ms": 0,
+                        }
+                    )
+
+            test_total = len(results["tests"])
+            test_failed = sum(1 for r in results["tests"] if r.get("verdict") == "fail")
+            test_passed = test_total - test_failed
+
+            scenario_results = results.get("scenarios") or []
+            if not isinstance(scenario_results, list):
+                scenario_results = []
+
+            scenario_total = len(scenario_results)
+            scenario_failed = sum(1 for s in scenario_results if isinstance(s, dict) and s.get("verdict") == "fail")
+            scenario_passed = scenario_total - scenario_failed
+
+            total = test_total + scenario_total
+            failed_count = test_failed + scenario_failed
+            passed_count = test_passed + scenario_passed
+
+            results["summary"]["total"] = total
+            results["summary"]["passed"] = passed_count
+            results["summary"]["failed"] = failed_count
+            results["summary"]["tests_executed"] = 0
+
             write_results()
             raise
 
@@ -7208,7 +7312,7 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         else:
 # Default behavior: run declared tests (steady-state)
-            if not declared_tests:
+            if not declared_tests and not want_scenarios:
                 results["result"] = "pass"
                 finished_at = time.time()
                 results["summary"]["finished_at"] = finished_at
@@ -7771,38 +7875,27 @@ def cmd_test(args: argparse.Namespace) -> None:
         results["summary"]["finished_at"] = finished_at
         results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
 
-        # Atomic tests are authoritative (results["tests"])
-        total = len(results["tests"])
-        failed_count = sum(1 for r in results["tests"] if r.get("verdict") == "fail")
-        passed_count = total - failed_count
+        test_total = len(results["tests"])
+        test_failed = sum(1 for r in results["tests"] if r.get("verdict") == "fail")
+        test_passed = test_total - test_failed
+
+        scenario_results = results.get("scenarios") or []
+        if not isinstance(scenario_results, list):
+            scenario_results = []
+
+        scenario_total = len(scenario_results)
+        scenario_failed = sum(1 for s in scenario_results if isinstance(s, dict) and s.get("verdict") == "fail")
+        scenario_passed = scenario_total - scenario_failed
+
+        total = test_total + scenario_total
+        failed_count = test_failed + scenario_failed
+        passed_count = test_passed + scenario_passed
 
         results["summary"]["total"] = total
         results["summary"]["passed"] = passed_count
         results["summary"]["failed"] = failed_count
 
-        # If scenarios were requested and any scenario failed but no atomic test recorded failure,
-        # mark overall fail by injecting a visibility record.
-        scenario_failed = any(s.get("verdict") == "fail" for s in (results.get("scenarios") or []))
-        if want_scenarios and scenario_failed and failed_count == 0:
-            record_test(
-                name="scenarios:verdict",
-                kind="scenario",
-                src="",
-                dst="",
-                expected="pass",
-                observed="fail",
-                verdict="fail",
-                duration_ms=0,
-                error="one or more scenarios failed (see results.scenarios)",
-            )
-            total = len(results["tests"])
-            failed_count = sum(1 for r in results["tests"] if r.get("verdict") == "fail")
-            passed_count = total - failed_count
-            results["summary"]["total"] = total
-            results["summary"]["passed"] = passed_count
-            results["summary"]["failed"] = failed_count
-
-        results["result"] = "fail" if results["summary"]["failed"] > 0 else "pass"
+        results["result"] = "fail" if failed_count > 0 else "pass"
         write_results()
 
     except SystemExit:
