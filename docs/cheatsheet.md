@@ -1043,6 +1043,25 @@ kind: invariant
 
 They validate declared truth conditions and return authoritative pass/fail results like any other test.
 
+### Blocked declared validation items
+
+If a declared test or selected scenario reaches authoritative execution scope but cannot execute normally because execution is blocked later in the gate path, Cassian Gate records that item explicitly in `results.json`.
+
+This prevents omission from being misread as success.
+
+Typical blocked representation:
+
+- `observed: blocked`
+- `verdict: fail`
+- `error: blocked before execution`
+
+Example meaning:
+
+- the declared validation item existed
+- it was in authoritative scope
+- it did not run normally
+- the result was recorded explicitly rather than omitted
+
 ---
 
 ## Routing Invariants
@@ -2288,6 +2307,19 @@ Key files:
 
 ---
 
+## results.json
+
+`results.json` is the authoritative verdict artifact.
+
+It explicitly records declared validation items that executed, and when materially relevant, declared validation items that were blocked after entering authoritative execution scope.
+
+Important boundary:
+
+- omission does not mean success
+- a blocked declared item should appear explicitly in `results.json`
+
+---
+
 ## topology.resolved.yaml
 
 Contains the **fully expanded deterministic model** used for execution.
@@ -2621,6 +2653,20 @@ cassian test topologies/three-frr-two-hosts-fw-routed.yaml \
 python -m json.tool labs/clab-three-frr-two-hosts-fw-routed/artifacts/state-diff/state_diff.json
 ```
 
+Inspect a blocked declared-item result:
+
+```bash
+cassian test topologies/neg/blocked_precheck_bgp_results.yaml
+python -m json.tool labs/clab-blocked-precheck-bgp-results/results.json
+```
+
+Look for:
+
+- the declared test present in `tests`
+- `observed: blocked`
+- `verdict: fail`
+- summary counts reflecting the blocked item
+
 Use AI to explain a failure from the most recent run:
 
 ```bash
@@ -2773,6 +2819,21 @@ Meaning:
 - the system ran validation correctly
 - the declared proof failed
 - exit code remains `1`
+
+A FAIL can also mean a declared validation item was blocked after authoritative execution began.
+
+In that case, inspect `results.json`.
+
+Typical blocked-result shape:
+
+```json
+{
+  "name": "<declared-check-name>",
+  "observed": "blocked",
+  "verdict": "fail",
+  "error": "blocked before execution"
+}
+```
 
 These UX clarifications do **not** change:
 
