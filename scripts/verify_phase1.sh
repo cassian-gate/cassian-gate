@@ -1232,6 +1232,46 @@ diff -u ${TMPROOT}/route_not_advertised_to.results.run1.json ${TMPROOT}/route_no
   || { echo "FAIL: route_not_advertised_to replay results.json drift"; diff -u ${TMPROOT}/route_not_advertised_to.results.run1.json ${TMPROOT}/route_not_advertised_to.results.replay.json || true; exit 1; }
 
 echo
+echo "=== 6g) Blocked declared-item results completeness ==="
+
+BLOCKED_TOPO="topologies/neg/blocked_precheck_bgp_results.yaml"
+BLOCKED_LAB="blocked-precheck-bgp-results"
+BLOCKED_LABDIR="labs/clab-${BLOCKED_LAB}"
+
+rm -rf "${BLOCKED_LABDIR}" 2>/dev/null || true
+
+set +e
+blocked_out="$($NS test "$BLOCKED_TOPO" 2>&1)"
+blocked_rc=$?
+set -e
+if [ "$blocked_rc" -ne 1 ]; then
+  echo "FAIL: expected blocked declared-item run to fail with rc=1, but rc=$blocked_rc"
+  echo "$blocked_out"
+  exit 1
+fi
+
+test -s "${BLOCKED_LABDIR}/results.json" || { echo "FAIL: missing ${BLOCKED_LABDIR}/results.json after blocked declared-item run"; exit 1; }
+
+jq -e '
+  .result=="fail"
+  and .summary.total==1
+  and .summary.failed==1
+  and .summary.tests_executed==0
+  and ([.tests[]? | select(.name=="r1_to_r2_direct_ping_blocked_by_bgp_precheck"
+                            and .kind=="ping"
+                            and .expected=="pass"
+                            and .observed=="blocked"
+                            and .verdict=="fail"
+                            and .error=="blocked before execution")] | length) == 1
+' "${BLOCKED_LABDIR}/results.json" >/dev/null || {
+  echo "FAIL: blocked declared-item results completeness missing expected blocked test entry/counts"
+  echo "$blocked_out"
+  jq '.' "${BLOCKED_LABDIR}/results.json" 2>/dev/null || true
+  exit 1
+}
+echo "OK: blocked declared-item results completeness recorded"
+echo
+
 echo "=== 7) Cleanup smoke (cassian cleanup --all) ==="
 
 # 7a) Dry-run must show a plan and exit 0
