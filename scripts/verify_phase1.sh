@@ -79,6 +79,48 @@ if [ "$wf_defs" -ne 1 ] || [ "$wf_all" -ne 2 ] || [ "$wf_py" -ne 0 ]; then
   exit 1
 fi
 
+echo "=== 0ba) H1 scenario-step closure proofs ==="
+rm -rf \
+  labs/clab-h1-invalid-multi-key \
+  labs/clab-h1-invalid-unknown-action \
+  labs/clab-h1-invalid-scalar-step
+
+set +e
+$NS preflight topologies/neg/h1_invalid_unknown_action.yaml >"${TMPROOT}/h1_preflight.out" 2>"${TMPROOT}/h1_preflight.err"
+h1_preflight_rc=$?
+set -e
+if [ "$h1_preflight_rc" -ne 2 ]; then
+  dump_pair_if_nonempty "${TMPROOT}/h1_preflight.out" "${TMPROOT}/h1_preflight.err"
+  fail "H1 preflight invalid-step rejection exited $h1_preflight_rc (expected 2)"
+fi
+echo "OK: H1 preflight invalid-step rejection exits 2"
+
+set +e
+$NS test topologies/neg/h1_invalid_multi_key.yaml >"${TMPROOT}/h1_test_invalid.out" 2>"${TMPROOT}/h1_test_invalid.err"
+h1_test_invalid_rc=$?
+set -e
+if [ "$h1_test_invalid_rc" -ne 2 ]; then
+  dump_pair_if_nonempty "${TMPROOT}/h1_test_invalid.out" "${TMPROOT}/h1_test_invalid.err"
+  fail "H1 invalid multi-key test exited $h1_test_invalid_rc (expected 2)"
+fi
+if [ -e labs/clab-h1-invalid-multi-key/results.json ] || [ -e labs/clab-h1-invalid-multi-key/results.summary.txt ]; then
+  fail "H1 invalid test emitted authoritative execution artifacts"
+fi
+echo "OK: H1 invalid test exits 2 and emits no authoritative execution artifacts"
+
+set +e
+$NS run topologies/neg/h1_invalid_unknown_action.yaml >"${TMPROOT}/h1_run_invalid.out" 2>"${TMPROOT}/h1_run_invalid.err"
+h1_run_invalid_rc=$?
+set -e
+if [ "$h1_run_invalid_rc" -ne 2 ]; then
+  dump_pair_if_nonempty "${TMPROOT}/h1_run_invalid.out" "${TMPROOT}/h1_run_invalid.err"
+  fail "H1 invalid run exited $h1_run_invalid_rc (expected 2)"
+fi
+if [ -e labs/clab-h1-invalid-unknown-action/results.json ] || [ -e labs/clab-h1-invalid-unknown-action/results.summary.txt ]; then
+  fail "H1 invalid run emitted authoritative execution artifacts"
+fi
+echo "OK: H1 invalid run exits 2 and emits no authoritative execution artifacts"
+
 echo "=== 0b) Guardrail: validate-contrib structural verification ==="
 # Invariant:
 #  - validate-contrib command exists as an explicit surface

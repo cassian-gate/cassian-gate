@@ -1,0 +1,12 @@
+name: h1-invalid-empty-step
+
+nodes:
+  - name: h1
+    type: host
+
+links: []
+
+scenarios:
+  - id: quick_all
+    steps:
+      - {}

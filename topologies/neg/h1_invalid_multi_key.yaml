@@ -1,0 +1,21 @@
+name: h1-invalid-multi-key
+
+nodes:
+  - name: h1
+    type: host
+
+links: []
+
+scenarios:
+  - id: quick_all
+    steps:
+      - fault:
+          interface_down:
+            node: h1
+            if: eth1
+        wait_for:
+          type: ping
+          from: h1
+          to: 192.0.2.1
+          expect: fail
+          timeout: 5

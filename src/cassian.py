@@ -10473,7 +10473,12 @@ def cmd_run(args: argparse.Namespace) -> None:
                 up_ok = True
 
         except SystemExit as e:
-            record_failure(getattr(e, "code", 1))
+            code = getattr(e, "code", 1)
+            if isinstance(code, str):
+                raise SystemExit(2)
+            if code == 2:
+                raise SystemExit(2)
+            record_failure(code)
         except Exception:
             record_failure(1)
 
@@ -10486,8 +10491,12 @@ def cmd_run(args: argparse.Namespace) -> None:
                     rt = get_runtime(topo_resolved)
                     _capture_config_run_exploration(rt, lab=lab_name)
                 except SystemExit as e:
-                    # Filesystem root failures are fail-fast by contract; record and continue to finally.
-                    record_failure(getattr(e, "code", 1))
+                    code = getattr(e, "code", 1)
+                    if isinstance(code, str):
+                        raise SystemExit(2)
+                    if code == 2:
+                        raise SystemExit(2)
+                    record_failure(code)
                 except Exception:
                     record_failure(1)
 
@@ -10496,7 +10505,12 @@ def cmd_run(args: argparse.Namespace) -> None:
                 try:
                     cmd_test(argparse.Namespace(lab=lab_name, _report_authority="run"))
                 except SystemExit as e:
-                    record_failure(getattr(e, "code", 1))
+                    code = getattr(e, "code", 1)
+                    if isinstance(code, str):
+                        raise SystemExit(2)
+                    if code == 2:
+                        raise SystemExit(2)
+                    record_failure(code)
                 except Exception:
                     record_failure(1)
 
@@ -10505,7 +10519,12 @@ def cmd_run(args: argparse.Namespace) -> None:
                 try:
                     cmd_collect(argparse.Namespace(lab=lab_name))
                 except SystemExit as e:
-                    record_failure(getattr(e, "code", 1))
+                    code = getattr(e, "code", 1)
+                    if isinstance(code, str):
+                        raise SystemExit(2)
+                    if code == 2:
+                        raise SystemExit(2)
+                    record_failure(code)
                 except Exception:
                     record_failure(1)
 
@@ -10547,7 +10566,18 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     # Final reporting + exit behavior (never lie)
     if exit_code is not None and int(exit_code) != 0:
-        raise SystemExit(int(exit_code))
+        code = int(exit_code)
+        if code == 1:
+            last_msg = str(getattr(cassian_common, "LAST_ERROR_MSG", "") or "").strip().lower()
+            if (
+                last_msg.startswith("topology invalid:")
+                or last_msg.startswith("invalid yaml:")
+                or last_msg.startswith("coverage:")
+                or last_msg.startswith("schema:")
+                or last_msg.startswith("scenario ")
+            ):
+                code = 2
+        raise SystemExit(code)
 
     return
 
