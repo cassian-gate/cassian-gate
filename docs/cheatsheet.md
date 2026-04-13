@@ -1506,11 +1506,19 @@ scenarios:
 
 ## Step Types
 
+Currently implemented scenario step types:
+
 - `run`
 - `fault`
-- `wait`
 - `wait_for`
 - `wait_for_bgp`
+- `pcap_start`
+- `pcap_stop`
+
+Important current boundary:
+
+- `wait` is not part of the currently implemented H1-recognized step surface
+- use `wait_for` or `wait_for_bgp` where applicable
 
 No implicit retries.
 Timeout = failure.
