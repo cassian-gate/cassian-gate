@@ -1189,6 +1189,14 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                 die(f"{sctx}: step must be a dict")
             if not step:
                 die(f"{sctx}: empty step")
+            if len(step) != 1:
+                keys = sorted(str(k) for k in step.keys())
+                die(f"{sctx}: must contain exactly one action category; found {len(keys)}: {', '.join(keys)}")
+
+            action_key = next(iter(step.keys()))
+            recognized_actions = {"run", "fault", "wait_for", "wait_for_bgp", "pcap_start", "pcap_stop"}
+            if action_key not in recognized_actions:
+                die(f"{sctx}: uses unknown action category '{action_key}'")
 
                         # ---- pcap_start ----
             if "pcap_start" in step:
