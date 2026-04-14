@@ -188,7 +188,7 @@
     },
     "notes": []
   },
-  "tool": "ai-netsim",
+  "tool": "Cassian Gate",
   "topology": {
     "input": "topologies/three-frr-two-hosts-fw-routed.yaml",
     "resolved_name": "three-frr-two-hosts-fw-routed"

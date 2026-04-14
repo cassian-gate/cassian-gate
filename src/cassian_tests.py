@@ -4012,7 +4012,7 @@ def _preflight_report(input_ref: str, topo_path: Path, resolved: dict, cov: dict
 
     return {
         "schema_version": "preflight.v1",
-        "tool": "ai-netsim",
+        "tool": "Cassian Gate",
         "command": "preflight",
         "authority": "advisory",
         "topology": {
