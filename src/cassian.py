@@ -6880,10 +6880,10 @@ def cmd_test(args: argparse.Namespace) -> None:
             hint_lines = [
                 "Lab exists but one or more containers are not running.",
                 "Try:",
-                "  netsim destroy <lab>",
-                "  netsim up <topology.yaml> --reconfigure",
+                "  cassian destroy <lab>",
+                "  cassian up <topology.yaml> --reconfigure",
                 "or:",
-                "  netsim cleanup --all --yes",
+                "  cassian cleanup --all --yes",
             ]
             die(f"{name} is not running\n\n" + "\n".join(hint_lines))
 
@@ -12221,7 +12221,7 @@ def cmd_ai_review(args) -> None:
                 "  topology.resolved.yaml\n"
                 "  results.json\n\n"
                 "Run:\n"
-                "netsim test <topology>",
+                "cassian test <topology>",
                 file=sys.stderr,
             )
             sys.exit(2)
@@ -12900,7 +12900,7 @@ def cmd_ai_review(args) -> None:
                 "  topology.resolved.yaml\n"
                 "  results.json\n\n"
                 "Run:\n"
-                "netsim test <topology>",
+                "cassian test <topology>",
                 file=sys.stderr,
             )
             sys.exit(2)
@@ -13066,7 +13066,6 @@ def cmd_ai_coach(args) -> None:
     _ai_finalize_and_emit("coach", bundle, args)
 
 def main() -> None:
-    # LEGACY COMPATIBILITY: transitional alias remains available during migration.
     parser = argparse.ArgumentParser(
         prog="cassian",
         description="Cassian Gate: deterministic network change validation gate",
@@ -13076,9 +13075,6 @@ def main() -> None:
             "  cassian test <topology.yaml>              (authoritative gate)\n"
             "  cassian replay <artifact-dir> --gate      (authoritative replay)\n"
             "  cassian replay -h                         (replay options)\n"
-            "\n"
-            "Legacy compatibility:\n"
-            "  netsim remains available temporarily as a legacy alias during migration.\n"
         ),
     )
     parser.add_argument(
