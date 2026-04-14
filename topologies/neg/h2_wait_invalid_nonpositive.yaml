@@ -1,0 +1,26 @@
+name: h2-wait-invalid-nonpositive
+
+nodes:
+  - name: h1
+    type: host
+    ip: 192.168.1.10/24
+    gw: 192.168.1.1
+
+links: []
+
+tests:
+  - name: self_ping_expected_fail
+    kind: ping
+    src: h1
+    to: 192.168.1.10
+    expect: fail
+    count: 1
+
+scenarios:
+  - id: bad_wait
+    steps:
+      - wait:
+          seconds: 0
+      - wait:
+          seconds: -1
+      - run: self_ping_expected_fail

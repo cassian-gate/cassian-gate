@@ -3187,6 +3187,20 @@ def cmd_test(args: argparse.Namespace) -> None:
                             )
                     continue
 
+                if action == "wait":
+                    if not isinstance(payload, dict):
+                        die(
+                            f"blast-radius: scenario '{scenario_id}' step {step_idx} wait must be a mapping",
+                            code=2,
+                        )
+                    seconds = payload.get("seconds")
+                    if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds < 1:
+                        die(
+                            f"blast-radius: scenario '{scenario_id}' step {step_idx} wait.seconds must be a positive integer",
+                            code=2,
+                        )
+                    continue
+
                 if action == "wait_for_bgp":
                     if not isinstance(payload, dict):
                         die(
