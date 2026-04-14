@@ -6,6 +6,18 @@ This document defines the **user-facing execution contract** for Cassian Gate.
 
 It reflects **implemented CLI behavior only**.
 
+Cassian Gate is a deterministic, artifact-authoritative network change-validation gate.
+
+It is for:
+- network engineers validating planned changes before production
+- platform and infrastructure engineers using a CI-safe network gate
+- operators who need explicit pass/fail artifacts and deterministic execution
+
+It is **not yet** for:
+- users seeking a broad network automation platform
+- users expecting generic multi-vendor feature parity
+- users wanting exploratory labs or AI output to act as deployment authority
+
 Cassian Gate is a:
 
 > **Deterministic Network Change Validation Gate**

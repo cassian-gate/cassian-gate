@@ -1,10 +1,32 @@
-# Cassian Gate Documentation
+# Cassian Gate
+
+Cassian Gate is a deterministic, artifact-authoritative network change-validation gate for engineers who want proof before production changes.
+
+It validates declared network behavior through deterministic execution, authoritative artifacts, and explicit pass/fail outcomes before deployment.
+
+Cassian Gate is **not**:
+- a general-purpose network lab platform
+- a controller
+- a chaos engine
+- a heuristic validator
+- an AI decision system
+- a feature-parity multi-NOS platform
+
+Cassian Gate is for:
+- network engineers validating planned changes before production
+- platform and infrastructure engineers who need a CI-safe network gate
+- teams that want deterministic artifacts and explicit authority boundaries
+
+Cassian Gate is **not yet** for:
+- teams looking for a broad network automation platform
+- users expecting generic NOS feature parity across vendors
+- users wanting exploratory labs or AI-driven decisions to act as deployment authority
 
 **Status:** AUTHORITATIVE  
 **Audience:** Network engineers, platform engineers, CI/CD operators  
 **Scope:** Active Cassian Gate documentation surface in this repository
 
-This directory contains the active documentation for **Cassian Gate**, the deterministic, CI-safe network change-validation gate.
+This directory contains the active documentation for **Cassian Gate**.
 
 These documents explain:
 - how Cassian Gate should be used
@@ -103,7 +125,7 @@ Key reminders:
 
 The canonical product name is **Cassian Gate** and the canonical CLI name is **`cassian`**.
 
-Some source-tree examples in active docs may still invoke `src/netsim.py` where they are describing the current repository entrypoint directly. That reflects current repo reality, not a change in product identity or authority model.
+Active operator-facing documentation in this surface uses the canonical product and CLI naming consistently. Historical or internal material outside the active docs surface does not change product identity or authority boundaries.
 
 ---
 
