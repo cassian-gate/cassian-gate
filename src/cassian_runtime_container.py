@@ -736,6 +736,15 @@ def build_coverage_model(resolved: dict[str, Any], topo_path: Path) -> dict[str,
                         else:
                             die(f"coverage: scenario '{sid}' pcap_stop.target must be interface-target or link-target")
 
+                elif "wait" in st:
+                    spec = st.get("wait")
+                    if not isinstance(spec, dict):
+                        die(f"coverage: scenario '{sid}' wait must be a dict")
+                    seconds = spec.get("seconds")
+                    if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds < 1:
+                        die(f"coverage: scenario '{sid}' wait.seconds must be a positive integer")
+                    scen_waits.add("wait")
+
                 elif "run" in st:
                     ref = st.get("run")
                     # v17 schema: run is a string test name (after include:all expansion)

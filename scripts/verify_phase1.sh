@@ -83,7 +83,9 @@ echo "=== 0ba) H1 scenario-step closure proofs ==="
 rm -rf \
   labs/clab-h1-invalid-multi-key \
   labs/clab-h1-invalid-unknown-action \
-  labs/clab-h1-invalid-scalar-step
+  labs/clab-h1-invalid-scalar-step \
+  labs/clab-h2-wait-positive \
+  labs/clab-h2-wait-runtime-positive
 
 set +e
 $NS preflight topologies/neg/h1_invalid_unknown_action.yaml >"${TMPROOT}/h1_preflight.out" 2>"${TMPROOT}/h1_preflight.err"
@@ -120,6 +122,109 @@ if [ -e labs/clab-h1-invalid-unknown-action/results.json ] || [ -e labs/clab-h1-
   fail "H1 invalid run emitted authoritative execution artifacts"
 fi
 echo "OK: H1 invalid run exits 2 and emits no authoritative execution artifacts"
+
+$NS validate topologies/h2_wait_positive.yaml >"${TMPROOT}/h2_wait_validate.out" 2>"${TMPROOT}/h2_wait_validate.err"
+echo "OK: H2 canonical wait validate accepted"
+
+$NS preflight topologies/h2_wait_positive.yaml >"${TMPROOT}/h2_wait_preflight.out" 2>"${TMPROOT}/h2_wait_preflight.err"
+echo "OK: H2 canonical wait preflight accepted"
+
+set +e
+$NS validate topologies/neg/h2_wait_invalid_scalar.yaml >"${TMPROOT}/h2_wait_invalid_scalar.out" 2>"${TMPROOT}/h2_wait_invalid_scalar.err"
+h2_wait_invalid_scalar_rc=$?
+set -e
+if [ "$h2_wait_invalid_scalar_rc" -ne 2 ]; then
+  dump_pair_if_nonempty "${TMPROOT}/h2_wait_invalid_scalar.out" "${TMPROOT}/h2_wait_invalid_scalar.err"
+  fail "H2 invalid scalar wait validate exited $h2_wait_invalid_scalar_rc (expected 2)"
+fi
+grep -q "wait must be a mapping containing exactly one field 'seconds'" "${TMPROOT}/h2_wait_invalid_scalar.out" "${TMPROOT}/h2_wait_invalid_scalar.err" \
+  || fail "H2 invalid scalar wait missing expected owned error text"
+echo "OK: H2 invalid scalar wait rejected"
+
+set +e
+$NS validate topologies/neg/h2_wait_invalid_missing_seconds.yaml >"${TMPROOT}/h2_wait_invalid_missing_seconds.out" 2>"${TMPROOT}/h2_wait_invalid_missing_seconds.err"
+h2_wait_invalid_missing_seconds_rc=$?
+set -e
+if [ "$h2_wait_invalid_missing_seconds_rc" -ne 2 ]; then
+  dump_pair_if_nonempty "${TMPROOT}/h2_wait_invalid_missing_seconds.out" "${TMPROOT}/h2_wait_invalid_missing_seconds.err"
+  fail "H2 invalid missing-seconds wait validate exited $h2_wait_invalid_missing_seconds_rc (expected 2)"
+fi
+echo "OK: H2 invalid missing-seconds wait rejected"
+
+set +e
+$NS validate topologies/neg/h2_wait_invalid_nonpositive.yaml >"${TMPROOT}/h2_wait_invalid_nonpositive.out" 2>"${TMPROOT}/h2_wait_invalid_nonpositive.err"
+h2_wait_invalid_nonpositive_rc=$?
+set -e
+if [ "$h2_wait_invalid_nonpositive_rc" -ne 2 ]; then
+  dump_pair_if_nonempty "${TMPROOT}/h2_wait_invalid_nonpositive.out" "${TMPROOT}/h2_wait_invalid_nonpositive.err"
+  fail "H2 invalid nonpositive wait validate exited $h2_wait_invalid_nonpositive_rc (expected 2)"
+fi
+echo "OK: H2 invalid nonpositive wait rejected"
+
+set +e
+$NS validate topologies/neg/h2_wait_invalid_float.yaml >"${TMPROOT}/h2_wait_invalid_float.out" 2>"${TMPROOT}/h2_wait_invalid_float.err"
+h2_wait_invalid_float_rc=$?
+set -e
+if [ "$h2_wait_invalid_float_rc" -ne 2 ]; then
+  dump_pair_if_nonempty "${TMPROOT}/h2_wait_invalid_float.out" "${TMPROOT}/h2_wait_invalid_float.err"
+  fail "H2 invalid float wait validate exited $h2_wait_invalid_float_rc (expected 2)"
+fi
+echo "OK: H2 invalid float wait rejected"
+
+set +e
+$NS validate topologies/neg/h2_wait_invalid_extra_key.yaml >"${TMPROOT}/h2_wait_invalid_extra_key.out" 2>"${TMPROOT}/h2_wait_invalid_extra_key.err"
+h2_wait_invalid_extra_key_rc=$?
+set -e
+if [ "$h2_wait_invalid_extra_key_rc" -ne 2 ]; then
+  dump_pair_if_nonempty "${TMPROOT}/h2_wait_invalid_extra_key.out" "${TMPROOT}/h2_wait_invalid_extra_key.err"
+  fail "H2 invalid extra-key wait validate exited $h2_wait_invalid_extra_key_rc (expected 2)"
+fi
+echo "OK: H2 invalid extra-key wait rejected"
+
+set +e
+$NS test topologies/neg/h2_wait_invalid_scalar.yaml >"${TMPROOT}/h2_wait_test_invalid_scalar.out" 2>"${TMPROOT}/h2_wait_test_invalid_scalar.err"
+h2_wait_test_invalid_scalar_rc=$?
+set -e
+if [ "$h2_wait_test_invalid_scalar_rc" -ne 2 ]; then
+  dump_pair_if_nonempty "${TMPROOT}/h2_wait_test_invalid_scalar.out" "${TMPROOT}/h2_wait_test_invalid_scalar.err"
+  fail "H2 invalid scalar wait test exited $h2_wait_test_invalid_scalar_rc (expected 2)"
+fi
+if [ -e labs/clab-h2-wait-invalid-scalar/results.json ] || [ -e labs/clab-h2-wait-invalid-scalar/results.summary.txt ]; then
+  fail "H2 invalid wait test emitted authoritative execution artifacts"
+fi
+echo "OK: H2 invalid scalar wait test exits 2 and emits no authoritative execution artifacts"
+
+set +e
+$NS run topologies/h2_wait_runtime_positive.yaml --scenario simple_wait_runtime >"${TMPROOT}/h2_wait_run_runtime.out" 2>"${TMPROOT}/h2_wait_run_runtime.err"
+h2_wait_run_runtime_rc=$?
+set -e
+if [ "$h2_wait_run_runtime_rc" -ne 0 ]; then
+  dump_pair_if_nonempty "${TMPROOT}/h2_wait_run_runtime.out" "${TMPROOT}/h2_wait_run_runtime.err"
+  fail "H2 runtime wait run exited $h2_wait_run_runtime_rc (expected 0)"
+fi
+grep -q "Scenarios executed: 1" "${TMPROOT}/h2_wait_run_runtime.out" "${TMPROOT}/h2_wait_run_runtime.err" \
+  || fail "H2 runtime wait run did not execute scenario"
+echo "OK: H2 runtime wait run executed scenario path"
+
+set +e
+$NS test topologies/h2_wait_runtime_positive.yaml --scenario simple_wait_runtime >"${TMPROOT}/h2_wait_test_runtime.out" 2>"${TMPROOT}/h2_wait_test_runtime.err"
+h2_wait_test_runtime_rc=$?
+set -e
+if [ "$h2_wait_test_runtime_rc" -ne 0 ]; then
+  dump_pair_if_nonempty "${TMPROOT}/h2_wait_test_runtime.out" "${TMPROOT}/h2_wait_test_runtime.err"
+  fail "H2 runtime wait test exited $h2_wait_test_runtime_rc (expected 0)"
+fi
+grep -q "Scenarios executed: 1" "${TMPROOT}/h2_wait_test_runtime.out" "${TMPROOT}/h2_wait_test_runtime.err" \
+  || fail "H2 runtime wait test did not execute scenario"
+
+jq -e '
+  ([.scenarios[]?.steps[]? | select(.type=="wait" and .seconds==1 and .observed=="completed" and .verdict=="pass")] | length) == 1
+' labs/clab-h2-wait-runtime-positive/results.json >/dev/null || {
+  echo "FAIL: H2 wait results recording shape missing expected authoritative step entry"
+  jq '.scenarios' labs/clab-h2-wait-runtime-positive/results.json 2>/dev/null || true
+  exit 1
+}
+echo "OK: H2 runtime wait test recorded authoritative wait step shape"
 
 echo "=== 0b) Guardrail: validate-contrib structural verification ==="
 # Invariant:

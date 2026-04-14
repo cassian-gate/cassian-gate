@@ -1194,11 +1194,45 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                 die(f"{sctx}: must contain exactly one action category; found {len(keys)}: {', '.join(keys)}", code=2)
 
             action_key = next(iter(step.keys()))
-            recognized_actions = {"run", "fault", "wait_for", "wait_for_bgp", "pcap_start", "pcap_stop"}
+            recognized_actions = {"run", "fault", "wait", "wait_for", "wait_for_bgp", "pcap_start", "pcap_stop"}
             if action_key not in recognized_actions:
                 die(f"{sctx}: uses unknown action category '{action_key}'", code=2)
 
-                        # ---- pcap_start ----
+            if "wait" in step:
+                wait_spec = step.get("wait")
+                if not isinstance(wait_spec, dict) or set(wait_spec.keys()) != {"seconds"}:
+                    die(
+                        f"ERROR: scenario step {step_i} wait must be a mapping containing exactly one field 'seconds', "
+                        "and seconds must be a positive integer",
+                        code=2,
+                    )
+                seconds = wait_spec.get("seconds")
+                if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds < 1:
+                    die(
+                        f"ERROR: scenario step {step_i} wait must be a mapping containing exactly one field 'seconds', "
+                        "and seconds must be a positive integer",
+                        code=2,
+                    )
+
+            # ---- wait ----
+            if "wait" in step:
+                wait_spec = step.get("wait")
+                if not isinstance(wait_spec, dict) or set(wait_spec.keys()) != {"seconds"}:
+                    die(
+                        f"ERROR: scenario step {step_i} wait must be a mapping containing exactly one field 'seconds', "
+                        "and seconds must be a positive integer",
+                        code=2,
+                    )
+
+                seconds = wait_spec.get("seconds")
+                if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds < 1:
+                    die(
+                        f"ERROR: scenario step {step_i} wait must be a mapping containing exactly one field 'seconds', "
+                        "and seconds must be a positive integer",
+                        code=2,
+                    )
+
+            # ---- pcap_start ----
             if "pcap_start" in step:
                 ps = step.get("pcap_start")
                 if not isinstance(ps, dict):

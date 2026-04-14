@@ -1510,15 +1510,32 @@ Currently implemented scenario step types:
 
 - `run`
 - `fault`
+- `wait`
 - `wait_for`
 - `wait_for_bgp`
 - `pcap_start`
 - `pcap_stop`
 
-Important current boundary:
+### `wait` (explicit elapsed-time pause)
 
-- `wait` is not part of the currently implemented H1-recognized step surface
-- use `wait_for` or `wait_for_bgp` where applicable
+Canonical form:
+
+```yaml
+- wait:
+    seconds: 5
+```
+
+Rules:
+
+- payload must be a mapping
+- payload must contain exactly one field: `seconds`
+- `seconds` must be a positive integer
+- scalar form such as `- wait: 5` is invalid
+- extra keys are invalid
+- `wait` executes only as an explicit elapsed-time pause
+- `wait` does **not** prove readiness, BGP convergence, reachability, or service health
+
+Use `wait_for` or `wait_for_bgp` when you want condition-based convergence checks.
 
 No implicit retries.
 Timeout = failure.
@@ -2621,6 +2638,19 @@ Run scenario testing:
 
 ```bash
 cassian test topology.yaml --all-scenarios
+```
+
+Run a specific scenario in exploration mode:
+
+```bash
+cassian run topology.yaml --scenario <scenario-id>
+```
+
+Run a scenario with an explicit wait step:
+
+```bash
+cassian test topologies/h2_wait_runtime_positive.yaml --scenario simple_wait_runtime
+cassian run topologies/h2_wait_runtime_positive.yaml --scenario simple_wait_runtime
 ```
 
 Run a grey-failure scenario:
