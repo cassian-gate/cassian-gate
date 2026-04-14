@@ -10377,6 +10377,8 @@ def cmd_run(args: argparse.Namespace) -> None:
     do_test = not bool(getattr(args, "no_test", False))  # ok even if flag not yet added
     do_reconfigure = bool(getattr(args, "reconfigure", False))
     do_capture_config = bool(getattr(args, "capture_config", False))
+    scenario = getattr(args, "scenario", None)
+    all_scenarios = bool(getattr(args, "all_scenarios", False))
 
     exit_code: int | None = None   # None means "no failure captured"
     up_ok = False
@@ -10517,7 +10519,22 @@ def cmd_run(args: argparse.Namespace) -> None:
             # 2) test (optional)
             if do_test:
                 try:
-                    cmd_test(argparse.Namespace(lab=lab_name, _report_authority="run"))
+                    cmd_test(
+                        argparse.Namespace(
+                            lab=lab_name,
+                            _report_authority="run",
+                            scenario=scenario,
+                            all_scenarios=all_scenarios,
+                            list_scenarios=False,
+                            scenario_verbose=False,
+                            precheck_controlplane=False,
+                            keep_going=False,
+                            json=False,
+                            candidate_config=None,
+                            name=None,
+                            kind=None,
+                        )
+                    )
                 except SystemExit as e:
                     code = getattr(e, "code", 1)
                     if isinstance(code, str):
@@ -13362,6 +13379,8 @@ def main() -> None:
              "into labs/<lab>/artifacts/capture_config/** (never gates).",
     )
     p_run.add_argument("--no-test", action="store_true", help="Skip test phase (still may collect/capture-config).")
+    p_run.add_argument("--scenario", help="Run one declared scenario by id.")
+    p_run.add_argument("--all-scenarios", action="store_true", help="Run all declared scenarios.")
     p_run.set_defaults(func=cmd_run)
 
     # ai (group)
