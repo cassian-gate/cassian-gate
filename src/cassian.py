@@ -6390,6 +6390,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 scen_step({
                     "type": "wait",
                     "seconds": seconds,
+                    "observed": "completed",
                     "verdict": "pass",
                     "duration_ms": dur_ms,
                     "step": step_idx,
