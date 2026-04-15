@@ -1,22 +1,40 @@
 # VM Runtime Capabilities (Non-Authoritative)
 
-This document is **guidance only**.
-Authoritative behavior is defined by the Cassian Gate Design Contract and `results.json`.
+This document is supporting guidance only.
+Authoritative behavior remains defined by the Cassian Gate Design Contract, deterministic execution, and the generated authoritative artifacts such as `results.json`.
 
 ## Requirements (VM runtime)
 
-Supported host:
-- Linux host with KVM available and accessible (`/dev/kvm` readable+writable)
-- Container runtime and containerlab available per Cassian Gate setup
+Supported host requirements:
+- Linux host with KVM available and accessible
+- container runtime and containerlab available per normal Cassian Gate setup
 
 Unsupported:
-- WSL2 (VM runtime must fail fast)
+- WSL2 for VM-runtime execution
 
-## Canonical VM proof topology (explicit invocation)
+If VM runtime prerequisites are not met, Cassian Gate should be expected to reject or fail the VM-runtime path rather than silently approximating it.
+
+## Canonical VM proof topology
 
 Topology:
 - `topologies/vm-three-nodes-two-hosts-fw-outcomes.yaml`
 
 Validate:
+
 ```bash
-./src/netsim.py validate topologies/vm-three-nodes-two-hosts-fw-outcomes.yaml ; echo "exit=$?"
+cassian validate topologies/vm-three-nodes-two-hosts-fw-outcomes.yaml
+```
+
+Run the authoritative gate:
+
+```bash
+cassian test topologies/vm-three-nodes-two-hosts-fw-outcomes.yaml
+```
+
+Use these commands when you want to validate the declared VM-runtime proof topology through the normal Cassian Gate operator surface.
+
+## Boundary reminder
+
+This page does not expand authority.
+It does not make VM-runtime guidance authoritative by itself.
+For deploy/no-deploy meaning, rely on the authoritative gate path and the generated artifacts from execution.

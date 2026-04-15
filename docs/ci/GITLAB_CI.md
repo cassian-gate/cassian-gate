@@ -1,54 +1,64 @@
-# GitLab CI — Cassian Gate official gate template (OSS)
+# GitLab CI — Cassian Gate gate template
 
-This repository includes an official GitLab CI pipeline that runs **Cassian Gate** as a
+This document describes a GitLab CI pattern for running **Cassian Gate** as a
 **deterministic, clean-state validation gate**.
 
-## What this pipeline does (stable contract)
+It is a supporting CI guide. It does **not** replace deterministic execution,
+authoritative artifacts, or the project design contract.
 
-The pipeline:
+## What this pipeline is for
 
-1. Pins Python (3.11)
-2. Installs Python dependencies deterministically
-3. Runs:
-   - `python -m py_compile src/*.py`
-4. Runs the repository's authoritative verification oracle:
-   - `bash scripts/verify_phase1.sh`
-5. Runs a minimal project-level gate:
-   - `./src/netsim.py up topologies/three-frr-two-hosts-fw-routed.yaml --reconfigure`
-   - `./src/netsim.py test three-frr-two-hosts-fw-routed --scenario quick_all`
-   - `./src/netsim.py down three-frr-two-hosts-fw-routed`
+Use this pattern when you want a GitLab pipeline to:
 
-### Authority rules (important)
+- validate topology input before execution
+- run the authoritative gate with `cassian test`
+- preserve generated artifacts for audit and debugging
+- avoid treating exploratory workflows as deployment authority
 
-- **Pass/fail is determined by Cassian Gate (`cassian test`) and/or the repo oracle script.**
-- CI must not run `cassian run` as a gate.
-- `labs/` is generated evidence only; authoritative inputs are `topologies/` and `src/`.
+## What this pipeline is not
+
+This pipeline is **not**:
+
+- a broad CI automation framework
+- a substitute for the Cassian Gate authority model
+- a reason to treat `cassian run` as a gate
+- a promise that every GitLab runner shape supports containerlab reliably
+
+## Authority rules
+
+Keep these boundaries explicit:
+
+- authoritative gate execution runs through `cassian test <topology.yaml>`
+- `cassian run` remains exploratory and non-authoritative
+- `results.json` remains the authoritative verdict artifact
+- `results.summary.txt` remains explanatory only
+- `labs/` remains generated evidence only
 
 ## Runner requirements
 
-**Recommended (OSS-friendly):** GitLab Runner **Shell executor** on a Linux host with:
+A practical GitLab runner for current Cassian Gate usage typically needs:
 
-- Docker engine available
-- `containerlab` installed ahead of time and pinned
-- Sufficient privileges for containerlab networking
+- Linux host or runner
+- Docker available to the runner
+- `containerlab` installed ahead of time
+- sufficient privileges for containerlab networking
 
-If you use GitLab Runner Docker executor, it must be configured in a privileged way
-(and typically with Docker socket access). This is org-specific and not mandated by Cassian Gate.
+A shell executor on a Linux host is often the simplest fit.
 
-The template fails fast if `containerlab` is missing.
+If you use another runner model, keep the required runtime privileges explicit and review them
+carefully.
 
-## Artifacts
+## Typical CI shape
 
-The pipeline uploads:
+A narrow, truthful pipeline usually looks like this:
 
-- `labs/**/results.json`
-- `labs/**/results.summary.txt`
-- `labs/**/topology.resolved.yaml`
-- `labs/**/artifacts/**` (supporting evidence only)
+1. install pinned Python dependencies
+2. run repository verification or syntax checks as needed
+3. validate the topology
+4. run the authoritative gate with `cassian test`
+5. upload generated artifacts for review
 
-You can choose to upload all of `labs/**` on failures if your storage policy allows it.
-
-## Reproducing locally
+## Example local reproduction
 
 From repo root:
 
@@ -56,7 +66,30 @@ From repo root:
 python -m py_compile src/*.py
 bash scripts/verify_phase1.sh
 
-./src/netsim.py up topologies/three-frr-two-hosts-fw-routed.yaml --reconfigure
-./src/netsim.py test three-frr-two-hosts-fw-routed --scenario quick_all
-./src/netsim.py down three-frr-two-hosts-fw-routed
+cassian validate topologies/three-frr-two-hosts-fw-routed.yaml
+cassian test topologies/three-frr-two-hosts-fw-routed.yaml --scenario quick_all
+```
 
+This keeps CI aligned to the authoritative gate surface.
+
+## Example artifact upload set
+
+Typical artifact upload choices include:
+
+- `labs/**/results.json`
+- `labs/**/results.summary.txt`
+- `labs/**/topology.resolved.yaml`
+- `labs/**/artifacts/**`
+
+If your storage policy allows it, you may also retain the broader `labs/**` directory on failure
+for debugging.
+
+## Important boundary
+
+This page is supporting guidance only.
+
+Deploy/no-deploy meaning still comes from:
+
+- deterministic execution
+- `cassian test`
+- authoritative generated artifacts, especially `results.json`
