@@ -1,10 +1,22 @@
 # Cassian Gate v79 — Operator Cheat Sheet
 
-*(Authoritative Operator Reference)*
+*(Operator reference — supporting surface; execution and artifacts remain authoritative)*
 
-This document defines the **user-facing execution contract** for Cassian Gate.
+This document describes the **user-facing execution model** for Cassian Gate.
 
-It reflects **implemented CLI behavior only**.
+It reflects **implemented CLI behavior only** and does not replace deterministic execution or authoritative artifacts.
+
+Cassian Gate is a deterministic, artifact-authoritative network change-validation gate.
+
+It is for:
+- network engineers validating planned changes before production
+- platform and infrastructure engineers using a CI-safe network gate
+- operators who need explicit pass/fail artifacts and deterministic execution
+
+It is **not yet** for:
+- users seeking a broad network automation platform
+- users expecting generic multi-vendor feature parity
+- users wanting exploratory labs or AI output to act as deployment authority
 
 Cassian Gate is a:
 
@@ -58,7 +70,6 @@ cassian replay <artifacts-dir>
 cassian run <topology.yaml>
 cassian up <topology.yaml>
 cassian down <lab>
-cassian destroy <lab>
 cassian cleanup --all
 ```
 
@@ -214,19 +225,11 @@ cassian replay labs/clab-<lab> --gate
 
 This preserves **gate / authoritative** context.
 
-Current operator-visible behavior includes authoritative gate-style output such as:
-
-```text
-MODE: GATE | AUTHORITATIVE: YES | CLEAN-STATE: YES | DESTROY: YES
-Authority: GATE (authoritative)
-Mode: gate (clean-state topology)
-```
-
 Meaning:
 
 - authoritative validation path
-- clean-state lifecycle
-- CI-safe verdict surface
+- clean-state lifecycle context is preserved from the source gate run
+- CI-safe verdict semantics remain tied to the original authoritative context
 
 You can also verify deterministic result equivalence:
 
@@ -234,11 +237,7 @@ You can also verify deterministic result equivalence:
 cassian replay labs/clab-<lab> --gate --verify-results
 ```
 
-If the replayed verdict core differs from the source result, replay exits with:
-
-```text
-exit code: 1
-```
+With `--verify-results`, replay checks deterministic result equivalence against the source artifacts and fails on mismatch.
 
 ### Non-gate replay (non-authoritative context preserved)
 
@@ -248,14 +247,6 @@ Example:
 
 ```bash
 cassian replay labs/clab-<lab>
-```
-
-Current operator-visible behavior includes non-authoritative replay labeling such as:
-
-```text
-Mode: replay (exploration artifacts)
-Authority: RUN (non-authoritative)
-Replay Context: non-gate replay keeps runtime up for inspection
 ```
 
 Meaning:
@@ -318,21 +309,13 @@ Two approaches exist.
 cassian run <topology.yaml>
 ```
 
-Typical labeling:
-
-```text
-Authority: RUN (non-authoritative)
-Mode: run (workflow)
-Mode: run (exploration)
-```
-
 Meaning:
 
 - exploration only
 - non-authoritative
 - useful for debugging, not for proof
 
-This performs:
+Typical workflow shape:
 
 ```text
 up → test → collect → destroy
@@ -360,15 +343,20 @@ Run mode itself remains non-authoritative as a workflow mode.
 ```bash
 cassian up <topology.yaml>
 cassian status <lab>
-cassian test <lab>
+cassian exec <lab> <node>
 cassian down <lab>
 ```
 
 Use this when you want:
 
-- persistent labs
+- a persistent exploratory lab
 - manual inspection
 - iterative debugging
+
+Important boundary:
+
+- this path is for exploration and inspection
+- authoritative validation still runs through `cassian test <topology.yaml>`
 
 ---
 
@@ -411,7 +399,6 @@ cassian exec <lab> <node>
 cassian vty <lab> <node>
 cassian collect <lab>
 cassian down <lab>
-cassian destroy <lab>
 ```
 
 ---
@@ -533,13 +520,12 @@ Rules:
 datacenter-bgp-safety
 ```
 
-Current behavior:
+Typical behavior for supported pack usage:
 
 - loads from the supported local pack surface
-- passes local compatibility enforcement before expansion
+- undergoes compatibility checks before expansion
 - expands during Resolve into explicit invariant tests
-- later phases consume only the expanded invariants
-- replay and gate execution use the resolved expanded test list
+- later phases consume the expanded invariants
 
 ### Example
 
@@ -626,11 +612,11 @@ cassian validate topologies/neg/pack_unknown_reference.yaml
 cassian validate topologies/neg/pack_incompatible_contents.yaml
 ```
 
-Expected behavior:
+Typical outcomes:
 
-- valid local pack topology → exit `0`
-- unknown pack reference → exit `2`
-- incompatible pack contents → exit `2`
+- valid local pack topology is accepted
+- unknown pack references are rejected
+- incompatible pack contents are rejected
 
 ### Artifact Note
 
@@ -1089,7 +1075,7 @@ This is useful for validating routing policy behavior such as:
 - policy-based path preference
 - iBGP policy consistency
 
-Required fields:
+Typical required fields:
 
 | Field    | Description                           |
 | -------- | ------------------------------------- |
@@ -1117,13 +1103,11 @@ Behavior:
 - If the route is present but the LOCAL_PREF differs from the expected value, the invariant fails.
 - If the invariant definition itself is invalid, the run fails with misuse exit code `2`.
 
-Exit behavior:
+Typical exit semantics follow the standard Cassian Gate model:
 
-| Condition                              | Exit Code |
-| -------------------------------------- | --------- |
-| invariant satisfied                    | 0         |
-| invariant mismatch                     | 1         |
-| invariant misuse / invalid declaration | 2         |
+- satisfied invariant → passing gate outcome
+- invariant mismatch → validation failure
+- invalid invariant declaration → usage / contract error
 
 Artifacts produced:
 
@@ -1145,11 +1129,10 @@ Example result entry:
 }
 ```
 
-Determinism guarantees:
+Determinism notes:
 
 - invariant evaluation occurs during the **TEST** phase
-- results are deterministic under identical topology, code version, and runtime conditions
-- replay verification (`cassian replay --gate --verify-results`) must reproduce identical results
+- replay is intended to preserve the same authority semantics as the source gate context
 
 ### Route Advertised To Invariant
 
@@ -1198,13 +1181,11 @@ Behavior:
 - It fails when the prefix is not observed as advertised to that peer.
 - If the invariant definition itself is invalid, the run fails with misuse exit code `2`.
 
-Exit behavior:
+Typical exit semantics follow the standard Cassian Gate model:
 
-| Condition                              | Exit Code |
-| -------------------------------------- | --------- |
-| invariant satisfied                    | 0         |
-| invariant mismatch                     | 1         |
-| invariant misuse / invalid declaration | 2         |
+- satisfied invariant → passing gate outcome
+- invariant mismatch → validation failure
+- invalid invariant declaration → usage / contract error
 
 Artifacts produced:
 
@@ -1217,7 +1198,7 @@ labs/<lab>/results.summary.txt
 
 Replay:
 
-This invariant is replay-verifiable with standard gate replay:
+This invariant can be checked again using standard gate replay workflows.
 
 ```bash
 cassian replay labs/clab-route-advertised-to --gate --verify-results
@@ -1281,13 +1262,11 @@ Behavior:
 - It fails when the prefix is observed as advertised to that peer.
 - If the invariant definition itself is invalid, the run fails with misuse exit code `2`.
 
-Exit behavior:
+Typical exit semantics follow the standard Cassian Gate model:
 
-| Condition                              | Exit Code |
-| -------------------------------------- | --------- |
-| invariant satisfied                    | 0         |
-| invariant mismatch                     | 1         |
-| invariant misuse / invalid declaration | 2         |
+- satisfied invariant → passing gate outcome
+- invariant mismatch → validation failure
+- invalid invariant declaration → usage / contract error
 
 Artifacts produced:
 
@@ -1300,7 +1279,7 @@ labs/<lab>/results.summary.txt
 
 Replay:
 
-This invariant is replay-verifiable with standard gate replay:
+This invariant can be checked again using standard gate replay workflows.
 
 ```bash
 cassian replay labs/clab-route-not-advertised-to --gate --verify-results
@@ -1423,9 +1402,9 @@ Required fields:
 
 These invariants behave like other authoritative test results:
 
-- `expect: pass` → invariant must be observed as true
-- mismatch → test fails with exit code `1`
-- invalid invariant declaration → usage / contract error with exit code `2`
+- `expect: pass` means the declared invariant should be observed as true
+- mismatch leads to a validation failure
+- invalid invariant declarations are treated as usage / contract errors
 
 ### Evidence and authority
 
@@ -1434,7 +1413,7 @@ For EVPN invariants:
 - runtime EVPN route/session data is **supporting evidence**
 - the invariant verdict in `results.json` is **authoritative**
 
-The check is deterministic and replay-safe.
+The check is intended to preserve deterministic authority semantics and replay consistency.
 
 ### Positive proof examples
 
@@ -1458,7 +1437,7 @@ cassian test topologies/neg/evpn_invalid_mac_invariant.yaml
 
 ### Replay
 
-These invariants are replay-verifiable with standard gate replay:
+These invariants can be checked again using standard gate replay workflows:
 
 ```bash
 cassian replay labs/clab-evpn-mac-route-present --gate --verify-results
@@ -1843,12 +1822,6 @@ Destroy a running lab:
 cassian down <lab>
 ```
 
-Force destroy + artifact purge:
-
-```bash
-cassian destroy <lab> --purge-artifacts
-```
-
 Clean up abandoned labs:
 
 ```bash
@@ -1858,27 +1831,18 @@ cassian cleanup --all --yes
 
 Dry-run occurs unless `--yes` is provided.
 
-Example no-op outcome:
+Example cleanup flow:
 
 ```bash
-cassian destroy does-not-exist
-```
-
-Current operator-visible output:
-
-```text
-Cassian Gate Destroy Result
-Lab: does-not-exist
-LAB DESCRIPTOR: labs/does-not-exist.clab.yaml
-RESULT: NO-OP (lab not found)
-Meaning: nothing was destroyed
+cassian down <lab>
+cassian cleanup --all --yes
 ```
 
 Meaning:
 
-- no destructive action occurred
-- the command completed safely
-- this is explicit rather than ambiguous
+- `cassian down <lab>` tears down the named lab
+- `cassian cleanup --all --yes` removes any remaining Cassian Gate-owned labs discovered by the cleanup plan
+- cleanup stays explicit because dry-run remains the default without `--yes`
 
 ---
 
@@ -2002,33 +1966,26 @@ Rules:
 - online-enriched rendering is explicit opt-in only
 - local advisory rendering remains the baseline behavior
 - online rendering does not change authority, verdicts, or execution behavior
-- if online rendering is explicitly requested but unavailable, `cassian ai` refuses with exit code `2`
+- unavailable online rendering should be treated as a non-authoritative advisory-path failure, not a change in execution authority
 
 ### Rendering modes
 
-`cassian ai` discloses the rendering mode it used:
-
-- `local advisory rendering`
-- `online-enriched advisory rendering`
+`cassian ai` may indicate whether local or online-enriched advisory rendering was used.
 
 Both remain advisory-only.
 
-### Deterministic context selection
+### Context selection
 
-Context selection priority is:
+When possible, prefer explicit artifact or lab selection for clarity.
 
-1. explicit artifacts
-2. explicit lab
-3. most recent valid artifact context
-
-Required artifacts:
+Required artifacts include:
 
 ```text
 topology.resolved.yaml
 results.json
 ```
 
-If the required artifacts are missing, `cassian ai` refuses with a deterministic advisory error.
+If the required artifacts are missing, the advisory path should not be treated as available.
 
 ### Important boundary
 
@@ -2042,29 +1999,21 @@ If the required artifacts are missing, `cassian ai` refuses with a deterministic
 
 ---
 
-## AI Output Structure (Deterministic)
+## AI Output Structure
 
-All `cassian ai` outputs follow a **stable, deterministic structure**:
+`cassian ai` is intended to present grounded, advisory explanations based on artifacts.
+
+Typical output includes:
 
 ```text
-Summary:
-
-Deterministic Facts / Grounded Evidence:
-
-Advisory Interpretation / Likely Cause:
-
-Recommended Next Steps:
-
-Example Drafts (Non-Authoritative / Human Review Only):
-
-Teaching / Coaching (Advisory Only):
+Summary
+Grounded evidence
+Advisory interpretation
+Recommended next steps
+Optional draft suggestions
 ```
 
-Important:
-
-- section order is fixed
-- structure is identical across runs
-- same input → same output shape
+Treat the exact wording and formatting as supporting guidance rather than release-surface authority.
 
 ---
 
@@ -2142,8 +2091,8 @@ Notes:
 
 Behavior:
 
-- different phrasing → same deterministic reasoning path
-- no randomness in module selection
+- different phrasings can still target the same advisory intent
+- AI remains advisory-only regardless of phrasing
 
 ---
 
@@ -2165,26 +2114,13 @@ cassian ai --lab <lab> "<question>"
 cassian ai --lab <lab> --online "<question>"
 ```
 
-Requirements:
-
-- `AI_NETSIM_AI_PROVIDER`
-- `AI_NETSIM_AI_API_KEY`
+Requirements depend on the configured online AI path.
 
 Behavior:
 
-- same reasoning structure as local
-- may provide:
-  - richer explanations
-  - improved phrasing
-
-Guarantees:
-
-- same conclusions as local
-- same section structure
-- no change to:
-  - verdicts
-  - artifacts
-  - execution
+- online rendering is optional
+- it may provide richer explanations or phrasing
+- it does not change verdicts, artifacts, or execution
 
 ---
 
@@ -2242,12 +2178,7 @@ cassian ai --lab <lab> "give me a concrete validation plan"
 
 ## Verification Behavior
 
-- `verify_ai.sh` runs fully **offline by default**
-- online checks are optional:
-
-```bash
-AI_NETSIM_VERIFY_ONLINE_OK=1 ./scripts/verify_ai.sh
-```
+AI verification details belong to the implementation and verification surfaces. For operator use, keep the important boundary clear: AI remains optional and advisory-only.
 
 ---
 
@@ -2284,43 +2215,17 @@ Artifacts are written to:
 labs/clab-<lab-name>/
 ```
 
-Current surfaced artifact wording should be interpreted as:
+Artifacts are typically written under:
 
 ```text
-Artifacts: labs/clab-<lab>/
-  - topology.resolved.yaml (generated execution model used for execution; non-authoritative)
-  - results.json (authoritative verdict artifact)
-  - results.summary.txt (human-readable summary only; non-authoritative)
+labs/clab-<lab-name>/
 ```
 
-Meaning:
+Interpret them using the authority boundary already established in the project:
 
-- `topology.resolved.yaml` is generated execution input, not an authority source
-- `results.json` is the authoritative verdict surface
-- `results.summary.txt` is explanatory only and does not determine verdicts
-
-Current `results.summary.txt` boundary block:
-
-```text
-Authority:
-- results.json is the authoritative verdict artifact
-
-Summary:
-- results.summary.txt is explanatory only and does not determine verdicts
-
-PASS means:
-- all executed declared checks matched their expected outcomes within the scope shown in the summary
-
-PASS does not mean:
-- full network correctness outside the executed scope
-
-FAIL means:
-- if declared checks did not match expected outcomes, this is a validation failure
-- if a hard/system failure is recorded, the summary will state that validation was interrupted by a system/runtime failure
-
-Share this:
-- labs/clab-<lab>/results.json
-```
+- `topology.resolved.yaml` is generated execution input
+- `results.json` is the authoritative verdict artifact
+- `results.summary.txt` is explanatory only
 
 Key files:
 
@@ -2419,16 +2324,7 @@ labs/clab-<lab-name>/artifacts/state-diff/state_diff.json
 
 ### What to inspect
 
-Typical fields include:
-
-- `schema`
-- `authority`
-- `capture_profiles`
-- `compared_objects`
-- `added`
-- `removed`
-- `changed`
-- `counts`
+Inspect the structured diff for the captured objects, changed elements, and supporting evidence relevant to your review.
 
 ### Operator meaning
 
@@ -2495,15 +2391,7 @@ Keep the authority boundary clear:
 
 ### What it contains
 
-Typical fields include:
-
-- `schema`
-- `authority`
-- `topology`
-- `coverage_basis`
-- `directly_covered`
-- `potentially_affected`
-- `counts`
+Inspect the blast-radius artifact for the covered scope, potentially affected objects, and other supporting evidence relevant to your review.
 
 ### Operator meaning
 
@@ -2766,19 +2654,13 @@ It does **not**:
 - score content quality
 - infer meaning or intent
 
-Supported contrib surfaces:
+Supported contrib surfaces are limited to the contrib content types documented by the current project documentation.
 
-```text
-contrib/topologies/...
-contrib/packs/...
-contrib/state-profiles/...
-```
-
-Current behavior:
+Typical behavior:
 
 - validates only the path you explicitly pass
-- accepts supported contrib root/container shapes already present in the repo
-- fails fast on unsupported file layout or missing required structure
+- checks for supported contrib layout and required structure
+- rejects unsupported or malformed contrib content
 
 Examples:
 
@@ -2789,17 +2671,10 @@ cassian validate-contrib contrib/state-profiles
 cassian validate-contrib contrib/topologies/first-run-proof
 ```
 
-Exit behavior:
+Typical exit semantics follow the standard structural-validation pattern:
 
-- valid supported contrib content → exit `0`
-- invalid or unsupported contrib content → exit `2`
-
-Example failure:
-
-```text
-ERROR: missing required file passing/topology.yaml
-exit=2
-```
+- accepted supported contrib content returns success
+- invalid or unsupported contrib content is rejected as a usage / contract error
 
 ---
 
@@ -2828,17 +2703,10 @@ Misuse / usage / contract error example:
 cassian test does-not-exist.yaml
 ```
 
-Typical output:
+Typical outcome:
 
-```text
-ERROR: topology path not found: does-not-exist.yaml
-Detected:
-  looks like a topology path (contains '/' or ends with .yaml/.yml)
-Next:
-  Gate mode: cassian test <topology.yaml>
-  Lab mode:  cassian up <topology.yaml> --reconfigure ; cassian test <lab-name>
-exit=2
-```
+- the command is rejected before validation runs
+- the failure is treated as a usage / contract error
 
 Meaning:
 
