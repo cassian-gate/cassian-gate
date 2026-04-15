@@ -21,10 +21,12 @@ What changes between them:
 - the passing variant allows TCP/8443 through the firewall
 - the failing variant allows TCP/2222 instead, while the proof still expects TCP/8443 to work
 
-Exact commands:
+Example commands:
 
-    python src/netsim.py test contrib/topologies/first-run-proof/failing/topology.yaml
-    python src/netsim.py test contrib/topologies/first-run-proof/passing/topology.yaml
+```bash
+cassian test contrib/topologies/first-run-proof/failing/topology.yaml
+cassian test contrib/topologies/first-run-proof/passing/topology.yaml
+```
 
 Expected verdict difference:
 
