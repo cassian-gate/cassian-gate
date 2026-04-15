@@ -1,57 +1,79 @@
-# Quickstart (10 minutes)
+# Quickstart (truthful v2 path)
 
-## Prereqs
-- Docker
-- containerlab
-- Python venv set up for Cassian Gate
+This quickstart is a release-facing supporting guide for Cassian Gate v2.
 
-## 1) Build demo images (one-time)
+Cassian Gate is a deterministic network change-validation gate. It is **not** a broad automation platform, a general lab product, or an AI decision system.
+
+Use it when you want a clean, explicit validation path before production. Do **not** treat this page as authoritative proof of safety; authoritative meaning comes from deterministic execution and the generated artifacts.
+
+Cassian Gate is for:
+- network engineers validating planned changes before production
+- platform and infrastructure engineers using a CI-safe network gate
+- teams that need explicit pass/fail artifacts
+
+Cassian Gate is **not yet** for:
+- users expecting generic multi-vendor feature parity
+- teams seeking a broad network automation platform
+- users wanting exploratory workflows or AI output to act as deployment authority
+
+## 1) Check the local environment
+
 ```bash
-docker build -t cassian/frr-demo-bgp-r1:latest images/frr-demo-bgp-r1
-docker build -t cassian/frr-demo-bgp-r2:latest images/frr-demo-bgp-r2
-docker build -t cassian/frr-demo-static-r1:latest images/frr-demo-static-r1
-docker build -t cassian/frr-demo-static-r2:latest images/frr-demo-static-r2
-Note: the canonical CLI name is `cassian`, but the current source-tree examples below still invoke `./src/netsim.py` because that is the present repository entrypoint in this repo.
+cassian doctor
+```
 
-2) Run the simplest gate (connected + negative test)
-./src/netsim.py up examples/01_connected_smoke.yaml --reconfigure
-./src/netsim.py test ex01-connected-smoke
+## 2) Validate a topology before execution
 
-3) Run BGP advertisement proof (routing comes from the image)
-./src/netsim.py up examples/02_bgp_advertise.yaml --reconfigure
-./src/netsim.py test ex02-bgp-advertise
+Use your actual topology file path.
 
-4) Run multi-hop ping proof (static routes come from the image)
-./src/netsim.py up examples/03_static_multihop_ping.yaml --reconfigure
-./src/netsim.py test ex03-static-multihop
-
-Where to look
-
-Artifacts are under:
-
-labs/clab-<labname>/results.json
-
-labs/clab-<labname>/results.summary.txt
-
-Important boundary
-
-Topology does NOT encode routing mechanics in v1.x.
-Routing behavior must come from device configuration (images/config) and is proven via tests.
-
-
----
-
-# 5) Verification steps
-
-After implementing:
 ```bash
-python -m py_compile src/netsim.py
-./scripts/verify_phase1.sh
-./src/netsim.py up examples/01_connected_smoke.yaml --reconfigure
-./src/netsim.py test ex01-connected-smoke
+cassian validate <topology.yaml>
+```
 
+## 3) Run the authoritative gate
 
-Then run the BGP example if those tests exist in your engine:
+`cassian test` is the authoritative validation path. It is the command to use for deploy/no-deploy decisions.
 
-./src/netsim.py up examples/02_bgp_advertise.yaml --reconfigure
-./src/netsim.py test ex02-bgp-advertise
+```bash
+cassian test <topology.yaml>
+```
+
+## 4) Read the right artifacts
+
+After a gate run, inspect:
+
+- `labs/clab-<lab>/results.json` for authoritative verdict meaning
+- `labs/clab-<lab>/results.summary.txt` for human-readable explanation
+- `labs/clab-<lab>/topology.resolved.yaml` for resolved input visibility
+
+Important boundary:
+
+- `results.json` is authoritative for verdict sharing
+- `results.summary.txt` is explanatory only
+- release docs and examples are supporting guidance only
+
+## 5) Use exploration deliberately
+
+When you want to inspect a lab interactively, use exploration mode instead of treating a kept lab as gate authority.
+
+```bash
+cassian run <topology.yaml> --keep
+cassian status <lab>
+```
+
+You can then inspect or collect from the kept lab, and tear it down when finished:
+
+```bash
+cassian collect <lab>
+cassian down <lab>
+```
+
+## 6) Recommended first-pass workflow
+
+```bash
+cassian doctor
+cassian validate <topology.yaml>
+cassian test <topology.yaml>
+```
+
+That sequence gives you the narrow, truthful v2 path: environment check, input validation, then authoritative gate execution.

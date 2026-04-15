@@ -1,8 +1,8 @@
 # Cassian Gate
 
-Cassian Gate is a deterministic, artifact-authoritative network change-validation gate for engineers who want proof before production changes.
+Cassian Gate is a deterministic, artifact-authoritative network change-validation gate for engineers who want proof before production.
 
-It validates declared network behavior through deterministic execution, authoritative artifacts, and explicit pass/fail outcomes before deployment.
+It validates declared network behavior through deterministic execution, explicit pass/fail outcomes, and authoritative artifacts produced by the engine itself.
 
 Cassian Gate is **not**:
 - a general-purpose network lab platform
@@ -22,8 +22,8 @@ Cassian Gate is **not yet** for:
 - users expecting generic NOS feature parity across vendors
 - users wanting exploratory labs or AI-driven decisions to act as deployment authority
 
-**Status:** AUTHORITATIVE  
-**Audience:** Network engineers, platform engineers, CI/CD operators  
+**Status:** Release-facing supporting surface
+**Audience:** Network engineers, platform engineers, CI/CD operators
 **Scope:** Active Cassian Gate documentation surface in this repository
 
 This directory contains the active documentation for **Cassian Gate**.
@@ -34,7 +34,9 @@ These documents explain:
 - which materials are supporting only
 - where internal or historical documentation has been separated from the active docs surface
 
-If documentation here conflicts with implementation at the level of authority, lifecycle meaning, or intended behavior, the documented contract and locked project doctrine govern.
+These documents do **not** replace deterministic execution or authoritative artifacts. For deploy/no-deploy meaning, rely on `cassian test` and the generated authoritative artifacts, especially `results.json`.
+
+If documentation here conflicts with the locked design contract, doctrine, or current implemented behavior, the contract/doctrine and implementation win over explanatory release text.
 
 ---
 
@@ -55,7 +57,7 @@ Recommended reading order:
    The command and flag reference.
 
 5. `quickstart.md`  
-   The fastest path to running the repo successfully.
+   The fastest path to first validation.
 
 6. `cheatsheet.md`  
    A broader operator reference with examples.
@@ -118,6 +120,7 @@ Key reminders:
 - `results.summary.txt` is explanatory only
 - AI is advisory only and never decides pass/fail
 - generated artifacts do not become authoritative inputs
+- release docs and examples are supporting guidance, not authoritative proof of safety
 
 ---
 
@@ -131,4 +134,4 @@ Active operator-facing documentation in this surface uses the canonical product 
 
 ## One-sentence summary
 
-> **This documentation defines how Cassian Gate is operated, understood, and trusted.**
+> **Cassian Gate is a deterministic network change-validation gate; this documentation helps you use it correctly, but the authoritative proof still comes from execution and artifacts.**
