@@ -45,12 +45,12 @@ Inspect or copy one of these first:
 
 Passing variant:
 
-    python src/netsim.py test contrib/topologies/recipes/failover-does-validation-fail-when-a-link-drops/passing/topology.yaml
+    cassian test contrib/topologies/recipes/failover-does-validation-fail-when-a-link-drops/passing/topology.yaml
     echo "exit=$?"
 
 Failing variant:
 
-    python src/netsim.py test contrib/topologies/recipes/failover-does-validation-fail-when-a-link-drops/failing/topology.yaml
+    cassian test contrib/topologies/recipes/failover-does-validation-fail-when-a-link-drops/failing/topology.yaml
     echo "exit=$?"
 
 ## Expected outcome difference

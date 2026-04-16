@@ -14,7 +14,7 @@ host A can reach host B on a declared allowed TCP port.
 
 Run:
 
-    python src/netsim.py test contrib/topologies/recipes/reachability-can-host-a-reach-host-b/passing/topology.yaml
+    cassian test contrib/topologies/recipes/reachability-can-host-a-reach-host-b/passing/topology.yaml
 
 Expected result:
 
@@ -30,8 +30,8 @@ Here the topology still blocks the tested TCP port, while the declared test stil
 
 Run:
 
-    python src/netsim.py test contrib/topologies/recipes/reachability-can-host-a-reach-host-b/failing/topology.yaml
-
+    cassian test contrib/topologies/recipes/reachability-can-host-a-reach-host-b/failing/topology.yaml
+    
 Expected result:
 
 - normal authoritative gate execution

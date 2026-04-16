@@ -2,8 +2,8 @@
 
 # Cassian Gate v1 CLI Reference
 
-**Version:** v1 / v1.x
-**Status:** STABLE
+**Version:** v1 / v1.x  
+**Status:** STABLE  
 **Scope:** CLI surface (commands, flags, semantics)
 
 This document lists supported CLI commands and their semantics in v1 / v1.x.
@@ -27,7 +27,7 @@ This document lists supported CLI commands and their semantics in v1 / v1.x.
 
 Flags:
 
-* `--json`
+* `--json`  
   Emit machine-readable JSON output (CI-friendly).
 
 ---
@@ -38,7 +38,7 @@ Flags:
 
 Flags:
 
-* `--reconfigure`
+* `--reconfigure`  
   Destroy the existing lab first, then redeploy.
 
 ---
@@ -59,12 +59,12 @@ Arguments:
 
 Flags:
 
-* `--all` (required)
-  Only targets Cassian Gate labs that have artifact dirs under `labs/clab-*`.
+* `--all` (required)  
+  Only targets Cassian Gate labs that have artifact dirs under `labs/clab-*`.  
   **Never scans Docker globally.**
 
-* `--yes`
-  Actually destroy labs listed in the plan.
+* `--yes`  
+  Actually destroy labs listed in the plan.  
   Artifacts are **not deleted**.
 
 Default behavior:
@@ -109,28 +109,28 @@ Arguments:
 
 Flags:
 
-* `--bgp`
+* `--bgp`  
   Include `show bgp summary` for FRR nodes.
 
-* `--bgp-verbose`
+* `--bgp-verbose`  
   Print full `show bgp summary` output.
 
-* `--strict`
+* `--strict`  
   Exit non-zero if any FRR peers are not `Established`.
 
-* `--interfaces`
+* `--interfaces`  
   Include `ip -br a` output per node.
 
-* `--summary`
+* `--summary`  
   Print a one-line summary at the end.
 
-* `--json`
+* `--json`  
   Emit machine-readable JSON (no command echo).
 
-* `--routes`
+* `--routes`  
   Validate expected routes exist (read-only check).
 
-* `--routes-verbose`
+* `--routes-verbose`  
   Include raw `show ip route` output (human mode).
 
 ---
@@ -163,41 +163,41 @@ Arguments:
 
 Test selection flags:
 
-* `--name <test-name>`
+* `--name <test-name>`  
   Run only the test with this name.
 
-* `--kind ping|tcp`
-  Run only tests of this kind.
+* `--kind ping|tcp`  
+  Run only tests of this kind.  
   **Note:** this filter is limited to `ping|tcp` even though v1.x supports `bgp_neighbor` as an atomic test type.
 
-* `--keep-going`
+* `--keep-going`  
   Run all tests even if one fails (still exits non-zero if any fail).
 
 Output flags:
 
-* `--json`
+* `--json`  
   Print `results.json` to stdout in addition to writing the file.
 
 Scenario flags:
 
-* `--scenario <id>`
+* `--scenario <id>`  
   Run only this scenario ID (`scenarios[*].id`).
 
-* `--all-scenarios`
+* `--all-scenarios`  
   Run all scenarios after steady-state tests.
 
-* `--scenario-verbose`
+* `--scenario-verbose`  
   Print each scenario step as it runs (human-only; does not change artifacts).
 
 Convergence control:
 
-* `--precheck-controlplane`
-  Run global control-plane prechecks (e.g., BGP wait) before executing scenarios.
+* `--precheck-controlplane`  
+  Run global control-plane prechecks (e.g., BGP wait) before executing scenarios.  
   Default: off when `--scenario` / `--all-scenarios` is used.
 
 Listing:
 
-* `--list-scenarios`
+* `--list-scenarios`  
   List scenarios from `labs/clab-<lab>/topology.resolved.yaml` (no deploy/execute).
 
 ---
@@ -212,91 +212,50 @@ This is explicitly non-authoritative and primarily for exploration / convenience
 
 Flags:
 
-* `--reconfigure`
+* `--reconfigure`  
   Destroy the existing lab first, then redeploy.
 
-* `--keep`
+* `--keep`  
   Do not destroy the lab at the end (useful for debugging failures).
 
-* `--destroy-always`
+* `--destroy-always`  
   Attempt to destroy the lab even if up/test/collect fails.
 
-* `--no-collect`
+* `--no-collect`  
   Skip collect (faster, but no artifacts).
 
 ---
 
 ## 5) Assistive AI (Advisory Only)
 
-### `cassian ai explain <target> [flags]`
+### `cassian ai`
 
-**Purpose:** Explain a prior run using artifacts only.
+**Purpose:** Optional advisory AI entrypoint.
 
-Arguments:
+Behavior:
 
-* `<target>`: lab name or topology file (to resolve lab)
+* explicitly invoked by the operator
+* advisory only
+* non-authoritative
+* never changes verdicts, exit codes, lifecycle execution, or authoritative artifacts
 
-Common AI flags:
+Notes:
 
-* `--bundle`
-  Emit deterministic JSON bundle (no model) and exit 0.
-
-* `--bundle-out <path>`
-  Write bundle JSON to this path and exit 0.
-
-* `--online`
-  Attempt online model call (BYO key). Never gates; exit 0 on failure.
-
-* `--model <name>`
-  Override model name (else `AI_NETSIM_AI_MODEL`).
-
-* `--format json|text`
-  Output format (default: `json`, CI-safe).
-
-Explain-only flags:
-
-* `--strict-inputs`
-  Usage error (exit 2) if required artifacts are missing.
-
-* `--max-items <n>`
-  Bound findings/suggestions deterministically (default: 50).
-
----
-
-### `cassian ai review <topology.yaml> [flags]`
-
-**Purpose:** Review topology tests/scenarios coverage (no execution).
-
-Arguments:
-
-* `<topology.yaml>`: topology file
-
-Flags:
-
-* same common AI flags as above
-* `--max-items <n>` (default: 50)
-
----
-
-### `cassian ai coach [flags]`
-
-**Purpose:** Onboarding and guidance (no YAML generation).
-
-Flags:
-
-* same common AI flags as above
+* shipped AI behavior must be described only through the `cassian ai` entrypoint
+* AI guidance remains outside the authority chain
+* absence or unavailability of AI does not weaken deterministic engine behavior
 
 ---
 
 ## 6) Exit Code Semantics
 
-* `0`
-  Success. For AI commands, `0` also covers “AI unavailable” cases.
+* `0`  
+  Success.
 
-* `2`
+* `2`  
   Usage / input / artifact error (not a gate failure).
 
-* non-zero (other)
+* non-zero (other)  
   Hard execution failure (deploy/provision/runtime failure), or strict status failure.
 
 ---

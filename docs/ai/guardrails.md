@@ -12,7 +12,7 @@
 - fail-fast validation rules
 
 ### Probabilistic edge (advisory)
-- `cassian ai explain/review/coach`
+- `cassian ai`
 - evidence summarization
 - coverage suggestions
 - human guidance

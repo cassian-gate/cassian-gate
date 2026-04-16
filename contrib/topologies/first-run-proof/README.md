@@ -21,8 +21,8 @@ What the failure represents:
 
 Official first-run commands:
 
-    python src/netsim.py test contrib/topologies/first-run-proof/failing/topology.yaml
-    python src/netsim.py test contrib/topologies/first-run-proof/passing/topology.yaml
+    cassian test contrib/topologies/first-run-proof/failing/topology.yaml
+    cassian test contrib/topologies/first-run-proof/passing/topology.yaml
 
 Expected verdict difference:
 
