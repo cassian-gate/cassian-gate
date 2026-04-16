@@ -57,7 +57,7 @@ Recommended reading order:
    The command and flag reference.
 
 5. `quickstart.md`  
-   The fastest path to first validation.
+   The fastest path to first validation, including one small authoritative PASS proof, one small authoritative FAIL proof, the authoritative artifact trio, and the PASS boundary.
 
 6. `cheatsheet.md`  
    A broader operator reference with examples.

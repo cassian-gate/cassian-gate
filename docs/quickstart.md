@@ -67,13 +67,80 @@ You can then inspect or collect from the kept lab, and tear it down when finishe
 cassian collect <lab>
 cassian down <lab>
 ```
-
+````md
 ## 6) Recommended first-pass workflow
 
 ```bash
 cassian doctor
 cassian validate <topology.yaml>
 cassian test <topology.yaml>
-```
+````
 
 That sequence gives you the narrow, truthful v2 path: environment check, input validation, then authoritative gate execution.
+
+## 7) First-run proof
+
+Start with two small authoritative proofs. Use `cassian test`, not `cassian run`, because `cassian test` is the authoritative clean-state gate.
+
+### Start here: one small PASS proof
+
+Run:
+
+```bash
+cassian test topologies/first-run-proof-minimal.yaml
+```
+
+Expected result:
+
+* authoritative PASS
+* exit code `0`
+* artifacts under `labs/clab-first-run-proof-minimal/`
+
+### See a meaningful FAIL
+
+Run:
+
+```bash
+cassian test topologies/first-run-proof-fail-catching.yaml
+```
+
+Expected result:
+
+* authoritative FAIL
+* exit code `1`
+* artifacts under `labs/clab-first-run-proof-fail-catching/`
+
+This FAIL is a validation outcome from valid authoritative input. It is not malformed YAML, invalid schema, or a runtime crash.
+
+### How to read the artifacts
+
+After either run, inspect:
+
+* `topology.resolved.yaml` — the resolved execution input used for the run
+* `results.json` — the authoritative machine-consumable verdict record
+* `results.summary.txt` — human-readable explanation only
+
+Authority boundary:
+
+* `results.json` is the verdict artifact to share in CI, tickets, and PRs
+* `results.summary.txt` is supporting explanation only
+* logs, packet captures, state capture, and AI output are supporting evidence only
+
+### What PASS means
+
+PASS means the declared checks passed for this declared topology and this authoritative execution.
+
+### What PASS does not mean
+
+PASS does not mean:
+
+* universal production safety
+* complete coverage
+* validation of undeclared behavior
+* that Cassian Gate checked anything you did not explicitly declare
+
+Cassian Gate is a narrow, deterministic pre-deployment validation gate. It is not a broad simulation platform, chaos tool, or AI decision system.
+
+```
+```
+
