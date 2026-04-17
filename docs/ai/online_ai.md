@@ -15,10 +15,10 @@ This is enforced by code, verification scripts, and golden-file fixtures.
 
 ## What Online AI Is Used For
 
-When explicitly enabled, online AI may:
-- produce clearer explanations of failures (`cassian ai explain`)
-- provide richer reasoning and context for suggestions (`cassian ai review`)
-- give onboarding and workflow guidance (`cassian ai coach`)
+When explicitly enabled through the shipped `cassian ai` entrypoint, online AI may:
+- produce clearer explanations and summaries
+- provide richer reasoning and context for suggestions
+- give onboarding and workflow guidance
 
 Online AI only consumes deterministic artifacts such as:
 - `results.json`
@@ -56,7 +56,7 @@ There is:
 - no hidden uploads
 - no telemetry
 
-Online AI is activated only when you pass `--online`.
+Online AI is activated only when explicitly invoked through the shipped `cassian ai` surface.
 
 ## Installation (Example)
 
@@ -66,7 +66,7 @@ Install the OpenAI SDK locally:
 pip install openai
 ````
 
-Cassian Gate will not import or use the SDK unless `--online` is specified.
+Cassian Gate will not import or use the SDK unless online AI is explicitly invoked through the shipped `cassian ai` surface.
 
 ## Configuration
 
@@ -82,9 +82,6 @@ export AI_NETSIM_AI_API_KEY="sk-..."
 Optional:
 
 ```bash
-# Model override (else a safe default is used)
-export AI_NETSIM_AI_MODEL="gpt-4.1-mini"
-
 # Optional OpenAI-compatible endpoint (proxy, gateway, etc.)
 export AI_NETSIM_AI_BASE_URL="https://api.openai.com/v1"
 ```
@@ -98,27 +95,31 @@ If any required value is missing or invalid, Cassian Gate:
 
 ## CLI Usage
 
-Enable online AI per command using `--online`.
-
-Explain (post-execution):
+The shipped AI entrypoint is:
 
 ```bash
-cassian ai explain three-frr-two-hosts-fw-routed --online --format json
-```
+cassian ai [--online] [--lab LAB] [--artifacts ARTIFACTS] [--format json|text] [question ...]
+````
 
-Review (topology-only):
+Supported surface:
 
-```bash
-cassian ai review topologies/my-topology.yaml --online --format json
-```
+* `--online`
+  Explicit opt-in for online-enriched advisory rendering
 
-Coach (onboarding):
+* `--lab LAB`
+  Provide an explicit lab name as advisory context
 
-```bash
-cassian ai coach --online --format json
-```
+* `--artifacts ARTIFACTS`
+  Provide an explicit artifacts directory as advisory context
+
+* `--format json|text`
+  Select advisory output format
+
+* `[question ...]`
+  Optional natural-language advisory question
 
 Online AI is never enabled by default.
+````
 
 ## Output Semantics
 
@@ -183,16 +184,16 @@ Cassian Gate:
 * never logs raw API keys (errors are sanitized)
 * never stores credentials
 * never makes background network calls
-* never uploads data without `--online`
+* never uploads data without explicit operator invocation through the shipped AI surface
 
-Only the deterministic bundle is sent to the provider when `--online` is used.
+Only the deterministic artifact/context surface used by the shipped AI entrypoint is sent to the provider when online AI is explicitly invoked.
 
 ## CI & Automation Safety
 
 Online AI is CI-safe by design (non-gating), but recommended practice is:
 
-* do not enable `--online` in CI
-* use `--bundle` / `--bundle-out` and artifacts for PR review
+* do not enable optional online AI in CI unless you explicitly want non-gating advisory output
+* use deterministic artifacts for PR review
 * validate stability via golden fixtures (not live calls)
 
 ## Why Online AI Is Optional

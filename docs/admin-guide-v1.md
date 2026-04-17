@@ -1,11 +1,11 @@
-
+````md
 ---
 
 # Cassian Gate v1 Administrator Guide
 
-**Version:** v1 / v1.x
-**Status:** STABLE
-**Audience:** Network engineers, platform engineers, CI/CD operators
+**Version:** v1 / v1.x  
+**Status:** STABLE  
+**Audience:** Network engineers, platform engineers, CI/CD operators  
 **Scope:** Operating Cassian Gate v1 safely, correctly, and intentionally
 
 This document explains **what Cassian Gate v1 is**, **how it is meant to be used**, and **how to interpret its results**.
@@ -115,7 +115,7 @@ Example:
 
 ```bash
 cassian test three-frr-two-hosts-fw-routed
-```
+````
 
 If this command fails, the change **must not be deployed**.
 
@@ -448,20 +448,20 @@ Logs and state capture are **evidence only** — never gating.
 
 ## 12) Assistive AI (Optional)
 
-AI commands:
+AI entrypoint:
 
-* `cassian ai explain`
-* `cassian ai review`
-* `cassian ai coach`
+* `cassian ai`
 
 AI:
 
-* runs post-execution only
-* consumes artifacts only
+* is explicitly invoked
+* remains advisory only
+* remains non-authoritative
+* consumes supporting artifact/context surfaces only
 * never affects verdicts
 * never affects exit codes
 
-If AI fails, Cassian Gate still exits `0`.
+If AI is unavailable or not used, Cassian Gate’s deterministic engine behavior remains unchanged.
 
 ---
 
@@ -493,3 +493,5 @@ If Cassian Gate fails, it is telling you something **important**.
 
 ---
 
+```
+```

@@ -16,7 +16,7 @@ The passing variant proves two bounded policy outcomes in one small example:
 
 Run:
 
-    python src/netsim.py test contrib/topologies/recipes/policy-does-this-firewall-block-or-allow-a-port/passing/topology.yaml
+    cassian test contrib/topologies/recipes/policy-does-this-firewall-block-or-allow-a-port/passing/topology.yaml
 
 Expected result:
 
@@ -32,7 +32,7 @@ The failing variant shows a meaningful validation failure:
 
 Run:
 
-    python src/netsim.py test contrib/topologies/recipes/policy-does-this-firewall-block-or-allow-a-port/failing/topology.yaml
+    cassian test contrib/topologies/recipes/policy-does-this-firewall-block-or-allow-a-port/failing/topology.yaml
 
 Expected result:
 
