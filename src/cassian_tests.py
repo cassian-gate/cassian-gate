@@ -2502,7 +2502,7 @@ def execute_scenario(
 
             active_pcap = {
                 "scenario_id": sid,
-                "step_seq_start": int(seq),
+                "step_seq_start": int(_pcap_step_seq(idx)),
                 "step_seq_stop": None,
                 "node": node,
                 "iface": iface,
@@ -2583,11 +2583,12 @@ def execute_scenario(
             duration_s = float(max(0.0, stopped_at - float(active_pcap.get("started_at") or stopped_at)))
 
             # write meta json (supporting evidence only)
+            stop_step_seq = int(_pcap_step_seq(idx))
             meta_obj: dict[str, Any] = {
                 "authority": "supporting_evidence",
                 "scenario_id": sid,
                 "step_seq_start": int(active_pcap.get("step_seq_start") or 0),
-                "step_seq_stop": int(_pcap_step_seq(idx)),
+                "step_seq_stop": stop_step_seq,
                 "target": {"node": node, "iface": iface},
                 "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(active_pcap.get("started_at") or stopped_at))),
                 "stopped_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stopped_at)),
@@ -2618,6 +2619,8 @@ def execute_scenario(
                 "pcap_file": str(Path(out_pcap).relative_to(lab_dir(lab))),
                 "meta_file": str(Path(out_meta).relative_to(lab_dir(lab))),
                 "bytes_written": int(bytes_written),
+                "step_seq_start": int(active_pcap.get("step_seq_start") or 0),
+                "step_seq_stop": stop_step_seq,
             }
             if err:
                 step_rec["pcap"]["error"] = err
@@ -2629,7 +2632,9 @@ def execute_scenario(
                         "type": "pcap",
                         "authority": "supporting_evidence",
                         "scenario_id": sid,
-                        "step": int(_pcap_step_seq(idx)),
+                        "step": stop_step_seq,
+                        "step_seq_start": int(active_pcap.get("step_seq_start") or 0),
+                        "step_seq_stop": stop_step_seq,
                         "tool_status": tool_status,
                         "error": err if err else "",
                         "pcap_file": str(Path(out_pcap).relative_to(lab_dir(lab))),
@@ -2775,12 +2780,13 @@ def execute_scenario(
 
         stopped_at = time.time()
         duration_s = float(max(0.0, stopped_at - float(active_pcap.get("started_at") or stopped_at)))
+        auto_stop_step_seq = int(active_pcap.get("step_seq_stop") or active_pcap.get("step_seq_start") or 0)
 
         meta_obj: dict[str, Any] = {
             "authority": "supporting_evidence",
             "scenario_id": sid,
             "step_seq_start": int(active_pcap.get("step_seq_start") or 0),
-            "step_seq_stop": None,
+            "step_seq_stop": auto_stop_step_seq,
             "target": {"node": node, "iface": iface},
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(active_pcap.get("started_at") or stopped_at))),
             "stopped_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stopped_at)),

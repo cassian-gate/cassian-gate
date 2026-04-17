@@ -6650,6 +6650,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     else:
                         tmp_candidates = [str(tmp_pcap)]
 
+                    start_step_seq = int(step_idx)
                     st[key] = {
                         "active": True,
                         "node": node,
@@ -6663,6 +6664,8 @@ def cmd_test(args: argparse.Namespace) -> None:
                         "pcap_path": str(pcap_path),
                         "meta_path": str(meta_path),
                         "step": int(step_idx),
+                        "step_seq_start": start_step_seq,
+                        "step_seq_stop": None,
                         "max_seconds": int(max_seconds) if max_seconds is not None else None,
                         "max_kb": int(max_kb) if max_kb is not None else None,
                         "snaplen": int(snaplen) if snaplen is not None else None,
@@ -6675,7 +6678,9 @@ def cmd_test(args: argparse.Namespace) -> None:
                                 "type": "pcap",
                                 "authority": "supporting_evidence",
                                 "scenario_id": str(scenario_id),
-                                "step": int(step_index),
+                                "step": start_step_seq,
+                                "step_seq_start": start_step_seq,
+                                "step_seq_stop": None,
                                 "tool_status": "ok" if cp.returncode == 0 else "failed",
                                 "error": "" if cp.returncode == 0 else "tcpdump start failed",
                             }
@@ -6783,11 +6788,12 @@ def cmd_test(args: argparse.Namespace) -> None:
                         pass
 
                     # Write meta json (host side)
+                    stop_step_seq = int(cur.get("step_seq_stop") or step_idx)
                     meta = {
                         "authority": "supporting_evidence",
                         "scenario_id": str(scenario_id),
                         "step_seq_start": int(cur.get("step_seq_start") or 0),
-                        "step_seq_stop": int(step_idx),
+                        "step_seq_stop": stop_step_seq,
                         "target": {"node": str(cur.get("node") or ""), "iface": str(cur.get("iface") or "")},
                         "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(cur.get("started_at") or stopped_at))),
                         "stopped_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stopped_at)),
@@ -6815,7 +6821,9 @@ def cmd_test(args: argparse.Namespace) -> None:
                                 "type": "pcap",
                                 "authority": "supporting_evidence",
                                 "scenario_id": str(scenario_id),
-                                "step": int(step_idx),
+                                "step": stop_step_seq,
+                                "step_seq_start": int(cur.get("step_seq_start") or 0),
+                                "step_seq_stop": stop_step_seq,
                                 "tool_status": str(tool_status),
                                 "error": str(err or ""),
                                 "pcap_file": str(pcap_path.relative_to(lab_dir(str(lab)))),
