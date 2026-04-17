@@ -33,7 +33,7 @@ find "$SNAP" -maxdepth 1 -type f -name "${BASE}.*.tar" \
   | xargs -r rm -f
 
 echo
-echo "Implementation surface snapshot saved as version ${NEXT}: $OUT"
+echo "Implementation surface snapshot saved as version ${NEXT}: $(basename "$OUT")"
 echo
 echo "Paste this into the implementation chat:"
 echo "Treat the uploaded tar as the active implementation surface. Do not assume changes outside this uploaded set unless explicitly requested."
