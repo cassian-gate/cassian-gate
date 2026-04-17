@@ -9,11 +9,11 @@ mkdir -p "$SNAP"
 
 LAST=0
 if [[ -f "$COUNTER" ]]; then
-  LAST=$(cat "$COUNTER")
+  LAST=$(<"$COUNTER")
 fi
 
 NEXT=$((LAST + 1))
-echo "$NEXT" > "$COUNTER"
+printf '%s\n' "$NEXT" > "$COUNTER"
 
 OUT="$SNAP/${BASE}.${NEXT}.tar"
 
@@ -25,16 +25,26 @@ tar -cf "$OUT" \
   contrib \
   candidate
 
-mapfile -t SNAPSHOTS < <(
-  find "$SNAP" -maxdepth 1 -type f -name "${BASE}.*.tar" \
-    | sed -E 's|.*/'"${BASE}"'\.([0-9]+)\.tar$|\1 &|' \
-    | sort -n \
-    | awk '{print $2}'
-)
+shopt -s nullglob
+files=( "$SNAP"/${BASE}.*.tar )
 
-if (( ${#SNAPSHOTS[@]} > 2 )); then
-  for old in "${SNAPSHOTS[@]:0:${#SNAPSHOTS[@]}-2}"; do
-    rm -f "$old"
+if (( ${#files[@]} > 2 )); then
+  versions=()
+
+  for f in "${files[@]}"; do
+    name=$(basename "$f")
+    ver=${name#${BASE}.}
+    ver=${ver%.tar}
+    versions+=( "$ver:$f" )
+  done
+
+  IFS=$'\n' sorted=($(printf '%s\n' "${versions[@]}" | sort -t: -k1,1n))
+  unset IFS
+
+  keep_from=$(( ${#sorted[@]} - 2 ))
+  for ((i=0; i<keep_from; i++)); do
+    old=${sorted[$i]#*:}
+    rm -f -- "$old"
   done
 fi
 
