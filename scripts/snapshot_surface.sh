@@ -25,12 +25,18 @@ tar -cf "$OUT" \
   contrib \
   candidate
 
-find "$SNAP" -maxdepth 1 -type f -name "${BASE}.*.tar" \
-  | sed -n 's|.*/'"${BASE}"'\.\([0-9]\+\)\.tar|\1 &|p' \
-  | sort -n \
-  | head -n -2 \
-  | cut -d' ' -f2- \
-  | xargs -r rm -f
+mapfile -t SNAPSHOTS < <(
+  find "$SNAP" -maxdepth 1 -type f -name "${BASE}.*.tar" \
+    | sed -E 's|.*/'"${BASE}"'\.([0-9]+)\.tar$|\1 &|' \
+    | sort -n \
+    | awk '{print $2}'
+)
+
+if (( ${#SNAPSHOTS[@]} > 2 )); then
+  for old in "${SNAPSHOTS[@]:0:${#SNAPSHOTS[@]}-2}"; do
+    rm -f "$old"
+  done
+fi
 
 echo
 echo "Implementation surface snapshot saved as version ${NEXT}: $(basename "$OUT")"
