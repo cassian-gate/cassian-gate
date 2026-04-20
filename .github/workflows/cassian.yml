@@ -1,4 +1,4 @@
-name: ai-netsim (authoritative gate)
+name: Cassian Gate (authoritative gate)
 
 on:
   pull_request:
@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   gate:
-    name: netsim test (deterministic gate)
+    name: cassian test (deterministic gate)
     # NOTE:
     # - containerlab requires privileged Docker networking / netns access.
     # - GitHub-hosted runners often cannot support this reliably.
@@ -75,15 +75,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ./src/netsim.py up topologies/three-frr-two-hosts-fw-routed.yaml --reconfigure
-          ./src/netsim.py test three-frr-two-hosts-fw-routed --scenario quick_all
-          ./src/netsim.py down three-frr-two-hosts-fw-routed
+          ./src/cassian.py up topologies/three-frr-two-hosts-fw-routed.yaml --reconfigure
+          ./src/cassian.py test three-frr-two-hosts-fw-routed --scenario quick_all
+          ./src/cassian.py down three-frr-two-hosts-fw-routed
 
       - name: Upload artifacts (always; bounded on success)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ai-netsim-labs
+          name: cassian-labs
           path: |
             labs/**/results.json
             labs/**/results.summary.txt
@@ -96,7 +96,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: ai-netsim-labs-full-on-failure
+          name: cassian-labs-full-on-failure
           path: |
             labs/**
           if-no-files-found: ignore

@@ -8425,7 +8425,7 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     # These are resolve-time hard defaults in netsim_model.py.
     image_defaults = [
         ("FRR image present", "frrouting/frr:latest"),
-        ("nft-fw image present", "ghcr.io/andrew-ai-netsim/nft-fw:latest"),
+        ("nft-fw image present", "ghcr.io/cassian-gate/nft-fw:latest"),
         ("host image present", "wbitt/network-multitool:latest"),
     ]
     if docker_cli:

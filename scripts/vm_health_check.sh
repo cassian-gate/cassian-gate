@@ -14,7 +14,7 @@ set -euo pipefail
 #
 # Usage:
 #   vm_health_check.sh
-#   vm_health_check.sh --ghcr ghcr.io/andrew-ai-netsim/nft-fw:latest
+#   vm_health_check.sh --ghcr ghcr.io/cassian-gate/nft-fw:latest
 #   vm_health_check.sh --quick
 #
 # Env:
@@ -280,7 +280,7 @@ check_ghcr_pull() {
   section "Optional GHCR pull test (auth + existence)"
   if [[ -z "$GHCR_TEST_IMAGE" ]]; then
     warn "no GHCR test image set; skipping"
-    echo "      Tip: --ghcr ghcr.io/andrew-ai-netsim/nft-fw:latest"
+    echo "      Tip: --ghcr ghcr.io/cassian-gate/nft-fw:latest"
     return
   fi
 

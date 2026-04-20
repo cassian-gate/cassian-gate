@@ -42,15 +42,15 @@ cassian test <topology.yaml>
 
 After a gate run, inspect:
 
-- `labs/clab-<lab>/results.json` for authoritative verdict meaning
-- `labs/clab-<lab>/results.summary.txt` for human-readable explanation
-- `labs/clab-<lab>/topology.resolved.yaml` for resolved input visibility
+* `labs/clab-<lab>/results.json` for authoritative verdict meaning
+* `labs/clab-<lab>/results.summary.txt` for human-readable explanation
+* `labs/clab-<lab>/topology.resolved.yaml` for resolved input visibility
 
 Important boundary:
 
-- `results.json` is authoritative for verdict sharing
-- `results.summary.txt` is explanatory only
-- release docs and examples are supporting guidance only
+* `results.json` is authoritative for verdict sharing
+* `results.summary.txt` is explanatory only
+* release docs and examples are supporting guidance only
 
 ## 5) Use exploration deliberately
 
@@ -67,14 +67,14 @@ You can then inspect or collect from the kept lab, and tear it down when finishe
 cassian collect <lab>
 cassian down <lab>
 ```
-````md
+
 ## 6) Recommended first-pass workflow
 
 ```bash
 cassian doctor
 cassian validate <topology.yaml>
 cassian test <topology.yaml>
-````
+```
 
 That sequence gives you the narrow, truthful v2 path: environment check, input validation, then authoritative gate execution.
 
@@ -140,7 +140,3 @@ PASS does not mean:
 * that Cassian Gate checked anything you did not explicitly declare
 
 Cassian Gate is a narrow, deterministic pre-deployment validation gate. It is not a broad simulation platform, chaos tool, or AI decision system.
-
-```
-```
-

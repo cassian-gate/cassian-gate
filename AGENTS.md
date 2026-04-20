@@ -1,4 +1,4 @@
-# ai-netsim Agent Rules (Authoritative)
+# Cassian Gate Agent Rules (Authoritative)
 
 This repository is designed to be worked on with AI assistance **without relying on chat history**.
 
@@ -20,7 +20,7 @@ If any of the above conflicts with a suggestion, the suggestion is invalid.
 - **AI is advisory only** (explain/review/coach)
 - AI must never influence:
   - verdict logic
-  - exit codes of `netsim test`
+  - exit codes of `cassian test`
   - execution semantics
   - runtime mutation
 
@@ -39,7 +39,7 @@ Agents follow the loop:
 ---
 
 ## Scope guardrails
-ai-netsim is a deterministic **validation gate**, not a lab tool.
+Cassian Gate is a deterministic **validation gate**, not a lab tool.
 
 Do NOT:
 - add exploratory/lab features

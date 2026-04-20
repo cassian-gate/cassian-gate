@@ -1080,7 +1080,7 @@ def nft_fw_apply(rt: "Runtime", lab_name: str, node: str, ruleset: str) -> None:
     # Require nft exists in the image (NO runtime installs)
     cp = rt.sh(lab_name, node, "command -v nft >/dev/null", check=False, capture_output=False)
     if cp.returncode != 0:
-        die(f"{node}: nft not found (use an nftables-capable image, e.g. ghcr.io/andrew-ai-netsim/nft-fw:latest)")
+        die(f"{node}: nft not found (use an nftables-capable image, e.g. ghcr.io/cassian-gate/nft-fw:latest)")
 
     # Load ruleset (fail-fast if nft rejects it)
     cmd = (
