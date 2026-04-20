@@ -6,7 +6,7 @@ stages:
 # - Recommended: GitLab Runner using Shell executor on a Linux host with Docker + containerlab installed.
 # - If using Docker executor: it must be privileged and allow Docker socket access; this is org-specific.
 
-ai_netsim_gate:
+cassian_gate:
   stage: test
   # Prefer a pinned Python image; runner must provide Docker + containerlab on the host.
   image: python:3.11
@@ -48,9 +48,9 @@ ai_netsim_gate:
     - bash scripts/verify_phase1.sh
 
     # Project gate (up -> test -> down)
-    - ./src/netsim.py up topologies/three-frr-two-hosts-fw-routed.yaml --reconfigure
-    - ./src/netsim.py test three-frr-two-hosts-fw-routed --scenario quick_all
-    - ./src/netsim.py down three-frr-two-hosts-fw-routed
+    - ./src/cassian.py up topologies/three-frr-two-hosts-fw-routed.yaml --reconfigure
+    - ./src/cassian.py test three-frr-two-hosts-fw-routed --scenario quick_all
+    - ./src/cassian.py down three-frr-two-hosts-fw-routed
 
   artifacts:
     when: always

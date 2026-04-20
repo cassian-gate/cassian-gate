@@ -98,13 +98,9 @@ Recommended reading order:
 
 ## Internal and historical material
 
-The following areas are intentionally separated from the active docs surface:
+Internal, historical, or maintainer-oriented material may be separated from the active docs surface elsewhere in the repository.
 
-- `docs/internal/`
-- `docs/archive/`
-- `docs/ai/internal/`
-
-These locations may contain maintainer notes, internal planning, historical handovers, or working material. They are not the primary operator-facing documentation surface.
+Such material is not the primary operator-facing documentation surface and should not be treated as the active release-facing documentation set.
 
 ---
 

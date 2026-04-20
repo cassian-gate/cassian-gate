@@ -1467,7 +1467,7 @@ def topo_to_containerlab(topo: dict) -> dict:
 
     hard_defaults = {
         "host": "wbitt/network-multitool:latest",
-        "nft-fw": "ghcr.io/andrew-ai-netsim/nft-fw:latest",
+        "nft-fw": "ghcr.io/cassian-gate/nft-fw:latest",
         "frr": "frrouting/frr:latest",
     }
 
