@@ -45,9 +45,9 @@ That gives you the shortest path to an authoritative first PASS verdict from thi
 
 ## Proof Kit
 
-* Passing first-run proof: [`topologies/first-run-proof-minimal.yaml`](topologies/first-run-proof-minimal.yaml)
-* Fail-catching first-run proof: [`topologies/first-run-proof-fail-catching.yaml`](topologies/first-run-proof-fail-catching.yaml)
-* Current GitHub Actions gate guide: [`docs/ci/GITHUB_ACTIONS.md`](docs/ci/GITHUB_ACTIONS.md)
+* Passing first-run proof: [`topologies/first-run-proof-minimal.yaml`](topologies/first-run-proof-minimal.yaml) — shortest path to a first authoritative PASS verdict proving the declared TCP flow is allowed.
+* Fail-catching first-run proof: [`topologies/first-run-proof-fail-catching.yaml`](topologies/first-run-proof-fail-catching.yaml) — shows Cassian Gate returning an authoritative FAIL when the declared TCP expectation is wrong.
+* Copy-paste GitHub Actions template: [`contrib/ci/cassian-gate-ci.yml`](contrib/ci/cassian-gate-ci.yml) — ready-to-copy CI workflow that runs the proof gate and uploads `results.json` and `topology.resolved.yaml`.
 
 ## What's in v2
 
