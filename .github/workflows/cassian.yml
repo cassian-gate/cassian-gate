@@ -1,0 +1,103 @@
+name: Cassian Gate (authoritative gate)
+
+on:
+  pull_request:
+  push:
+    branches: [ "main", "master" ]
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: cassian test (deterministic gate)
+    # NOTE:
+    # - containerlab requires privileged Docker networking / netns access.
+    # - GitHub-hosted runners often cannot support this reliably.
+    # - This workflow is intended for self-hosted runners (recommended for OSS).
+    runs-on: self-hosted
+
+    env:
+      PYTHONUNBUFFERED: "1"
+      # Deterministic: ensure local src/ imports are used.
+      PYTHONPATH: "src"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python (pinned)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Show runner prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== Docker ==="
+          docker version
+          echo
+          echo "=== containerlab ==="
+          if command -v containerlab >/dev/null 2>&1; then
+            containerlab version
+          else
+            echo "ERROR: containerlab not found on runner."
+            echo "This workflow requires a runner with containerlab preinstalled (pinned) and Docker privileges."
+            exit 2
+          fi
+
+      - name: Install Python dependencies (deterministic)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -V
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt
+          else
+            python -m pip install .
+          fi
+
+      - name: Syntax sanity (fast)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile src/*.py
+
+      - name: Phase-1 verification oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/verify_phase1.sh
+
+      - name: Project gate (up -> test -> down)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./src/cassian.py up topologies/three-frr-two-hosts-fw-routed.yaml --reconfigure
+          ./src/cassian.py test three-frr-two-hosts-fw-routed --scenario quick_all
+          ./src/cassian.py down three-frr-two-hosts-fw-routed
+
+      - name: Upload artifacts (always; bounded on success)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cassian-labs
+          path: |
+            labs/**/results.json
+            labs/**/results.summary.txt
+            labs/**/topology.resolved.yaml
+            labs/**/two_run/**
+            labs/**/artifacts/**
+          if-no-files-found: ignore
+
+      - name: Upload full labs on failure (evidence bundle)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cassian-labs-full-on-failure
+          path: |
+            labs/**
+          if-no-files-found: ignore
+

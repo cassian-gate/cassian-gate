@@ -1,148 +1,133 @@
-# ai-netsim Documentation
+# Cassian Gate
 
-**Status:** AUTHORITATIVE  
-**Audience:** Network engineers, platform engineers, CI/CD operators  
-**Scope:** ai-netsim v1 / v1.x documentation set
+Cassian Gate is a deterministic, artifact-authoritative network change-validation gate for engineers who want proof before production.
 
-This repository contains the **authoritative documentation** for **ai-netsim**, a deterministic, CI-first **network change-validation gate**.
+It validates declared network behavior through deterministic execution, explicit pass/fail outcomes, and authoritative artifacts produced by the engine itself.
 
-These documents define **how ai-netsim is intended to be used**, **what is supported**, and **what is explicitly out of scope** for each version.
+Cassian Gate is **not**:
+- a general-purpose network lab platform
+- a controller
+- a chaos engine
+- a heuristic validator
+- an AI decision system
+- a feature-parity multi-NOS platform
 
-If documentation here conflicts with implementation **at the level of intent, scope, or authority**, **the documentation wins**.  
-Implementation bugs are fixed to match documented behavior.
+Cassian Gate is for:
+- network engineers validating planned changes before production
+- platform and infrastructure engineers who need a CI-safe network gate
+- teams that want deterministic artifacts and explicit authority boundaries
 
----
+Cassian Gate is **not yet** for:
+- teams looking for a broad network automation platform
+- users expecting generic NOS feature parity across vendors
+- users wanting exploratory labs or AI-driven decisions to act as deployment authority
 
-## What ai-netsim Is
+**Status:** Release-facing supporting surface
+**Audience:** Network engineers, platform engineers, CI/CD operators
+**Scope:** Active Cassian Gate documentation surface in this repository
 
-ai-netsim is:
+This directory contains the active documentation for **Cassian Gate**.
 
-* a **deterministic network change-validation gate**
-* **artifact-driven** and **CI-safe**
-* **behavior-validated**, not configuration-validated
-* **engineer-first**, not lab-first
-* **AI-assisted**, never AI-driven
+These documents explain:
+- how Cassian Gate should be used
+- which surfaces are authoritative
+- which materials are supporting only
+- where internal or historical documentation has been separated from the active docs surface
 
-ai-netsim exists to answer one question reliably:
+These documents do **not** replace deterministic execution or authoritative artifacts. For deploy/no-deploy meaning, rely on `cassian test` and the generated authoritative artifacts, especially `results.json`.
 
-> *“Will this change behave the way we expect before we deploy it?”*
-
----
-
-## What ai-netsim Is NOT
-
-ai-netsim is **not**:
-
-* a general-purpose network lab
-* a topology designer
-* a routing **mechanics** simulator (protocols, metrics, policies)
-* a performance or ASIC emulator
-* an AI that decides correctness
-* an auto-remediation system
+If documentation here conflicts with the locked design contract, doctrine, or current implemented behavior, the contract/doctrine and implementation win over explanatory release text.
 
 ---
 
-## Repository Structure
+## Start here
 
-This repository is intentionally small, explicit, and **version-scoped**.
+Recommended reading order:
 
-```
-.
-├── admin-guide-v1.md
-├── topology-schema-v1.md
-├── cli-reference-v1.md
-└── README.md
-```
+1. `design-contract.md`  
+   The authoritative behavioral contract.
 
-Future versions (v1.5, v2) will introduce **new files**, not overwrite v1 documents.
+2. `admin-guide-v1.md`  
+   The operator mental model, authority boundaries, and correct usage.
 
----
+3. `topology-schema-v1.md`  
+   The topology input model and validation semantics.
 
-### Document Roles
+4. `cli-reference-v1.md`  
+   The command and flag reference.
 
-| File                    | Purpose                                       |
-| ----------------------- | --------------------------------------------- |
-| `admin-guide-v1.md`     | How to operate ai-netsim correctly and safely |
-| `topology-schema-v1.md` | Exact topology YAML structure and semantics   |
-| `cli-reference-v1.md`   | Complete CLI command reference                |
-| `README.md`             | Orientation and navigation (this file)        |
+5. `quickstart.md`  
+   The fastest path to first validation, including one small authoritative PASS proof, one small authoritative FAIL proof, the authoritative artifact trio, and the PASS boundary.
+
+6. `cheatsheet.md`  
+   A broader operator reference with examples.
 
 ---
 
-## Document Hierarchy (Important)
+## Active documentation surface
 
-Read and trust documents in this order:
+### Core docs
 
-1. **Admin Guide**  
-   Defines mental model, authority, and correct usage.
+- `design-contract.md`
+- `admin-guide-v1.md`
+- `topology-schema-v1.md`
+- `cli-reference-v1.md`
+- `quickstart.md`
+- `cheatsheet.md`
 
-2. **Topology Schema Guide**  
-   Defines what topology YAML *means* and what is allowed.
+### Supporting docs
 
-3. **CLI Reference**  
-   Defines available commands and flags.
+- `input-adapters.md`
+- `vm-runtime-capabilities.md`
 
-This mirrors ai-netsim’s own design:
+### Extensions / adoption / examples
 
-> **Intent → Structure → Execution**
+- `extensions/extension-and-adoption.md`
+- `examples/first-run-proof-failure-narrative.md`
+- `ci/GITHUB_ACTIONS.md`
+- `ci/GITLAB_CI.md`
 
----
+### AI docs (active surface)
 
-## Versioning Policy
-
-This repository follows **strict version scoping**.
-
-* `v1 / v1.x` documents describe **stable, implemented behavior**
-* Anything not documented here is **out of scope**
-* Future versions (v1.5, v2) will live alongside, not overwrite, v1 docs
-
-No speculative features are documented.
-
----
-
-## Authority & Contract Alignment
-
-ai-netsim is governed by a **design contract**:
-
-* Tests and scenarios are authoritative
-* AI is advisory only
-* Determinism is non-negotiable
-* Ambiguity fails fast
-
-All documents in this repository are written to **enforce that contract**, not weaken it.
+- `ai/README.md`
+- `ai/guardrails.md`
+- `ai/cli-contract-ai.md`
+- `ai/online_ai.md`
 
 ---
 
-## How This Repo Is Meant to Be Used
+## Internal and historical material
 
-This repository is intended to be:
+Internal, historical, or maintainer-oriented material may be separated from the active docs surface elsewhere in the repository.
 
-* read by humans
-* referenced during change reviews
-* linked in CI pipelines
-* cited during incidents and postmortems
-
-It assumes readers already understand networking fundamentals.  
-It documents **ai-netsim behavior and guarantees**, not networking theory.
+Such material is not the primary operator-facing documentation surface and should not be treated as the active release-facing documentation set.
 
 ---
 
-## Contributing / Changes
+## Authority reminders
 
-Changes to documentation must:
+Cassian Gate documentation follows the locked project doctrine and design contract.
 
-1. Declare the target version
-2. Respect existing scope boundaries
-3. Preserve authority model
-4. Avoid speculative features
-5. Remain consistent with implementation
+Key reminders:
 
-If a change alters authority, scope, or version semantics, it must be **explicitly justified**.
+- `cassian test` is the authoritative gate surface
+- exploratory workflows do not become authoritative by convenience
+- `results.json` is the authoritative verdict artifact
+- `results.summary.txt` is explanatory only
+- AI is advisory only and never decides pass/fail
+- generated artifacts do not become authoritative inputs
+- release docs and examples are supporting guidance, not authoritative proof of safety
+
+---
+
+## Repository reality note
+
+The canonical product name is **Cassian Gate** and the canonical CLI name is **`cassian`**.
+
+Active operator-facing documentation in this surface uses the canonical product and CLI naming consistently. Historical or internal material outside the active docs surface does not change product identity or authority boundaries.
 
 ---
 
-## One-Sentence Summary
+## One-sentence summary
 
-> **This repository defines how ai-netsim is used, trusted, and kept honest.**
-
----
+> **Cassian Gate is a deterministic network change-validation gate; this documentation helps you use it correctly, but the authoritative proof still comes from execution and artifacts.**

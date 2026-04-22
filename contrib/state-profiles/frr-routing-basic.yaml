@@ -1,0 +1,12 @@
+name: frr-routing-basic
+
+authority: non-authoritative
+
+purpose: Supporting state-capture profile for basic FRR routing inspection only.
+
+node_types:
+  - frr
+
+commands:
+  - ["vtysh", "-c", "show ip route"]
+  - ["vtysh", "-c", "show ipv6 route"]

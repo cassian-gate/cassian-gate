@@ -1,13 +1,13 @@
 ---
 
-# ai-netsim v1 Topology Schema Guide
+# Cassian Gate v1 Topology Schema Guide
 
 **Version:** v1 / v1.x
 **Status:** STABLE
 **Scope:** Topology YAML structure and semantics
-**Audience:** Engineers authoring ai-netsim topologies
+**Audience:** Engineers authoring Cassian Gate topologies
 
-This document explains **how topology YAML is structured**, what each section means, and what is **explicitly allowed or forbidden** in ai-netsim v1.
+This document explains **how topology YAML is structured**, what each section means, and what is **explicitly allowed or forbidden** in Cassian Gate v1.
 
 This is a **schema guide**, not a tutorial and not a routing reference.
 
@@ -19,7 +19,7 @@ Topology YAML files define **user intent**.
 
 They are one of the **only authoritative inputs** that can affect validation outcomes.
 
-ai-netsim v1 will:
+Cassian Gate v1 will:
 
 * validate schema strictly
 * reject unknown or ambiguous fields
@@ -69,7 +69,7 @@ nodes:
 
 ## 3.1) Node Types (v1)
 
-ai-netsim v1 supports a **small, explicit set of node types**.
+Cassian Gate v1 supports a **small, explicit set of node types**.
 
 No other node types are allowed.
 
@@ -109,7 +109,7 @@ FRR nodes have **two mutually exclusive modes** that define how routing is handl
 
 #### `frr_mode: generated` (default)
 
-* ai-netsim generates minimal FRR config
+* Cassian Gate generates minimal FRR config
 * no routing intent is inferred
 * suitable for single-hop or routing-neutral validation
 
@@ -121,7 +121,7 @@ This mode exists to keep v1 **routing-agnostic**.
 
 * the container image owns `/etc/frr/*`
 * routing is provided entirely by the image
-* ai-netsim does not bind or overwrite FRR config
+* Cassian Gate does not bind or overwrite FRR config
 * **required for multi-hop `expect: pass` tests**
 
 This mode is used by demo images and onboarding scenarios.
@@ -164,7 +164,7 @@ Rules:
 * endpoints must be explicit (`node:interface`)
 * exactly two endpoints per link
 * ambiguous interface references fail fast
-* ai-netsim never guesses interface mapping
+* Cassian Gate never guesses interface mapping
 
 Links define **connectivity only**, not routing.
 
@@ -222,7 +222,7 @@ Rules:
 
 ### Multi-hop Guardrail (Critical)
 
-ai-netsim v1 **does not infer routing**.
+Cassian Gate v1 **does not infer routing**.
 
 Therefore, this fails fast:
 
@@ -378,10 +378,10 @@ These belong to v1.5+.
 * scenarios model failure
 * routing lives outside v1 authority
 
-If something is ambiguous, ai-netsim will fail — **by design**.
+If something is ambiguous, Cassian Gate will fail — **by design**.
 
 ---
 
-**End of ai-netsim v1 Topology Schema Guide**
+**End of Cassian Gate v1 Topology Schema Guide**
 
 ---

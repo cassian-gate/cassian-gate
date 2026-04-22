@@ -1,0 +1,39 @@
+# First-run fail-catching proof for Cassian Gate.
+# This shows the gate blocks a wrongly declared allowed TCP flow from h1 to h2.
+# Expected outcome: the gate returns FAIL because the tested port is not actually allowed.
+# Inspect results.json, topology.resolved.yaml, and results.summary.txt after the run.
+
+name: first-run-proof-fail-catching
+
+nodes:
+  - name: h1
+    type: host
+    ip: 192.168.1.10/24
+    gw: 192.168.1.1
+
+  - name: h2
+    type: host
+    ip: 192.168.2.10/24
+    gw: 192.168.2.1
+
+  - name: fw1
+    type: nft-fw
+    routed: true
+    interfaces:
+      eth1: 192.168.1.1/24
+      eth2: 192.168.2.1/24
+    allow_icmp: true
+    allow_tcp: [8443]
+
+links:
+  - endpoints: ["h1:eth1", "fw1:eth1"]
+  - endpoints: ["h2:eth1", "fw1:eth2"]
+
+tests:
+  - name: h1_tcp_2222_to_h2_should_pass_but_fails
+    kind: tcp
+    src: h1
+    dst: h2
+    port: 2222
+    listener: true
+    expect: pass

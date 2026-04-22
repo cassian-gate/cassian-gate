@@ -1,0 +1,14 @@
+name: h1-invalid-first-invalid-deterministic
+
+nodes:
+  - name: h1
+    type: host
+
+links: []
+
+scenarios:
+  - id: quick_all
+    steps:
+      - frobnicate:
+          node: h1
+      - {}

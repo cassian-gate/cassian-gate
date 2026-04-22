@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cassian-gate"
+version = "2.0.0"
+description = "Deterministic pre-production proof layer for network changes"
+requires-python = ">=3.10"
+dependencies = [
+  "PyYAML",
+  "openai",
+  "httpx",
+  "pydantic",
+  "tqdm",
+  "annotated-types",
+  "typing-extensions",
+]
+
+[project.scripts]
+cassian = "cassian:main"
+
+[tool.setuptools]
+py-modules = [
+  "cassian",
+  "cassian_artifacts",
+  "cassian_common",
+  "cassian_model",
+  "cassian_runtime_container",
+  "cassian_tests",
+]
+
+[tool.setuptools.package-dir]
+"" = "src"

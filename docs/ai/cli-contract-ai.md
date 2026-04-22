@@ -10,34 +10,21 @@ This contract prevents AI from becoming authoritative.
 
 ## Commands
 
-### `netsim ai explain <lab|topology>`
-Inputs (artifact-only):
-- labs/clab-<lab>/results.json
-- labs/clab-<lab>/topology.resolved.yaml
-Optional:
-- labs/clab-<lab>/results.summary.txt
-
-Outputs:
-- cites exact failures from results.json (test/scenario step ids)
-- never invents facts
-- provides “evidence summary” even if AI is disabled/unavailable
-
-### `netsim ai review <topology.yaml> [--against <results.json>]`
+### `cassian ai`
 Inputs:
-- topology (or resolved topology)
-- optionally results.json for “what ran vs what exists”
+- explicitly invoked operator input only
+- supporting topology and artifact context when available
+
+Behavior:
+- advisory only
+- non-authoritative
+- never modifies verdicts, exit codes, or artifacts
+- never runs labs or calls runtime
 
 Outputs:
-- deterministic gap list first (computed without AI)
-- bounded suggestions (copy-paste snippets allowed)
-- advisory only; never gating
-
-### `netsim ai coach [<topology|lab>]`
-Purpose:
-- onboarding and guidance (human learning)
-Restrictions:
-- must NOT generate paste-ready YAML or configs
-- may provide high-level templates and explanations only
+- explanations, summaries, and bounded guidance consistent with shipped behavior
+- must not invent facts
+- must remain outside the authority chain
 
 ## Provider boundary
 - AI is opt-in:

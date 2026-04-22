@@ -1,0 +1,16 @@
+name: bgp-invalid-attribute-invariant
+
+nodes:
+  - name: r1
+    type: frr
+
+links: []
+
+tests:
+  - name: invalid_attribute_invariant
+    kind: invariant
+    type: bgp_metric_equals
+    node: r1
+    prefix: 10.0.10.0/24
+    expected: 50
+    expect: pass

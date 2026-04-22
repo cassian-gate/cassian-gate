@@ -1,0 +1,44 @@
+name: bgp-localpref-not-equal-expected-equal
+
+nodes:
+  - name: r1
+    type: frr
+    asn: 65001
+    router_id: 1.1.1.1
+    bgp:
+      neighbors:
+        - peer: r2
+          remote_as: 65002
+    networks:
+      - 1.1.1.1/32
+
+  - name: r2
+    type: frr
+    asn: 65002
+    router_id: 2.2.2.2
+    bgp:
+      neighbors:
+        - peer: r1
+          remote_as: 65001
+          ipv4_unicast:
+            route_map_in: RM-IN-LP-200
+      route_maps:
+        - name: RM-IN-LP-200
+          entries:
+            - seq: 10
+              action: permit
+              set:
+                localpref: 200
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["10.0.12.0/31", "10.0.12.1/31"]
+
+tests:
+  - name: r2_sees_1_1_1_1_32_with_localpref_150
+    kind: invariant
+    type: bgp_localpref_equals
+    node: r2
+    prefix: 1.1.1.1/32
+    expected: 150
+    expect: pass

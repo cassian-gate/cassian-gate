@@ -1,9 +1,9 @@
 ---
 
-# ai-netsim v1 CLI Reference
+# Cassian Gate v1 CLI Reference
 
-**Version:** v1 / v1.x
-**Status:** STABLE
+**Version:** v1 / v1.x  
+**Status:** STABLE  
 **Scope:** CLI surface (commands, flags, semantics)
 
 This document lists supported CLI commands and their semantics in v1 / v1.x.
@@ -12,7 +12,7 @@ This document lists supported CLI commands and their semantics in v1 / v1.x.
 
 ## 1) Core Commands
 
-### `netsim gen <topology.yaml>`
+### `cassian gen <topology.yaml>`
 
 **Purpose:** Generate containerlab artifacts from a topology.
 
@@ -21,29 +21,29 @@ This document lists supported CLI commands and their semantics in v1 / v1.x.
 
 ---
 
-### `netsim validate <topology.yaml> [--json]`
+### `cassian validate <topology.yaml> [--json]`
 
 **Purpose:** Validate topology + scenarios without deploying containers.
 
 Flags:
 
-* `--json`
+* `--json`  
   Emit machine-readable JSON output (CI-friendly).
 
 ---
 
-### `netsim up <topology.yaml> [--reconfigure]`
+### `cassian up <topology.yaml> [--reconfigure]`
 
 **Purpose:** Generate and deploy a lab.
 
 Flags:
 
-* `--reconfigure`
+* `--reconfigure`  
   Destroy the existing lab first, then redeploy.
 
 ---
 
-### `netsim down <name>`
+### `cassian down <name>`
 
 **Purpose:** Destroy a deployed lab by name.
 
@@ -53,18 +53,18 @@ Arguments:
 
 ---
 
-### `netsim cleanup --all [--yes]`
+### `cassian cleanup --all [--yes]`
 
-**Purpose:** Safely clean up ai-netsim-owned labs found under `labs/`.
+**Purpose:** Safely clean up Cassian Gate-owned labs found under `labs/`.
 
 Flags:
 
-* `--all` (required)
-  Only targets ai-netsim labs that have artifact dirs under `labs/clab-*`.
+* `--all` (required)  
+  Only targets Cassian Gate labs that have artifact dirs under `labs/clab-*`.  
   **Never scans Docker globally.**
 
-* `--yes`
-  Actually destroy labs listed in the plan.
+* `--yes`  
+  Actually destroy labs listed in the plan.  
   Artifacts are **not deleted**.
 
 Default behavior:
@@ -75,7 +75,7 @@ Default behavior:
 
 ## 2) Exec and Inspection Helpers
 
-### `netsim exec <lab> <node> [command...]`
+### `cassian exec <lab> <node> [command...]`
 
 **Purpose:** Execute a command inside a container.
 
@@ -91,7 +91,7 @@ Behavior:
 
 ---
 
-### `netsim vty <lab> <node> "<vtysh command>"`
+### `cassian vty <lab> <node> "<vtysh command>"`
 
 **Purpose:** Run a vtysh command on an FRR node.
 
@@ -103,39 +103,39 @@ Arguments:
 
 ---
 
-### `netsim status <lab> [flags]`
+### `cassian status <lab> [flags]`
 
 **Purpose:** Show lab status (containers + optional FRR info).
 
 Flags:
 
-* `--bgp`
+* `--bgp`  
   Include `show bgp summary` for FRR nodes.
 
-* `--bgp-verbose`
+* `--bgp-verbose`  
   Print full `show bgp summary` output.
 
-* `--strict`
+* `--strict`  
   Exit non-zero if any FRR peers are not `Established`.
 
-* `--interfaces`
+* `--interfaces`  
   Include `ip -br a` output per node.
 
-* `--summary`
+* `--summary`  
   Print a one-line summary at the end.
 
-* `--json`
+* `--json`  
   Emit machine-readable JSON (no command echo).
 
-* `--routes`
+* `--routes`  
   Validate expected routes exist (read-only check).
 
-* `--routes-verbose`
+* `--routes-verbose`  
   Include raw `show ip route` output (human mode).
 
 ---
 
-### `netsim collect <lab>`
+### `cassian collect <lab>`
 
 **Purpose:** Collect runtime artifacts for a lab.
 
@@ -151,7 +151,7 @@ Notes:
 
 ## 3) Gate Command
 
-### `netsim test <lab> [flags]`
+### `cassian test <lab> [flags]`
 
 **Purpose:** Run declared tests and scenarios for a lab.
 
@@ -163,48 +163,48 @@ Arguments:
 
 Test selection flags:
 
-* `--name <test-name>`
+* `--name <test-name>`  
   Run only the test with this name.
 
-* `--kind ping|tcp`
-  Run only tests of this kind.
+* `--kind ping|tcp`  
+  Run only tests of this kind.  
   **Note:** this filter is limited to `ping|tcp` even though v1.x supports `bgp_neighbor` as an atomic test type.
 
-* `--keep-going`
+* `--keep-going`  
   Run all tests even if one fails (still exits non-zero if any fail).
 
 Output flags:
 
-* `--json`
+* `--json`  
   Print `results.json` to stdout in addition to writing the file.
 
 Scenario flags:
 
-* `--scenario <id>`
+* `--scenario <id>`  
   Run only this scenario ID (`scenarios[*].id`).
 
-* `--all-scenarios`
+* `--all-scenarios`  
   Run all scenarios after steady-state tests.
 
-* `--scenario-verbose`
+* `--scenario-verbose`  
   Print each scenario step as it runs (human-only; does not change artifacts).
 
 Convergence control:
 
-* `--precheck-controlplane`
-  Run global control-plane prechecks (e.g., BGP wait) before executing scenarios.
+* `--precheck-controlplane`  
+  Run global control-plane prechecks (e.g., BGP wait) before executing scenarios.  
   Default: off when `--scenario` / `--all-scenarios` is used.
 
 Listing:
 
-* `--list-scenarios`
+* `--list-scenarios`  
   List scenarios from `labs/clab-<lab>/topology.resolved.yaml` (no deploy/execute).
 
 ---
 
 ## 4) One-shot Workflow (Non-authoritative)
 
-### `netsim run <topology.yaml> [flags]`
+### `cassian run <topology.yaml> [flags]`
 
 **Purpose:** Ephemeral workflow: `up → test → collect → down`.
 
@@ -212,95 +212,54 @@ This is explicitly non-authoritative and primarily for exploration / convenience
 
 Flags:
 
-* `--reconfigure`
+* `--reconfigure`  
   Destroy the existing lab first, then redeploy.
 
-* `--keep`
+* `--keep`  
   Do not destroy the lab at the end (useful for debugging failures).
 
-* `--destroy-always`
+* `--destroy-always`  
   Attempt to destroy the lab even if up/test/collect fails.
 
-* `--no-collect`
+* `--no-collect`  
   Skip collect (faster, but no artifacts).
 
 ---
 
 ## 5) Assistive AI (Advisory Only)
 
-### `netsim ai explain <target> [flags]`
+### `cassian ai`
 
-**Purpose:** Explain a prior run using artifacts only.
+**Purpose:** Optional advisory AI entrypoint.
 
-Arguments:
+Behavior:
 
-* `<target>`: lab name or topology file (to resolve lab)
+* explicitly invoked by the operator
+* advisory only
+* non-authoritative
+* never changes verdicts, exit codes, lifecycle execution, or authoritative artifacts
 
-Common AI flags:
+Notes:
 
-* `--bundle`
-  Emit deterministic JSON bundle (no model) and exit 0.
-
-* `--bundle-out <path>`
-  Write bundle JSON to this path and exit 0.
-
-* `--online`
-  Attempt online model call (BYO key). Never gates; exit 0 on failure.
-
-* `--model <name>`
-  Override model name (else `AI_NETSIM_AI_MODEL`).
-
-* `--format json|text`
-  Output format (default: `json`, CI-safe).
-
-Explain-only flags:
-
-* `--strict-inputs`
-  Usage error (exit 2) if required artifacts are missing.
-
-* `--max-items <n>`
-  Bound findings/suggestions deterministically (default: 50).
-
----
-
-### `netsim ai review <topology.yaml> [flags]`
-
-**Purpose:** Review topology tests/scenarios coverage (no execution).
-
-Arguments:
-
-* `<topology.yaml>`: topology file
-
-Flags:
-
-* same common AI flags as above
-* `--max-items <n>` (default: 50)
-
----
-
-### `netsim ai coach [flags]`
-
-**Purpose:** Onboarding and guidance (no YAML generation).
-
-Flags:
-
-* same common AI flags as above
+* shipped AI behavior must be described only through the `cassian ai` entrypoint
+* AI guidance remains outside the authority chain
+* absence or unavailability of AI does not weaken deterministic engine behavior
 
 ---
 
 ## 6) Exit Code Semantics
 
-* `0`
-  Success. For AI commands, `0` also covers “AI unavailable” cases.
+* `0`  
+  Success.
 
-* `2`
+* `2`  
   Usage / input / artifact error (not a gate failure).
 
-* non-zero (other)
+* non-zero (other)  
   Hard execution failure (deploy/provision/runtime failure), or strict status failure.
 
 ---
 
-**End of ai-netsim v1 CLI Reference**
+**End of Cassian Gate v1 CLI Reference**
 
 ---

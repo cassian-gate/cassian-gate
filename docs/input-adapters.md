@@ -1,19 +1,20 @@
 # Input Adapters (Read-Only) — Terraform Plan JSON + Rendered Ansible Output
 
-This feature lets ai-netsim ingest external change context (Terraform plan JSON, rendered Ansible output)
-as non-authoritative, advisory-only metadata.
+This feature lets Cassian Gate ingest external change context such as Terraform plan JSON and rendered Ansible output as non-authoritative, advisory-only metadata.
 
 Adapters are designed to improve:
 
-* change scope visibility (what appears to be changing)
-* advisory preflight / AI context (what you might need to prove)
+* change-scope visibility (what appears to be changing)
+* advisory preflight context
+* advisory AI context for human review
 
-They never change:
+They do **not** change:
 
 * lifecycle phases
-* test/scenario selection
+* test or scenario selection
 * pass/fail verdicts
-* exit codes of `netsim test`
+* authoritative gate meaning
+* exit semantics of `cassian test`
 
 Adapters are read-only, offline-first, deterministic parsers.
 
@@ -21,18 +22,21 @@ Adapters are read-only, offline-first, deterministic parsers.
 
 ## Authority boundary (non-negotiable)
 
-Adapters MUST NOT:
+Adapters must **not**:
 
-* select tests/scenarios automatically
+* select tests or scenarios automatically
 * gate runs or affect CI verdicts
 * mutate topology YAML
-* apply configs or run terraform/ansible
-* infer vendor semantics beyond the input text
+* apply configs or run Terraform or Ansible
+* infer vendor semantics beyond the provided input text
 
-All adapter outputs are explicitly labeled:
+All adapter outputs are supporting context only.
 
-* `authority: advisory`
-* `schema_version: adapters.v1`
+They remain:
+
+* advisory
+* explicitly supplied
+* outside the authoritative gate chain
 
 ---
 
@@ -40,53 +44,53 @@ All adapter outputs are explicitly labeled:
 
 ### Terraform plan JSON adapter
 
-Input: JSON output from Terraform, e.g. `terraform show -json <planfile>`.
+Input: JSON output from Terraform, for example `terraform show -json <planfile>`.
 
 ```bash
-./src/netsim.py adapt terraform --plan /path/to/plan.json
+cassian adapt terraform --plan /path/to/plan.json
 ```
 
 Options:
 
-* `--out <dir>` (default: `artifacts/adapters/`)
-* `--strict` (exit 1 if parse_errors are present)
+* `--out <dir>`
+* `--strict`
 
-Output (canonical filename):
+Typical output filename:
 
-* `<out>/terraform.plan.adapter.json`
+* `terraform.plan.adapter.json`
 
 ---
 
 ### Rendered Ansible output adapter
 
-Input: a directory containing rendered outputs (template results), not live device state.
+Input: a directory containing rendered outputs such as template results, not live device state.
 
 ```bash
-./src/netsim.py adapt ansible --dir /path/to/rendered_dir
+cassian adapt ansible --dir /path/to/rendered_dir
 ```
 
 Options:
 
-* `--out <dir>` (default: `artifacts/adapters/`)
-* `--strict` (exit 1 if parse_errors are present)
+* `--out <dir>`
+* `--strict`
 
-Output (canonical filename):
+Typical output filename:
 
-* `<out>/ansible.rendered.adapter.json`
+* `ansible.rendered.adapter.json`
 
 Notes:
 
-* File selection is allowlist-based (deterministic).
-* Outputs may include `file_hash` (sha256) for traceability.
+* file selection is deterministic
+* outputs may include file-level traceability metadata
 
 ---
 
 ## Using adapters with preflight (advisory-only)
 
-Adapters are never auto-discovered. You must pass them explicitly:
+Adapters are never auto-discovered. Pass them explicitly when you want preflight to include adapter context.
 
 ```bash
-./src/netsim.py preflight topologies/three-frr-two-hosts-fw-routed.yaml \
+cassian preflight topologies/three-frr-two-hosts-fw-routed.yaml \
   --adapter artifacts/adapters/terraform.plan.adapter.json \
   --adapter artifacts/adapters/ansible.rendered.adapter.json \
   --format json
@@ -94,56 +98,60 @@ Adapters are never auto-discovered. You must pass them explicitly:
 
 Rules:
 
-* Missing/unreadable adapter path is a usage error for preflight (exit 1).
-* Adapter `parse_errors` inside the JSON remain advisory; preflight still exits 0.
+* unreadable or missing adapter paths are treated as preflight input errors
+* adapter parse issues remain advisory context, not validation verdicts
+* adapters do not make preflight authoritative
 
 ---
 
-## Using adapters with AI review / explain (advisory-only)
+## Using adapters with AI (advisory-only)
 
-Adapters are optional context only, explicitly passed:
+Adapters can also be supplied as advisory context for artifact-based AI interpretation workflows.
+
+Use the current `cassian ai` surface together with the relevant artifact or lab path, and include adapters only when you want extra change-context during explanation or review.
+
+Examples of the current AI entrypoint:
 
 ```bash
-./src/netsim.py ai review topologies/three-frr-two-hosts-fw-routed.yaml \
-  --adapter artifacts/adapters/terraform.plan.adapter.json \
-  --bundle
+cassian ai --artifacts <artifacts-dir> "what should I prove first"
 ```
 
 ```bash
-./src/netsim.py ai explain three-frr-two-hosts-fw-routed \
-  --adapter artifacts/adapters/terraform.plan.adapter.json \
-  --bundle
+cassian ai --lab <lab> "why did this fail"
 ```
 
 Rules:
 
-* Missing/unreadable adapter path is an AI usage error (exit 2).
-* Adapters never affect gate results; `netsim test` remains authoritative.
+* adapters remain optional context only
+* adapters never affect gate results
+* `cassian test` remains the sole authoritative validation gate
+* AI remains advisory-only whether adapters are present or not
 
 ---
 
 ## CI pattern (recommended)
 
-Run adapters and preflight as separate advisory steps before the authoritative gate:
+Run adapters and preflight as separate advisory steps before the authoritative gate.
 
 ```bash
-# Produce adapter inputs (done by your pipeline — may require terraform/ansible there)
+# Produce adapter inputs in your pipeline.
 terraform show -json plan.out > plan.json
 
-# Convert to normalized advisory context (ai-netsim does not run terraform)
-./src/netsim.py adapt terraform --plan plan.json
+# Convert to normalized advisory context.
+cassian adapt terraform --plan plan.json
 
-# Optional: preflight with adapter context
-./src/netsim.py preflight topologies/<topology>.yaml \
+# Optional: preflight with adapter context.
+cassian preflight topologies/<topology>.yaml \
   --adapter artifacts/adapters/terraform.plan.adapter.json \
   --format json
 
-# Authoritative gate (unchanged)
-./src/netsim.py test <labname>
+# Authoritative gate.
+cassian test <topology.yaml>
 ```
 
 Important:
 
-* Adapter parsing is offline-first (file-only).
-* Adapters are not required to run the gate.
-* The only authoritative inputs are `topologies/*.yaml` + `src/`.
+* adapter parsing is file-based advisory context
+* adapters are not required to run the gate
+* the only authoritative inputs remain `topologies/*.yaml` and `src/*`
+* release docs and adapter outputs do not become authoritative proof

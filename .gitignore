@@ -7,6 +7,7 @@ __pycache__/
 labs/
 results.json
 *.clab.yaml
+artifacts/
 
 # OS / editor
 .vscode/
@@ -41,3 +42,6 @@ images/**
 changes/
 docs/future/
 scripts/netsim_snapshot.sh
+
+# local verification artifacts
+artifacts/verify_candidate_apply_v1_5/

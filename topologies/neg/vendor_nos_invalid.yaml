@@ -1,0 +1,8 @@
+name: vendor-nos-invalid
+
+nodes:
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+
+links: []

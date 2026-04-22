@@ -1,0 +1,13 @@
+name: wi1-schema-invalid-topology
+
+nodes:
+  r1:
+    type: frr
+
+links: []
+tests:
+  - name: dummy_ping
+    kind: ping
+    src: r1
+    dst: r1
+    expect: pass

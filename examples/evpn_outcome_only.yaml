@@ -2,7 +2,7 @@ name: ex-evpn-outcome-only
 
 # v1.5 EVPN Awareness (presence-only):
 # - This declaration is informational only.
-# - ai-netsim will NOT validate EVPN internals (RTs, VNIs, MAC/IP tables, etc.).
+# - Cassian Gate will NOT validate EVPN internals (RTs, VNIs, MAC/IP tables, etc.).
 # - This lab is intended for outcome verification when you supply real configs via --candidate-config.
 fabric:
   evpn:
@@ -10,7 +10,7 @@ fabric:
     mode: evpn
 
 nodes:
-  # Generic FRR nodes. In v1.5, ai-netsim does not assign EVPN roles.
+  # Generic FRR nodes. In v1.5, Cassian Gate does not assign EVPN roles.
   - name: spine1
     type: frr
   - name: leaf1
