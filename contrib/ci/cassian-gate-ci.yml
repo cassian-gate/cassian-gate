@@ -1,0 +1,43 @@
+name: Cassian Gate Proof
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/**"
+      - "topologies/first-run-proof-minimal.yaml"
+      - "contrib/ci/cassian-gate-ci.yml"
+
+jobs:
+  proof:
+    runs-on: [self-hosted, linux]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Cassian Gate from repo
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .
+
+      - name: Validate first-run proof topology
+        run: cassian validate topologies/first-run-proof-minimal.yaml
+
+      - name: Run authoritative proof gate
+        run: cassian test topologies/first-run-proof-minimal.yaml
+
+      - name: Upload authoritative proof artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cassian-gate-proof-artifacts
+          path: |
+            labs/clab-first-run-proof-minimal/results.json
+            labs/clab-first-run-proof-minimal/topology.resolved.yaml
+          if-no-files-found: error

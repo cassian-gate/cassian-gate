@@ -1,3 +1,8 @@
+# First-run fail-catching proof for Cassian Gate.
+# This shows the gate blocks a wrongly declared allowed TCP flow from h1 to h2.
+# Expected outcome: the gate returns FAIL because the tested port is not actually allowed.
+# Inspect results.json, topology.resolved.yaml, and results.summary.txt after the run.
+
 name: first-run-proof-fail-catching
 
 nodes:

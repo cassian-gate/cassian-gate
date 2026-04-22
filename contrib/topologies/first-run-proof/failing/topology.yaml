@@ -19,17 +19,17 @@ nodes:
       eth2: 192.168.2.1/24
     allow_icmp: true
     allow_tcp:
-      - 2222
+      - 8443
 
 links:
   - endpoints: ["h1:eth1", "fw1:eth1"]
   - endpoints: ["h2:eth1", "fw1:eth2"]
 
 tests:
-  - name: h1_tcp_8443_to_h2_should_pass_but_is_blocked
+  - name: h1_tcp_2222_to_h2_should_pass_but_fails
     kind: tcp
     src: h1
     dst: h2
-    port: 8443
+    port: 2222
     listener: true
     expect: pass

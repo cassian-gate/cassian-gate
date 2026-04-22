@@ -1,3 +1,8 @@
+# First-run passing proof for Cassian Gate.
+# This proves the routed nft-fw path allows the declared TCP flow from h1 to h2.
+# Expected outcome: the gate returns PASS for h1_tcp_8443_to_h2_pass.
+# Inspect results.json, topology.resolved.yaml, and results.summary.txt after the run.
+
 name: first-run-proof-minimal
 
 nodes:
