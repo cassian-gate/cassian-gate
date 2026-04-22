@@ -305,6 +305,31 @@ def _invocation_record_written_artifact(p: Path) -> None:
         # Best-effort only; never raise.
         return
 
+def _command_uses_workspace_labs(cmd: str) -> bool:
+    return str(cmd or "").strip() in {
+        "up",
+        "down",
+        "status",
+        "exec",
+        "vty",
+        "collect",
+        "test",
+        "run",
+        "gen",
+        "cleanup",
+    }
+
+def _bind_workspace_labs_dir(workspace: Path) -> None:
+    labs_dir = Path(workspace) / "labs"
+    cassian_common.LABS_DIR = labs_dir
+    globals()["LABS_DIR"] = labs_dir
+
+    import cassian_artifacts as _cassian_artifacts
+    import cassian_runtime_container as _cassian_runtime_container
+
+    _cassian_artifacts.LABS_DIR = labs_dir
+    _cassian_runtime_container.LABS_DIR = labs_dir
+
 def _maybe_print_privilege_notice(template: str) -> None:
     """
     Privilege transparency hygiene (Set 9 / WI-1).
@@ -13409,6 +13434,11 @@ def main() -> None:
         global _PRIV_NOTICE_PRINTED
         _PRIV_NOTICE_PRINTED = False
         _invocation_reset_written_artifacts()
+
+        cmd_name = str(getattr(args, "cmd", "") or "").strip()
+        invocation_workspace = Path.cwd()
+        if _command_uses_workspace_labs(cmd_name):
+            _bind_workspace_labs_dir(invocation_workspace)
 
         # Footer (WI-1a): gate-mode-only artifact footer (cassian test <topology.yaml>)
         if str(getattr(args, "cmd", "") or "") == "test":
