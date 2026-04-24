@@ -63,3 +63,7 @@ v2 includes the deterministic gate engine, FRR-based validation, named routing a
 ## Future direction
 
 Post-v2 expansion deepens FRR first, then adds SONiC as the next open NOS and Arista as the first commercial NOS, without weakening deterministic gate authority.
+
+## License
+
+Cassian Gate is licensed under the Apache License 2.0.
