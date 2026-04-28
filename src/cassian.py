@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
 """
-Cassian Gate execution engine
+Compatibility shim.
 
-Design contract (must not be violated):
-- Deterministic lifecycle (resolve → generate → deploy → provision → test → collect → destroy)
-- Inputs are authoritative: topologies/
-- Outputs are generated: labs/ (including *.clab.yaml, topology.resolved.yaml, results.json)
-- Defaults only during resolve and visible in resolved topology
-- Negative tests are first-class (expected fail + observed fail = verdict pass)
-
-See: docs/design-contract.md
+Real implementation lives in `cassian_cli.py`, `cassian_engine.py`, `cassian_ai.py`,
+`cassian_candidate.py`, `cassian_state.py`, `cassian_two_run.py`. This file exists
+to preserve the `cassian:main` entry point and `from cassian import X` import paths
+during the post-split transition. Slated for removal in a future cleanup.
 """
 from __future__ import annotations
 
