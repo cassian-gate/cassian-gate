@@ -24,6 +24,12 @@ cassian = "cassian:main"
 [tool.setuptools]
 py-modules = [
   "cassian",
+  "cassian_cli",
+  "cassian_engine",
+  "cassian_ai",
+  "cassian_candidate",
+  "cassian_state",
+  "cassian_two_run",
   "cassian_artifacts",
   "cassian_common",
   "cassian_model",

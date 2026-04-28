@@ -45,3 +45,4 @@ scripts/netsim_snapshot.sh
 
 # local verification artifacts
 artifacts/verify_candidate_apply_v1_5/
+src/*.egg-info/
