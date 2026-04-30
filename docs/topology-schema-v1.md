@@ -367,7 +367,7 @@ The topology schema does not support:
 * VM execution
 * vendor NOS features
 
-These belong to v1.5+.
+These belong to v1.5+. See `docs/topology-schema-v1.5.md` for the v1.5 invariant test category, supported invariant types, and `observed_state` payload contract.
 
 ---
 

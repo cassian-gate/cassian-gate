@@ -1,0 +1,146 @@
+name: h2-invariant-observability-demo
+
+# -----------------------------------------------------------------------------
+# Phase 1a — Handover 2 of 8: Invariant Failure Observability
+# Negative-case proof topology (R33, R34).
+#
+# Purpose
+#   Exercise observed_state population (WI-1) and summary rendering (WI-2)
+#   against at least one failing invariant from each of the four Phase 1a
+#   invariant categories. Each chosen invariant is declared `expect: pass`
+#   and engineered to fail by design, so the run produces verdict FAIL with
+#   observed_state populated on every failed-invariant record per its
+#   R10-R20 contract.
+#
+# Substrate
+#   Single EVPN substrate (matches corpus reference `evpn_runtime_generation`
+#   and `evpn_bgp_session_up`). EVPN fabric IBGP within ASN 65100 converges
+#   reliably; spine1 is the RR; leaf1 and leaf2 are participants. No
+#   independent eBGP routers — that pattern was shown by an earlier
+#   iteration to fail the 30s control-plane convergence precheck and block
+#   all invariants before any evaluator ran.
+#
+# Categories covered (one invariant each)
+#   - BGP session : evpn_bgp_session_up   (R11; exercises WI-1 Patch 2 Repl A)
+#   - Route       : route_present         (R12; exercises WI-1 Patch 2 Repl C)
+#   - BGP policy  : route_advertised_to   (R14; exercises WI-1 Patch 2 Repl E)
+#   - EVPN        : evpn_mac_route_present (R19; exercises WI-1 Patch 2 Repl D)
+#
+# This topology is verification scaffolding only. It is not part of the
+# product surface and is not consumed by any other workstream.
+# -----------------------------------------------------------------------------
+
+fabric:
+  evpn:
+    enabled: true
+    mode: vlan-aware
+    asn: 65100
+
+nodes:
+  - name: spine1
+    type: frr
+    role: spine
+    evpn_rr: true
+    router_id: 10.255.0.1
+
+  - name: leaf1
+    type: frr
+    role: leaf
+    router_id: 10.255.0.11
+
+  - name: leaf2
+    type: frr
+    role: leaf
+    router_id: 10.255.0.12
+
+  - name: host1
+    type: host
+    attach: leaf1
+    vlan: 10
+    ip: 10.10.10.11/24
+    gw: 10.10.10.1
+    mac: "00:11:22:33:44:55"
+
+  - name: host2
+    type: host
+    attach: leaf2
+    vlan: 10
+    ip: 10.10.10.12/24
+    gw: 10.10.10.1
+    mac: "00:11:22:33:44:66"
+
+links:
+  # Spine-leaf underlay
+  - endpoints: ["spine1:eth1", "leaf1:eth1"]
+    ipv4: ["172.16.0.0/31", "172.16.0.1/31"]
+
+  - endpoints: ["spine1:eth2", "leaf2:eth1"]
+    ipv4: ["172.16.0.2/31", "172.16.0.3/31"]
+
+  # Host-attach
+  - endpoints: ["host1:eth1", "leaf1:eth2"]
+  - endpoints: ["host2:eth1", "leaf2:eth2"]
+
+vlans:
+  10:
+    vni: 10100
+
+tests:
+  # 1. BGP session category (R11)
+  #    evpn_bgp_session_up between leaf1 and leaf2. Engineered to fail
+  #    because the EVPN substrate uses spine1 as the route reflector and
+  #    leaves do not peer directly with each other. There is no direct
+  #    link between leaf1 and leaf2, so peer_ips is empty and no
+  #    peerName=="leaf2" entry exists in leaf1's EVPN BGP table.
+  #    present=False -> observed=fail -> verdict=fail.
+  #    Note: peer must be a known node name (the engine's blast-radius
+  #    validator rejects unknown node references with code=2 and would
+  #    overwrite all four failed-invariant records with hard_failure).
+  #    Exercises WI-1 Patch 2 Replacement A.
+  - name: leaf1_evpn_session_to_leaf2
+    kind: invariant
+    type: evpn_bgp_session_up
+    node: leaf1
+    peer: leaf2
+    expect: pass
+
+  # 2. Route category (R12)
+  #    route_present for a prefix that is not advertised anywhere and not
+  #    derivable from links or fabric. Engineered to fail because
+  #    10.99.99.0/24 is not in any node's networks list, and leaf1's route
+  #    table will therefore never carry it. observed_state.routes=[]
+  #    exercises the R22 empty-set discipline.
+  #    Exercises WI-1 Patch 2 Replacement C.
+  - name: leaf1_route_present_unadvertised
+    kind: invariant
+    type: route_present
+    node: leaf1
+    prefix: 10.99.99.0/24
+    expect: pass
+
+  # 3. BGP policy category (R14)
+  #    route_advertised_to for a prefix that leaf1 does not advertise to
+  #    spine1. Engineered to fail because no node declares 10.99.99.0/24,
+  #    so leaf1's advertised-routes set toward spine1 cannot contain it.
+  #    Exercises WI-1 Patch 2 Replacement E.
+  - name: leaf1_advertises_unadvertised_prefix_to_spine1
+    kind: invariant
+    type: route_advertised_to
+    node: leaf1
+    peer: spine1
+    prefix: 10.99.99.0/24
+    expect: pass
+
+  # 4. EVPN category (R19)
+  #    evpn_mac_route_present for a MAC that is not assigned to any host.
+  #    Engineered to fail because de:ad:be:ef:00:01 is not in any host
+  #    node's mac field, so it cannot appear in EVPN Type-2 MAC routes
+  #    for VNI 10100.
+  #    Exercises WI-1 Patch 2 Replacement D.
+  - name: leaf2_evpn_mac_route_for_unknown_mac
+    kind: invariant
+    type: evpn_mac_route_present
+    node: leaf2
+    mac: "de:ad:be:ef:00:01"
+    vni: 10100
+    expect: pass
