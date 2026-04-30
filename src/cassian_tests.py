@@ -3029,6 +3029,106 @@ def _render_scenarios_summary(results: dict) -> str:
 
     return "\n".join(out) + "\n"
 
+
+# -----------------------------------------------------------------------------
+# Handover 2 / WI-2: observed_state summary rendering helpers.
+# Render the per-failed-invariant `observed:` block in results.summary.txt
+# from the observed_state payload populated by WI-1. Deterministic,
+# byte-stable for identical observed_state inputs.
+# -----------------------------------------------------------------------------
+
+_OBSERVED_STATE_LIST_KEYS: tuple[str, ...] = (
+    "advertised_routes",
+    "evpn_routes",
+    "routes",
+)
+
+_OBSERVED_STATE_LIST_CAP: int = 5
+
+
+def _format_observed_state_value_scalar(value) -> str:
+    """
+    Deterministic scalar rendering for an observed_state value.
+
+    Booleans render as 'true' / 'false'; None as 'null'; empty lists as '[]';
+    everything else as str(value).
+    """
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if value is None:
+        return "null"
+    if isinstance(value, list) and len(value) == 0:
+        return "[]"
+    return str(value)
+
+
+def _format_observed_state_list_entry(entry) -> str:
+    """
+    Deterministic single-entry rendering for a list entry inside an
+    observed_state list field.
+
+    Dict entries render as 'key=value, key=value, ...' with keys in
+    canonical-sorted order; non-dict entries render via str().
+    """
+    if isinstance(entry, dict):
+        parts = []
+        for k in sorted(entry.keys()):
+            parts.append(f"{k}={_format_observed_state_value_scalar(entry[k])}")
+        return ", ".join(parts)
+    return str(entry)
+
+
+def _format_observed_state_block(observed_state: dict, truncated: bool) -> list[str]:
+    """
+    Deterministic multi-line rendering of a failed-invariant observed_state
+    payload for results.summary.txt (Handover 2 R24-R28).
+
+    Layout:
+      - header 'observed:' at 4-space indent
+      - <key>: <value> lines at 6-space indent in canonical-sorted key order
+      - known list fields ('routes', 'advertised_routes', 'evpn_routes')
+        with at least one entry render multi-line at 8-space indent,
+        capped at _OBSERVED_STATE_LIST_CAP entries with a trailing
+        '(+<N> more)' over-cap line at 8-space indent
+      - empty lists render inline as '[]'
+      - truncation marker '(observed_state truncated; full payload in results.json)'
+        at 6-space indent appears iff truncated is True
+
+    Returns the block as a list of lines (no trailing newline).
+    Returns [] when observed_state is not a dict.
+    """
+    if not isinstance(observed_state, dict):
+        return []
+
+    out: list[str] = []
+    out.append("    observed:")
+
+    for key in sorted(observed_state.keys()):
+        value = observed_state[key]
+
+        if (
+            key in _OBSERVED_STATE_LIST_KEYS
+            and isinstance(value, list)
+            and len(value) > 0
+        ):
+            out.append(f"      {key}:")
+            cap = _OBSERVED_STATE_LIST_CAP
+            for entry in value[:cap]:
+                out.append(f"        - {_format_observed_state_list_entry(entry)}")
+            extra = len(value) - cap
+            if extra > 0:
+                out.append(f"        (+{extra} more)")
+        else:
+            out.append(f"      {key}: {_format_observed_state_value_scalar(value)}")
+
+    if truncated:
+        out.append("      (observed_state truncated; full payload in results.json)")
+
+    return out
+
+
 def _format_test_summary(results: dict) -> str:
     lab = results.get("lab", "")
     summ = results.get("summary", {}) or {}
@@ -3135,18 +3235,39 @@ def _format_test_summary(results: dict) -> str:
                 else:
                     err = err
 
-            failed_tests.append((name, kind, src, dst, err))
+            # WI-2: capture observed_state and observed_state_truncated for
+            # per-failed-invariant `observed:` block rendering. None / False
+            # for non-invariant or unpopulated records (R27).
+            observed_state = t.get("observed_state")
+            observed_state_truncated = bool(t.get("observed_state_truncated"))
 
-    failed_tests.sort()
+            failed_tests.append(
+                (name, kind, src, dst, err, observed_state, observed_state_truncated)
+            )
+
+    # WI-2: sort by name only because tuple positions 5-6 may carry dict /
+    # bool values that are not orderable across equal-name tuples. Test
+    # names are unique under model validation; sort remains deterministic.
+    failed_tests.sort(key=lambda x: x[0])
 
     if failed_tests:
         lines.append("failed_tests:")
         cap = 10
-        for (name, kind, src, dst, err) in failed_tests[:cap]:
+        for (name, kind, src, dst, err, observed_state, observed_state_truncated) in failed_tests[:cap]:
             line = f" - {name} ({kind}) {src}->{dst}"
             if err:
                 line += f" : {err}"
             lines.append(line)
+
+            # WI-2: per-failed-invariant `observed:` block (R24-R28).
+            # Suppressed for non-invariant kinds (ping/tcp/bgp_neighbor/prereq)
+            # and when observed_state is missing or not a dict (R27).
+            if kind == "invariant" and isinstance(observed_state, dict):
+                lines.extend(
+                    _format_observed_state_block(
+                        observed_state, observed_state_truncated
+                    )
+                )
         if len(failed_tests) > cap:
             lines.append(f" - (+{len(failed_tests) - cap} more)")
     else:

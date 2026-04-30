@@ -1457,6 +1457,85 @@ They do **not** by themselves prove:
 
 ---
 
+## Failed-Invariant Observed State
+
+When an invariant test produces `verdict: fail`, the test record in `results.json` carries a structured `observed_state` payload alongside the existing `observed` string. This is the authoritative deterministic failure-reason artifact.
+
+Where it appears:
+
+- on records in `results["tests"]` whose `kind == "invariant"` AND `verdict == "fail"`
+- on records in `results["events"]` whose `type == "scenario_test_run"` AND `kind == "invariant"` AND `verdict == "fail"`
+
+Where it does NOT appear:
+
+- on passing-invariant records
+- on non-invariant test kinds (`ping`, `tcp`)
+- on `prereq` failure paths (those surface as `hard_failure:` in the summary)
+- on records with `observed: blocked, verdict: fail, error: blocked before execution` (those are recorded explicitly per the Blocked declared validation items rules above)
+
+Determinism contract:
+
+- every value in `observed_state` is derived from declared topology / test inputs or from deterministically-computable scalars in parsed `vtysh` JSON
+- environmental nondeterminism (host clocks, container IDs, runtime PIDs, hostnames-of-the-runner, containerlab-allocated veth MAC addresses) MUST NOT enter `observed_state`
+- two clean runs of the same topology produce byte-identical `observed_state` payloads
+
+Per-record byte ceiling:
+
+- a single record's `observed_state` is bounded at 8192 bytes of canonical JSON
+- when a payload would exceed the ceiling, the engine deterministically suffix-drops trailing entries from the longest list field until it fits and sets `observed_state_truncated: true` on the record
+- the supporting `evidence` field still carries the full pre-truncation list
+
+Example failed-invariant record shape in `results.json`:
+
+```json
+{
+  "name": "leaf2_evpn_mac_route_for_unknown_mac",
+  "kind": "invariant",
+  "type": "evpn_mac_route_present",
+  "verdict": "fail",
+  "observed": "fail",
+  "observed_state": {
+    "type": "evpn_mac_route_present",
+    "mac": "de:ad:be:ef:00:01",
+    "vni": 10100,
+    "evpn_routes": [
+      {"mac": "00:11:22:33:44:55", "vni": 10100, "rd": "", "prefix": "", "route_type": 2}
+    ],
+    "source_node": "leaf2"
+  }
+}
+```
+
+Summary rendering in `results.summary.txt`:
+
+Each failed-invariant line in the `failed_tests:` block is followed by an indented `observed:` block. Indentation is fixed: header at 4-space, key/value lines at 6-space, list entries at 8-space. List values are capped at 5 entries with a trailing `(+<N> more)` over-cap line. When the record carries `observed_state_truncated: true`, the renderer emits a literal trailing line `(observed_state truncated; full payload in results.json)` at 6-space indent.
+
+Example summary block:
+
+```text
+failed_tests:
+ - leaf2_evpn_mac_route_for_unknown_mac (invariant) leaf2-> : evpn_mac_route_present mismatch (expected pass, observed fail)
+    observed:
+      evpn_routes:
+        - mac=00:11:22:33:44:01, prefix=, rd=, route_type=2, vni=10100
+        - mac=00:11:22:33:44:02, prefix=, rd=, route_type=2, vni=10100
+        (+58 more)
+      mac: de:ad:be:ef:00:01
+      source_node: leaf2
+      type: evpn_mac_route_present
+      vni: 10100
+      (observed_state truncated; full payload in results.json)
+```
+
+Authority boundary unchanged:
+
+- `results.json` `observed_state` field = authoritative structured failure reason
+- `results.summary.txt` `observed:` block = explanatory rendering only
+
+For the per-type `observed_state` schema (which keys are required for each invariant type) see `docs/topology-schema-v1.5.md` §4.
+
+---
+
 # 🔟 Scenarios (Failure Choreography)
 
 Scenarios define **ordered fault injection sequences**.
@@ -2247,6 +2326,7 @@ Important boundary:
 
 - omission does not mean success
 - a blocked declared item should appear explicitly in `results.json`
+- failed-invariant records carry a structured `observed_state` payload — see §9 "Failed-Invariant Observed State" and `docs/topology-schema-v1.5.md` §4 for the schema
 
 ---
 

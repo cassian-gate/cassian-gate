@@ -883,6 +883,139 @@ def _maybe_print_privilege_notice(template: str) -> None:
 RESULTS_SCHEMA = "results.v1"
 RESULTS_SCHEMA_VERSION = "1.0.0"
 
+# Frozen byte ceiling for a single invariant test record's observed_state.
+# When canonical JSON serialization exceeds this ceiling,
+# _observed_state_truncate deterministically suffix-drops list-tail entries
+# from the longest list field (alpha tie-break on key) until the
+# serialization fits.
+_OBSERVED_STATE_MAX_BYTES = 8192
+
+
+def _observed_state_serialized_bytes(state: dict) -> int:
+    """
+    Canonical byte count for a single observed_state payload.
+
+    Mirrors cassian_artifacts.write_json_canonical's serialization policy at
+    the object level (sort_keys=True, ensure_ascii=False, indent=2) so that
+    truncation decisions track the on-disk size closely.
+    """
+    try:
+        s = json.dumps(state, indent=2, sort_keys=True, ensure_ascii=False)
+    except Exception:
+        return 0
+    return len(s.encode("utf-8", errors="replace"))
+
+
+def _observed_state_truncate(state: dict) -> tuple[bool, int]:
+    """
+    Deterministic suffix-drop truncation for a single observed_state payload.
+
+    Returns (truncated, original_bytes).
+
+    Algorithm:
+      - Compute pre-truncation canonical byte count.
+      - If <= _OBSERVED_STATE_MAX_BYTES, return (False, original_bytes).
+      - Otherwise, repeatedly drop the trailing entry of the longest list
+        field (ties broken alphabetically by key) until the serialization
+        fits or no droppable list-tail entry remains. Required keys are
+        never removed; only list contents are shortened.
+    """
+    original = _observed_state_serialized_bytes(state)
+    if original <= _OBSERVED_STATE_MAX_BYTES:
+        return False, original
+
+    while _observed_state_serialized_bytes(state) > _OBSERVED_STATE_MAX_BYTES:
+        candidates = [
+            (k, v) for k, v in state.items()
+            if isinstance(v, list) and len(v) > 0
+        ]
+        if not candidates:
+            break
+        candidates.sort(key=lambda kv: (-len(kv[1]), str(kv[0])))
+        longest_key = candidates[0][0]
+        state[longest_key] = state[longest_key][:-1]
+
+    return True, original
+
+
+def _observed_state_finalize_in_results(results: dict) -> None:
+    """
+    Collect-time observed_state stabilization (additive-only).
+
+    Hard rules:
+      - never alter verdict
+      - never alter the existing 'observed' string field
+      - never alter any other existing record field
+      - strip observed_state from passing invariant records
+      - strip observed_state from non-invariant records (defensive)
+      - apply deterministic suffix-drop truncation when present payload
+        exceeds _OBSERVED_STATE_MAX_BYTES
+
+    Emits 'observed_state_truncated' (bool) and
+    'observed_state_truncation_original_bytes' (int) only when truncation
+    actually occurred. Never emits these flags otherwise.
+    """
+    if not isinstance(results, dict):
+        return
+
+    def _stabilize_record(rec: dict) -> None:
+        if not isinstance(rec, dict):
+            return
+
+        kind = str(rec.get("kind") or "").strip().lower()
+        verdict = str(rec.get("verdict") or "").strip().lower()
+
+        if kind != "invariant" or verdict != "fail":
+            # observed_state belongs only on failed invariant records.
+            for k in (
+                "observed_state",
+                "observed_state_truncated",
+                "observed_state_truncation_original_bytes",
+            ):
+                if k in rec:
+                    rec.pop(k, None)
+            return
+
+        state = rec.get("observed_state")
+        if not isinstance(state, dict):
+            # Failed invariant with no populated observed_state; evaluator
+            # call sites are responsible for population. Strip stray
+            # truncation flags if any.
+            for k in (
+                "observed_state_truncated",
+                "observed_state_truncation_original_bytes",
+            ):
+                if k in rec:
+                    rec.pop(k, None)
+            return
+
+        truncated, original_bytes = _observed_state_truncate(state)
+        if truncated:
+            rec["observed_state_truncated"] = True
+            rec["observed_state_truncation_original_bytes"] = int(original_bytes)
+        else:
+            for k in (
+                "observed_state_truncated",
+                "observed_state_truncation_original_bytes",
+            ):
+                if k in rec:
+                    rec.pop(k, None)
+
+    tests = results.get("tests")
+    if isinstance(tests, list):
+        for rec in tests:
+            _stabilize_record(rec)
+
+    events = results.get("events")
+    if isinstance(events, list):
+        for ev in events:
+            if not isinstance(ev, dict):
+                continue
+            if str(ev.get("type") or "").strip().lower() != "scenario_test_run":
+                continue
+            _stabilize_record(ev)
+
+
 def _finalize_results_schema(
     *,
     results: dict,
@@ -3641,6 +3774,7 @@ def cmd_test(args: argparse.Namespace) -> None:
         error: str = "",
         meta: dict | None = None,
         evidence: dict | None = None,
+        observed_state: dict | None = None,
     ) -> None:
         rec = {
             "name": name,
@@ -3656,6 +3790,8 @@ def cmd_test(args: argparse.Namespace) -> None:
         }
         if meta:
             rec["meta"] = meta
+        if observed_state is not None:
+            rec["observed_state"] = observed_state
         results["tests"].append(rec)
 
     def record_event_test_run(
@@ -3673,6 +3809,7 @@ def cmd_test(args: argparse.Namespace) -> None:
         error: str = "",
         meta: dict | None = None,
         evidence: dict | None = None,
+        observed_state: dict | None = None,
     ) -> None:
         rec = {
             "type": "scenario_test_run",
@@ -3691,6 +3828,8 @@ def cmd_test(args: argparse.Namespace) -> None:
         }
         if meta:
             rec["meta"] = meta
+        if observed_state is not None:
+            rec["observed_state"] = observed_state
         results["events"].append(rec)
 
     def record_event_scenario_fault(
@@ -4201,6 +4340,11 @@ def cmd_test(args: argparse.Namespace) -> None:
         out = lab_dir(lab) / "results.json"
         try:
             out.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                _observed_state_finalize_in_results(results)
+            except Exception:
+                # Never allow observed_state stabilization to break gate execution.
+                pass
             write_json_canonical(out, results)
             _invocation_record_written_artifact(out)
 
@@ -5007,6 +5151,28 @@ def cmd_test(args: argparse.Namespace) -> None:
             observed = "pass" if present else "fail"
             verdict = "pass" if observed == expected else "fail"
 
+            observed_state_payload = None
+            if verdict == "fail":
+                state_value = "Unknown"
+                last_reset_reason_value = ""
+                for _e in evidence_entries:
+                    if not isinstance(_e, dict):
+                        continue
+                    if str(_e.get("peerName") or "") == peer:
+                        st = str(_e.get("state") or "").strip()
+                        if st:
+                            state_value = st
+                        break
+                observed_state_payload = {
+                    "type": "evpn_bgp_session_up",
+                    "peer": peer,
+                    "state": state_value,
+                    "last_reset_reason": last_reset_reason_value,
+                    "source_node": src,
+                }
+                if parse_error:
+                    observed_state_payload["parse_error"] = str(parse_error)
+
             record_fn(
                 name=test_name,
                 kind="invariant",
@@ -5028,6 +5194,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     "present": bool(present),
                     "observed_neighbor_count": len(evidence_entries),
                 },
+                observed_state=observed_state_payload,
             )
             return verdict
 
@@ -5275,6 +5442,19 @@ def cmd_test(args: argparse.Namespace) -> None:
                 observed = "pass" if observed_med == exp_med_i else "fail"
                 verdict = "pass" if observed == expected else "fail"
 
+                observed_state_payload = None
+                if verdict == "fail":
+                    observed_state_payload = {
+                        "type": "bgp_med_equals",
+                        "prefix": norm_prefix,
+                        "peer": "",
+                        "expected_med": int(exp_med_i),
+                        "actual_med": int(observed_med) if observed_med is not None else None,
+                        "source_node": src,
+                    }
+                    if parse_error:
+                        observed_state_payload["parse_error"] = str(parse_error)
+
                 record_fn(
                     name=test_name,
                     kind="invariant",
@@ -5297,6 +5477,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                         "expected_value": exp_med_i,
                         "observed_value": observed_med,
                     },
+                    observed_state=observed_state_payload,
                 )
                 return verdict
 
@@ -5330,6 +5511,27 @@ def cmd_test(args: argparse.Namespace) -> None:
 
             verdict = "pass" if observed == expected else "fail"
 
+            observed_state_payload = None
+            if verdict == "fail":
+                if inv_type == "route_present":
+                    routes_value: list = []
+                else:
+                    routes_value = [
+                        {
+                            "prefix": norm_prefix,
+                            "next_hop": "",
+                            "protocol": "",
+                            "metric": None,
+                            "as_path": "",
+                        }
+                    ] if present else []
+                observed_state_payload = {
+                    "type": inv_type,
+                    "prefix": norm_prefix,
+                    "routes": routes_value,
+                    "source_node": src,
+                }
+
             record_fn(
                 name=test_name,
                 kind="invariant",
@@ -5350,6 +5552,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     "present": bool(present),
                     "observed_prefix_count": len(set(observed_prefixes or [])),
                 },
+                observed_state=observed_state_payload,
             )
             return verdict
 
@@ -5649,6 +5852,66 @@ def cmd_test(args: argparse.Namespace) -> None:
 
             verdict = "pass" if observed == expected else "fail"
 
+            observed_state_payload = None
+            if verdict == "fail":
+                # WI-1 Patch 4 (D06): Filter observed_state.evpn_routes to
+                # MACs declared as host node `mac:` fields in the resolved
+                # topology. The existing evidence_entries collection
+                # captures every MAC the EVPN substrate has learned in its
+                # type-2 routes, which under containerlab includes
+                # auto-allocated veth MACs that vary across runs. Those
+                # tokens are explicitly disallowed from observed_state's
+                # required keys per the determinism surface declared in the
+                # handover (D06: "environmental nondeterminism MUST NOT
+                # enter observed_state's required keys. Such tokens MAY
+                # appear in the existing evidence channel"). The unfiltered
+                # list remains in `evidence` (the supporting evidence
+                # channel that already tolerates non-determinism); only the
+                # observed_state surface is filtered.
+                _declared_host_macs: set[str] = set()
+                for _n in (topo.get("nodes") or []):
+                    if not isinstance(_n, dict):
+                        continue
+                    if str(_n.get("type") or "") != "host":
+                        continue
+                    _m = _n.get("mac")
+                    if isinstance(_m, str) and _m.strip():
+                        _declared_host_macs.add(_m.strip().lower())
+
+                evpn_routes_value: list = []
+                for _e in evidence_entries:
+                    if not isinstance(_e, dict):
+                        continue
+                    _e_mac = str(_e.get("mac") or "").strip().lower()
+                    if _e_mac and _e_mac not in _declared_host_macs:
+                        continue
+                    evpn_routes_value.append(
+                        {
+                            "rd": "",
+                            "prefix": "",
+                            "mac": str(_e.get("mac") or ""),
+                            "vni": _e.get("vni"),
+                            "route_type": _e.get("route_type"),
+                        }
+                    )
+                if inv_type == "evpn_vni_route_present":
+                    observed_state_payload = {
+                        "type": "evpn_vni_route_present",
+                        "vni": int(vni_i) if vni_i is not None else None,
+                        "evpn_routes": evpn_routes_value,
+                        "source_node": src,
+                    }
+                else:
+                    observed_state_payload = {
+                        "type": inv_type,
+                        "mac": mac,
+                        "vni": int(vni_i) if vni_i is not None else None,
+                        "evpn_routes": evpn_routes_value,
+                        "source_node": src,
+                    }
+                if parse_error:
+                    observed_state_payload["parse_error"] = str(parse_error)
+
             record_fn(
                 name=test_name,
                 kind="invariant",
@@ -5671,6 +5934,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     "present": bool(present),
                     "observed_route_count": len(evidence_entries),
                 },
+                observed_state=observed_state_payload,
             )
             return verdict
 
@@ -5845,6 +6109,47 @@ def cmd_test(args: argparse.Namespace) -> None:
                 observed = "pass" if not present else "fail"
             verdict = "pass" if observed == expected else "fail"
 
+            observed_state_payload = None
+            if verdict == "fail":
+                if inv_type == "route_advertised_to":
+                    advertised_routes_value: list = [
+                        {
+                            "prefix": _p,
+                            "next_hop": "",
+                            "protocol": "",
+                            "metric": None,
+                            "as_path": "",
+                        }
+                        for _p in advertised_prefixes
+                    ]
+                    observed_state_payload = {
+                        "type": "route_advertised_to",
+                        "prefix": prefix,
+                        "peer": peer,
+                        "advertised_routes": advertised_routes_value,
+                        "none_advertised": (len(advertised_routes_value) == 0),
+                        "source_node": node,
+                    }
+                else:
+                    advertised_routes_value = [
+                        {
+                            "prefix": prefix,
+                            "next_hop": "",
+                            "protocol": "",
+                            "metric": None,
+                            "as_path": "",
+                        }
+                    ] if present else []
+                    observed_state_payload = {
+                        "type": "route_not_advertised_to",
+                        "prefix": prefix,
+                        "peer": peer,
+                        "advertised_routes": advertised_routes_value,
+                        "source_node": node,
+                    }
+                if parse_error:
+                    observed_state_payload["parse_error"] = str(parse_error)
+
             record_fn(
                 name=test_name,
                 kind="invariant",
@@ -5867,6 +6172,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     "present": bool(present),
                     "observed_prefix_count": len(advertised_prefixes),
                 },
+                observed_state=observed_state_payload,
             )
             return verdict
 
@@ -5997,6 +6303,19 @@ def cmd_test(args: argparse.Namespace) -> None:
             observed = "pass" if observed_localpref == exp_localpref_i else "fail"
             verdict = "pass" if observed == expected else "fail"
 
+            observed_state_payload = None
+            if verdict == "fail":
+                observed_state_payload = {
+                    "type": "bgp_localpref_equals",
+                    "prefix": prefix,
+                    "peer": "",
+                    "expected_localpref": int(exp_localpref_i),
+                    "actual_localpref": int(observed_localpref) if observed_localpref is not None else None,
+                    "source_node": node,
+                }
+                if parse_error:
+                    observed_state_payload["parse_error"] = str(parse_error)
+
             record_fn(
                 name=test_name,
                 kind="invariant",
@@ -6019,8 +6338,25 @@ def cmd_test(args: argparse.Namespace) -> None:
                     "expected_value": exp_localpref_i,
                     "observed_value": observed_localpref,
                 },
+                observed_state=observed_state_payload,
             )
             return verdict
+
+        observed_state_payload: dict | None = None
+        if inv_type == "bgp_session_up":
+            observed_state_payload = {
+                "type": "bgp_session_up",
+                "peer": str(t.get("dst") or ""),
+                "state": "Unknown",
+                "last_error": "",
+                "source_node": src,
+            }
+        else:
+            observed_state_payload = {
+                "type": str(inv_type or ""),
+                "source_node": src,
+                "parse_error": f"unsupported invariant type '{inv_type}'",
+            }
 
         record_fn(
             name=test_name,
@@ -6034,6 +6370,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             error=f"unsupported invariant type '{inv_type}'",
             evidence={"reason": "unsupported_invariant_type"},
             meta={"type": inv_type},
+            observed_state=observed_state_payload,
         )
         return "fail"
 
