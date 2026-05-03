@@ -1296,9 +1296,98 @@ It does **not** by itself prove:
 - community / AS-path behavior
 - broader route-map intent
 
+### BGP Session Up Invariant
+
+Invariant type:
+
+```
+bgp_session_up
+```
+
+Purpose:
+
+Verify that an IPv4-AFI BGP session from the specified node to a declared neighbor IPv4 address is in the FRR `Established` state.
+
+This is useful for validating BGP session establishment such as:
+
+- iBGP session presence to a known neighbor
+- eBGP session presence to a known neighbor
+- post-change BGP session re-establishment
+- guarded assertion of session up before further routing-policy invariants
+
+Required fields:
+
+| Field  | Description                                                         |
+| ------ | ------------------------------------------------------------------- |
+| node   | Node where the BGP session is checked (FRR-typed)                   |
+| dst    | IPv4 literal of the configured neighbor on that node                |
+
+Example:
+
+```yaml
+tests:
+  - name: r1_bgp_up_to_10_0_0_2
+    kind: invariant
+    type: bgp_session_up
+    node: r1
+    dst: 10.0.0.2
+    expect: pass
+```
+
+Behavior:
+
+- The invariant runs `vtysh -c 'show bgp summary json'` on the specified node and parses the structured output.
+- It passes when the queried neighbor is present in FRR's BGP summary and its session state is `Established`.
+- It fails when the session is in any other FRR FSM state (`Idle`, `Active`, `Connect`, `OpenSent`, `OpenConfirm`), when the neighbor is not configured (engine-synthesized state literal `NotConfigured`), or when vtysh fails or its output is not parseable as JSON (engine-synthesized state literal `Unknown`).
+- If the invariant definition itself is invalid (missing or malformed `dst` IPv4 literal), the run fails with misuse exit code `2`.
+- The retry policy mirrors the existing `bgp_neighbor` test surface: retries are bounded by the test's `timeout_s` (default 15 seconds) and `retry_interval_s` (default 1.0 seconds); the loop terminates on first vtysh-rc success and the post-retry block reads the parsed state.
+
+Typical exit semantics follow the standard Cassian Gate model:
+
+- satisfied invariant → passing gate outcome
+- invariant mismatch → validation failure
+- invalid invariant declaration → usage / contract error
+
+Artifacts produced:
+
+The invariant result is recorded in the standard artifacts:
+
+```
+labs/<lab>/results.json
+labs/<lab>/results.summary.txt
+```
+
+When `verdict: fail`, the test record carries a structured `observed_state` payload with deterministic keys (`type`, `peer`, `state`, `last_error`, `source_node`). See "Failed-Invariant Observed State" below and `docs/topology-schema-v1.5.md` §4.1 for the full per-type schema.
+
+Positive proof example:
+
+```bash
+cassian test topologies/bgp_invariant.yaml
+```
+
+Replay:
+
+This invariant can be checked again using standard gate replay workflows.
+
+```bash
+cassian replay labs/clab-bgp-invariant --gate --verify-results
+```
+
+Scope boundary:
+
+This invariant validates only IPv4-AFI BGP session-Established truth from one node to one neighbor IPv4.
+
+It does **not** by itself prove:
+
+- EVPN-AFI session state (use `evpn_bgp_session_up`)
+- route presence or attribute correctness
+- route advertisement boundaries
+- generic routing policy correctness
+
 ---
 
 ## EVPN Invariants
+
 
 Cassian Gate supports deterministic EVPN invariant checks as standard authoritative test results.
 

@@ -6342,6 +6342,202 @@ def cmd_test(args: argparse.Namespace) -> None:
             )
             return verdict
 
+        if inv_type == "bgp_session_up":
+            neighbor = str(t.get("dst") or "").strip()
+            try:
+                ip = ipaddress.ip_address(neighbor)
+                if ip.version != 4:
+                    raise ValueError("dst must be IPv4")
+            except Exception:
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst=str(t.get("dst") or ""),
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=int((time.time() - start) * 1000),
+                    error="dst missing or invalid (expected non-empty IPv4 literal)",
+                    evidence={
+                        "cmd": "vtysh -c 'show bgp summary json'",
+                        "parse_error": "dst missing or invalid (expected non-empty IPv4 literal)",
+                    },
+                    meta={
+                        "type": "bgp_session_up",
+                        "neighbor": neighbor,
+                        "state": "Unknown",
+                        "attempts": 0,
+                        "timeout_s": 0,
+                        "retry_interval_s": 0.0,
+                        "last_rc": None,
+                    },
+                    observed_state={
+                        "type": "bgp_session_up",
+                        "peer": neighbor,
+                        "state": "Unknown",
+                        "last_error": "dst missing or invalid (expected non-empty IPv4 literal)",
+                        "source_node": src,
+                    },
+                )
+                return "fail"
+
+            if not src:
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst=neighbor,
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=int((time.time() - start) * 1000),
+                    error="src missing or empty",
+                    evidence={
+                        "cmd": "vtysh -c 'show bgp summary json'",
+                        "parse_error": "src missing or empty",
+                    },
+                    meta={
+                        "type": "bgp_session_up",
+                        "neighbor": neighbor,
+                        "state": "Unknown",
+                        "attempts": 0,
+                        "timeout_s": 0,
+                        "retry_interval_s": 0.0,
+                        "last_rc": None,
+                    },
+                    observed_state={
+                        "type": "bgp_session_up",
+                        "peer": neighbor,
+                        "state": "Unknown",
+                        "last_error": "src missing or empty",
+                        "source_node": src,
+                    },
+                )
+                return "fail"
+
+            timeout_s = int(t.get("timeout_s") or (15 if expected == "pass" else 0))
+            interval_s = float(t.get("retry_interval_s") or 1.0)
+
+            def attempt():
+                cp = rt.exec(lab, src, ["vtysh", "-c", "show bgp summary json"], check=False)
+                ok = (getattr(cp, "returncode", 1) == 0)
+                out = (cp.stdout or "") if hasattr(cp, "stdout") else ""
+                return ok, cp, out
+
+            if expected == "pass" and timeout_s > 0:
+                def try_once():
+                    ok, cp, out = attempt()
+                    return ok, (cp, out)
+
+                ok, last_payload, attempts, dur_ms = retry_until(timeout_s, interval_s, try_once)
+                last_cp, last_out = last_payload
+            else:
+                ok_a, cp_a, out_a = attempt()
+                last_cp = cp_a
+                last_out = out_a
+                last_state = None
+                attempts = 1
+                dur_ms = int((time.time() - start) * 1000)
+                ok = (getattr(cp_a, "returncode", 1) == 0)
+
+            observed_state_str: str = "Unknown"
+            last_error: str = ""
+            parse_error: str = ""
+            peer_present: bool = False
+
+            if ok:
+                try:
+                    data = json.loads(last_out or "{}")
+                    peers = None
+                    top_peers = data.get("peers")
+                    if isinstance(top_peers, dict):
+                        peers = top_peers
+                    else:
+                        v4u = data.get("ipv4Unicast")
+                        if isinstance(v4u, dict):
+                            inner = v4u.get("peers")
+                            if isinstance(inner, dict):
+                                peers = inner
+                    if peers is None:
+                        for _, v in sorted(data.items()):
+                            if isinstance(v, dict):
+                                inner = v.get("peers")
+                                if isinstance(inner, dict):
+                                    peers = inner
+                                    break
+                    if isinstance(peers, dict):
+                        p = peers.get(neighbor)
+                        if isinstance(p, dict):
+                            peer_present = True
+                            raw_state = p.get("state") or p.get("bgpState") or p.get("peerState")
+                            if raw_state:
+                                observed_state_str = str(raw_state)
+                            reset_reason = p.get("lastResetReason")
+                            if reset_reason:
+                                last_error = str(reset_reason)
+                        else:
+                            observed_state_str = "NotConfigured"
+                            last_error = "neighbor not present in summary"
+                            parse_error = "neighbor not present in summary"
+                    else:
+                        observed_state_str = "Unknown"
+                        last_error = "peers not found in summary"
+                        parse_error = "peers not found in summary"
+                except Exception:
+                    observed_state_str = "Unknown"
+                    last_error = "vtysh output not parseable as JSON"
+                    parse_error = "vtysh output not parseable as JSON"
+            else:
+                observed_state_str = "Unknown"
+                last_error = "vtysh command failed"
+                parse_error = "vtysh command failed"
+
+            st_norm = observed_state_str.strip().lower()
+            observed = "pass" if (peer_present and st_norm == "established") else "fail"
+            verdict = "pass" if observed == expected else "fail"
+
+            evidence = {
+                "cmd": "vtysh -c 'show bgp summary json'",
+                "parse_error": parse_error,
+            }
+            meta = {
+                "type": "bgp_session_up",
+                "neighbor": neighbor,
+                "state": observed_state_str,
+                "attempts": int(attempts),
+                "timeout_s": int(timeout_s),
+                "retry_interval_s": float(interval_s),
+                "last_rc": getattr(last_cp, "returncode", None),
+            }
+
+            if verdict == "pass":
+                observed_state_record = None
+            else:
+                observed_state_record = {
+                    "type": "bgp_session_up",
+                    "peer": neighbor,
+                    "state": observed_state_str,
+                    "last_error": last_error,
+                    "source_node": src,
+                }
+
+            record_fn(
+                name=test_name,
+                kind="invariant",
+                src=src,
+                dst=neighbor,
+                expected=expected,
+                observed=observed,
+                verdict=verdict,
+                duration_ms=int(dur_ms),
+                error="" if verdict == "pass" else f"bgp_session_up mismatch (expected {expected}, observed {observed})",
+                evidence=evidence,
+                meta=meta,
+                observed_state=observed_state_record,
+            )
+            return verdict
+
         observed_state_payload: dict | None = None
         if inv_type == "bgp_session_up":
             observed_state_payload = {
