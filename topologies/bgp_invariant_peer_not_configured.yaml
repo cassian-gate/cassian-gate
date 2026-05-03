@@ -1,4 +1,4 @@
-name: bgp-invariant
+name: bgp-invariant-peer-not-configured
 
 nodes:
   - name: r1
@@ -23,9 +23,9 @@ links:
     ipv4: ["10.0.0.1/30", "10.0.0.2/30"]
 
 tests:
-  - name: inv_bgp_up_r1_to_10_0_0_2
+  - name: inv_bgp_up_r1_to_unconfigured_peer
     kind: invariant
     type: bgp_session_up
     node: r1
-    dst: 10.0.0.2
+    dst: 10.0.0.99
     expect: pass
