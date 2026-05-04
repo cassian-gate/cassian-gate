@@ -4988,32 +4988,118 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         return verdict
 
-    def run_invariant_test(*, test_name: str, src: str, t: dict, record_fn=record_test) -> str:
-        inv_type = str(t.get("type") or "").strip().lower()
-        expected = str(t.get("expect") or "pass").strip().lower()
-        if expected not in ("pass", "fail"):
-            expected = "pass"
+    def _evaluate_invariant_attempt(
+        *,
+        inv_type: str,
+        t: dict,
+        src: str,
+    ) -> tuple[bool, bool, dict, dict]:
+        """
+        Single-attempt evaluator for invariant types implemented by
+        run_invariant_test. Returns (vtysh_ok, predicate_ok, observed_state, evidence).
 
-        start = time.time()
+          vtysh_ok       True if the runtime probe succeeded (vtysh exit 0 and
+                         output captured). Used by TEST-path retry loops to
+                         skip transient runtime failures.
+          predicate_ok   True if the invariant condition is satisfied. Used by
+                         the wait-for-path retry_until driver in
+                         cassian_tests.py:wait_for_condition.
+          observed_state Per-type structured payload conforming to the
+                         schema documented in docs/topology-schema-v1.5.md
+                         §4. Suitable for record_fn(observed_state=...) on
+                         the TEST-path. The TEST-path caller is responsible
+                         for selecting which fields are exposed in
+                         results.json[tests] vs. results.json[scenarios]
+                         (Handover 2 / REQ-WF-16 contracts).
+          evidence       Diagnostic dict (cmd, parse_error, returncode, ...)
+                         suitable for record_fn(evidence=...) on the
+                         TEST-path.
+
+        No retry. No recording. No input validation. Backend errors are
+        caught inside the helper and surfaced as vtysh_ok=False with
+        diagnostic content in evidence; the helper does not raise.
+
+        For invariant types where vtysh-success implies the predicate (most
+        types), vtysh_ok and predicate_ok return identical values. They
+        differ for bgp_session_up and evpn_bgp_session_up, where vtysh
+        running successfully does not imply the BGP session has reached
+        Established.
+        """
+        if inv_type == "bgp_session_up":
+            neighbor = str(t.get("dst") or "").strip()
+            cp = rt.exec(lab, src, ["vtysh", "-c", "show bgp summary json"], check=False)
+            vtysh_ok = (getattr(cp, "returncode", 1) == 0)
+            out = (cp.stdout or "") if hasattr(cp, "stdout") else ""
+
+            observed_state_str: str = "Unknown"
+            last_error: str = ""
+            parse_error: str = ""
+            peer_present: bool = False
+
+            if vtysh_ok:
+                try:
+                    data = json.loads(out or "{}")
+                    peers = None
+                    top_peers = data.get("peers")
+                    if isinstance(top_peers, dict):
+                        peers = top_peers
+                    else:
+                        v4u = data.get("ipv4Unicast")
+                        if isinstance(v4u, dict):
+                            inner = v4u.get("peers")
+                            if isinstance(inner, dict):
+                                peers = inner
+                    if peers is None:
+                        for _, v in sorted(data.items()):
+                            if isinstance(v, dict):
+                                inner = v.get("peers")
+                                if isinstance(inner, dict):
+                                    peers = inner
+                                    break
+                    if isinstance(peers, dict):
+                        p = peers.get(neighbor)
+                        if isinstance(p, dict):
+                            peer_present = True
+                            raw_state = p.get("state") or p.get("bgpState") or p.get("peerState")
+                            if raw_state:
+                                observed_state_str = str(raw_state)
+                            reset_reason = p.get("lastResetReason")
+                            if reset_reason:
+                                last_error = str(reset_reason)
+                        else:
+                            observed_state_str = "NotConfigured"
+                            last_error = "neighbor not present in summary"
+                            parse_error = "neighbor not present in summary"
+                    else:
+                        observed_state_str = "Unknown"
+                        last_error = "peers not found in summary"
+                        parse_error = "peers not found in summary"
+                except Exception:
+                    observed_state_str = "Unknown"
+                    last_error = "vtysh output not parseable as JSON"
+                    parse_error = "vtysh output not parseable as JSON"
+            else:
+                observed_state_str = "Unknown"
+                last_error = "vtysh command failed"
+                parse_error = "vtysh command failed"
+
+            st_norm = observed_state_str.strip().lower()
+            predicate_ok = bool(peer_present and st_norm == "established")
+
+            observed_state = {
+                "peer_present": peer_present,
+                "state": observed_state_str,
+                "last_error": last_error,
+            }
+            evidence = {
+                "cmd": "vtysh -c 'show bgp summary json'",
+                "parse_error": parse_error,
+                "returncode": getattr(cp, "returncode", None),
+            }
+            return vtysh_ok, predicate_ok, observed_state, evidence
 
         if inv_type == "evpn_bgp_session_up":
             peer = str(t.get("peer") or "").strip()
-            if not peer:
-                record_fn(
-                    name=test_name,
-                    kind="invariant",
-                    src=src,
-                    dst="",
-                    expected=expected,
-                    observed="fail",
-                    verdict="fail",
-                    duration_ms=0,
-                    error="evpn_bgp_session_up requires peer",
-                    evidence={"reason": "missing_peer"},
-                    meta={"type": inv_type, "peer": peer},
-                )
-                return "fail"
-
             cp = rt.exec(
                 lab,
                 src,
@@ -5034,9 +5120,11 @@ def cmd_test(args: argparse.Namespace) -> None:
                         out = str(out)
                 rc = getattr(cp, "returncode", None)
 
-            evidence_entries = []
-            parse_error = ""
-            present = False
+            vtysh_ok = (rc in (0, None))
+
+            evidence_entries: list = []
+            parse_error: str = ""
+            present: bool = False
 
             try:
                 doc = json.loads(str(out or "").strip()) if str(out or "").strip() else {}
@@ -5048,7 +5136,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 else:
                     raise ValueError("unexpected_evpn_bgp_summary_json_shape")
 
-                peer_ips = set()
+                peer_ips: set = set()
                 for link in (topo.get("links") or []):
                     endpoints = list(link.get("endpoints") or [])
                     if len(endpoints) != 2:
@@ -5091,6 +5179,575 @@ def cmd_test(args: argparse.Namespace) -> None:
                         present = True
             except Exception as e:
                 parse_error = str(e)
+
+            evidence_entries = sorted(
+                evidence_entries,
+                key=lambda x: (
+                    str(x.get("neighbor") or ""),
+                    str(x.get("peerName") or ""),
+                    str(x.get("state") or ""),
+                    str(x.get("node") or ""),
+                ),
+            )
+
+            predicate_ok = bool(present)
+
+            observed_state = {
+                "peer": peer,
+                "present": present,
+                "neighbors": evidence_entries,
+            }
+            evidence = {
+                "cmd": "vtysh -c 'show bgp l2vpn evpn summary json'",
+                "rc": rc,
+                "parse_error": parse_error,
+                "neighbors": evidence_entries,
+            }
+            return vtysh_ok, predicate_ok, observed_state, evidence
+
+        if inv_type in ("route_present", "route_absent"):
+            norm_prefix = str(t.get("_norm_prefix") or "").strip()
+            cp = rt.exec(
+                lab,
+                src,
+                ["vtysh", "-c", "show ip route json"],
+                check=False,
+                capture_output=True,
+            )
+
+            if isinstance(cp, str):
+                out = cp
+                rc = None
+            else:
+                out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
+                if isinstance(out, (bytes, bytearray)):
+                    try:
+                        out = out.decode("utf-8", errors="replace")
+                    except Exception:
+                        out = str(out)
+                rc = getattr(cp, "returncode", None)
+
+            vtysh_ok = (rc in (0, None))
+
+            observed_prefixes = parse_frr_show_ip_route_prefixes_json(str(out or ""))
+            present = norm_prefix in set(observed_prefixes or [])
+
+            if inv_type == "route_present":
+                predicate_ok = bool(present)
+            else:
+                predicate_ok = not bool(present)
+
+            observed_state = {
+                "norm_prefix": norm_prefix,
+                "present": present,
+                "observed_prefixes": list(observed_prefixes or []),
+            }
+            evidence = {
+                "cmd": "vtysh -c 'show ip route json'",
+                "rc": rc,
+            }
+            return vtysh_ok, predicate_ok, observed_state, evidence
+
+        if inv_type == "bgp_med_equals":
+            norm_prefix = str(t.get("_norm_prefix") or "").strip()
+            cp = rt.exec(
+                lab,
+                src,
+                ["vtysh", "-c", f"show ip bgp {norm_prefix} json"],
+                check=False,
+                capture_output=True,
+            )
+
+            if isinstance(cp, str):
+                out = cp
+                rc = None
+            else:
+                out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
+                if isinstance(out, (bytes, bytearray)):
+                    try:
+                        out = out.decode("utf-8", errors="replace")
+                    except Exception:
+                        out = str(out)
+                rc = getattr(cp, "returncode", None)
+
+            vtysh_ok = (rc in (0, None))
+
+            parse_error = ""
+            observed_med = None
+            empty_first_doc = (str(out or "").strip() in ("", "{}"))
+
+            try:
+                doc = json.loads(str(out or "").strip()) if str(out or "").strip() else {}
+                route_obj = None
+
+                if isinstance(doc, dict):
+                    cand = doc.get(norm_prefix)
+                    if isinstance(cand, list) and cand:
+                        route_obj = cand[0]
+                    elif isinstance(cand, dict):
+                        route_obj = cand
+                    elif (
+                        doc.get("prefix") is not None
+                        and (_normalize_prefix(str(doc.get("prefix"))) or str(doc.get("prefix"))) == norm_prefix
+                    ):
+                        route_obj = doc
+                    else:
+                        routes = doc.get("routes")
+                        if isinstance(routes, dict):
+                            cand = routes.get(norm_prefix)
+                            if isinstance(cand, list) and cand:
+                                route_obj = cand[0]
+                            elif isinstance(cand, dict):
+                                route_obj = cand
+                            else:
+                                for k, v in routes.items():
+                                    nk = _normalize_prefix(str(k)) or str(k)
+                                    if nk != norm_prefix:
+                                        continue
+                                    if isinstance(v, list) and v:
+                                        route_obj = v[0]
+                                        break
+                                    if isinstance(v, dict):
+                                        route_obj = v
+                                        break
+                        if route_obj is None:
+                            for k, v in doc.items():
+                                nk = _normalize_prefix(str(k)) or str(k)
+                                if nk != norm_prefix:
+                                    continue
+                                if isinstance(v, list) and v:
+                                    route_obj = v[0]
+                                    break
+                                if isinstance(v, dict):
+                                    route_obj = v
+                                    break
+                else:
+                    raise ValueError("unexpected_bgp_prefix_json_shape")
+
+                if not isinstance(route_obj, dict):
+                    parse_error = "prefix not present in bgp json"
+                else:
+                    for key in ("med", "metric"):
+                        val = route_obj.get(key)
+                        if val is None or str(val).strip() == "":
+                            continue
+                        try:
+                            observed_med = int(val)
+                            break
+                        except Exception:
+                            continue
+
+                    if observed_med is None:
+                        paths = route_obj.get("paths")
+                        if isinstance(paths, list):
+                            for path in paths:
+                                if not isinstance(path, dict):
+                                    continue
+                                for key in ("med", "metric"):
+                                    val = path.get(key)
+                                    if val is None or str(val).strip() == "":
+                                        continue
+                                    try:
+                                        observed_med = int(val)
+                                        break
+                                    except Exception:
+                                        continue
+                                if observed_med is not None:
+                                    break
+
+                    if observed_med is None:
+                        parse_error = "med not present in bgp json"
+            except Exception as e:
+                parse_error = str(e)
+
+            predicate_ok = (observed_med is not None)
+
+            observed_state = {
+                "norm_prefix": norm_prefix,
+                "observed_med": observed_med,
+            }
+            evidence = {
+                "cmd": f"vtysh -c 'show ip bgp {norm_prefix} json'",
+                "rc": rc,
+                "parse_error": parse_error,
+                "empty_first_doc": empty_first_doc,
+            }
+            return vtysh_ok, predicate_ok, observed_state, evidence
+
+        if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent", "evpn_vni_route_present"):
+            mac = str(t.get("_mac") or "").strip().lower()
+            vni_i = t.get("_vni_i")
+            cp = rt.exec(
+                lab,
+                src,
+                ["vtysh", "-c", "show bgp l2vpn evpn route json"],
+                check=False,
+                capture_output=True,
+            )
+
+            if isinstance(cp, str):
+                out = cp
+                rc = None
+            else:
+                out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
+                if isinstance(out, (bytes, bytearray)):
+                    try:
+                        out = out.decode("utf-8", errors="replace")
+                    except Exception:
+                        out = str(out)
+                rc = getattr(cp, "returncode", None)
+
+            vtysh_ok = (rc in (0, None))
+
+            raw = str(out or "").strip()
+            evidence_entries: list = []
+            present = False
+            parse_error = ""
+
+            def _append_entry(mac_val, vni_val, state_val):
+                nonlocal present
+                rec = {
+                    "mac": str(mac_val or "").strip().lower(),
+                    "vni": vni_val,
+                    "route_type": state_val,
+                    "node": src,
+                }
+                if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent") and not rec["mac"]:
+                    return
+                evidence_entries.append(rec)
+                if inv_type == "evpn_vni_route_present":
+                    if rec["vni"] == vni_i:
+                        present = True
+                else:
+                    if rec["mac"] == mac and rec["vni"] == vni_i:
+                        if state_val is None or str(state_val).lower() in ("2", "2-evpn", "macip", "type2"):
+                            present = True
+
+            try:
+                doc = json.loads(raw) if raw else {}
+                seen = set()
+
+                if isinstance(doc, dict):
+                    for rd_key, rd_val in doc.items():
+                        if rd_key in ("numPrefix", "numPaths"):
+                            continue
+                        if not isinstance(rd_val, dict):
+                            continue
+
+                        vni_ctx = None
+                        m_rt = re.search(r"RT:\d+:(\d+)", json.dumps(rd_val), flags=re.IGNORECASE)
+                        if m_rt:
+                            try:
+                                vni_ctx = int(m_rt.group(1))
+                            except Exception:
+                                vni_ctx = None
+
+                        for prefix_key, prefix_val in rd_val.items():
+                            if prefix_key == "rd":
+                                continue
+                            if not isinstance(prefix_val, dict):
+                                continue
+                            for path_group in list(prefix_val.get("paths") or []):
+                                if not isinstance(path_group, list):
+                                    continue
+                                for entry in path_group:
+                                    if not isinstance(entry, dict):
+                                        continue
+
+                                    mac_val = None
+                                    for key in ("mac", "macAddr", "macaddr"):
+                                        val = entry.get(key)
+                                        if isinstance(val, str) and val.strip():
+                                            mac_val = val.strip().lower()
+                                            break
+
+                                    vni_val = None
+                                    for key in ("vni",):
+                                        val = entry.get(key)
+                                        if val is None or str(val).strip() == "":
+                                            continue
+                                        try:
+                                            vni_val = int(val)
+                                            break
+                                        except Exception:
+                                            continue
+                                    if vni_val is None:
+                                        vni_val = vni_ctx
+
+                                    state_val = entry.get("routeType")
+                                    if state_val is None:
+                                        state_val = entry.get("type")
+                                    if isinstance(state_val, str):
+                                        state_val = state_val.strip()
+
+                                    if inv_type == "evpn_vni_route_present" and vni_val is None:
+                                        continue
+                                    if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent") and not mac_val:
+                                        continue
+
+                                    sig = (mac_val, vni_val, state_val, src)
+                                    if sig in seen:
+                                        continue
+                                    seen.add(sig)
+                                    _append_entry(mac_val, vni_val, state_val)
+                else:
+                    raise ValueError("unexpected_evpn_json_shape")
+
+            except Exception as e:
+                parse_error = str(e)
+
+            predicate_ok = bool(present)
+
+            observed_state = {
+                "mac": mac,
+                "vni_i": vni_i,
+                "present": present,
+                "evidence_entries": evidence_entries,
+            }
+            evidence = {
+                "cmd": "vtysh -c 'show bgp l2vpn evpn route json'",
+                "rc": rc,
+                "parse_error": parse_error,
+            }
+            return vtysh_ok, predicate_ok, observed_state, evidence
+
+        if inv_type in ("route_advertised_to", "route_not_advertised_to"):
+            node = str(t.get("node") or "")
+            peer_ip = str(t.get("_peer_ip") or "").strip()
+            prefix = str(t.get("_norm_prefix") or "").strip()
+
+            cp = rt.exec(
+                lab,
+                node,
+                ["vtysh", "-c", f"show ip bgp neighbor {peer_ip} advertised-routes json"],
+                check=False,
+            )
+            out = cp.stdout or ""
+            rc = cp.returncode
+            if isinstance(out, (bytes, bytearray)):
+                try:
+                    out = out.decode("utf-8", errors="replace")
+                except Exception:
+                    out = str(out)
+
+            vtysh_ok = (rc == 0)
+
+            raw = str(out or "").strip()
+            parse_error = ""
+            advertised_prefixes: list = []
+
+            def _collect_adv_prefixes(obj):
+                found = []
+                if isinstance(obj, dict):
+                    for container_key in ("advertisedRoutes", "routes"):
+                        container = obj.get(container_key)
+                        if isinstance(container, dict):
+                            for k, v in container.items():
+                                if isinstance(v, (dict, list)):
+                                    nk = _normalize_prefix(str(k)) or str(k)
+                                    if nk:
+                                        found.append(nk)
+                    for k, v in obj.items():
+                        if isinstance(v, (dict, list)):
+                            nk = _normalize_prefix(str(k)) or str(k)
+                            if nk and "/" in nk:
+                                found.append(nk)
+                    for key in ("prefix", "network"):
+                        val = obj.get(key)
+                        nk = _normalize_prefix(str(val)) or str(val or "")
+                        if nk:
+                            found.append(nk)
+                    paths = obj.get("paths")
+                    if isinstance(paths, list):
+                        for path in paths:
+                            found.extend(_collect_adv_prefixes(path))
+                elif isinstance(obj, list):
+                    for item in obj:
+                        found.extend(_collect_adv_prefixes(item))
+                return found
+
+            try:
+                doc = json.loads(raw) if raw else {}
+                advertised_prefixes = sorted(set(_collect_adv_prefixes(doc)))
+            except Exception as e:
+                parse_error = str(e)
+
+            present = prefix in advertised_prefixes
+
+            if inv_type == "route_advertised_to":
+                predicate_ok = bool(present)
+            else:
+                predicate_ok = not bool(present)
+
+            observed_state = {
+                "norm_prefix": prefix,
+                "present": present,
+                "advertised_prefixes": advertised_prefixes,
+            }
+            evidence = {
+                "cmd": f"vtysh -c 'show ip bgp neighbor {peer_ip} advertised-routes json'",
+                "rc": rc,
+                "parse_error": parse_error,
+            }
+            return vtysh_ok, predicate_ok, observed_state, evidence
+
+        if inv_type == "bgp_localpref_equals":
+            node = str(t.get("node") or "")
+            prefix = str(t.get("_norm_prefix") or "").strip()
+
+            cp = rt.exec(lab, node, ["vtysh", "-c", f"show ip bgp {prefix} json"], check=False)
+            out = cp.stdout or ""
+            rc = cp.returncode
+            if isinstance(out, (bytes, bytearray)):
+                try:
+                    out = out.decode("utf-8", errors="replace")
+                except Exception:
+                    out = str(out)
+
+            vtysh_ok = (rc == 0)
+
+            parse_error = ""
+            observed_localpref = None
+            try:
+                doc = json.loads(str(out or "").strip()) if str(out or "").strip() else {}
+                route_obj = None
+                if isinstance(doc, dict):
+                    cand = doc.get(prefix)
+                    if isinstance(cand, list) and cand:
+                        route_obj = cand[0]
+                    elif isinstance(cand, dict):
+                        route_obj = cand
+                    elif (
+                        doc.get("prefix") is not None
+                        and (_normalize_prefix(str(doc.get("prefix"))) or str(doc.get("prefix"))) == prefix
+                    ):
+                        route_obj = doc
+                    else:
+                        routes = doc.get("routes")
+                        if isinstance(routes, dict):
+                            cand = routes.get(prefix)
+                            if isinstance(cand, list) and cand:
+                                route_obj = cand[0]
+                            elif isinstance(cand, dict):
+                                route_obj = cand
+                            else:
+                                for k, v in routes.items():
+                                    nk = _normalize_prefix(str(k)) or str(k)
+                                    if nk != prefix:
+                                        continue
+                                    if isinstance(v, list) and v:
+                                        route_obj = v[0]
+                                        break
+                                    if isinstance(v, dict):
+                                        route_obj = v
+                                        break
+                        if route_obj is None:
+                            for k, v in doc.items():
+                                nk = _normalize_prefix(str(k)) or str(k)
+                                if nk != prefix:
+                                    continue
+                                if isinstance(v, list) and v:
+                                    route_obj = v[0]
+                                    break
+                                if isinstance(v, dict):
+                                    route_obj = v
+                                    break
+                else:
+                    raise ValueError("unexpected_bgp_prefix_json_shape")
+
+                if not isinstance(route_obj, dict):
+                    parse_error = "prefix not present in bgp json"
+                else:
+                    for key in ("locPrf", "localpref", "localPref", "local_preference"):
+                        val = route_obj.get(key)
+                        if val is None or str(val).strip() == "":
+                            continue
+                        try:
+                            observed_localpref = int(val)
+                            break
+                        except Exception:
+                            continue
+
+                    if observed_localpref is None:
+                        paths = route_obj.get("paths")
+                        if isinstance(paths, list):
+                            for path in paths:
+                                if not isinstance(path, dict):
+                                    continue
+                                for key in ("locPrf", "localpref", "localPref", "local_preference"):
+                                    val = path.get(key)
+                                    if val is None or str(val).strip() == "":
+                                        continue
+                                    try:
+                                        observed_localpref = int(val)
+                                        break
+                                    except Exception:
+                                        continue
+                                if observed_localpref is not None:
+                                    break
+
+                    if observed_localpref is None:
+                        parse_error = "localpref not present in bgp json"
+            except Exception as e:
+                parse_error = str(e)
+
+            predicate_ok = (observed_localpref is not None)
+
+            observed_state = {
+                "norm_prefix": prefix,
+                "observed_localpref": observed_localpref,
+            }
+            evidence = {
+                "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                "rc": rc,
+                "parse_error": parse_error,
+            }
+            return vtysh_ok, predicate_ok, observed_state, evidence
+
+        # WI-1 Repair Set complete: all 11 invariant types now wire through
+        # this helper. This fallback is reached only if a new invariant type
+        # is added to the type-system without being wired here; in that
+        # case raising surfaces the omission deterministically rather than
+        # silently returning an incorrect result.
+        raise NotImplementedError(
+            f"_evaluate_invariant_attempt: inv_type={inv_type!r} is not implemented "
+            f"in the shared invariant evaluator. Add a new branch to wire it."
+        )
+
+    def run_invariant_test(*, test_name: str, src: str, t: dict, record_fn=record_test) -> str:
+        inv_type = str(t.get("type") or "").strip().lower()
+        expected = str(t.get("expect") or "pass").strip().lower()
+        if expected not in ("pass", "fail"):
+            expected = "pass"
+
+        start = time.time()
+
+        if inv_type == "evpn_bgp_session_up":
+            peer = str(t.get("peer") or "").strip()
+            if not peer:
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="evpn_bgp_session_up requires peer",
+                    evidence={"reason": "missing_peer"},
+                    meta={"type": inv_type, "peer": peer},
+                )
+                return "fail"
+
+            _vtysh_ok, predicate_ok, last_state, last_evidence = (
+                _evaluate_invariant_attempt(inv_type="evpn_bgp_session_up", t=t, src=src)
+            )
+
+            rc = last_evidence.get("rc")
+            parse_error = str(last_evidence.get("parse_error") or "")
+            evidence_entries = list(last_evidence.get("neighbors") or [])
+            present = bool(last_state.get("present"))
 
             if rc not in (0, None):
                 record_fn(
@@ -5137,16 +5794,6 @@ def cmd_test(args: argparse.Namespace) -> None:
                     },
                 )
                 raise SystemExit(2)
-
-            evidence_entries = sorted(
-                evidence_entries,
-                key=lambda x: (
-                    str(x.get("neighbor") or ""),
-                    str(x.get("peerName") or ""),
-                    str(x.get("state") or ""),
-                    str(x.get("node") or ""),
-                ),
-            )
 
             observed = "pass" if present else "fail"
             verdict = "pass" if observed == expected else "fail"
@@ -5254,25 +5901,14 @@ def cmd_test(args: argparse.Namespace) -> None:
                     )
                     return "fail"
 
-                cp = rt.exec(
-                    lab,
-                    src,
-                    ["vtysh", "-c", f"show ip bgp {norm_prefix} json"],
-                    check=False,
-                    capture_output=True,
+                t["_norm_prefix"] = norm_prefix
+                _vtysh_ok, _pred_ok, last_state, last_evidence = (
+                    _evaluate_invariant_attempt(inv_type="bgp_med_equals", t=t, src=src)
                 )
-
-                if isinstance(cp, str):
-                    out = cp
-                    rc = None
-                else:
-                    out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
-                    if isinstance(out, (bytes, bytearray)):
-                        try:
-                            out = out.decode("utf-8", errors="replace")
-                        except Exception:
-                            out = str(out)
-                    rc = getattr(cp, "returncode", None)
+                rc = last_evidence.get("rc")
+                parse_error = str(last_evidence.get("parse_error") or "")
+                observed_med = last_state.get("observed_med")
+                empty_first_doc = bool(last_evidence.get("empty_first_doc"))
 
                 if rc not in (0, None):
                     record_fn(
@@ -5297,123 +5933,17 @@ def cmd_test(args: argparse.Namespace) -> None:
                     )
                     raise SystemExit(2)
 
-                parse_error = ""
-                observed_med = None
-                try:
-                    route_obj = None
-                    docs_to_try = [str(out or "").strip()]
-
-                    if docs_to_try[0] in ("", "{}"):
-                        time.sleep(2)
-                        cp_retry = rt.exec(
-                            lab,
-                            src,
-                            ["vtysh", "-c", f"show ip bgp {norm_prefix} json"],
-                            check=False,
-                            capture_output=True,
-                        )
-                        if isinstance(cp_retry, str):
-                            retry_out = cp_retry
-                        else:
-                            retry_out = getattr(cp_retry, "stdout", "") or getattr(cp_retry, "output", "") or ""
-                            if isinstance(retry_out, (bytes, bytearray)):
-                                try:
-                                    retry_out = retry_out.decode("utf-8", errors="replace")
-                                except Exception:
-                                    retry_out = str(retry_out)
-                        docs_to_try.append(str(retry_out or "").strip())
-
-                    parsed_any = False
-                    for raw_doc in docs_to_try:
-                        doc = json.loads(raw_doc) if raw_doc else {}
-                        parsed_any = True
-                        route_obj = None
-
-                        if isinstance(doc, dict):
-                            cand = doc.get(norm_prefix)
-                            if isinstance(cand, list) and cand:
-                                route_obj = cand[0]
-                            elif isinstance(cand, dict):
-                                route_obj = cand
-                            elif (
-                                doc.get("prefix") is not None
-                                and (_normalize_prefix(str(doc.get("prefix"))) or str(doc.get("prefix"))) == norm_prefix
-                            ):
-                                route_obj = doc
-                            else:
-                                routes = doc.get("routes")
-                                if isinstance(routes, dict):
-                                    cand = routes.get(norm_prefix)
-                                    if isinstance(cand, list) and cand:
-                                        route_obj = cand[0]
-                                    elif isinstance(cand, dict):
-                                        route_obj = cand
-                                    else:
-                                        for k, v in routes.items():
-                                            nk = _normalize_prefix(str(k)) or str(k)
-                                            if nk != norm_prefix:
-                                                continue
-                                            if isinstance(v, list) and v:
-                                                route_obj = v[0]
-                                                break
-                                            if isinstance(v, dict):
-                                                route_obj = v
-                                                break
-                                if route_obj is None:
-                                    for k, v in doc.items():
-                                        nk = _normalize_prefix(str(k)) or str(k)
-                                        if nk != norm_prefix:
-                                            continue
-                                        if isinstance(v, list) and v:
-                                            route_obj = v[0]
-                                            break
-                                        if isinstance(v, dict):
-                                            route_obj = v
-                                            break
-                        else:
-                            raise ValueError("unexpected_bgp_prefix_json_shape")
-
-                        if not isinstance(route_obj, dict):
-                            parse_error = "prefix not present in bgp json"
-                            continue
-
-                        for key in ("med", "metric"):
-                            val = route_obj.get(key)
-                            if val is None or str(val).strip() == "":
-                                continue
-                            try:
-                                observed_med = int(val)
-                                break
-                            except Exception:
-                                continue
-
-                        if observed_med is None:
-                            paths = route_obj.get("paths")
-                            if isinstance(paths, list):
-                                for path in paths:
-                                    if not isinstance(path, dict):
-                                        continue
-                                    for key in ("med", "metric"):
-                                        val = path.get(key)
-                                        if val is None or str(val).strip() == "":
-                                            continue
-                                        try:
-                                            observed_med = int(val)
-                                            break
-                                        except Exception:
-                                            continue
-                                    if observed_med is not None:
-                                        break
-
-                        if observed_med is not None:
-                            break
-
-                        parse_error = "med not present in bgp json"
-
-                    if not parsed_any:
-                        parse_error = "prefix not present in bgp json"
-                except Exception as e:
-                    parse_error = str(e)
+                if observed_med is None and empty_first_doc:
+                    time.sleep(2)
+                    _vtysh_ok2, _pred_ok2, last_state2, last_evidence2 = (
+                        _evaluate_invariant_attempt(inv_type="bgp_med_equals", t=t, src=src)
+                    )
+                    if last_state2.get("observed_med") is not None:
+                        last_state = last_state2
+                        last_evidence = last_evidence2
+                        rc = last_evidence.get("rc")
+                        parse_error = str(last_evidence.get("parse_error") or "")
+                        observed_med = last_state.get("observed_med")
 
                 if observed_med is None:
                     record_fn(
@@ -5481,28 +6011,13 @@ def cmd_test(args: argparse.Namespace) -> None:
                 )
                 return verdict
 
-            cp = rt.exec(
-                lab,
-                src,
-                ["vtysh", "-c", "show ip route json"],
-                check=False,
-                capture_output=True,
+            t["_norm_prefix"] = norm_prefix
+            _vtysh_ok, _pred_ok, last_state, last_evidence = (
+                _evaluate_invariant_attempt(inv_type=inv_type, t=t, src=src)
             )
-
-            if isinstance(cp, str):
-                out = cp
-                rc = None
-            else:
-                out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
-                if isinstance(out, (bytes, bytearray)):
-                    try:
-                        out = out.decode("utf-8", errors="replace")
-                    except Exception:
-                        out = str(out)
-                rc = getattr(cp, "returncode", None)
-
-            observed_prefixes = parse_frr_show_ip_route_prefixes_json(str(out or ""))
-            present = norm_prefix in set(observed_prefixes or [])
+            rc = last_evidence.get("rc")
+            present = bool(last_state.get("present"))
+            observed_prefixes = list(last_state.get("observed_prefixes") or [])
 
             if inv_type == "route_present":
                 observed = "pass" if present else "fail"
@@ -5597,122 +6112,15 @@ def cmd_test(args: argparse.Namespace) -> None:
                     )
                     return "fail"
 
-            cp = rt.exec(
-                lab,
-                src,
-                ["vtysh", "-c", "show bgp l2vpn evpn route json"],
-                check=False,
-                capture_output=True,
+            t["_mac"] = mac
+            t["_vni_i"] = vni_i
+            _vtysh_ok, _pred_ok, last_state, last_evidence = (
+                _evaluate_invariant_attempt(inv_type=inv_type, t=t, src=src)
             )
-
-            if isinstance(cp, str):
-                out = cp
-                rc = None
-            else:
-                out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
-                if isinstance(out, (bytes, bytearray)):
-                    try:
-                        out = out.decode("utf-8", errors="replace")
-                    except Exception:
-                        out = str(out)
-                rc = getattr(cp, "returncode", None)
-
-            raw = str(out or "").strip()
-            evidence_entries = []
-            present = False
-            parse_error = ""
-
-            def _append_entry(mac_val, vni_val, state_val):
-                nonlocal present
-                rec = {
-                    "mac": str(mac_val or "").strip().lower(),
-                    "vni": vni_val,
-                    "route_type": state_val,
-                    "node": src,
-                }
-                if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent") and not rec["mac"]:
-                    return
-                evidence_entries.append(rec)
-                if inv_type == "evpn_vni_route_present":
-                    if rec["vni"] == vni_i:
-                        present = True
-                else:
-                    if rec["mac"] == mac and rec["vni"] == vni_i:
-                        if state_val is None or str(state_val).lower() in ("2", "2-evpn", "macip", "type2"):
-                            present = True
-
-            try:
-                doc = json.loads(raw) if raw else {}
-                seen = set()
-
-                if isinstance(doc, dict):
-                    for rd_key, rd_val in doc.items():
-                        if rd_key in ("numPrefix", "numPaths"):
-                            continue
-                        if not isinstance(rd_val, dict):
-                            continue
-
-                        vni_ctx = None
-                        m_rt = re.search(r"RT:\d+:(\d+)", json.dumps(rd_val), flags=re.IGNORECASE)
-                        if m_rt:
-                            try:
-                                vni_ctx = int(m_rt.group(1))
-                            except Exception:
-                                vni_ctx = None
-
-                        for prefix_key, prefix_val in rd_val.items():
-                            if prefix_key == "rd":
-                                continue
-                            if not isinstance(prefix_val, dict):
-                                continue
-                            for path_group in list(prefix_val.get("paths") or []):
-                                if not isinstance(path_group, list):
-                                    continue
-                                for entry in path_group:
-                                    if not isinstance(entry, dict):
-                                        continue
-
-                                    mac_val = None
-                                    for key in ("mac", "macAddr", "macaddr"):
-                                        val = entry.get(key)
-                                        if isinstance(val, str) and val.strip():
-                                            mac_val = val.strip().lower()
-                                            break
-
-                                    vni_val = None
-                                    for key in ("vni",):
-                                        val = entry.get(key)
-                                        if val is None or str(val).strip() == "":
-                                            continue
-                                        try:
-                                            vni_val = int(val)
-                                            break
-                                        except Exception:
-                                            continue
-                                    if vni_val is None:
-                                        vni_val = vni_ctx
-
-                                    state_val = entry.get("routeType")
-                                    if state_val is None:
-                                        state_val = entry.get("type")
-                                    if isinstance(state_val, str):
-                                        state_val = state_val.strip()
-
-                                    if inv_type == "evpn_vni_route_present" and vni_val is None:
-                                        continue
-                                    if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent") and not mac_val:
-                                        continue
-
-                                    sig = (mac_val, vni_val, state_val, src)
-                                    if sig in seen:
-                                        continue
-                                    seen.add(sig)
-                                    _append_entry(mac_val, vni_val, state_val)
-                else:
-                    raise ValueError("unexpected_evpn_json_shape")
-
-            except Exception as e:
-                parse_error = str(e)
+            rc = last_evidence.get("rc")
+            parse_error = str(last_evidence.get("parse_error") or "")
+            evidence_entries = list(last_state.get("evidence_entries") or [])
+            present = bool(last_state.get("present"))
 
             if rc not in (0, None):
                 record_fn(
@@ -5793,7 +6201,17 @@ def cmd_test(args: argparse.Namespace) -> None:
                         if not m:
                             continue
                         mac_val = m.group(1).lower()
-                        _append_entry(mac_val, vni_i, "2")
+                        rec = {
+                            "mac": str(mac_val or "").strip().lower(),
+                            "vni": vni_i,
+                            "route_type": "2",
+                            "node": src,
+                        }
+                        if not rec["mac"]:
+                            continue
+                        evidence_entries.append(rec)
+                        if rec["mac"] == mac and rec["vni"] == vni_i:
+                            present = True
                 except Exception as e:
                     if parse_error:
                         parse_error = f"{parse_error}; text_parse={e}"
@@ -6000,59 +6418,15 @@ def cmd_test(args: argparse.Namespace) -> None:
                 )
                 raise SystemExit(2)
 
-            cp = rt.exec(
-                lab,
-                node,
-                ["vtysh", "-c", f"show ip bgp neighbor {peer_ips[0]} advertised-routes json"],
-                check=False,
+            t["_peer_ip"] = peer_ips[0]
+            t["_norm_prefix"] = prefix
+            _vtysh_ok, _pred_ok, last_state, last_evidence = (
+                _evaluate_invariant_attempt(inv_type=inv_type, t=t, src=node)
             )
-            out = cp.stdout or ""
-            rc = cp.returncode
-            if isinstance(out, (bytes, bytearray)):
-                try:
-                    out = out.decode("utf-8", errors="replace")
-                except Exception:
-                    out = str(out)
-
-            raw = str(out or "").strip()
-            parse_error = ""
-            advertised_prefixes = []
-
-            def _collect_adv_prefixes(obj):
-                found = []
-                if isinstance(obj, dict):
-                    for container_key in ("advertisedRoutes", "routes"):
-                        container = obj.get(container_key)
-                        if isinstance(container, dict):
-                            for k, v in container.items():
-                                if isinstance(v, (dict, list)):
-                                    nk = _normalize_prefix(str(k)) or str(k)
-                                    if nk:
-                                        found.append(nk)
-                    for k, v in obj.items():
-                        if isinstance(v, (dict, list)):
-                            nk = _normalize_prefix(str(k)) or str(k)
-                            if nk and "/" in nk:
-                                found.append(nk)
-                    for key in ("prefix", "network"):
-                        val = obj.get(key)
-                        nk = _normalize_prefix(str(val)) or str(val or "")
-                        if nk:
-                            found.append(nk)
-                    paths = obj.get("paths")
-                    if isinstance(paths, list):
-                        for path in paths:
-                            found.extend(_collect_adv_prefixes(path))
-                elif isinstance(obj, list):
-                    for item in obj:
-                        found.extend(_collect_adv_prefixes(item))
-                return found
-
-            try:
-                doc = json.loads(raw) if raw else {}
-                advertised_prefixes = sorted(set(_collect_adv_prefixes(doc)))
-            except Exception as e:
-                parse_error = str(e)
+            rc = last_evidence.get("rc")
+            parse_error = str(last_evidence.get("parse_error") or "")
+            advertised_prefixes = list(last_state.get("advertised_prefixes") or [])
+            present = bool(last_state.get("present"))
 
             if rc != 0:
                 record_fn(
@@ -6103,7 +6477,6 @@ def cmd_test(args: argparse.Namespace) -> None:
                 )
                 raise SystemExit(2)
 
-            present = prefix in advertised_prefixes
             observed = "pass" if present else "fail"
             if inv_type == "route_not_advertised_to":
                 observed = "pass" if not present else "fail"
@@ -6182,99 +6555,13 @@ def cmd_test(args: argparse.Namespace) -> None:
             expv = t.get("expected")
             exp_localpref_i = int(expv)
 
-            cp = rt.exec(lab, node, ["vtysh", "-c", f"show ip bgp {prefix} json"], check=False)
-            out = cp.stdout or ""
-            rc = cp.returncode
-            if isinstance(out, (bytes, bytearray)):
-                try:
-                    out = out.decode("utf-8", errors="replace")
-                except Exception:
-                    out = str(out)
-
-            parse_error = ""
-            observed_localpref = None
-            try:
-                doc = json.loads(str(out or "").strip()) if str(out or "").strip() else {}
-                route_obj = None
-                if isinstance(doc, dict):
-                    cand = doc.get(prefix)
-                    if isinstance(cand, list) and cand:
-                        route_obj = cand[0]
-                    elif isinstance(cand, dict):
-                        route_obj = cand
-                    elif (
-                        doc.get("prefix") is not None
-                        and (_normalize_prefix(str(doc.get("prefix"))) or str(doc.get("prefix"))) == prefix
-                    ):
-                        route_obj = doc
-                    else:
-                        routes = doc.get("routes")
-                        if isinstance(routes, dict):
-                            cand = routes.get(prefix)
-                            if isinstance(cand, list) and cand:
-                                route_obj = cand[0]
-                            elif isinstance(cand, dict):
-                                route_obj = cand
-                            else:
-                                for k, v in routes.items():
-                                    nk = _normalize_prefix(str(k)) or str(k)
-                                    if nk != prefix:
-                                        continue
-                                    if isinstance(v, list) and v:
-                                        route_obj = v[0]
-                                        break
-                                    if isinstance(v, dict):
-                                        route_obj = v
-                                        break
-                        if route_obj is None:
-                            for k, v in doc.items():
-                                nk = _normalize_prefix(str(k)) or str(k)
-                                if nk != prefix:
-                                    continue
-                                if isinstance(v, list) and v:
-                                    route_obj = v[0]
-                                    break
-                                if isinstance(v, dict):
-                                    route_obj = v
-                                    break
-                else:
-                    raise ValueError("unexpected_bgp_prefix_json_shape")
-
-                if not isinstance(route_obj, dict):
-                    parse_error = "prefix not present in bgp json"
-                else:
-                    for key in ("locPrf", "localpref", "localPref", "local_preference"):
-                        val = route_obj.get(key)
-                        if val is None or str(val).strip() == "":
-                            continue
-                        try:
-                            observed_localpref = int(val)
-                            break
-                        except Exception:
-                            continue
-
-                    if observed_localpref is None:
-                        paths = route_obj.get("paths")
-                        if isinstance(paths, list):
-                            for path in paths:
-                                if not isinstance(path, dict):
-                                    continue
-                                for key in ("locPrf", "localpref", "localPref", "local_preference"):
-                                    val = path.get(key)
-                                    if val is None or str(val).strip() == "":
-                                        continue
-                                    try:
-                                        observed_localpref = int(val)
-                                        break
-                                    except Exception:
-                                        continue
-                                if observed_localpref is not None:
-                                    break
-
-                    if observed_localpref is None:
-                        parse_error = "localpref not present in bgp json"
-            except Exception as e:
-                parse_error = str(e)
+            t["_norm_prefix"] = prefix
+            _vtysh_ok, _pred_ok, last_state, last_evidence = (
+                _evaluate_invariant_attempt(inv_type="bgp_localpref_equals", t=t, src=node)
+            )
+            rc = last_evidence.get("rc")
+            parse_error = str(last_evidence.get("parse_error") or "")
+            observed_localpref = last_state.get("observed_localpref")
 
             if observed_localpref is None:
                 record_fn(
@@ -6420,78 +6707,25 @@ def cmd_test(args: argparse.Namespace) -> None:
             interval_s = float(t.get("retry_interval_s") or 1.0)
 
             def attempt():
-                cp = rt.exec(lab, src, ["vtysh", "-c", "show bgp summary json"], check=False)
-                ok = (getattr(cp, "returncode", 1) == 0)
-                out = (cp.stdout or "") if hasattr(cp, "stdout") else ""
-                return ok, cp, out
+                vtysh_ok, _predicate_ok, attempt_state, attempt_evidence = (
+                    _evaluate_invariant_attempt(inv_type="bgp_session_up", t=t, src=src)
+                )
+                return vtysh_ok, (attempt_state, attempt_evidence)
 
             if expected == "pass" and timeout_s > 0:
-                def try_once():
-                    ok, cp, out = attempt()
-                    return ok, (cp, out)
-
-                ok, last_payload, attempts, dur_ms = retry_until(timeout_s, interval_s, try_once)
-                last_cp, last_out = last_payload
+                ok, last_payload, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
+                last_state, last_evidence = last_payload
             else:
-                ok_a, cp_a, out_a = attempt()
-                last_cp = cp_a
-                last_out = out_a
-                last_state = None
+                ok_a, payload_a = attempt()
+                last_state, last_evidence = payload_a
                 attempts = 1
                 dur_ms = int((time.time() - start) * 1000)
-                ok = (getattr(cp_a, "returncode", 1) == 0)
+                ok = ok_a
 
-            observed_state_str: str = "Unknown"
-            last_error: str = ""
-            parse_error: str = ""
-            peer_present: bool = False
-
-            if ok:
-                try:
-                    data = json.loads(last_out or "{}")
-                    peers = None
-                    top_peers = data.get("peers")
-                    if isinstance(top_peers, dict):
-                        peers = top_peers
-                    else:
-                        v4u = data.get("ipv4Unicast")
-                        if isinstance(v4u, dict):
-                            inner = v4u.get("peers")
-                            if isinstance(inner, dict):
-                                peers = inner
-                    if peers is None:
-                        for _, v in sorted(data.items()):
-                            if isinstance(v, dict):
-                                inner = v.get("peers")
-                                if isinstance(inner, dict):
-                                    peers = inner
-                                    break
-                    if isinstance(peers, dict):
-                        p = peers.get(neighbor)
-                        if isinstance(p, dict):
-                            peer_present = True
-                            raw_state = p.get("state") or p.get("bgpState") or p.get("peerState")
-                            if raw_state:
-                                observed_state_str = str(raw_state)
-                            reset_reason = p.get("lastResetReason")
-                            if reset_reason:
-                                last_error = str(reset_reason)
-                        else:
-                            observed_state_str = "NotConfigured"
-                            last_error = "neighbor not present in summary"
-                            parse_error = "neighbor not present in summary"
-                    else:
-                        observed_state_str = "Unknown"
-                        last_error = "peers not found in summary"
-                        parse_error = "peers not found in summary"
-                except Exception:
-                    observed_state_str = "Unknown"
-                    last_error = "vtysh output not parseable as JSON"
-                    parse_error = "vtysh output not parseable as JSON"
-            else:
-                observed_state_str = "Unknown"
-                last_error = "vtysh command failed"
-                parse_error = "vtysh command failed"
+            observed_state_str = str(last_state.get("state") or "Unknown")
+            last_error = str(last_state.get("last_error") or "")
+            parse_error = str(last_evidence.get("parse_error") or "")
+            peer_present = bool(last_state.get("peer_present"))
 
             st_norm = observed_state_str.strip().lower()
             observed = "pass" if (peer_present and st_norm == "established") else "fail"
@@ -6508,7 +6742,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 "attempts": int(attempts),
                 "timeout_s": int(timeout_s),
                 "retry_interval_s": float(interval_s),
-                "last_rc": getattr(last_cp, "returncode", None),
+                "last_rc": last_evidence.get("returncode"),
             }
 
             if verdict == "pass":
