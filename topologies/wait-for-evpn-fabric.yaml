@@ -1,0 +1,130 @@
+# Cassian Gate Phase 1a Handover 3 / WI-5 PP3
+#
+# REQ-WF-20 / P2 positive proof (combined coverage — EVPN trio):
+#   - wait_for: evpn_bgp_session_up   (REQ-WF-4) — leaf1 EVPN session to spine1
+#   - wait_for: evpn_vni_route_present (REQ-WF-5) — leaf2 has type-2/3 routes for vni 10100
+#   - wait_for: evpn_mac_route_present (REQ-WF-6) — leaf2 has host1's MAC on vni 10100
+#
+# Topology shape: standard 1-spine / 2-leaf / 2-host EVPN fabric, identical
+# to topologies/evpn_bgp_session_up.yaml, evpn_vni_route_present.yaml, and
+# evpn_mac_route_present.yaml. spine1 is the route reflector (asn 65100,
+# evpn_rr: true). vlan 10 binds to vni 10100. host1 attaches to leaf1 with
+# MAC 00:11:22:33:44:55; host2 attaches to leaf2 with MAC 00:11:22:33:44:66.
+#
+# Scenario sequence:
+#   1) wait_for evpn_bgp_session_up: leaf1's EVPN BGP session to spine1
+#      reaches Established.
+#   2) wait_for evpn_vni_route_present: leaf2 has at least one EVPN
+#      type-2 / type-3 route for vni 10100.
+#   3) wait_for evpn_mac_route_present: leaf2 has the type-2 MAC route
+#      for host1's MAC on vni 10100 (originated by leaf1, reflected by
+#      spine1, received at leaf2).
+#
+# Steps run in sequence; each gives the fabric more time to converge
+# before the next, so by step 3 the type-2 route should be fully
+# propagated across the iBGP-EVPN mesh.
+#
+# This topology DOES NOT inject a fault. REQ-WF-21's negative timeout
+# proof is in WI-5 PP4.
+
+name: wait-for-evpn-fabric
+
+fabric:
+  evpn:
+    enabled: true
+    mode: vlan-aware
+    asn: 65100
+
+nodes:
+  - name: spine1
+    type: frr
+    role: spine
+    evpn_rr: true
+    router_id: 10.255.0.1
+
+  - name: leaf1
+    type: frr
+    role: leaf
+    router_id: 10.255.0.11
+
+  - name: leaf2
+    type: frr
+    role: leaf
+    router_id: 10.255.0.12
+
+  - name: host1
+    type: host
+    attach: leaf1
+    vlan: 10
+    ip: 10.10.10.11/24
+    gw: 10.10.10.1
+    mac: "00:11:22:33:44:55"
+
+  - name: host2
+    type: host
+    attach: leaf2
+    vlan: 10
+    ip: 10.10.10.12/24
+    gw: 10.10.10.1
+    mac: "00:11:22:33:44:66"
+
+links:
+  - endpoints: ["spine1:eth1", "leaf1:eth1"]
+    ipv4: ["172.16.0.0/31", "172.16.0.1/31"]
+
+  - endpoints: ["spine1:eth2", "leaf2:eth1"]
+    ipv4: ["172.16.0.2/31", "172.16.0.3/31"]
+
+  - endpoints: ["host1:eth1", "leaf1:eth2"]
+  - endpoints: ["host2:eth1", "leaf2:eth2"]
+
+vlans:
+  10:
+    vni: 10100
+
+# Zero-assertion compliance: most-demanding EVPN invariant (type-2 MAC route
+# end-to-end propagation) reused for validate-time. With --all-scenarios at
+# runtime, this test is skipped, but validate-time zero-assertion check
+# still requires it.
+tests:
+  - name: leaf2_sees_host1_mac_route
+    kind: invariant
+    type: evpn_mac_route_present
+    node: leaf2
+    mac: "00:11:22:33:44:55"
+    vni: 10100
+    expect: pass
+
+scenarios:
+  - id: wait_for_evpn_fabric_positive
+    description: |
+      After EVPN fabric converges, three wait_for steps in sequence verify:
+      (1) leaf1 EVPN BGP session to spine1 is Established;
+      (2) leaf2 has type-2/3 routes for vni 10100;
+      (3) leaf2 has host1's MAC route on vni 10100 (full type-2 propagation
+      across the iBGP-EVPN mesh).
+    steps:
+      - wait_for:
+          type: evpn_bgp_session_up
+          from: leaf1
+          peer: spine1
+          expect: pass
+          timeout: 60
+          interval_s: 2
+
+      - wait_for:
+          type: evpn_vni_route_present
+          from: leaf2
+          vni: 10100
+          expect: pass
+          timeout: 60
+          interval_s: 2
+
+      - wait_for:
+          type: evpn_mac_route_present
+          from: leaf2
+          mac: "00:11:22:33:44:55"
+          vni: 10100
+          expect: pass
+          timeout: 60
+          interval_s: 2

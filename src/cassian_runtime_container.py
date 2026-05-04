@@ -619,33 +619,75 @@ def build_coverage_model(resolved: dict[str, Any], topo_path: Path) -> dict[str,
                         die(f"coverage: scenario '{sid}' wait_for must be a dict")
 
                     wtype = str(wf.get("type") or "").strip().lower()
-                    if wtype not in ("ping", "tcp", "route_prefix"):
+                    # REQ-WF-15 closure: coverage validator allowlist widened
+                    # to match validate_scenarios in cassian_tests.py (WI-2).
+                    if wtype not in (
+                        "ping",
+                        "tcp",
+                        "route_prefix",
+                        "bgp_session_up",
+                        "route_present",
+                        "route_advertised_to",
+                        "evpn_bgp_session_up",
+                        "evpn_vni_route_present",
+                        "evpn_mac_route_present",
+                    ):
                         die(
                             f"coverage: scenario '{sid}' wait_for type '{wtype}' is not supported by coverage schema "
-                            "(only ping|tcp|route_prefix)"
+                            "(only ping|tcp|route_prefix|bgp_session_up|route_present|"
+                            "route_advertised_to|evpn_bgp_session_up|"
+                            "evpn_vni_route_present|evpn_mac_route_present)"
                         )
 
-                    # Record wait type for coverage summary
+                    # Record wait type for coverage summary (one tag per type)
                     if wtype == "ping":
                         scen_waits.add("wait_for_ping")
                     elif wtype == "tcp":
                         scen_waits.add("wait_for_tcp")
-                    else:
+                    elif wtype == "route_prefix":
                         scen_waits.add("wait_for_route_prefix")
+                    elif wtype == "bgp_session_up":
+                        scen_waits.add("wait_for_bgp_session_up")
+                    elif wtype == "route_present":
+                        scen_waits.add("wait_for_route_present")
+                    elif wtype == "route_advertised_to":
+                        scen_waits.add("wait_for_route_advertised_to")
+                    elif wtype == "evpn_bgp_session_up":
+                        scen_waits.add("wait_for_evpn_bgp_session_up")
+                    elif wtype == "evpn_vni_route_present":
+                        scen_waits.add("wait_for_evpn_vni_route_present")
+                    else:
+                        # evpn_mac_route_present (last in allowlist)
+                        scen_waits.add("wait_for_evpn_mac_route_present")
 
+                    # `from` (base required key) is a known node for all wait_for types.
                     frm = wf.get("from")
-                    to = wf.get("to")
-
                     if isinstance(frm, str) and frm.strip():
                         fnode = frm.strip()
                         if fnode not in known_nodes:
                             die(f"coverage: scenario '{sid}' references unknown from node '{fnode}'")
                         scen_nodes.add(fnode)
 
-                    if isinstance(to, str) and to.strip():
-                        tval = to.strip()
-                        if tval in known_nodes:
-                            scen_nodes.add(tval)
+                    # Per-type node-reference accumulation:
+                    # - `to` (ping/tcp): node name OR IPv4 literal; only count nodes
+                    # - `peer` (route_advertised_to, evpn_bgp_session_up): known node name
+                    # - `dst` (bgp_session_up): IPv4 literal, NOT a node; do not add
+                    # - `prefix`, `mac`, `vni`: non-node fields, ignored
+
+                    if wtype in ("ping", "tcp"):
+                        to = wf.get("to")
+                        if isinstance(to, str) and to.strip():
+                            tval = to.strip()
+                            if tval in known_nodes:
+                                scen_nodes.add(tval)
+
+                    if wtype in ("route_advertised_to", "evpn_bgp_session_up"):
+                        peer = wf.get("peer")
+                        if isinstance(peer, str) and peer.strip():
+                            pnode = peer.strip()
+                            if pnode not in known_nodes:
+                                die(f"coverage: scenario '{sid}' references unknown peer node '{pnode}'")
+                            scen_nodes.add(pnode)
 
                 elif "pcap_start" in st:
                     spec = st.get("pcap_start") or {}

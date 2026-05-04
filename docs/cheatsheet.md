@@ -1689,6 +1689,44 @@ Timeout = failure.
 
 ---
 
+### `wait_for` (condition-based convergence)
+
+Polls a deterministic predicate until satisfied or `timeout`. Records a scenario step verdict (no test verdict).
+
+Required keys (every `wait_for` step):
+
+- `type` — one of the nine condition types listed below
+- `from` — source node name
+- `expect` — `pass` or `fail`
+- `timeout` — int (seconds)
+- `interval_s` — number (polling cadence)
+
+Optional: `per_attempt_timeout_s`.
+
+Accepted condition types:
+
+- `ping` — ICMP from `from` to `to` (node name or IPv4 literal)
+- `tcp` — TCP from `from` to `to:port`
+- `route_prefix` — `prefix` (CIDR) present in RIB on `from`
+- `bgp_session_up` — BGP session to `dst` (IPv4 neighbor) reaches Established
+- `route_present` — `prefix` (CIDR) present in BGP RIB on `from`
+- `route_advertised_to` — `prefix` (CIDR) advertised toward `peer` (node name)
+- `evpn_bgp_session_up` — EVPN BGP session to `peer` (node name) reaches Established
+- `evpn_vni_route_present` — EVPN type-2/3 route present for `vni` (integer)
+- `evpn_mac_route_present` — EVPN type-2 route for `mac` + `vni` is present
+
+Per-type parameter requirements: see `docs/topology-schema-v1.md` §6 (`### wait_for`) and `docs/topology-schema-v1.5.md` §2.
+
+Notes:
+
+- A successful `wait_for` step does **not** count as a passing test. Verdicts come only from items in `tests:`.
+- `expect: fail` inverts the convergence semantics (succeeds if the condition does not become satisfied within `timeout`).
+- `wait_for: bgp_session_up` is a single-neighbor check (explicit `dst`); `wait_for_bgp` is a coarse all-neighbors-of-one-node readiness check. Both remain available.
+
+Prefer `wait_for` with an invariant condition over fixed `wait: { seconds: N }` for convergence purposes.
+
+---
+
 ## Grey Failures (Deterministic Degradation)
 
 Grey failures are **scenario-only capabilities**, not standalone CLI commands.

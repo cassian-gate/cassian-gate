@@ -338,6 +338,78 @@ Allowed step types:
 
 ---
 
+### `wait_for` (condition-based convergence)
+
+`wait_for` is a scenario step that polls a deterministic predicate until it is satisfied or until `timeout` is reached. It anchors a scenario to **observable convergence** rather than to fixed elapsed time. A successful `wait_for` step **does not** produce a test verdict; verdicts come only from items declared in `tests:`. The wait_for step records its own pass/fail in the scenario step record.
+
+Prefer `wait_for` with an invariant condition over fixed `wait: { seconds: N }` whenever the desired outcome is a verifiable convergence condition.
+
+#### Required keys (every `wait_for` step)
+
+| Key | Type | Meaning |
+|---|---|---|
+| `type` | string | One of the accepted condition types (see below) |
+| `from` | string | Source node name (the vantage point from which the condition is evaluated) |
+| `expect` | `pass` \| `fail` | Whether the condition is expected to converge to satisfied (`pass`) or to remain unsatisfied at `timeout` (`fail`) |
+| `timeout` | int | Upper bound in seconds; the step fails on timeout |
+| `interval_s` | number | Fixed polling interval in seconds (no jitter, no backoff) |
+
+Optional: `per_attempt_timeout_s` (int ≥ 1).
+
+Unknown keys are rejected.
+
+#### Accepted condition types
+
+`wait_for.type` must be one of these nine condition types:
+
+* `ping` — ICMP reachability from `from` to `to`. Per-type required: `to` (node name or IPv4 literal). Optional: `count`, `src_ip`, `src_if`.
+* `tcp` — TCP reachability from `from` to `to:port`. Per-type required: `to`, `port`. Optional: `src_ip`, `src_if`.
+* `route_prefix` — RIB presence of `prefix` on `from`. Per-type required: `prefix` (CIDR). The key `src` (or its alias `on`) names the same vantage as `from`.
+* `bgp_session_up` — BGP session to neighbor IP reaches Established. Per-type required: `dst` (IPv4 literal of the BGP neighbor).
+* `route_present` — Prefix appears in the RIB on `from`. Per-type required: `prefix` (CIDR).
+* `route_advertised_to` — Prefix appears in the advertised-routes set toward a named peer. Per-type required: `peer` (node name), `prefix` (CIDR).
+* `evpn_bgp_session_up` — EVPN BGP session to a peer node reaches Established. Per-type required: `peer` (node name).
+* `evpn_vni_route_present` — At least one EVPN type-2 / type-3 route is present for the named VNI. Per-type required: `vni` (integer).
+* `evpn_mac_route_present` — EVPN type-2 MAC route for the named MAC and VNI is present. Per-type required: `mac` (canonical MAC literal), `vni` (integer).
+
+#### Parameter cross-link
+
+For the six invariant-derived condition types (`bgp_session_up`, `route_present`, `route_advertised_to`, `evpn_bgp_session_up`, `evpn_vni_route_present`, `evpn_mac_route_present`), the per-type parameter requirements match the corresponding invariant type as defined in `docs/topology-schema-v1.5.md` §2 (Supported Invariant Types) — the **required-fields** column is the authoritative reference. The `wait_for` step uses the same parameter names as the invariant table, **except** that `wait_for` uses `from:` for the source node where the invariant table uses `node:`.
+
+Note: the `observed_state` payload schema documented in `docs/topology-schema-v1.5.md` §4 is **not** part of the `wait_for` surface. `observed_state` is produced only on failed-invariant test records (`kind: invariant`), not on `wait_for` scenario step records.
+
+#### Example scenario
+
+```yaml
+scenarios:
+  - id: post_failure_convergence
+    steps:
+      - fault:
+          link_down:
+            endpoints: ["r1:eth1", "r2:eth1"]
+
+      - wait_for:
+          type: bgp_session_up
+          from: r1
+          dst: 10.0.0.2
+          expect: pass
+          timeout: 60
+          interval_s: 2
+
+      - run:
+          include: all
+```
+
+This scenario fails a link, waits up to 60 seconds for the BGP session from `r1` to neighbor `10.0.0.2` to re-establish (polling every 2 seconds), then runs all declared tests. The `wait_for` step records `verdict: pass` if the session converges within `timeout`, `verdict: fail` otherwise.
+
+#### Semantics
+
+* The polling loop is deterministic: fixed `interval_s` cadence, no jitter, no exponential backoff.
+* `expect: fail` inverts the convergence semantics: the step succeeds if the condition does **not** become satisfied within `timeout`. This supports negative-convergence assertions (e.g., proving a route does not appear after a withdrawal).
+* `wait_for` is distinct from `wait_for_bgp`: `wait_for_bgp` is a coarse "all neighbors of one node" readiness check; `wait_for: bgp_session_up` is a single-neighbor session check with explicit `dst` IP. Both remain available; pick the one that matches the convergence question.
+
+---
+
 ## 7) Demo Topologies (v1.x Onboarding)
 
 The following demo topologies ship with v1.x:
