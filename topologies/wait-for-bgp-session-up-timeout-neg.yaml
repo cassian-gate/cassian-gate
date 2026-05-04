@@ -1,0 +1,86 @@
+# Cassian Gate Phase 1a Handover 3 / WI-5 PP4
+#
+# REQ-WF-21 / P3 negative timeout proof: wait_for with an impossible
+# condition reaches `timeout` cleanly and the scenario step records
+# the timeout outcome.
+#
+# Topology shape derived from topologies/wait-for-bgp-session-up.yaml:
+# two FRR routers (r1 AS 65001, r2 AS 65002) directly connected on a
+# /30. BGP session r1<->r2 establishes normally (substrate must be
+# DEPLOY/TEST-valid for the lifecycle to reach the scenario phase).
+#
+# Scenario uses `expect: fail` semantics:
+#   - The wait_for step queries r1 for a BGP session to 192.0.2.99 —
+#     an RFC 5737 documentation IP that is NOT a configured neighbor.
+#   - Helper attempts to read FRR's BGP summary; the queried peer is
+#     absent (last_error="neighbor not present in summary").
+#   - predicate_ok stays False on every attempt.
+#   - retry_until exhausts `timeout` (5s) at `interval_s` (1s) cadence.
+#   - `expect: fail` inverts the verdict: the scenario step passes
+#     because the condition did NOT become satisfied within timeout.
+#
+# This is a positive PASS scenario (verdict=pass) at the scenario-step
+# layer, demonstrating the negative-convergence semantics work
+# correctly. The underlying impossible condition is what proves the
+# timeout path; the `expect: fail` wrapper exercises the inversion.
+#
+# Operator-visible facts after this run:
+#   - scenario step verdict: pass
+#   - meta.attempts: ~5 (one per second over 5-second window)
+#   - meta.evidence.last_error: "neighbor not present in summary"
+#   - meta.succeeded: false (the underlying check did not succeed)
+#   - cassian test exit: 0
+
+name: wait-for-bgp-session-up-timeout-neg
+
+nodes:
+  - name: r1
+    type: frr
+    asn: 65001
+    router_id: 1.1.1.1
+    bgp:
+      neighbors:
+        - peer: r2
+          remote_as: 65002
+
+  - name: r2
+    type: frr
+    asn: 65002
+    router_id: 2.2.2.2
+    bgp:
+      neighbors:
+        - peer: r1
+          remote_as: 65001
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["10.0.0.1/30", "10.0.0.2/30"]
+
+# Zero-assertion compliance: a passing invariant test for the actual
+# r1<->r2 session is reused as the assertion-bearing element. With
+# --all-scenarios at runtime, this test is skipped; validate-time
+# zero-assertion check still requires it.
+tests:
+  - name: inv_bgp_up_r1_to_r2_real
+    kind: invariant
+    type: bgp_session_up
+    node: r1
+    dst: 10.0.0.2
+    expect: pass
+
+scenarios:
+  - id: wait_for_bgp_session_up_timeout_negative
+    description: |
+      Negative-convergence proof: wait_for an impossible BGP session to
+      192.0.2.99 (an RFC 5737 documentation IP that is not a configured
+      neighbor on r1). The condition cannot become satisfied within
+      timeout=5s. With expect=fail, the scenario step's verdict is
+      inverted to pass.
+    steps:
+      - wait_for:
+          type: bgp_session_up
+          from: r1
+          dst: 192.0.2.99
+          expect: fail
+          timeout: 5
+          interval_s: 1

@@ -1,0 +1,92 @@
+# Cassian Gate Phase 1a Handover 3 / WI-5 PP2
+#
+# REQ-WF-20 / P2 positive proof (combined coverage):
+#   - wait_for: route_advertised_to (REQ-WF-3) — observed at r1 toward r2
+#   - wait_for: route_present       (REQ-WF-2) — observed at r2 from r1's advertisement
+#
+# Topology shape derived from topologies/route_advertised_to.yaml: r1 (AS 65001)
+# connected to r2 (AS 65002) on a /31, h1 attached to r1 with a /24 in
+# r1's `networks:` so r1 advertises 10.10.10.0/24 to r2 via eBGP.
+#
+# Scenario sequence:
+#   1) wait_for route_advertised_to: r1 has 10.10.10.0/24 in its
+#      advertised-routes set toward peer r2.
+#   2) wait_for route_present: r2 has 10.10.10.0/24 in its IPv4 RIB
+#      (received from r1 via BGP).
+#
+# Both expect pass; both converge after BGP neighbor reaches Established.
+#
+# This topology DOES NOT inject a fault. REQ-WF-21's negative timeout
+# proof is in WI-5 PP4.
+
+name: wait-for-route-advertised-to
+
+nodes:
+  - name: r1
+    type: frr
+    asn: 65001
+    router_id: 1.1.1.1
+    networks:
+      - 10.10.10.0/24
+    bgp:
+      neighbors:
+        - peer: r2
+          remote_as: 65002
+
+  - name: r2
+    type: frr
+    asn: 65002
+    router_id: 2.2.2.2
+    bgp:
+      neighbors:
+        - peer: r1
+          remote_as: 65001
+
+  - name: h1
+    type: host
+    ip: 10.10.10.10/24
+    gw: 10.10.10.1
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["192.0.2.1/31", "192.0.2.0/31"]
+
+  - endpoints: ["h1:eth1", "r1:eth2"]
+    ipv4: ["10.10.10.10/24", "10.10.10.1/24"]
+
+# Zero-assertion compliance: the route_advertised_to invariant from
+# topologies/route_advertised_to.yaml is reused as the assertion-bearing
+# element. With --all-scenarios at runtime, this test is skipped, but
+# validate-time zero-assertion check still requires it.
+tests:
+  - name: r1_advertises_10_10_10_0_24_to_r2
+    kind: invariant
+    type: route_advertised_to
+    node: r1
+    peer: r2
+    prefix: 10.10.10.0/24
+    expect: pass
+
+scenarios:
+  - id: wait_for_route_advertised_to_and_present_positive
+    description: |
+      After BGP convergence, r1 should advertise 10.10.10.0/24 to r2 and
+      r2 should observe 10.10.10.0/24 in its RIB. Two wait_for steps in
+      sequence verify both halves of this end-to-end advertisement.
+    steps:
+      - wait_for:
+          type: route_advertised_to
+          from: r1
+          peer: r2
+          prefix: 10.10.10.0/24
+          expect: pass
+          timeout: 30
+          interval_s: 2
+
+      - wait_for:
+          type: route_present
+          from: r2
+          prefix: 10.10.10.0/24
+          expect: pass
+          timeout: 30
+          interval_s: 2
