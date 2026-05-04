@@ -7631,6 +7631,183 @@ def cmd_test(args: argparse.Namespace) -> None:
                 attempt_success = (last_obs == "pass")
                 return attempt_success, (cp, last_obs)
 
+            # -------------------------
+            # type: bgp_session_up (REQ-WF-1)
+            # -------------------------
+            if wtype == "bgp_session_up":
+                # Construct helper-input t-dict from wait_for.
+                # The helper reads t.get("dst") for the peer IP.
+                t_for_helper = {"dst": wait_for.get("dst")}
+                vtysh_ok, predicate_ok, observed_state, evidence = (
+                    _evaluate_invariant_attempt(
+                        inv_type="bgp_session_up",
+                        t=t_for_helper,
+                        src=str(src).strip(),
+                    )
+                )
+                last_cp = None
+                last_obs = "pass" if predicate_ok else "fail"
+                last_evidence = dict(evidence or {})
+                last_evidence["observed_state"] = dict(observed_state or {})
+                attempt_success = (last_obs == "pass")
+                return attempt_success, (last_cp, last_obs)
+
+            # -------------------------
+            # type: route_present (REQ-WF-2)
+            # -------------------------
+            if wtype == "route_present":
+                pfx = wait_for.get("prefix")
+                if not isinstance(pfx, str) or not pfx.strip():
+                    raise ValueError("wait_for route_present: requires prefix as CIDR")
+                norm_prefix = _normalize_prefix(pfx.strip()) or pfx.strip()
+                t_for_helper = {"_norm_prefix": norm_prefix}
+                vtysh_ok, predicate_ok, observed_state, evidence = (
+                    _evaluate_invariant_attempt(
+                        inv_type="route_present",
+                        t=t_for_helper,
+                        src=str(src).strip(),
+                    )
+                )
+                last_cp = None
+                last_obs = "pass" if predicate_ok else "fail"
+                last_evidence = dict(evidence or {})
+                last_evidence["observed_state"] = dict(observed_state or {})
+                attempt_success = (last_obs == "pass")
+                return attempt_success, (last_cp, last_obs)
+
+            # -------------------------
+            # type: route_advertised_to (REQ-WF-3)
+            # -------------------------
+            if wtype == "route_advertised_to":
+                peer = wait_for.get("peer")
+                if not isinstance(peer, str) or not peer.strip():
+                    raise ValueError("wait_for route_advertised_to: requires peer as a node name")
+                pfx = wait_for.get("prefix")
+                if not isinstance(pfx, str) or not pfx.strip():
+                    raise ValueError("wait_for route_advertised_to: requires prefix as CIDR")
+                norm_prefix = _normalize_prefix(pfx.strip()) or pfx.strip()
+
+                # Resolve peer-IP from topology links (TEST-path-equivalent policy).
+                node_s = str(src).strip()
+                peer_s = peer.strip()
+                peer_ips: list = []
+                for link in (topo.get("links") or []):
+                    endpoints = list(link.get("endpoints") or [])
+                    if len(endpoints) != 2:
+                        continue
+                    try:
+                        a_node, _ = str(endpoints[0]).split(":", 1)
+                        b_node, _ = str(endpoints[1]).split(":", 1)
+                    except Exception:
+                        continue
+                    ips = list(link.get("ipv4") or [])
+                    if len(ips) != 2:
+                        continue
+                    if a_node == node_s and b_node == peer_s:
+                        try:
+                            peer_ips.append(str(ipaddress.ip_interface(ips[1]).ip))
+                        except Exception:
+                            continue
+                    elif b_node == node_s and a_node == peer_s:
+                        try:
+                            peer_ips.append(str(ipaddress.ip_interface(ips[0]).ip))
+                        except Exception:
+                            continue
+                peer_ips = sorted(set(peer_ips))
+                if not peer_ips:
+                    raise ValueError(
+                        f"wait_for route_advertised_to: unsupported peer mapping for "
+                        f"node={node_s!r} peer={peer_s!r} (no direct IPv4 link)"
+                    )
+
+                t_for_helper = {
+                    "node": node_s,
+                    "_peer_ip": peer_ips[0],
+                    "_norm_prefix": norm_prefix,
+                }
+                vtysh_ok, predicate_ok, observed_state, evidence = (
+                    _evaluate_invariant_attempt(
+                        inv_type="route_advertised_to",
+                        t=t_for_helper,
+                        src=node_s,
+                    )
+                )
+                last_cp = None
+                last_obs = "pass" if predicate_ok else "fail"
+                last_evidence = dict(evidence or {})
+                last_evidence["observed_state"] = dict(observed_state or {})
+                attempt_success = (last_obs == "pass")
+                return attempt_success, (last_cp, last_obs)
+
+            # -------------------------
+            # type: evpn_bgp_session_up (REQ-WF-4)
+            # -------------------------
+            if wtype == "evpn_bgp_session_up":
+                peer = wait_for.get("peer")
+                if not isinstance(peer, str) or not peer.strip():
+                    raise ValueError("wait_for evpn_bgp_session_up: requires peer as a node name")
+                t_for_helper = {"peer": peer.strip()}
+                vtysh_ok, predicate_ok, observed_state, evidence = (
+                    _evaluate_invariant_attempt(
+                        inv_type="evpn_bgp_session_up",
+                        t=t_for_helper,
+                        src=str(src).strip(),
+                    )
+                )
+                last_cp = None
+                last_obs = "pass" if predicate_ok else "fail"
+                last_evidence = dict(evidence or {})
+                last_evidence["observed_state"] = dict(observed_state or {})
+                attempt_success = (last_obs == "pass")
+                return attempt_success, (last_cp, last_obs)
+
+            # -------------------------
+            # type: evpn_vni_route_present (REQ-WF-5)
+            # -------------------------
+            if wtype == "evpn_vni_route_present":
+                vni_v = wait_for.get("vni")
+                if not isinstance(vni_v, int) or isinstance(vni_v, bool):
+                    raise ValueError("wait_for evpn_vni_route_present: requires vni as an int")
+                t_for_helper = {"_mac": "", "_vni_i": int(vni_v)}
+                vtysh_ok, predicate_ok, observed_state, evidence = (
+                    _evaluate_invariant_attempt(
+                        inv_type="evpn_vni_route_present",
+                        t=t_for_helper,
+                        src=str(src).strip(),
+                    )
+                )
+                last_cp = None
+                last_obs = "pass" if predicate_ok else "fail"
+                last_evidence = dict(evidence or {})
+                last_evidence["observed_state"] = dict(observed_state or {})
+                attempt_success = (last_obs == "pass")
+                return attempt_success, (last_cp, last_obs)
+
+            # -------------------------
+            # type: evpn_mac_route_present (REQ-WF-6)
+            # -------------------------
+            if wtype == "evpn_mac_route_present":
+                mac_v = wait_for.get("mac")
+                vni_v = wait_for.get("vni")
+                if not isinstance(mac_v, str) or not mac_v.strip():
+                    raise ValueError("wait_for evpn_mac_route_present: requires mac as a string")
+                if not isinstance(vni_v, int) or isinstance(vni_v, bool):
+                    raise ValueError("wait_for evpn_mac_route_present: requires vni as an int")
+                t_for_helper = {"_mac": str(mac_v).strip().lower(), "_vni_i": int(vni_v)}
+                vtysh_ok, predicate_ok, observed_state, evidence = (
+                    _evaluate_invariant_attempt(
+                        inv_type="evpn_mac_route_present",
+                        t=t_for_helper,
+                        src=str(src).strip(),
+                    )
+                )
+                last_cp = None
+                last_obs = "pass" if predicate_ok else "fail"
+                last_evidence = dict(evidence or {})
+                last_evidence["observed_state"] = dict(observed_state or {})
+                attempt_success = (last_obs == "pass")
+                return attempt_success, (last_cp, last_obs)
+
             raise ValueError(f"wait_for: unsupported type {wtype!r}")
 
         ok, last_val, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
@@ -7679,6 +7856,26 @@ def cmd_test(args: argparse.Namespace) -> None:
         if wtype == "route_prefix":
             meta["src"] = str(wait_for.get("src") or wait_for.get("on") or "")
             meta["prefix"] = str(wait_for.get("prefix") or "")
+
+        if wtype == "bgp_session_up":
+            meta["dst"] = str(wait_for.get("dst") or "")
+
+        if wtype == "route_present":
+            meta["prefix"] = str(wait_for.get("prefix") or "")
+
+        if wtype == "route_advertised_to":
+            meta["peer"] = str(wait_for.get("peer") or "")
+            meta["prefix"] = str(wait_for.get("prefix") or "")
+
+        if wtype == "evpn_bgp_session_up":
+            meta["peer"] = str(wait_for.get("peer") or "")
+
+        if wtype == "evpn_vni_route_present":
+            meta["vni"] = int(wait_for.get("vni") or 0)
+
+        if wtype == "evpn_mac_route_present":
+            meta["mac"] = str(wait_for.get("mac") or "")
+            meta["vni"] = int(wait_for.get("vni") or 0)
 
         # Evidence: bounded and last-attempt only
         meta["evidence"] = dict(last_evidence)
