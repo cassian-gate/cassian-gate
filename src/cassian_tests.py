@@ -3152,6 +3152,81 @@ def _render_scenarios_summary(results: dict) -> str:
                     if isinstance(src_if, str) and src_if.strip():
                         line_parts.append(f"src_if={src_if.strip()}")
 
+                # H3 / WI-6 / F6 follow-up (Reviewer Condition 2):
+                # Surface type-specific identifiers and timeout diagnostics for
+                # the 6 new wait_for condition types. Reads from the actual
+                # scenario step record schema (st.wait_type / st.meta), not from
+                # the legacy st.wait_for path which is None on the success path
+                # (see scen_step() canonical_keys in cassian_engine.run_scenario).
+                #
+                # Scoped to new types only; existing types (ping, tcp,
+                # route_prefix) continue to be rendered by the legacy block
+                # above, preserving REQ-WF-13 byte-identity.
+                wait_type = st.get("wait_type")
+                meta = st.get("meta") if isinstance(st.get("meta"), dict) else {}
+                if isinstance(wait_type, str) and wait_type.strip() in (
+                    "bgp_session_up",
+                    "route_present",
+                    "route_advertised_to",
+                    "evpn_bgp_session_up",
+                    "evpn_vni_route_present",
+                    "evpn_mac_route_present",
+                ):
+                    wt = wait_type.strip()
+                    # type
+                    line_parts.append(f"type={wt}")
+                    # source node
+                    frm = meta.get("from")
+                    if isinstance(frm, str) and frm.strip():
+                        line_parts.append(f"from={frm.strip()}")
+                    # type-specific target identifiers
+                    if wt == "bgp_session_up":
+                        m_dst = meta.get("dst")
+                        if isinstance(m_dst, str) and m_dst.strip():
+                            line_parts.append(f"dst={m_dst.strip()}")
+                    elif wt == "route_present":
+                        m_pfx = meta.get("prefix")
+                        if isinstance(m_pfx, str) and m_pfx.strip():
+                            line_parts.append(f"prefix={m_pfx.strip()}")
+                    elif wt == "route_advertised_to":
+                        m_peer = meta.get("peer")
+                        if isinstance(m_peer, str) and m_peer.strip():
+                            line_parts.append(f"peer={m_peer.strip()}")
+                        m_pfx = meta.get("prefix")
+                        if isinstance(m_pfx, str) and m_pfx.strip():
+                            line_parts.append(f"prefix={m_pfx.strip()}")
+                    elif wt == "evpn_bgp_session_up":
+                        m_peer = meta.get("peer")
+                        if isinstance(m_peer, str) and m_peer.strip():
+                            line_parts.append(f"peer={m_peer.strip()}")
+                    elif wt == "evpn_vni_route_present":
+                        m_vni = meta.get("vni")
+                        if m_vni is not None:
+                            line_parts.append(f"vni={m_vni}")
+                    elif wt == "evpn_mac_route_present":
+                        m_mac = meta.get("mac")
+                        if isinstance(m_mac, str) and m_mac.strip():
+                            line_parts.append(f"mac={m_mac.strip()}")
+                        m_vni = meta.get("vni")
+                        if m_vni is not None:
+                            line_parts.append(f"vni={m_vni}")
+                    # expect
+                    m_succeeded = meta.get("succeeded")
+                    # When the underlying check did not succeed (timeout path or
+                    # negative-convergence path), surface the helper's
+                    # observed_state diagnostic literals (state + last_error).
+                    # This is the operator-readable equivalent of digging into
+                    # results.json[scenarios][].steps[].meta.evidence.observed_state.
+                    if m_succeeded is False:
+                        evidence = meta.get("evidence") if isinstance(meta.get("evidence"), dict) else {}
+                        obs_state = evidence.get("observed_state") if isinstance(evidence.get("observed_state"), dict) else {}
+                        os_state = obs_state.get("state")
+                        os_last_error = obs_state.get("last_error")
+                        if isinstance(os_state, str) and os_state.strip():
+                            line_parts.append(f"state={os_state.strip()}")
+                        if isinstance(os_last_error, str) and os_last_error.strip():
+                            line_parts.append(f"last_error=\"{os_last_error.strip()}\"")
+
             elif stype == "wait_for_bgp":
                 node = st.get("node")
                 if isinstance(node, str) and node.strip():
