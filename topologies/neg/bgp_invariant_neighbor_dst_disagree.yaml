@@ -1,0 +1,42 @@
+# Negative-fixture topology for Phase 1a Handover 2.6 — REQ-H26-5.
+# Exercises the strict 'neighbor' / 'dst' disagreement hard-fail introduced by the
+# Resolve-time `neighbor -> dst` alias (cassian_model.py, kind: invariant /
+# type: bgp_session_up arm).
+#
+# Both fields are declared with deliberately disagreeing IPv4 literals.
+# `cassian validate` MUST fail at Resolve with the deterministic message
+#   tests[<i>] (<test-name>): 'neighbor' and 'dst' disagree (<a> vs <b>)
+# and exit non-zero. No `topology.resolved.yaml` is produced for this topology.
+
+name: bgp-invariant-neighbor-dst-disagree
+
+nodes:
+  - name: r1
+    type: frr
+    asn: 65001
+    router_id: 1.1.1.1
+    bgp:
+      neighbors:
+        - peer: r2
+          remote_as: 65002
+  - name: r2
+    type: frr
+    asn: 65002
+    router_id: 2.2.2.2
+    bgp:
+      neighbors:
+        - peer: r1
+          remote_as: 65001
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["10.0.0.1/30", "10.0.0.2/30"]
+
+tests:
+  - name: inv_bgp_up_r1_neighbor_dst_disagree
+    kind: invariant
+    type: bgp_session_up
+    node: r1
+    neighbor: 10.0.0.2
+    dst: 10.0.0.3
+    expect: pass

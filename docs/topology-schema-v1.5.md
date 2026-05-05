@@ -45,7 +45,7 @@ v1.5 supports the following invariant types. Each type maps to a single determin
 
 | Type | Category | Required fields (in addition to `kind`, `type`, `name`, `expect`) |
 |---|---|---|
-| `bgp_session_up` | BGP session | `node`, `dst` (IPv4 literal of the neighbor) |
+| `bgp_session_up` | BGP session | `node`, `neighbor` (IPv4 literal of the BGP neighbor; canonical alias `dst` accepted) |
 | `evpn_bgp_session_up` | BGP session | `node`, `peer` (a known node name) |
 | `route_present` | Route | `node`, `prefix` (CIDR) |
 | `route_absent` | Route | `node`, `prefix` (CIDR) |
@@ -119,7 +119,7 @@ Every key listed below is REQUIRED on the failed-invariant record's `observed_st
 }
 ```
 
-* `peer` is the test's `dst` field, which is required to be an IPv4 literal.
+* `peer` is the test's `dst` field, which is required to be an IPv4 literal. Operators write the user-facing form `neighbor:` (the natural BGP vocabulary); the resolver aliases `neighbor:` to the canonical `dst:` at Resolve, hard-failing if both are declared with disagreeing values.
 * `state` reflects the FRR BGP FSM state for the configured neighbor (`Idle`, `Active`, `Connect`, `OpenSent`, `OpenConfirm`, `Established`); the literal `NotConfigured` when vtysh succeeds but the queried peer is not present in FRR's BGP summary; or the literal `Unknown` when vtysh fails, vtysh output cannot be parsed as JSON, or the test's `dst`/`src` input is missing or invalid.
 * `last_error` carries the neighbor's `lastResetReason` from FRR when present, or one of a closed set of engine-synthesized deterministic literal strings on the diagnostic paths: `"neighbor not present in summary"` when the queried peer is absent from FRR's BGP summary, `"peers not found in summary"` when FRR's BGP summary contains no peer dictionary at any expected key, `"vtysh command failed"` when the vtysh invocation returns a non-zero exit, `"vtysh output not parseable as JSON"` when vtysh succeeds but its output is not valid JSON, `"dst missing or invalid (expected non-empty IPv4 literal)"` when the test record's `dst` field is absent or not an IPv4 literal, or `"src missing or empty"` when the test record's source node is absent or empty. Empty string when none of these conditions applies.
 
