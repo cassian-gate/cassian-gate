@@ -1320,7 +1320,7 @@ Required fields:
 | Field  | Description                                                         |
 | ------ | ------------------------------------------------------------------- |
 | node   | Node where the BGP session is checked (FRR-typed)                   |
-| dst    | IPv4 literal of the configured neighbor on that node                |
+| neighbor | IPv4 literal of the BGP neighbor on that node (canonical alias `dst` accepted) |
 
 Example:
 
@@ -1330,7 +1330,7 @@ tests:
     kind: invariant
     type: bgp_session_up
     node: r1
-    dst: 10.0.0.2
+    neighbor: 10.0.0.2
     expect: pass
 ```
 

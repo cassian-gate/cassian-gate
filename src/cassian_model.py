@@ -1892,7 +1892,7 @@ def resolve_topology(topo: dict) -> dict:
         #   node: <node name>
         # Normalized aliases:
         #   node -> src
-        #   neighbor -> dst   (bgp_session_up only)
+        #   neighbor -> dst   (bgp_session_up invariants; bgp_neighbor tests)
         # ----------------------------
         if (t.get("kind") or "").strip() == "invariant":
             ctx = f"tests[{i}] ({t.get('name', '<unnamed>')})"
@@ -1905,6 +1905,18 @@ def resolve_topology(topo: dict) -> dict:
 
             if "src" not in t and "node" in t:
                 t["src"] = t.get("node")
+
+            if (t.get("type") or "").strip().lower() == "bgp_session_up":
+                if "neighbor" in t and "dst" in t:
+                    a = str(t.get("neighbor") or "").strip()
+                    b = str(t.get("dst") or "").strip()
+                    if a and b and a != b:
+                        die(f"{ctx}: 'neighbor' and 'dst' disagree ({a!r} vs {b!r})")
+
+                if "neighbor" in t:
+                    if "dst" not in t:
+                        t["dst"] = str(t.get("neighbor") or "").strip()
+                    t.pop("neighbor", None)
 
             inv_type = str(t.get("type") or "").strip().lower()
             src = t.get("src")
@@ -2025,6 +2037,19 @@ def resolve_topology(topo: dict) -> dict:
         # v1: normalize test field aliases
         # Accept 'from'/'to' as aliases for 'src'/'dst' with strict disagreement checks.
         # ----------------------------
+        if t.get("kind") == "bgp_neighbor":
+            ctx = f"tests[{i}] ({t.get('name', '<unnamed>')})"
+            if "neighbor" in t and "dst" in t:
+                a = str(t.get("neighbor") or "").strip()
+                b = str(t.get("dst") or "").strip()
+                if a and b and a != b:
+                    die(f"{ctx}: 'neighbor' and 'dst' disagree ({a!r} vs {b!r})")
+
+            if "neighbor" in t:
+                if "dst" not in t:
+                    t["dst"] = str(t.get("neighbor") or "").strip()
+                t.pop("neighbor", None)
+
         if "from" in t and "src" in t:
             a = str(t.get("from") or "").strip()
             b = str(t.get("src") or "").strip()
