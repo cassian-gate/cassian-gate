@@ -1253,10 +1253,29 @@ def ensure_valid_topology(topo: dict) -> None:
                     f"Affected tests: {', '.join(offenders)}"
                 )
 
-def gen_frr_daemons() -> str:
-    return """zebra=yes
+def gen_frr_daemons(topo: dict | None = None) -> str:
+    # H4: topology-aware emission of the 'ospfd' line (REQ-H4-5 / B05).
+    # Default ('ospfd=no') is byte-identical to pre-H4 rendering for any
+    # topology that declares no 'ospf:' on any FRR node, preserving the
+    # daemons-file byte-stability surface (D-5 / P1).
+    # 'ospfd=yes' is emitted iff at least one FRR node in the resolved
+    # topology declares an 'ospf:' section. Only the 'ospfd' line is
+    # affected; all other lines are byte-identical to pre-H4.
+    # Backward-compat: the no-arg call (topo is None) continues to return
+    # the original 'ospfd=no' content byte-identically.
+    ospfd_value = "no"
+    if isinstance(topo, dict):
+        for n in (topo.get("nodes") or []):
+            if not isinstance(n, dict):
+                continue
+            if str(n.get("type") or "").strip().lower() != "frr":
+                continue
+            if n.get("ospf"):
+                ospfd_value = "yes"
+                break
+    return f"""zebra=yes
 bgpd=yes
-ospfd=no
+ospfd={ospfd_value}
 ospf6d=no
 ripd=no
 ripngd=no
@@ -1533,6 +1552,41 @@ def gen_frr_conf(node: dict, topo: dict) -> str:
         if route_maps:
             cfg.append("!")
 
+    # H4: OSPF rendering (REQ-H4-6 / B06).
+    # Emit a deterministic 'router ospf' block when the node declares
+    # 'ospf:'. Per LD-5: no passive-interface logic. Per LD-6: no timer
+    # customisation keys. Per D-4: 'network <cidr> area <area>' lines are
+    # sorted in canonical IPv4-CIDR ascending order. Single-area-per-node
+    # in H4 (NG-3); multi-area is OOS.
+    ospf_section = node.get("ospf")
+    if isinstance(ospf_section, dict):
+        ospf_area = ospf_section.get("area")
+        ospf_networks_raw = ospf_section.get("networks") or []
+        # WI-2 schema validation guarantees: area is int >= 0; networks is
+        # a non-empty list of canonical IPv4 CIDR strings; top-level
+        # node.router_id is present and is an IPv4 literal.
+        if isinstance(ospf_area, int) and isinstance(ospf_networks_raw, list) and ospf_networks_raw:
+            try:
+                ospf_networks_sorted = sorted(
+                    (str(c).strip() for c in ospf_networks_raw if isinstance(c, str) and str(c).strip()),
+                    key=lambda c: ipaddress.IPv4Network(c, strict=True),
+                )
+            except Exception:
+                # Defensive: schema validation should have rejected any
+                # non-canonical CIDR earlier; if it slips through, fall
+                # back to declaration-order to avoid a non-deterministic
+                # crash here. This branch is unreachable from validated
+                # input.
+                ospf_networks_sorted = [
+                    str(c).strip() for c in ospf_networks_raw if isinstance(c, str) and str(c).strip()
+                ]
+            cfg.append("router ospf")
+            if rid:
+                cfg.append(f" ospf router-id {rid}")
+            for cidr in ospf_networks_sorted:
+                cfg.append(f" network {cidr} area {int(ospf_area)}")
+            cfg.append("!")
+
     cfg.append("line vty")
     cfg.append("!")
     return "\n".join(cfg) + "\n"
@@ -1586,7 +1640,7 @@ def topo_to_containerlab(topo: dict) -> dict:
 
             if frr_mode == "generated":
                 cfgdir = node_cfg_dir(topo["name"], n["name"])
-                write_file(cfgdir / "daemons", gen_frr_daemons())
+                write_file(cfgdir / "daemons", gen_frr_daemons(topo))
                 write_file(cfgdir / "vtysh.conf", gen_vtysh_conf())
                 write_file(cfgdir / "frr.conf", gen_frr_conf(n, topo))
 
