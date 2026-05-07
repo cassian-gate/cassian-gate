@@ -998,6 +998,84 @@ def ensure_valid_topology(topo: dict) -> None:
                     f"(e.g. 1.1.1.1)."
                 )
 
+        # H4: node-level 'ospf:' schema validation (FRR-only by virtue of the
+        # enclosing 'if n.get("type") != "frr": continue' guard at the start of
+        # this loop).
+        # LD-3: 'ospf:' carries exactly two keys, 'area' (int >= 0) and
+        #       'networks' (list of >= 1 canonical IPv4 CIDR strings); top-level
+        #       node.router_id is reused as the OSPF router-ID.
+        # LD-6: no timer customisation keys (hello/dead/SPF intervals).
+        # DC 2.7: unknown keys under 'ospf:' are hard-fail.
+        if "ospf" in n and n.get("ospf") is not None:
+            ospf = n.get("ospf")
+            if not isinstance(ospf, dict):
+                die(
+                    f"Topology invalid: nodes[{i}] '{name}': 'ospf:' must be a mapping "
+                    f"(allowed keys: 'area', 'networks')"
+                )
+
+            # LD-3: top-level node.router_id is required when 'ospf:' is declared.
+            if "router_id" not in n or n.get("router_id") is None or not str(n.get("router_id") or "").strip():
+                die(
+                    f"Topology invalid: nodes[{i}] '{name}': declares 'ospf:' but is missing required "
+                    f"top-level 'router_id' (OSPF requires a router-ID; reuse the node's top-level "
+                    f"'router_id' field)"
+                )
+
+            # DC 2.7: reject unknown keys under 'ospf:' (Unknown-Key Strictness).
+            allowed_ospf_keys = {"area", "networks"}
+            for k in ospf.keys():
+                if k not in allowed_ospf_keys:
+                    die(
+                        f"Topology invalid: nodes[{i}] '{name}': declares unknown key {k!r} under 'ospf:' "
+                        f"(allowed keys: 'area', 'networks')"
+                    )
+
+            # area: required, int >= 0.
+            if "area" not in ospf:
+                die(
+                    f"Topology invalid: nodes[{i}] '{name}': declares 'ospf:' but is missing required key "
+                    f"'area' (expected: int >= 0)"
+                )
+            area_raw = ospf.get("area")
+            if isinstance(area_raw, bool) or not isinstance(area_raw, int):
+                die(
+                    f"Topology invalid: nodes[{i}] '{name}': 'ospf.area' must be an integer "
+                    f"(got {area_raw!r}, expected: int >= 0)"
+                )
+            if area_raw < 0:
+                die(
+                    f"Topology invalid: nodes[{i}] '{name}': 'ospf.area' must be >= 0 "
+                    f"(got {area_raw!r}, expected: int >= 0)"
+                )
+
+            # networks: required, list of >= 1 canonical IPv4 CIDR strings.
+            if "networks" not in ospf:
+                die(
+                    f"Topology invalid: nodes[{i}] '{name}': declares 'ospf:' but is missing required key "
+                    f"'networks' (expected: list of canonical IPv4 CIDR strings, e.g. ['10.0.0.0/24'])"
+                )
+            networks_raw = ospf.get("networks")
+            if not isinstance(networks_raw, list) or len(networks_raw) < 1:
+                die(
+                    f"Topology invalid: nodes[{i}] '{name}': 'ospf.networks' must be a non-empty list of "
+                    f"canonical IPv4 CIDR strings (e.g. ['10.0.0.0/24'])"
+                )
+            for cidr_raw in networks_raw:
+                if not isinstance(cidr_raw, str) or not cidr_raw.strip():
+                    die(
+                        f"Topology invalid: nodes[{i}] '{name}': has invalid CIDR {cidr_raw!r} in "
+                        f"'ospf.networks' (expected: canonical IPv4 CIDR, e.g. '10.0.0.0/24')"
+                    )
+                cidr_s = cidr_raw.strip()
+                try:
+                    _net = ipaddress.IPv4Network(cidr_s, strict=True)
+                except Exception:
+                    die(
+                        f"Topology invalid: nodes[{i}] '{name}': has invalid CIDR {cidr_s!r} in "
+                        f"'ospf.networks' (expected: canonical IPv4 CIDR, e.g. '10.0.0.0/24')"
+                    )
+
     for i, link in enumerate(topo["links"], start=1):
         eps = link.get("endpoints")
         if not isinstance(eps, list) or len(eps) != 2:
@@ -2068,6 +2146,14 @@ def resolve_topology(topo: dict) -> dict:
                         f"{src!r} of type {_src_kind!r}; this invariant requires "
                         f"src to be a node of type 'frr'"
                     )
+
+                # H4: Resolve-time default materialisation (REQ-H4-24 / B11).
+                # DC 2.6: defaults must be visible in topology.resolved.yaml; no
+                # concealed defaults. LD-2: when 'state' is omitted, materialise
+                # 'Full' explicitly. D-8: identical input -> byte-identical
+                # resolved-form output.
+                if "state" not in t:
+                    t["state"] = "Full"
 
         # ----------------------------
         # v1.5: route_prefix alias normalization
