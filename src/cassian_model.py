@@ -1868,13 +1868,14 @@ def resolve_topology(topo: dict) -> dict:
                 "evpn_mac_route_absent",
                 "evpn_vni_route_present",
                 "evpn_bgp_session_up",
+                "ospf_neighbor_up",
             ):
                 die(
                     f"tests[{i}]: invariant.type unsupported ({inv_type!r}) "
                     f"(supported: bgp_session_up, route_present, route_absent, "
                     f"bgp_med_equals, bgp_localpref_equals, route_advertised_to, route_not_advertised_to, "
                     f"evpn_mac_route_present, evpn_mac_route_absent, "
-                    f"evpn_vni_route_present, evpn_bgp_session_up)"
+                    f"evpn_vni_route_present, evpn_bgp_session_up, ospf_neighbor_up)"
                 )
             t["type"] = inv_type
         else:
@@ -1991,6 +1992,82 @@ def resolve_topology(topo: dict) -> dict:
                 if not isinstance(peer, str) or not peer.strip():
                     die(f"{ctx}: evpn_bgp_session_up requires non-empty 'peer'")
                 t["peer"] = peer.strip()
+
+            elif inv_type == "ospf_neighbor_up":
+                # H4: OSPF neighbor-state invariant (FRR-only NOS-tag).
+                # LD-1: 'neighbor' is IPv4 literal of peer's router-ID.
+                # LD-2: declarable 'state' set is the closed FSM set
+                #       {Down, Attempt, Init, 2-Way, ExStart, Exchange, Loading, Full};
+                #       'NotConfigured' and 'Unknown' are observed-only (D-1).
+                #       Default "Full" is materialised at Resolve in a later WI per DC §2.6.
+                # REQ-H4-3 / B03: src must reference a node of type "frr".
+                neighbor = t.get("neighbor")
+                if not isinstance(neighbor, str) or not neighbor.strip():
+                    die(
+                        f"{ctx}: invariant 'ospf_neighbor_up' requires 'neighbor' "
+                        f"(IPv4 literal of the peer's router-ID, e.g. '2.2.2.2')"
+                    )
+                neighbor_s = neighbor.strip()
+                try:
+                    _addr = ipaddress.IPv4Address(neighbor_s)
+                except Exception:
+                    die(
+                        f"{ctx}: invariant 'ospf_neighbor_up' has invalid 'neighbor' value "
+                        f"{neighbor_s!r} (expected: IPv4 literal of the peer's router-ID, "
+                        f"e.g. '2.2.2.2')"
+                    )
+                t["neighbor"] = neighbor_s
+
+                state = t.get("state")
+                if state is not None:
+                    if not isinstance(state, str) or not state.strip():
+                        die(
+                            f"{ctx}: invariant 'ospf_neighbor_up' has invalid 'state' value "
+                            f"{state!r} (expected one of: Down, Attempt, Init, 2-Way, "
+                            f"ExStart, Exchange, Loading, Full)"
+                        )
+                    state_s = state.strip()
+                    if state_s not in (
+                        "Down",
+                        "Attempt",
+                        "Init",
+                        "2-Way",
+                        "ExStart",
+                        "Exchange",
+                        "Loading",
+                        "Full",
+                    ):
+                        die(
+                            f"{ctx}: invariant 'ospf_neighbor_up' has invalid 'state' value "
+                            f"{state_s!r} (expected one of: Down, Attempt, Init, 2-Way, "
+                            f"ExStart, Exchange, Loading, Full)"
+                        )
+                    t["state"] = state_s
+
+                # FRR-only NOS-tag enforcement (REQ-H4-3 / B03).
+                # Build a local node-name -> node lookup from the resolved nodes
+                # list; resolved["nodes"] is fully populated at this point of
+                # resolve_topology() per the deep-copy at function entry.
+                _nodes_for_lookup = {
+                    str(_n.get("name") or "").strip(): _n
+                    for _n in (resolved.get("nodes") or [])
+                    if isinstance(_n, dict)
+                    and isinstance(_n.get("name"), str)
+                    and str(_n.get("name") or "").strip()
+                }
+                _src_node = _nodes_for_lookup.get(src.strip())
+                if _src_node is None:
+                    die(
+                        f"{ctx}: invariant 'ospf_neighbor_up' references src "
+                        f"{src!r} but no node by that name exists in the topology"
+                    )
+                _src_kind = str(_src_node.get("type") or "").strip().lower()
+                if _src_kind != "frr":
+                    die(
+                        f"{ctx}: invariant 'ospf_neighbor_up' references src "
+                        f"{src!r} of type {_src_kind!r}; this invariant requires "
+                        f"src to be a node of type 'frr'"
+                    )
 
         # ----------------------------
         # v1.5: route_prefix alias normalization
