@@ -5792,7 +5792,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             }
             return vtysh_ok, predicate_ok, observed_state, evidence
 
-        # WI-1 Repair Set complete: all 11 invariant types now wire through
+        # WI-1 Repair Set complete: all 12 invariant types now wire through
         # this helper. This fallback is reached only if a new invariant type
         # is added to the type-system without being wired here; in that
         # case raising surfaces the omission deterministically rather than
