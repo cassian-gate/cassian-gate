@@ -1,0 +1,26 @@
+# Phase 1a / Handover 4 of 8 — schema-negative fixture for REQ-H4-17 /
+# R-OSPF-13e: declares an 'ospf_neighbor_up' invariant whose 'src'
+# points at a node of type 'host' (NOT 'frr'). Per Strategy §6 +
+# Doctrine §1.14 + REQ-H4-3 / B03, the OSPF invariant family is
+# FRR-only; the WI-1 invariant-schema branch hard-fails when src is
+# non-FRR.
+# Expected: cassian validate hard-fails at Resolve with the §6.6.2
+# templated message naming the offending src and its non-FRR type.
+# Topology shape note: a single 'host' node with no FRR nodes and no
+# links is the minimal shape that survives upstream structural checks
+# (host requires 'ip', list-non-emptiness for 'nodes' satisfied, links
+# may be []). The hard-fail surfaces at the invariant-schema branch in
+# resolve_topology(), not earlier.
+name: bad-ospf-non-frr-src
+nodes:
+  - name: h1
+    type: host
+    ip: 10.0.99.1/24
+links: []
+tests:
+  - name: non_frr_src_rejected
+    kind: invariant
+    type: ospf_neighbor_up
+    src: h1
+    neighbor: 2.2.2.2
+    expect: pass

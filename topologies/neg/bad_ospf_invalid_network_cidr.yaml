@@ -1,0 +1,18 @@
+# Phase 1a / Handover 4 of 8 — schema-negative fixture for REQ-H4-16 /
+# R-OSPF-13d: declares 'ospf:' with an invalid CIDR in 'networks'.
+# The literal '10.0.12.5/24' has host bits set under /24 and is
+# rejected by IPv4Network(strict=True) — non-canonical CIDR form.
+# Expected: cassian validate hard-fails at Resolve with the §6.6.2
+# templated message naming the offending CIDR value and pointing to
+# canonical-form examples.
+name: bad-ospf-invalid-network-cidr
+nodes:
+  - name: r1
+    type: frr
+    router_id: 1.1.1.1
+    ospf:
+      area: 0
+      networks:
+        - 10.0.12.5/24
+links: []
+tests: []

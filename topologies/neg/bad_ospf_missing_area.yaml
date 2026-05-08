@@ -1,0 +1,14 @@
+# Phase 1a / Handover 4 of 8 — schema-negative fixture for REQ-H4-13 /
+# R-OSPF-13a: declares 'ospf:' with 'networks' but no 'area'.
+# Expected: cassian validate hard-fails at Resolve with the §6.6.2
+# templated message naming the missing key 'area'.
+name: bad-ospf-missing-area
+nodes:
+  - name: r1
+    type: frr
+    router_id: 1.1.1.1
+    ospf:
+      networks:
+        - 10.0.12.0/24
+links: []
+tests: []
