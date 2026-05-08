@@ -56,11 +56,13 @@ v1.5 supports the following invariant types. Each type maps to a single determin
 | `evpn_vni_route_present` | EVPN | `node`, `vni` (integer) |
 | `evpn_mac_route_present` | EVPN | `node`, `mac` (canonical MAC literal), `vni` (integer) |
 | `evpn_mac_route_absent` | EVPN | `node`, `mac` (canonical MAC literal), `vni` (integer) |
+| `ospf_neighbor_up` | OSPF | `src`, `neighbor` (IPv4 literal of the peer's router-ID); optional `state` (one of the 8 declarable FSM literals; default `Full`) |
 
 Rules:
 
 * `peer` fields MUST reference a node declared in `nodes:`; the engine's blast-radius validator rejects unknown node references with a hard-failure
 * IPv4 literals (`dst` for `bgp_session_up`) bypass the node-name check and pass through verbatim
+* `ospf_neighbor_up`'s `neighbor` field MUST be an IPv4 literal of the peer's OSPF router-ID (NOT a node name); the resolver's IPv4-literal validator hard-fails on non-IPv4 input. The `src` field MUST reference a node of `type: frr` declared in `nodes:` (FRR-only NOS-tag enforcement; non-FRR `src` is rejected at validation with a deterministic error)
 * `prefix` fields MUST be canonical IPv4 CIDR notation (e.g. `10.0.0.0/24`); non-canonical values are rejected at validation time
 * `mac` fields MUST be canonical lowercase colon-separated form (e.g. `00:11:22:33:44:55`)
 * `vni` MUST be a positive integer matching a VNI declared in the topology's `vlans:` map
@@ -249,6 +251,42 @@ Every key listed below is REQUIRED on the failed-invariant record's `observed_st
 * `evpn_routes` is filtered identically to §4.6 (declared host MACs only).
 * `evpn_mac_route_absent` payloads use `"type": "evpn_mac_route_absent"`; otherwise the schema is identical.
 
+### 4.8) `ospf_neighbor_up`
+
+```json
+{
+  "expected_state": "<one of the 8 declarable FSM literals>",
+  "last_error": "<string>",
+  "neighbor": "<IPv4 literal of the peer's OSPF router-ID>",
+  "source_node": "<node where the test runs>",
+  "state": "<one of the 10 FSM-literal closed-set members>",
+  "type": "ospf_neighbor_up"
+}
+```
+
+* `neighbor` is the test's `neighbor` field, which is an IPv4 literal of the peer's OSPF router-ID. Unlike `bgp_session_up` (which aliases user-facing `neighbor` to the canonical `dst`), `ospf_neighbor_up` keeps `neighbor` as the canonical field name; there is no aliasing.
+* `expected_state` is the test's declared `state` field (one of the 8 declarable FSM literals; default `Full` materialised at Resolve when the test omits the field, visible in `topology.resolved.yaml`).
+* `state` reflects the OSPF neighbor FSM state for the configured peer, drawn from a closed set of 10 literal members. The 8 **declarable** literals (any of which may be supplied via the test record's `state` field) reflect FRR's standard OSPF FSM transitions:
+  * `Down` — initial state; no Hellos seen yet, or the neighbor went unreachable.
+  * `Attempt` — non-broadcast network (NBMA) only; sending Hellos to a configured neighbor that has not yet responded.
+  * `Init` — Hellos received from the neighbor but two-way communication has not yet been confirmed (own router-id absent from neighbor's Hello neighbor list).
+  * `2-Way` — bidirectional Hello exchange confirmed (own router-id present in neighbor's Hello neighbor list); on broadcast networks, only DR/BDR proceed beyond this state.
+  * `ExStart` — beginning of database synchronization; routers negotiate master/slave roles and initial sequence number.
+  * `Exchange` — exchanging database description (DBD) packets summarizing each router's link-state database contents.
+  * `Loading` — sending link-state requests for any link-state advertisements (LSAs) the neighbor advertised but the local router does not yet have.
+  * `Full` — full adjacency formed; link-state databases synchronized; the neighbor is included in the local SPF computation. This is the steady-state value for a healthy OSPF adjacency.
+  The 2 **observed-only** literals (engine-synthesized; never declared in test records) signal the diagnostic shape of the failure:
+  * `NotConfigured` — vtysh succeeded but the queried neighbor is not present in FRR's `show ip ospf neighbor json` output (e.g. Hellos rejected upstream due to area mismatch, network mismatch, or no OSPF activation on the link interface).
+  * `Unknown` — vtysh failed, vtysh output cannot be parsed as JSON, or FRR returned an `nbrState` literal outside the 8 declarable members.
+* `last_error` is empty string `""` on the predicate-mismatch path (vtysh succeeded, JSON parsed, neighbor present, but observed FSM state does not match the declared `expected_state`); otherwise one of a closed set of engine-synthesized deterministic literal strings on the diagnostic paths: `"neighbor not present in ospf neighbor table"` when the queried neighbor's router-ID is not a key in FRR's neighbor dictionary; `"ospf neighbor table empty"` when FRR returned a neighbors dictionary that is structurally empty; `"vtysh command failed"` when the vtysh invocation returns a non-zero exit; `"vtysh output not parseable as JSON"` when vtysh succeeds but its output is not valid JSON; `"neighbor missing or invalid (expected non-empty IPv4 router-id literal)"` when the test record's `neighbor` field is absent or not an IPv4 literal (defensive validation at dispatch); `"src missing or empty"` when the test record's source node is absent or empty (defensive validation at dispatch).
+* The runtime evaluator strips role-qualifier suffixes from FRR's `nbrState` field before mapping to the closed set: literals like `Full/DR`, `Full/Backup`, `Full/DROther`, `2-Way/DROther` are split on `/` and the leading FSM literal is used.
+
+The retry loop driving `expect: pass` evaluation uses LD-4 defaults: `timeout_s=60`, `retry_interval_s=1.0` (seconds). Both values may be overridden per-test via the test record's `timeout_s` and `retry_interval_s` fields. For `expect: fail`, evaluation is single-attempt (no retry).
+
+The test record additionally carries a `meta` audit-trail dict on every record (PASS or FAIL), with eight keys: `type`, `neighbor`, `expected_state`, `state`, `attempts`, `timeout_s`, `retry_interval_s`, `last_rc`. The `meta` dict is a sibling field of `observed_state` and is NOT subject to the FAIL-only emission gate; it is present on PASS records as well.
+
+OSPF topology declaration (companion schema): each FRR node in the topology may declare an `ospf:` block carrying `area:` (integer ≥ 0, required) and `networks:` (non-empty list of canonical IPv4 CIDR strings, required); no other keys are accepted (Unknown-Key Strictness; timer customization keys such as `hello-interval`, `dead-interval`, `spf-delay` are out of scope and rejected). Declaring `ospf:` requires the node also declare a top-level `router_id` (single-area-per-node only — multi-area is out of scope).
+
 ---
 
 ## 5) Summary Rendering
@@ -288,6 +326,8 @@ The above rules guarantee that v1.x topologies exercising only `ping` / `tcp` / 
 * The truncation discipline is implemented in `cassian_engine.py` `_observed_state_finalize_in_results` and `_observed_state_truncate`.
 * The negative-case proof topology exercising one invariant per category lives at `topologies/neg/h2_invariant_observability_demo.yaml`.
 * The synthetic large-payload truncation fixture lives at `topologies/neg/h2_truncation_proof.yaml`.
+* The positive proof topology exercising `ospf_neighbor_up` end-to-end (area 0 mutual, expect: pass) lives at `topologies/ospf_neighbor_up.yaml`.
+* The negative proof topology demonstrating the mismatched-area FAIL pathology and the deterministic six-key `observed_state` payload lives at `topologies/neg/ospf_neighbor_up_mismatched_area.yaml`.
 
 ---
 
