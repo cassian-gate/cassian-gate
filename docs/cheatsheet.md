@@ -975,6 +975,7 @@ Supported kinds:
 
 - `ping`
 - `tcp`
+- `invariant` — see "Invariant tests" below for the supported invariant `type` values
 
 ---
 
@@ -1383,6 +1384,287 @@ It does **not** by itself prove:
 - route presence or attribute correctness
 - route advertisement boundaries
 - generic routing policy correctness
+
+---
+
+### Route Present Invariant
+
+Invariant type:
+
+```
+route_present
+```
+
+Purpose:
+
+Verify that a specific route is present on the specified node's IPv4 routing table.
+
+This is useful for validating route installation such as:
+
+- expected RIB presence after policy or session establishment
+- verification that a prefix is actually installed on the node
+- guarded assertion of route presence before further routing-policy invariants
+
+Required fields:
+
+| Field  | Description                                |
+| ------ | ------------------------------------------ |
+| node   | Node where the route presence is checked   |
+| prefix | Prefix being validated (canonical IPv4 CIDR) |
+
+Example:
+
+```yaml
+tests:
+  - name: r1_has_10_10_10_0_24
+    kind: invariant
+    type: route_present
+    node: r1
+    prefix: 10.10.10.0/24
+    expect: pass
+```
+
+Behavior:
+
+- The invariant inspects the IPv4 routing table on the specified node.
+- It passes when the queried prefix is observed in the routing table.
+- It fails when the queried prefix is not observed.
+- If the invariant definition itself is invalid, the run fails with misuse exit code `2`.
+
+Artifacts produced:
+
+```
+labs/<lab>/results.json
+labs/<lab>/results.summary.txt
+```
+
+When `verdict: fail`, the test record carries a structured `observed_state` payload (`type`, `prefix`, `routes`, `source_node`). See `docs/topology-schema-v1.5.md` §4.3 for the full per-type schema.
+
+Replay:
+
+```bash
+cassian replay labs/clab-route-present-missing --gate --verify-results
+```
+
+### Route Absent Invariant
+
+Invariant type:
+
+```
+route_absent
+```
+
+Purpose:
+
+Verify that a specific route is **not** present on the specified node's IPv4 routing table.
+
+This is useful for validating intentional route absence such as:
+
+- prefix-blackhole effectiveness
+- expected suppression after withdrawal
+- verification that a route is genuinely not installed
+- negative-complement of `route_present`
+
+Required fields:
+
+| Field  | Description                                  |
+| ------ | -------------------------------------------- |
+| node   | Node where the route absence is checked      |
+| prefix | Prefix being validated (canonical IPv4 CIDR) |
+
+Example:
+
+```yaml
+tests:
+  - name: r1_does_not_have_10_20_20_0_24
+    kind: invariant
+    type: route_absent
+    node: r1
+    prefix: 10.20.20.0/24
+    expect: pass
+```
+
+Behavior:
+
+- The invariant inspects the IPv4 routing table on the specified node.
+- It passes when the queried prefix is **not** observed in the routing table.
+- It fails when the queried prefix is observed.
+- If the invariant definition itself is invalid, the run fails with misuse exit code `2`.
+
+Artifacts produced:
+
+```
+labs/<lab>/results.json
+labs/<lab>/results.summary.txt
+```
+
+When `verdict: fail`, the test record carries a structured `observed_state` payload (`type`, `prefix`, `routes`, `source_node`). See `docs/topology-schema-v1.5.md` §4.3 for the full per-type schema.
+
+### BGP MED Equals Invariant
+
+Invariant type:
+
+```
+bgp_med_equals
+```
+
+Purpose:
+
+Verify that a BGP route installed on a node has the expected **MED** (Multi-Exit Discriminator) value.
+
+This is useful for validating routing policy behavior such as:
+
+- inbound MED-rewriting policy
+- expected MED preservation across boundaries
+- iBGP MED propagation consistency
+- companion to `bgp_localpref_equals` for full attribute coverage
+
+Required fields:
+
+| Field    | Description                                |
+| -------- | ------------------------------------------ |
+| node     | Node where the route must be observed      |
+| prefix   | Prefix being validated                     |
+| expected | Expected BGP MED value (integer)           |
+
+Example:
+
+```yaml
+tests:
+  - name: r2_sees_1_1_1_1_32_with_med_50
+    kind: invariant
+    type: bgp_med_equals
+    node: r2
+    prefix: 1.1.1.1/32
+    expected: 50
+    expect: pass
+```
+
+Behavior:
+
+- The invariant inspects the BGP route entry on the specified node.
+- The route must exist and contain the declared MED value.
+- If the route is present but the MED differs from the expected value, the invariant fails.
+- If the invariant definition itself is invalid, the run fails with misuse exit code `2`.
+
+Artifacts produced:
+
+```
+labs/<lab>/results.json
+labs/<lab>/results.summary.txt
+```
+
+When `verdict: fail`, the test record carries a structured `observed_state` payload (`type`, `prefix`, `peer`, `actual`, `expected`, `source_node`). See `docs/topology-schema-v1.5.md` §4.5 for the full per-type schema.
+
+### OSPF Neighbor Up Invariant
+
+Invariant type:
+
+```
+ospf_neighbor_up
+```
+
+Purpose:
+
+Verify that an OSPF neighbor adjacency from the specified node to a declared peer router-ID has reached the expected FSM state (default `Full`).
+
+This is useful for validating OSPF adjacency establishment such as:
+
+- backbone-area neighbor convergence
+- post-change OSPF re-adjacency
+- guarded assertion of OSPF Full adjacency before further routing-policy invariants
+
+This invariant is **FRR-only**; declaring `ospf_neighbor_up` against a non-FRR `src` node is rejected at validation with exit code `2`.
+
+Required fields:
+
+| Field    | Description                                                                    |
+| -------- | ------------------------------------------------------------------------------ |
+| src      | Node where the OSPF neighbor table is checked (must be `type: frr`)            |
+| neighbor | IPv4 literal of the peer's OSPF router-ID (NOT a node name)                    |
+
+Optional fields:
+
+| Field   | Description                                                                                     |
+| ------- | ----------------------------------------------------------------------------------------------- |
+| state   | Expected FSM state literal; one of `Down`, `Attempt`, `Init`, `2-Way`, `ExStart`, `Exchange`, `Loading`, `Full`. Default `Full` materialised at Resolve. |
+
+The companion node-level `ospf:` block (declared on FRR nodes) carries `area` (int ≥ 0, required) and `networks` (non-empty list of canonical IPv4 CIDRs, required); declaring `ospf:` requires the node to also declare top-level `router_id`. Timer customization (`hello-interval`, `dead-interval`, `spf-delay`) and `passive-interface` posture are out of scope; FRR defaults govern. See `docs/topology-schema-v1.md` §3.1 (`Optional ospf: block`) for the topology-side schema.
+
+Example:
+
+```yaml
+nodes:
+  - name: r1
+    type: frr
+    router_id: 1.1.1.1
+    ospf:
+      area: 0
+      networks:
+        - 10.0.0.0/16
+        - 1.1.1.1/32
+  - name: r2
+    type: frr
+    router_id: 2.2.2.2
+    ospf:
+      area: 0
+      networks:
+        - 10.0.0.0/16
+        - 2.2.2.2/32
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+
+tests:
+  - name: r1_neighbor_up_to_r2
+    kind: invariant
+    type: ospf_neighbor_up
+    src: r1
+    neighbor: 2.2.2.2
+    expect: pass
+```
+
+Behavior:
+
+- The invariant runs `vtysh -c 'show ip ospf neighbor json'` on the specified `src` node and parses the structured output.
+- It passes when the queried neighbor's router-ID is present in FRR's neighbor table and its FSM state matches `state` (default `Full`).
+- It fails when the FSM state differs (engine-synthesized state literals `NotConfigured` and `Unknown` may also appear on the FAIL path).
+- If the invariant definition is invalid (non-FRR `src`, non-IPv4 `neighbor`, undeclared `state` literal), the run fails with misuse exit code `2`.
+- Retry policy: bounded by the test's `timeout_s` (default `60` seconds — pragmatic to OSPF dead-interval reality) and `retry_interval_s` (default `1.0` seconds) when `expect: pass`. Single attempt for `expect: fail`.
+
+Artifacts produced:
+
+```
+labs/<lab>/results.json
+labs/<lab>/results.summary.txt
+```
+
+When `verdict: fail`, the test record carries a structured six-key `observed_state` payload (`type`, `neighbor`, `state`, `expected_state`, `last_error`, `source_node`). See `docs/topology-schema-v1.5.md` §4.8 for the full per-type schema, including the comprehensive 10-FSM-literal closed-set documentation (8 declarable + 2 observed-only).
+
+Positive proof example:
+
+```bash
+cassian test topologies/ospf_neighbor_up.yaml
+```
+
+Replay:
+
+```bash
+cassian replay labs/clab-ospf-neighbor-up --gate --verify-results
+```
+
+Scope boundary:
+
+This invariant validates only OSPFv2 single-area FRR adjacency from one node to one neighbor router-ID.
+
+It does **not** by itself prove:
+
+- OSPFv3 / IPv6 OSPF adjacency
+- multi-area OSPF design correctness
+- OSPF LSA-level inspection
+- non-FRR (SONiC, Arista) OSPF — `src` must be `type: frr`
+- area-mismatch as an invariant (the negative proof topology demonstrates the FAIL pathology, but no `ospf_area_match` invariant exists in v1.5)
+- routing policy or attribute correctness
 
 ---
 
