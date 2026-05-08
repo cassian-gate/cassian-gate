@@ -126,6 +126,31 @@ This mode exists to keep v1 **routing-agnostic**.
 
 This mode is used by demo images and onboarding scenarios.
 
+#### Optional `ospf:` block (v1.5+)
+
+An FRR node may optionally declare an `ospf:` block to advertise OSPF area membership and network prefixes. This is the topology-level declaration consumed by Cassian Gate's Generate phase to render `ospfd=yes` in the node's `daemons` file and a `router ospf` block in `frr.conf`.
+
+```yaml
+- name: r1
+  type: frr
+  router_id: 1.1.1.1
+  ospf:
+    area: 0
+    networks:
+      - 10.0.0.0/16
+      - 1.1.1.1/32
+```
+
+Rules:
+
+* `area` is required; integer ≥ 0
+* `networks` is required; non-empty list of canonical IPv4 CIDR strings (host bits unset; non-canonical or non-IPv4 forms are rejected)
+* declaring `ospf:` requires the node to also declare a top-level `router_id` (which is reused as the OSPF router-id); validation hard-fails otherwise
+* unknown keys under `ospf:` are rejected — including timer customization keys (`hello-interval`, `dead-interval`, `spf-delay` and similar)
+* single-area-per-node only; multi-area is out of scope in v1.5
+
+For the corresponding `ospf_neighbor_up` invariant test type (which asserts an OSPF neighbor reaches a declared FSM state), the per-test-record `observed_state` payload schema, and the comprehensive 10-FSM-literal closed-set documentation, see `docs/topology-schema-v1.5.md` §4.8.
+
 ---
 
 ### `nft-fw`

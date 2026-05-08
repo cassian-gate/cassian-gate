@@ -5704,7 +5704,95 @@ def cmd_test(args: argparse.Namespace) -> None:
             }
             return vtysh_ok, predicate_ok, observed_state, evidence
 
-        # WI-1 Repair Set complete: all 11 invariant types now wire through
+        if inv_type == "ospf_neighbor_up":
+            # H4: OSPF neighbor-state evaluator (REQ-H4-7 / B07).
+            # FRR JSON shape: {"neighbors": {"<router-id>": [{"nbrState": ...}]}}.
+            # Neighbor key is the OSPF router-ID literal (validated as IPv4
+            # at WI-1). FSM state may carry a role qualifier suffix
+            # ("Full/DR", "Full/Backup", "Full/DROther", "2-Way/DROther");
+            # the parser splits on '/' and maps to D-1's closed declarable
+            # set, with any outside-set literal mapped to "Unknown" with
+            # empty last_error per B07.
+            neighbor = str(t.get("neighbor") or "").strip()
+            cp = rt.exec(lab, src, ["vtysh", "-c", "show ip ospf neighbor json"], check=False)
+            vtysh_ok = (getattr(cp, "returncode", 1) == 0)
+            out = (cp.stdout or "") if hasattr(cp, "stdout") else ""
+
+            declarable_states = (
+                "Down",
+                "Attempt",
+                "Init",
+                "2-Way",
+                "ExStart",
+                "Exchange",
+                "Loading",
+                "Full",
+            )
+            observed_state_str: str = "Unknown"
+            last_error: str = ""
+            parse_error: str = ""
+            neighbor_present: bool = False
+
+            if vtysh_ok:
+                try:
+                    data = json.loads(out or "{}")
+                    nbrs = data.get("neighbors")
+                    if isinstance(nbrs, dict):
+                        if not nbrs:
+                            observed_state_str = "NotConfigured"
+                            last_error = "ospf neighbor table empty"
+                            parse_error = "ospf neighbor table empty"
+                        else:
+                            entries = nbrs.get(neighbor)
+                            if isinstance(entries, list) and entries:
+                                first = entries[0] if isinstance(entries[0], dict) else None
+                                if isinstance(first, dict):
+                                    neighbor_present = True
+                                    raw_state = first.get("nbrState")
+                                    if raw_state:
+                                        base = str(raw_state).split("/", 1)[0].strip()
+                                        if base in declarable_states:
+                                            observed_state_str = base
+                                        else:
+                                            observed_state_str = "Unknown"
+                                            last_error = ""
+                            else:
+                                observed_state_str = "NotConfigured"
+                                last_error = "neighbor not present in ospf neighbor table"
+                                parse_error = "neighbor not present in ospf neighbor table"
+                    else:
+                        observed_state_str = "NotConfigured"
+                        last_error = "ospf neighbor table empty"
+                        parse_error = "ospf neighbor table empty"
+                except Exception:
+                    observed_state_str = "Unknown"
+                    last_error = "vtysh output not parseable as JSON"
+                    parse_error = "vtysh output not parseable as JSON"
+            else:
+                observed_state_str = "Unknown"
+                last_error = "vtysh command failed"
+                parse_error = "vtysh command failed"
+
+            # Predicate: neighbor present AND observed FSM state matches the
+            # declared expected state. Test record's 'state' is defaulted to
+            # "Full" by WI-2 per LD-2 if omitted.
+            expected_state = str(t.get("state") or "Full").strip()
+            predicate_ok = bool(neighbor_present and observed_state_str == expected_state)
+
+            observed_state = {
+                "neighbor_present": neighbor_present,
+                "state": observed_state_str,
+                "last_error": last_error,
+                "expected_state": expected_state,
+            }
+            evidence = {
+                "cmd": "vtysh -c 'show ip ospf neighbor json'",
+                "parse_error": parse_error,
+                "returncode": getattr(cp, "returncode", None),
+            }
+            return vtysh_ok, predicate_ok, observed_state, evidence
+
+        # WI-1 Repair Set complete: all 12 invariant types now wire through
         # this helper. This fallback is reached only if a new invariant type
         # is added to the type-system without being wired here; in that
         # case raising surfaces the omission deterministically rather than
@@ -6766,6 +6854,168 @@ def cmd_test(args: argparse.Namespace) -> None:
                 verdict=verdict,
                 duration_ms=int(dur_ms),
                 error="" if verdict == "pass" else f"bgp_session_up mismatch (expected {expected}, observed {observed})",
+                evidence=evidence,
+                meta=meta,
+                observed_state=observed_state_record,
+            )
+            return verdict
+
+        if inv_type == "ospf_neighbor_up":
+            # H4: OSPF neighbor-state dispatch (REQ-H4-8 / B08, REQ-H4-9 / B09,
+            # REQ-H4-25). LD-4 retry defaults: timeout_s=60, retry_interval_s=1.0.
+            # P8: observed_state emitted on FAIL records only, with §7 six-key
+            # shape (expected_state, last_error, neighbor, source_node, state,
+            # type). meta emitted on every record (PASS or FAIL).
+            neighbor = str(t.get("neighbor") or "").strip()
+            expected_state = str(t.get("state") or "Full").strip()
+
+            # Defensive validation (WI-1 Resolve already enforces these; here
+            # to keep the dispatch self-defending against any future Resolve
+            # regression).
+            try:
+                _ip = ipaddress.ip_address(neighbor)
+                if _ip.version != 4:
+                    raise ValueError("neighbor must be IPv4")
+            except Exception:
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=int((time.time() - start) * 1000),
+                    error="neighbor missing or invalid (expected non-empty IPv4 router-id literal)",
+                    evidence={
+                        "cmd": "vtysh -c 'show ip ospf neighbor json'",
+                        "parse_error": "neighbor missing or invalid (expected non-empty IPv4 router-id literal)",
+                    },
+                    meta={
+                        "type": "ospf_neighbor_up",
+                        "neighbor": neighbor,
+                        "expected_state": expected_state,
+                        "state": "Unknown",
+                        "attempts": 0,
+                        "timeout_s": 0,
+                        "retry_interval_s": 0.0,
+                        "last_rc": None,
+                    },
+                    observed_state={
+                        "type": "ospf_neighbor_up",
+                        "neighbor": neighbor,
+                        "state": "Unknown",
+                        "expected_state": expected_state,
+                        "last_error": "neighbor missing or invalid (expected non-empty IPv4 router-id literal)",
+                        "source_node": src,
+                    },
+                )
+                return "fail"
+
+            if not src:
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=int((time.time() - start) * 1000),
+                    error="src missing or empty",
+                    evidence={
+                        "cmd": "vtysh -c 'show ip ospf neighbor json'",
+                        "parse_error": "src missing or empty",
+                    },
+                    meta={
+                        "type": "ospf_neighbor_up",
+                        "neighbor": neighbor,
+                        "expected_state": expected_state,
+                        "state": "Unknown",
+                        "attempts": 0,
+                        "timeout_s": 0,
+                        "retry_interval_s": 0.0,
+                        "last_rc": None,
+                    },
+                    observed_state={
+                        "type": "ospf_neighbor_up",
+                        "neighbor": neighbor,
+                        "state": "Unknown",
+                        "expected_state": expected_state,
+                        "last_error": "src missing or empty",
+                        "source_node": src,
+                    },
+                )
+                return "fail"
+
+            # LD-4 retry defaults; per-test overrides accepted for both keys.
+            timeout_s = int(t.get("timeout_s") or (60 if expected == "pass" else 0))
+            interval_s = float(t.get("retry_interval_s") or 1.0)
+
+            def attempt():
+                _vtysh_ok, _predicate_ok, attempt_state, attempt_evidence = (
+                    _evaluate_invariant_attempt(inv_type="ospf_neighbor_up", t=t, src=src)
+                )
+                # Drive retry on the predicate (state == expected), not on
+                # vtysh-success alone: NotConfigured with vtysh-success is
+                # not yet a pass.
+                return _predicate_ok, (attempt_state, attempt_evidence)
+
+            if expected == "pass" and timeout_s > 0:
+                ok, last_payload, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
+                last_state, last_evidence = last_payload
+            else:
+                ok_a, payload_a = attempt()
+                last_state, last_evidence = payload_a
+                attempts = 1
+                dur_ms = int((time.time() - start) * 1000)
+                ok = ok_a
+
+            observed_state_str = str(last_state.get("state") or "Unknown")
+            last_error = str(last_state.get("last_error") or "")
+            parse_error = str(last_evidence.get("parse_error") or "")
+            neighbor_present = bool(last_state.get("neighbor_present"))
+
+            observed = "pass" if (neighbor_present and observed_state_str == expected_state) else "fail"
+            verdict = "pass" if observed == expected else "fail"
+
+            evidence = {
+                "cmd": "vtysh -c 'show ip ospf neighbor json'",
+                "parse_error": parse_error,
+            }
+            meta = {
+                "type": "ospf_neighbor_up",
+                "neighbor": neighbor,
+                "expected_state": expected_state,
+                "state": observed_state_str,
+                "attempts": int(attempts),
+                "timeout_s": int(timeout_s),
+                "retry_interval_s": float(interval_s),
+                "last_rc": last_evidence.get("returncode"),
+            }
+
+            if verdict == "pass":
+                observed_state_record = None
+            else:
+                observed_state_record = {
+                    "type": "ospf_neighbor_up",
+                    "neighbor": neighbor,
+                    "state": observed_state_str,
+                    "expected_state": expected_state,
+                    "last_error": last_error,
+                    "source_node": src,
+                }
+
+            record_fn(
+                name=test_name,
+                kind="invariant",
+                src=src,
+                dst=neighbor,
+                expected=expected,
+                observed=observed,
+                verdict=verdict,
+                duration_ms=int(dur_ms),
+                error="" if verdict == "pass" else f"ospf_neighbor_up mismatch (expected {expected}, observed {observed})",
                 evidence=evidence,
                 meta=meta,
                 observed_state=observed_state_record,
