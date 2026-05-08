@@ -1,0 +1,68 @@
+# Phase 1a / Handover 4 of 8 — negative proof topology for the
+# ospf_neighbor_up invariant (REQ-H4-12 / LD-12 / PROOF-2 / PROOF-4).
+#
+# FAIL pathology (LD-12 ruling): mismatched OSPF area. r1 declares
+# area 0; r2 declares area 1. OSPF Hello packets carry the area-id;
+# receiving routers reject Hellos whose area-id does not match the
+# receiving interface's area. The neighbor adjacency never forms;
+# r2's router-id (2.2.2.2) never enters r1's ospf neighbor table.
+#
+# Test design (PROOF-2 emission requirement): the test declares
+# expect: pass so the runtime predicate failure produces verdict: fail.
+# Per H2 contract (enforced by engine's _stabilize_record), the six-key
+# observed_state payload appears ONLY on records with verdict: fail.
+# expect: fail would yield verdict: pass (expect matches observed),
+# which by H2 carries no observed_state — therefore PROOF-2 requires
+# expect: pass plus a topology that genuinely fails.
+#
+# Auto-IP allocation: the engine assigns /31 subnets sequentially from
+# 10.0.0.0/16 in link-declaration order. Link 0 -> [10.0.0.0/31,
+# 10.0.0.1/31]. The 10.0.0.0/16 supernet in ospf.networks ensures
+# OSPF activates on the link interface; the FAIL pathology is then
+# specifically the area mismatch (not no-OSPF-on-interface).
+#
+# Expected runtime observation:
+#   verdict: fail
+#   observed: fail
+#   observed_state (six-key, canonical-sorted):
+#     expected_state: Full
+#     last_error: ospf neighbor table empty
+#     neighbor: 2.2.2.2
+#     source_node: r1
+#     state: NotConfigured
+#     type: ospf_neighbor_up
+#
+# PROOF-4: the observed_state JSON payload is byte-identical across
+# two consecutive cassian test runs. None of its six values depend on
+# wall-clock time, retry-attempt count, or container instance identity.
+#
+# Note: the test exercises the LD-4 retry loop (timeout_s=60,
+# retry_interval_s=1.0); convergence-deadline is reached without
+# adjacency forming, then verdict=fail is emitted.
+name: ospf-neighbor-up-mismatched-area
+nodes:
+  - name: r1
+    type: frr
+    router_id: 1.1.1.1
+    ospf:
+      area: 0
+      networks:
+        - 10.0.0.0/16
+        - 1.1.1.1/32
+  - name: r2
+    type: frr
+    router_id: 2.2.2.2
+    ospf:
+      area: 1
+      networks:
+        - 10.0.0.0/16
+        - 2.2.2.2/32
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+tests:
+  - name: r1_neighbor_up_to_r2
+    kind: invariant
+    type: ospf_neighbor_up
+    src: r1
+    neighbor: 2.2.2.2
+    expect: pass
