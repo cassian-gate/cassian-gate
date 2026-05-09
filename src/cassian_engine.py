@@ -7260,6 +7260,185 @@ def cmd_test(args: argparse.Namespace) -> None:
             )
             return verdict
 
+        if inv_type == "interface_state":
+            # H5: interface_state TEST-phase dispatch (REQ-H5-13, REQ-H5-14,
+            # REQ-H5-15, REQ-H5-16). LD-2 ruling D retry defaults:
+            # timeout_s=10, retry_interval_s=0.5. observed_state emitted on
+            # FAIL records only via the existing _stabilize_record contract
+            # (cassian_engine.py L961, untouched per REQ-H5-16). meta
+            # emitted on every record (PASS or FAIL) per H4 audit-trail
+            # pattern; LD-4.c ruling A: meta has 7 keys, NO 'state' key —
+            # operators read observed_state.admin_state / operstate / carrier
+            # for the three orthogonal facts on FAIL records.
+            iface = str(t.get("interface") or "").strip()
+            expected_state = str(t.get("state") or "up").strip()
+
+            # Defensive validation (WI-1 Resolve already enforces these;
+            # here to keep the dispatch self-defending against any future
+            # Resolve regression). Closed-set last_error literals per
+            # handover §5.4.b.
+            if not iface:
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=int((time.time() - start) * 1000),
+                    error="interface missing or empty",
+                    evidence={
+                        "cmd": "ip -j link show",
+                        "parse_error": "interface field missing or empty",
+                    },
+                    meta={
+                        "type": "interface_state",
+                        "interface": iface,
+                        "expected_state": expected_state,
+                        "attempts": 0,
+                        "timeout_s": 0,
+                        "retry_interval_s": 0.0,
+                        "last_rc": None,
+                    },
+                    observed_state={
+                        "type": "interface_state",
+                        "interface": iface,
+                        "expected_state": expected_state,
+                        "admin_state": "unknown",
+                        "operstate": "UNKNOWN",
+                        "carrier": "unknown",
+                        "last_error": "interface field missing or empty",
+                        "source_node": src,
+                    },
+                )
+                return "fail"
+
+            if not src:
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst=iface,
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=int((time.time() - start) * 1000),
+                    error="src missing or empty",
+                    evidence={
+                        "cmd": f"ip -j link show {iface}",
+                        "parse_error": "node field missing or empty",
+                    },
+                    meta={
+                        "type": "interface_state",
+                        "interface": iface,
+                        "expected_state": expected_state,
+                        "attempts": 0,
+                        "timeout_s": 0,
+                        "retry_interval_s": 0.0,
+                        "last_rc": None,
+                    },
+                    observed_state={
+                        "type": "interface_state",
+                        "interface": iface,
+                        "expected_state": expected_state,
+                        "admin_state": "unknown",
+                        "operstate": "UNKNOWN",
+                        "carrier": "unknown",
+                        "last_error": "node field missing or empty",
+                        "source_node": src,
+                    },
+                )
+                return "fail"
+
+            # LD-2 ruling D retry defaults; per-test overrides accepted
+            # for both keys. B-RT12: retry on expect=pass until predicate
+            # satisfied OR timeout. B-RT13: single attempt on expect=fail.
+            timeout_s = int(t.get("timeout_s") or (10 if expected == "pass" else 0))
+            interval_s = float(t.get("retry_interval_s") or 0.5)
+
+            def attempt():
+                _probe_ok, _predicate_ok, attempt_state, attempt_evidence = (
+                    _evaluate_invariant_attempt(inv_type="interface_state", t=t, src=src)
+                )
+                # Drive retry on the predicate (B-RT12); a probe-success
+                # with predicate-mismatch on expect=pass should retry
+                # until timeout in case kernel state catches up.
+                return _predicate_ok, (attempt_state, attempt_evidence)
+
+            if expected == "pass" and timeout_s > 0:
+                ok, last_payload, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
+                last_state, last_evidence = last_payload
+            else:
+                ok_a, payload_a = attempt()
+                last_state, last_evidence = payload_a
+                attempts = 1
+                dur_ms = int((time.time() - start) * 1000)
+                ok = ok_a
+
+            admin_state = str(last_state.get("admin_state") or "unknown")
+            operstate = str(last_state.get("operstate") or "UNKNOWN")
+            carrier = str(last_state.get("carrier") or "unknown")
+            last_error = str(last_state.get("last_error") or "")
+            parse_error = str(last_evidence.get("parse_error") or "")
+
+            # Verdict from predicate (computed by evaluator with the
+            # asymmetric semantics in REQ-H5-17 / REQ-H5-18). Negative-test
+            # contract: observed=fail with expect=fail produces verdict=pass.
+            observed = "pass" if bool(ok) else "fail"
+            verdict = "pass" if observed == expected else "fail"
+
+            evidence = {
+                "cmd": f"ip -j link show {iface}",
+                "parse_error": parse_error,
+            }
+            # REQ-H5-15 / LD-4.c ruling A: meta has exactly 7 keys, NO
+            # 'state' key. Operators read three observed_state axes on FAIL.
+            meta = {
+                "type": "interface_state",
+                "interface": iface,
+                "expected_state": expected_state,
+                "attempts": int(attempts),
+                "timeout_s": int(timeout_s),
+                "retry_interval_s": float(interval_s),
+                "last_rc": last_evidence.get("returncode"),
+            }
+
+            # REQ-H5-16: FAIL-only observed_state emission preserved via
+            # _stabilize_record (cassian_engine.py L961, untouched). Pass
+            # observed_state=None on PASS records; existing strip rule is
+            # unaffected because _stabilize_record only acts on
+            # verdict!=fail records that nonetheless carry observed_state.
+            if verdict == "pass":
+                observed_state_record = None
+            else:
+                observed_state_record = {
+                    "type": "interface_state",
+                    "interface": iface,
+                    "expected_state": expected_state,
+                    "admin_state": admin_state,
+                    "operstate": operstate,
+                    "carrier": carrier,
+                    "last_error": last_error,
+                    "source_node": src,
+                }
+
+            record_fn(
+                name=test_name,
+                kind="invariant",
+                src=src,
+                dst=iface,
+                expected=expected,
+                observed=observed,
+                verdict=verdict,
+                duration_ms=int(dur_ms),
+                error="" if verdict == "pass" else f"interface_state mismatch (expected {expected}, observed {observed})",
+                evidence=evidence,
+                meta=meta,
+                observed_state=observed_state_record,
+            )
+            return verdict
+
         observed_state_payload: dict | None = None
         if inv_type == "bgp_session_up":
             observed_state_payload = {
