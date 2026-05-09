@@ -2001,13 +2001,14 @@ def resolve_topology(topo: dict) -> dict:
                 "evpn_vni_route_present",
                 "evpn_bgp_session_up",
                 "ospf_neighbor_up",
+                "interface_state",
             ):
                 die(
                     f"tests[{i}]: invariant.type unsupported ({inv_type!r}) "
                     f"(supported: bgp_session_up, route_present, route_absent, "
                     f"bgp_med_equals, bgp_localpref_equals, route_advertised_to, route_not_advertised_to, "
                     f"evpn_mac_route_present, evpn_mac_route_absent, "
-                    f"evpn_vni_route_present, evpn_bgp_session_up, ospf_neighbor_up)"
+                    f"evpn_vni_route_present, evpn_bgp_session_up, ospf_neighbor_up, interface_state)"
                 )
             t["type"] = inv_type
         else:
@@ -2208,6 +2209,134 @@ def resolve_topology(topo: dict) -> dict:
                 # resolved-form output.
                 if "state" not in t:
                     t["state"] = "Full"
+
+            elif inv_type == "interface_state":
+                # H5: interface state invariant (NOS-agnostic, ip -j link show).
+                # LD-1 ruling C: 'node' is the canonical operator key for this
+                # invariant; 'src' is engine-internal alias from L2040
+                # normalization. Field-name harmonisation deferred to BL-H5-1.
+                # LD-3 ruling B: 'state' default 'up' materialised at Resolve
+                # (DC 2.6 — defaults must be visible in topology.resolved.yaml).
+                # LD-4.b ruling A: predicate is asymmetric (state: down is
+                # disjunction, state: up is conjunction); evaluator owns the
+                # predicate; this branch is schema-only.
+                # LD-delta (closure-report finding): missing/null/empty 'node'
+                # is structurally caught by the shared pre-dispatch check at
+                # L2055-2057 ("invariant test requires 'node/src' as a node
+                # name") before this branch is reached. Wording deviates from
+                # handover §16.1 first clause but satisfies Doctrine §1.13
+                # (Engineer-First Safety) — names the field, identifies
+                # operator-friendly remediation. Restructuring the shared
+                # pre-dispatch check is out of scope for H5.
+
+                # REQ-H5-3 / B-V01: defensive 'node' presence re-statement.
+                # Practically unreachable behind L2055-2057; kept for clarity
+                # if a future refactor moves that check.
+                if "node" not in t:
+                    die(
+                        f"{ctx}: invariant 'interface_state' requires 'node' "
+                        f"(the node whose interface state is being asserted, e.g. 'r1')"
+                    )
+
+                # REQ-H5-5 / B-V03: 'interface' required, non-empty after .strip().
+                if "interface" not in t:
+                    die(
+                        f"{ctx}: invariant 'interface_state' requires 'interface' "
+                        f"(the interface name as seen inside the node namespace, e.g. 'eth1')"
+                    )
+                iface = t.get("interface")
+                if not isinstance(iface, str) or not iface.strip():
+                    die(
+                        f"{ctx}: invariant 'interface_state' has invalid 'interface' value "
+                        f"{iface!r} (expected: non-empty interface name string)"
+                    )
+                t["interface"] = iface.strip()
+
+                # REQ-H5-6 / B-V04: 'state' optional; if present must be in
+                # {up, down}. 'state: null' (None) is invalid per REQ-H5-6 —
+                # distinguish "key absent" from "key present with null value".
+                if "state" in t:
+                    state = t.get("state")
+                    if not isinstance(state, str) or state not in ("up", "down"):
+                        die(
+                            f"{ctx}: invariant 'interface_state' has invalid 'state' value "
+                            f"{state!r} (expected one of: up, down)"
+                        )
+
+                # REQ-H5-8 / B-V06: 'timeout_s' optional; if present positive integer.
+                if "timeout_s" in t:
+                    timeout_s = t.get("timeout_s")
+                    if (
+                        isinstance(timeout_s, bool)
+                        or not isinstance(timeout_s, int)
+                        or timeout_s <= 0
+                    ):
+                        die(
+                            f"{ctx}: invariant 'interface_state' has invalid 'timeout_s' value "
+                            f"{timeout_s!r} (expected: positive integer)"
+                        )
+
+                # REQ-H5-9 / B-V07: 'retry_interval_s' optional; if present
+                # positive number > 0.
+                if "retry_interval_s" in t:
+                    rinterval = t.get("retry_interval_s")
+                    if (
+                        isinstance(rinterval, bool)
+                        or not isinstance(rinterval, (int, float))
+                        or rinterval <= 0
+                    ):
+                        die(
+                            f"{ctx}: invariant 'interface_state' has invalid 'retry_interval_s' value "
+                            f"{rinterval!r} (expected: positive number)"
+                        )
+
+                # REQ-H5-10 / B-V08: Unknown-Key Strictness (DC 2.7).
+                # Engine-internal allowed set includes 'src' (alias-normalized
+                # from 'node' at L2040); user-facing message lists 'node' per
+                # LD-1 ruling C.
+                allowed_iface_state_keys = {
+                    "name",
+                    "kind",
+                    "type",
+                    "node",
+                    "src",
+                    "interface",
+                    "state",
+                    "expect",
+                    "timeout_s",
+                    "retry_interval_s",
+                }
+                for k in t.keys():
+                    if k not in allowed_iface_state_keys:
+                        die(
+                            f"{ctx}: invariant 'interface_state' declares unknown key {k!r} "
+                            f"(allowed keys: 'name', 'kind', 'type', 'node', 'interface', "
+                            f"'state', 'expect', 'timeout_s', 'retry_interval_s')"
+                        )
+
+                # REQ-H5-4 / B-V02: 'node' must reference a node in topology.
+                # LD-alpha: explicit text, parallel to OSPF L2191-2195 (no
+                # canonical blast-radius validator exists for invariant
+                # unknown-node references in cassian_model.py).
+                _nodes_for_lookup = {
+                    str(_n.get("name") or "").strip(): _n
+                    for _n in (resolved.get("nodes") or [])
+                    if isinstance(_n, dict)
+                    and isinstance(_n.get("name"), str)
+                    and str(_n.get("name") or "").strip()
+                }
+                node_s = str(t.get("node") or "").strip()
+                if node_s not in _nodes_for_lookup:
+                    die(
+                        f"{ctx}: invariant 'interface_state' references unknown 'node' value "
+                        f"{node_s!r} (node not declared in topology 'nodes:' section)"
+                    )
+
+                # REQ-H5-7 / B-V05: state default 'up' materialised at Resolve
+                # (LD-3 ruling B). DC 2.6: defaults must be visible in
+                # topology.resolved.yaml.
+                if "state" not in t:
+                    t["state"] = "up"
 
         # ----------------------------
         # v1.5: route_prefix alias normalization
