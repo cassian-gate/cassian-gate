@@ -4988,6 +4988,29 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         return verdict
 
+    def _interface_state_capability_check(node: str) -> tuple[bool, str]:
+        """
+        Capability-probe-on-first-use for `ip -j link show` against a
+        node namespace.
+
+        Returns (cap_ok, cap_last_error). cap_ok=True means subsequent
+        `ip -j link show <iface>` invocations on this node should produce
+        parseable JSON. cap_ok=False means the node's iproute2 build
+        (typically BusyBox) does not support the -j flag; the caller MUST
+        short-circuit with the closed-set last_error literal
+        "ip -j flag not supported by node's iproute2".
+
+        WI-2 stub: always returns (True, ""). WI-4 will replace this body
+        with the per-(lab, node) capability-probe-on-first-use cache per
+        REQ-H5-19 / B-RT07 / B-RT14 / B-RT15. The cache MUST live in this
+        cmd_test closure (per-gate-run scope; MUST NOT cross gate runs).
+
+        H5 LD-gamma: storage location for the cache is the v7 chat's
+        seam choice; WI-4 will land it in cmd_test's closure as a dict
+        keyed by node-name (lab is implicit from the closure scope).
+        """
+        return (True, "")
+
     def _evaluate_invariant_attempt(
         *,
         inv_type: str,
@@ -5791,6 +5814,221 @@ def cmd_test(args: argparse.Namespace) -> None:
                 "returncode": getattr(cp, "returncode", None),
             }
             return vtysh_ok, predicate_ok, observed_state, evidence
+
+        if inv_type == "interface_state":
+            # H5: interface state evaluator (REQ-H5-11, REQ-H5-12,
+            # REQ-H5-17, REQ-H5-18, REQ-H5-19, REQ-H5-20).
+            # NOS-agnostic — uses Linux primitives (ip -j link show
+            # <iface>) via rt.exec, works on any node type with a Linux
+            # network namespace (frr, host, nft-fw).
+            #
+            # Tuple-element naming note: the first return slot is named
+            # `vtysh_ok` in this helper's contract (see docstring above),
+            # but for interface_state the probe is `ip`, not `vtysh`.
+            # Local variable name `probe_ok` reflects the H5 vocabulary;
+            # the return statement binds it into the existing `vtysh_ok`
+            # slot per the function contract. Renaming the contract is
+            # BL-H5-6 (out of scope; would touch every existing branch).
+            #
+            # H5 LD-epsilon: evidence carries `returncode` to match the
+            # H4 OSPF convention at L5791 (handover §5.3 R-IS-RT05
+            # describes "rc"; existing convention wins per workflow
+            # §6.6 Implementation-Time UX Discipline). Dispatch reads
+            # evidence.get("returncode") into meta.last_rc at WI-3.
+            iface = str(t.get("interface") or "").strip()
+            expected_state = str(t.get("state") or "up").strip()
+
+            observed_state_str: str = "unknown"
+            operstate_str: str = "UNKNOWN"
+            carrier_str: str = "unknown"
+            last_error: str = ""
+            parse_error: str = ""
+            iface_present: bool = False
+            rc: int | None = None
+
+            # B-RT08 (defensive): WI-1 Resolve enforces non-empty
+            # 'interface'; this dispatch-time defensive check guards
+            # against any future Resolve regression. last_error literal
+            # per §5.4.b closed set.
+            if not iface:
+                last_error = "interface field missing or empty"
+                observed_state = {
+                    "interface_present": iface_present,
+                    "admin_state": observed_state_str,
+                    "operstate": operstate_str,
+                    "carrier": carrier_str,
+                    "last_error": last_error,
+                    "expected_state": expected_state,
+                    "interface": iface,
+                }
+                evidence = {
+                    "cmd": "ip -j link show",
+                    "parse_error": parse_error,
+                    "returncode": rc,
+                }
+                return False, False, observed_state, evidence
+
+            # B-RT09 (defensive): WI-1 Resolve enforces non-empty
+            # 'node/src'; this dispatch-time defensive check guards
+            # against any future Resolve regression.
+            if not src:
+                last_error = "node field missing or empty"
+                observed_state = {
+                    "interface_present": iface_present,
+                    "admin_state": observed_state_str,
+                    "operstate": operstate_str,
+                    "carrier": carrier_str,
+                    "last_error": last_error,
+                    "expected_state": expected_state,
+                    "interface": iface,
+                }
+                evidence = {
+                    "cmd": f"ip -j link show {iface}",
+                    "parse_error": parse_error,
+                    "returncode": rc,
+                }
+                return False, False, observed_state, evidence
+
+            # B-RT07 / B-RT14 / B-RT15: capability-probe cache hook.
+            # WI-2 stub returns (True, "") unconditionally; WI-4 fills
+            # in the per-(lab, node) cache. On capability-probe failure
+            # (WI-4 path), short-circuit with the closed-set literal
+            # "ip -j flag not supported by node's iproute2".
+            cap_ok, cap_last_error = _interface_state_capability_check(src)
+            if not cap_ok:
+                last_error = cap_last_error
+                observed_state = {
+                    "interface_present": iface_present,
+                    "admin_state": observed_state_str,
+                    "operstate": operstate_str,
+                    "carrier": carrier_str,
+                    "last_error": last_error,
+                    "expected_state": expected_state,
+                    "interface": iface,
+                }
+                evidence = {
+                    "cmd": f"ip -j link show {iface}",
+                    "parse_error": parse_error,
+                    "returncode": rc,
+                }
+                return False, False, observed_state, evidence
+
+            # B-RT01: probe via rt.exec (Runtime.exec abstraction).
+            # ALWAYS pass explicit interface argument (D04 mitigation —
+            # never invoke `ip -j link show` without it, which would
+            # return the full interface table).
+            cp = rt.exec(lab, src, ["ip", "-j", "link", "show", iface], check=False)
+            rc = getattr(cp, "returncode", None)
+            out = (cp.stdout or "") if hasattr(cp, "stdout") else ""
+            err = (cp.stderr or "") if hasattr(cp, "stderr") else ""
+            probe_ok = False  # B-RT02: True only after full classification.
+
+            # B-RT02 / B-RT03 / B-RT04 / B-RT05 / B-RT06: classify probe
+            # result into the §5.4.b closed set of last_error literals.
+            if rc != 0:
+                # B-RT03: rc != 0 with stderr indicating interface
+                # does not exist. iproute2 emits messages like
+                # 'Device "eth99" does not exist.' or
+                # 'Cannot find device "eth99"'.
+                err_lower = err.lower()
+                if "does not exist" in err_lower or "cannot find device" in err_lower:
+                    last_error = "interface not present"
+                else:
+                    # B-RT04: any other rc != 0 cause (permission,
+                    # namespace error, etc.).
+                    last_error = "ip command failed"
+            else:
+                # rc == 0 — try to parse JSON.
+                try:
+                    data = json.loads(out or "")
+                except Exception:
+                    # B-RT05: JSON parse failure. Empty stdout with
+                    # rc==0 also lands here (json.loads("") raises).
+                    last_error = "ip output not parseable as JSON"
+                    parse_error = "ip output not parseable as JSON"
+                    data = None
+
+                if data is not None:
+                    if (
+                        not isinstance(data, list)
+                        or len(data) != 1
+                        or not isinstance(data[0], dict)
+                    ):
+                        # B-RT06: structural surprise — list of length 1
+                        # with dict shape required.
+                        last_error = "ip output structurally unexpected"
+                    else:
+                        entry = data[0]
+                        # B-A04 / D02: extract by name only;
+                        # flag membership only — never positional
+                        # indexing or array equality (REQ-H5-20).
+                        flags = entry.get("flags")
+                        if not isinstance(flags, list):
+                            flags = []
+                        # admin_state from "UP" flag presence.
+                        if "UP" in flags:
+                            observed_state_str = "up"
+                        else:
+                            observed_state_str = "down"
+                        # carrier from "LOWER_UP" flag presence.
+                        if "LOWER_UP" in flags:
+                            carrier_str = "present"
+                        else:
+                            carrier_str = "absent"
+                        # operstate: D03 closed-set seven literals.
+                        # Out-of-set kernel literal -> UNKNOWN AND
+                        # last_error = "ip output structurally
+                        # unexpected" per B-RT06.
+                        raw_oper = entry.get("operstate")
+                        operstate_closed = (
+                            "UP",
+                            "DOWN",
+                            "UNKNOWN",
+                            "LOWERLAYERDOWN",
+                            "NOTPRESENT",
+                            "TESTING",
+                            "DORMANT",
+                        )
+                        if isinstance(raw_oper, str) and raw_oper in operstate_closed:
+                            operstate_str = raw_oper
+                            iface_present = True
+                            probe_ok = True
+                        else:
+                            operstate_str = "UNKNOWN"
+                            last_error = "ip output structurally unexpected"
+                            iface_present = True
+
+            # B-RT10 (state: up): conjunction admin==up AND operstate==UP.
+            # B-RT11 (state: down): disjunction admin==down OR
+            # operstate!=UP.
+            # Carrier is reported in observed_state but does NOT gate
+            # the verdict (LD-4.b ruling A; documented asymmetry).
+            predicate_ok = False
+            if probe_ok:
+                if expected_state == "up":
+                    predicate_ok = (
+                        observed_state_str == "up" and operstate_str == "UP"
+                    )
+                elif expected_state == "down":
+                    predicate_ok = (
+                        observed_state_str == "down" or operstate_str != "UP"
+                    )
+
+            observed_state = {
+                "interface_present": iface_present,
+                "admin_state": observed_state_str,
+                "operstate": operstate_str,
+                "carrier": carrier_str,
+                "last_error": last_error,
+                "expected_state": expected_state,
+                "interface": iface,
+            }
+            evidence = {
+                "cmd": f"ip -j link show {iface}",
+                "parse_error": parse_error,
+                "returncode": rc,
+            }
+            return probe_ok, predicate_ok, observed_state, evidence
 
         # WI-1 Repair Set complete: all 12 invariant types now wire through
         # this helper. This fallback is reached only if a new invariant type
