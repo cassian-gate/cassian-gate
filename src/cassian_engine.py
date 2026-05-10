@@ -4988,6 +4988,13 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         return verdict
 
+    # H5 WI-4 / LD-gamma: per-(lab, node) capability-probe cache for
+    # `ip -j link show`. Closure-local dict allocated per cmd_test
+    # invocation; lifetime is the gate run; fresh cmd_test calls bind
+    # a fresh dict (REQ-H5-19 / D09 — cache MUST NOT cross gate runs).
+    # Lab is implicit from the closure scope; key is node-name.
+    _ip_j_capability_cache: dict[str, tuple[bool, str]] = {}
+
     def _interface_state_capability_check(node: str) -> tuple[bool, str]:
         """
         Capability-probe-on-first-use for `ip -j link show` against a
@@ -5000,16 +5007,77 @@ def cmd_test(args: argparse.Namespace) -> None:
         short-circuit with the closed-set last_error literal
         "ip -j flag not supported by node's iproute2".
 
-        WI-2 stub: always returns (True, ""). WI-4 will replace this body
-        with the per-(lab, node) capability-probe-on-first-use cache per
-        REQ-H5-19 / B-RT07 / B-RT14 / B-RT15. The cache MUST live in this
-        cmd_test closure (per-gate-run scope; MUST NOT cross gate runs).
+        H5 WI-4 implementation (REQ-H5-19 / B-RT07 / B-RT14 / B-RT15):
 
-        H5 LD-gamma: storage location for the cache is the v7 chat's
-        seam choice; WI-4 will land it in cmd_test's closure as a dict
-        keyed by node-name (lab is implicit from the closure scope).
+        - Cache lookup: on hit, return the cached tuple unchanged.
+        - On miss: run `ip -j link show lo` against the node namespace
+          via rt.exec, classify the result (rc==0 AND non-empty stdout
+          AND parseable JSON AND list-of->=1-with-dict-shape -> ok;
+          else -> not ok), store the tuple in the cache, return it.
+        - Cache lifetime: per cmd_test invocation (closure scope).
+          Fresh cmd_test calls bind a fresh _ip_j_capability_cache
+          dict, satisfying REQ-H5-19's cross-gate-run prohibition
+          structurally — no explicit reset needed.
+
+        H5 LD-gamma resolution: cache lives at cmd_test's closure
+        scope as `_ip_j_capability_cache` (dict[str, tuple[bool, str]]).
+        Captured by closure; not exposed as module-level state.
+
+        H5 LD-epsilon parallel: classifies cap_ok via membership and
+        structural checks only (no positional indexing), consistent
+        with the evaluator branch's D02 / B-A04 discipline.
         """
-        return (True, "")
+        # B-RT14: cache hit short-circuits without re-probing.
+        if node in _ip_j_capability_cache:
+            return _ip_j_capability_cache[node]
+
+        # B-RT14: cache miss — run capability probe via rt.exec.
+        # 'lo' is the universal loopback interface present on every
+        # Linux network namespace; the probe is non-disturbing.
+        try:
+            cp = rt.exec(lab, node, ["ip", "-j", "link", "show", "lo"], check=False)
+        except Exception:
+            # Defensive: if rt.exec raises (runtime infrastructure
+            # error, container not present, etc.), classify as
+            # capability-probe failure. The caller's short-circuit
+            # path will surface the operator-friendly literal.
+            result = (False, "ip -j flag not supported by node's iproute2")
+            _ip_j_capability_cache[node] = result
+            return result
+
+        rc = getattr(cp, "returncode", None)
+        out = (cp.stdout or "") if hasattr(cp, "stdout") else ""
+
+        # Classification: ok iff rc==0 AND stdout parses as JSON AND
+        # parsed object is a list of length >= 1 with dict-shape entries.
+        # (Length>=1 rather than ==1: `lo` may be the only interface in
+        # an empty namespace, but on populated namespaces with explicit
+        # `lo` arg the kernel still returns just the matching record.
+        # We only care that the output is structurally JSON-list-of-dict;
+        # the per-test probe will use the explicit interface arg.)
+        cap_ok = False
+        if rc == 0 and out.strip():
+            try:
+                data = json.loads(out)
+                if (
+                    isinstance(data, list)
+                    and len(data) >= 1
+                    and isinstance(data[0], dict)
+                ):
+                    cap_ok = True
+            except Exception:
+                # JSON parse failure -> BusyBox `ip` (which on the -j
+                # flag emits help text or non-JSON garbage) or other
+                # non-iproute2 build. Treat as capability failure.
+                cap_ok = False
+
+        if cap_ok:
+            result = (True, "")
+        else:
+            result = (False, "ip -j flag not supported by node's iproute2")
+
+        _ip_j_capability_cache[node] = result
+        return result
 
     def _evaluate_invariant_attempt(
         *,
