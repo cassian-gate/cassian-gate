@@ -1,0 +1,25 @@
+# Phase 1a / Handover 5 — schema-negative fixture for the
+# interface_state invariant (REQ-H5-24 fixture 5).
+#
+# Contract: cassian validate MUST exit 2 with stderr matching:
+#   tests[0] (bad_invalid_state): invariant 'interface_state' has invalid 'state' value 'maybe' (expected one of: up, down)
+#
+# Closed-set state literals per handover §5.1: {up, down}. Resolve does
+# NOT case-fold (so 'UP' would also reject), does NOT accept booleans or
+# integers, does NOT accept extras like 'maybe'.
+name: bad-interface-state-invalid-state-literal
+
+nodes:
+  - name: r1
+    type: frr
+
+links: []
+
+tests:
+  - name: bad_invalid_state
+    kind: invariant
+    type: interface_state
+    node: r1
+    interface: eth1
+    state: maybe
+    expect: pass

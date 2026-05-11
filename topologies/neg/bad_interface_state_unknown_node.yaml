@@ -1,0 +1,25 @@
+# Phase 1a / Handover 5 — schema-negative fixture for the
+# interface_state invariant (REQ-H5-24 fixture 3).
+#
+# Contract: cassian validate MUST exit 2 with stderr matching:
+#   tests[0] (bad_unknown_node): invariant 'interface_state' references unknown 'node' value 'r99' (node not declared in topology 'nodes:' section)
+#
+# H5 LD-alpha: explicit unknown-node text (parallel to OSPF L2191-2195)
+# rather than delegation to a non-existent canonical blast-radius
+# validator. WI-1 verification by inspection chose this path.
+name: bad-interface-state-unknown-node
+
+nodes:
+  - name: r1
+    type: frr
+
+links: []
+
+tests:
+  - name: bad_unknown_node
+    kind: invariant
+    type: interface_state
+    node: r99
+    interface: eth1
+    state: up
+    expect: pass
