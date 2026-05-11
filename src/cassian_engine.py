@@ -7661,6 +7661,36 @@ def cmd_test(args: argparse.Namespace) -> None:
                         )
                         return "fail"
 
+        # H5 WI-3 fix (Debug Window Mode): interface_state dispatch for the
+        # scenario `run: <test_name>` path. run_named_test's existing
+        # invariant pre-validation (above) handles bgp_session_up /
+        # route_present / route_absent / bgp_med_equals / bgp_localpref_equals
+        # / route_advertised_to / route_not_advertised_to. For
+        # interface_state, route to run_invariant_test (where WI-3's primary
+        # dispatch lives at L7263) so the per-attempt evaluator + meta /
+        # observed_state emission contract is honored identically for both
+        # standalone and scenario invocations.
+        #
+        # H5 LD-eta (closure-report finding): run_named_test's L7464 `else`
+        # branch demands `dst`, which works for bgp_session_up only because
+        # Resolve aliases neighbor -> dst at cassian_model.py L2050-2053.
+        # For interface_state (and latently for ospf_neighbor_up which has
+        # no such alias), the L7464 fallback emits "missing src/dst" before
+        # any dispatch fires. The narrow fix here covers interface_state;
+        # generalizing run_named_test to dispatch all invariant types via
+        # run_invariant_test is BL-H5-7 (latent OSPF-via-scenario issue,
+        # not in H5 scope).
+        if kind == "invariant" and inv_type == "interface_state":
+            record_fn_local = (
+                (lambda **kw: record_event_test_run(
+                    scenario_id=scenario_ctx[0], step_index=scenario_ctx[1], **kw
+                ))
+                if scenario_ctx else record_test
+            )
+            return run_invariant_test(
+                test_name=ref, src=src, t=t, record_fn=record_fn_local
+            )
+
         if kind == "ping":
             if not src or not (dst or t.get("to") or t.get("to_ip")):
                 record_test(
