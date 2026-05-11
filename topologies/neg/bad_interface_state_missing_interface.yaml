@@ -1,0 +1,20 @@
+# Phase 1a / Handover 5 — schema-negative fixture for the
+# interface_state invariant (REQ-H5-24 fixture 2).
+#
+# Contract: cassian validate MUST exit 2 with stderr matching:
+#   tests[0] (bad_missing_interface): invariant 'interface_state' requires 'interface' (the interface name as seen inside the node namespace, e.g. 'eth1')
+name: bad-interface-state-missing-interface
+
+nodes:
+  - name: r1
+    type: frr
+
+links: []
+
+tests:
+  - name: bad_missing_interface
+    kind: invariant
+    type: interface_state
+    node: r1
+    state: up
+    expect: pass

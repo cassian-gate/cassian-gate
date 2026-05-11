@@ -57,6 +57,7 @@ v1.5 supports the following invariant types. Each type maps to a single determin
 | `evpn_mac_route_present` | EVPN | `node`, `mac` (canonical MAC literal), `vni` (integer) |
 | `evpn_mac_route_absent` | EVPN | `node`, `mac` (canonical MAC literal), `vni` (integer) |
 | `ospf_neighbor_up` | OSPF | `src`, `neighbor` (IPv4 literal of the peer's router-ID); optional `state` (one of the 8 declarable FSM literals; default `Full`) |
+| `interface_state` | Linux interface | `node`, `interface` (interface name as seen inside the node namespace, e.g. `eth1`); optional `state` (one of `up`, `down`; default `up` materialised at Resolve) |
 
 Rules:
 
@@ -286,6 +287,44 @@ The retry loop driving `expect: pass` evaluation uses LD-4 defaults: `timeout_s=
 The test record additionally carries a `meta` audit-trail dict on every record (PASS or FAIL), with eight keys: `type`, `neighbor`, `expected_state`, `state`, `attempts`, `timeout_s`, `retry_interval_s`, `last_rc`. The `meta` dict is a sibling field of `observed_state` and is NOT subject to the FAIL-only emission gate; it is present on PASS records as well.
 
 OSPF topology declaration (companion schema): each FRR node in the topology may declare an `ospf:` block carrying `area:` (integer ≥ 0, required) and `networks:` (non-empty list of canonical IPv4 CIDR strings, required); no other keys are accepted (Unknown-Key Strictness; timer customization keys such as `hello-interval`, `dead-interval`, `spf-delay` are out of scope and rejected). Declaring `ospf:` requires the node also declare a top-level `router_id` (single-area-per-node only — multi-area is out of scope).
+
+---
+
+### 4.9) `interface_state`
+
+```json
+{
+  "admin_state": "<one of: up, down, unknown>",
+  "carrier": "<one of: present, absent, unknown>",
+  "expected_state": "<one of: up, down>",
+  "interface": "<interface name, e.g. eth1>",
+  "last_error": "<string>",
+  "operstate": "<one of the 7 RFC 2863 closed-set literals>",
+  "source_node": "<node where the test runs>",
+  "type": "interface_state"
+}
+```
+
+* `interface` is the test's `interface` field, which is the interface name as seen inside the node's network namespace (e.g. `eth1`). Unlike OSPF (`neighbor` is an IPv4 router-ID), this is an OS-level interface identifier.
+* `expected_state` is the test's declared `state` field (one of `up` or `down`; default `up` materialised at Resolve when the test omits the field, visible in `topology.resolved.yaml`).
+* `source_node` is the user-facing `node` field as declared in the test record; the resolver aliases user-facing `node` to the internal `src` field, and the rendered `source_node` reflects the user-facing value.
+* `admin_state` reflects the kernel's administrative interface flag (the presence of the `UP` flag in `ip -j link show <iface>` JSON output), drawn from the closed set `{up, down, unknown}`. `unknown` appears only on diagnostic paths where probe succeeded but flag extraction did not produce a definitive value.
+* `operstate` reflects the kernel's operational interface state, drawn from a closed set of 7 RFC 2863 literals: `UP`, `DOWN`, `UNKNOWN`, `LOWERLAYERDOWN`, `NOTPRESENT`, `TESTING`, `DORMANT`. Any value outside this set is mapped to `UNKNOWN` AND triggers `last_error: "ip output structurally unexpected"`.
+* `carrier` reflects the kernel's link-layer carrier signal (the presence of the `LOWER_UP` flag in `ip -j link show <iface>` JSON output), drawn from the closed set `{present, absent, unknown}`. `carrier` is reported in `observed_state` for operator diagnosis but does NOT participate in the verdict predicate (see asymmetry note below).
+* `last_error` is empty string `""` on the predicate-mismatch path (probe succeeded, JSON parsed, interface present, but observed `admin_state`/`operstate` did not match the declared `expected_state`); otherwise one of a closed set of engine-synthesized deterministic literal strings on the diagnostic paths: `"ip -j flag not supported by node's iproute2"` when the node's `ip` binary does not support the `-j` JSON flag (typically BusyBox `ip`; see iproute2 capability dependency below); `"interface not present"` when `ip` exits non-zero with stderr indicating the interface does not exist; `"ip command failed"` when `ip` exits non-zero for other reasons (permission, namespace error, etc.); `"ip output not parseable as JSON"` when `ip` exits zero but stdout is not valid JSON; `"ip output structurally unexpected"` when the parsed JSON shape is not a list of one dict OR `operstate` is outside the 7-literal closed set; `"interface field missing or empty"` and `"node field missing or empty"` when the dispatch-time defensive checks fire (Resolve enforces both fields; these defensive paths exist for future-regression resilience).
+
+The verdict predicate is **asymmetric** between the two declarable states:
+
+* `state: up` requires `admin_state == "up"` AND `operstate == "UP"` (conjunction; both must hold).
+* `state: down` requires `admin_state == "down"` OR `operstate != "UP"` (disjunction; either suffices).
+
+The asymmetry reflects an operator-correctness principle: a confidently-up interface requires both administrative and operational confirmation, while a confidently-down interface need only fail either confirmation. `carrier` is orthogonal to both predicates and is reported in `observed_state` for diagnostic clarity (an admin-up interface with `carrier: absent` is a meaningful operator signal even when the verdict resolves to `pass` via the `state: up` conjunction failing).
+
+The retry loop driving `expect: pass` evaluation uses LD-2 defaults: `timeout_s=10`, `retry_interval_s=0.5` (seconds). Both values may be overridden per-test via the test record's `timeout_s` and `retry_interval_s` fields. For `expect: fail`, evaluation is single-attempt (no retry).
+
+The test record additionally carries a `meta` audit-trail dict on every record (PASS or FAIL), with seven keys: `type`, `interface`, `expected_state`, `attempts`, `timeout_s`, `retry_interval_s`, `last_rc`. The `meta` dict is a sibling field of `observed_state` and is NOT subject to the FAIL-only emission gate; it is present on PASS records as well. Note that `meta` does NOT carry a `state` key — operators read the three orthogonal axes `admin_state`, `operstate`, `carrier` from the FAIL record's `observed_state` instead.
+
+iproute2 capability dependency (companion schema constraint): the runtime probe uses `ip -j link show <iface>` and requires an `ip` binary that supports the `-j` JSON flag. BusyBox `ip` (the default in `alpine:latest`, which is the engine's default image for `host` and `nft-fw` node types) does NOT support `-j` and produces non-JSON help-text output on the unrecognized flag. Topologies exercising `interface_state` on `host` or `nft-fw` nodes MUST pin an image with full iproute2 (e.g. `nicolaka/netshoot:v0.15`) explicitly in the node declaration. FRR's default image (`frrouting/frr:latest`) already includes full iproute2 and requires no override. The engine performs a per-(lab, node) capability probe at first use; on capability-probe failure, the per-test record fails with `last_error: "ip -j flag not supported by node's iproute2"` and the operator is directed to pin a compatible image.
 
 ---
 

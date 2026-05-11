@@ -1,0 +1,54 @@
+# Phase 1a / Handover 5 of 8 — negative proof topology for the
+# interface_state invariant (REQ-H5-22 / PROOF-H5-3).
+# Filename per LD-13 ruling C: interface_state_assertion_mismatch.yaml.
+#
+# Contract: cassian test on this topology MUST exit non-zero. The
+# relevant interface_state record in results.json MUST have
+# verdict: fail, AND MUST contain a populated observed_state payload
+# conforming to the §5.4 schema (admin_state, operstate, carrier,
+# expected_state, interface, last_error, source_node, type).
+#
+# Pattern: 'expect: pass on inverted topology' (H4 grounding-cache
+# Fact-7). The interface r1:eth1 comes up at deploy/provision time
+# (admin==up, operstate==UP). The test asserts state: down, expect:
+# pass, which is materially wrong given the running state. The
+# evaluator's predicate (REQ-H5-18 disjunction for state: down)
+# evaluates to False (admin==up AND operstate==UP — neither disjunct
+# satisfied). predicate_ok=False -> observed='fail' -> with
+# expected='pass', verdict='fail'.
+#
+# Why expect: pass on inverted topology, not expect: fail on matching
+# topology: _stabilize_record (cassian_engine.py L961, untouched per
+# REQ-H5-16) strips observed_state on verdict != fail. With
+# expect: fail, a matching-down assertion would produce
+# observed='fail' (predicate-True for down) which then maps via the
+# negative-test contract (DC §10) to verdict='pass' — and
+# observed_state would be stripped, defeating the proof's purpose.
+# The expect: pass on inverted topology pattern is the canonical
+# H2/H4-established way to inspect observed_state on FAIL.
+#
+# Two FRR nodes (r1, r2) connected by a single link. Two-node minimal
+# shape because containerlab requires at least one link to deploy a
+# functional lab; the link auto-allocates /31 IPs from the
+# 10.0.0.0/16 supernet. Only r1:eth1 is asserted; r2 is the link's
+# remote endpoint and is otherwise unused.
+name: interface-state-assertion-mismatch
+
+nodes:
+  - name: r1
+    type: frr
+
+  - name: r2
+    type: frr
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+
+tests:
+  - name: r1_eth1_asserted_down_but_is_up
+    kind: invariant
+    type: interface_state
+    node: r1
+    interface: eth1
+    state: down
+    expect: pass

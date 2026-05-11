@@ -1,0 +1,26 @@
+# Phase 1a / Handover 5 — schema-negative fixture for the
+# interface_state invariant (REQ-H5-24 fixture 4).
+#
+# Contract: cassian validate MUST exit 2 with stderr matching:
+#   tests[0] (bad_unknown_key): invariant 'interface_state' declares unknown key 'mtu' (allowed keys: 'name', 'kind', 'type', 'node', 'interface', 'state', 'expect', 'timeout_s', 'retry_interval_s')
+#
+# DC §2.7 Unknown-Key Strictness: unknown keys under the interface_state
+# test record are hard-fail. 'mtu' is a representative future-feature
+# key (BL-H5-5 territory) that must be rejected today.
+name: bad-interface-state-unknown-key
+
+nodes:
+  - name: r1
+    type: frr
+
+links: []
+
+tests:
+  - name: bad_unknown_key
+    kind: invariant
+    type: interface_state
+    node: r1
+    interface: eth1
+    state: up
+    expect: pass
+    mtu: 1500

@@ -4988,6 +4988,97 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         return verdict
 
+    # H5 WI-4 / LD-gamma: per-(lab, node) capability-probe cache for
+    # `ip -j link show`. Closure-local dict allocated per cmd_test
+    # invocation; lifetime is the gate run; fresh cmd_test calls bind
+    # a fresh dict (REQ-H5-19 / D09 — cache MUST NOT cross gate runs).
+    # Lab is implicit from the closure scope; key is node-name.
+    _ip_j_capability_cache: dict[str, tuple[bool, str]] = {}
+
+    def _interface_state_capability_check(node: str) -> tuple[bool, str]:
+        """
+        Capability-probe-on-first-use for `ip -j link show` against a
+        node namespace.
+
+        Returns (cap_ok, cap_last_error). cap_ok=True means subsequent
+        `ip -j link show <iface>` invocations on this node should produce
+        parseable JSON. cap_ok=False means the node's iproute2 build
+        (typically BusyBox) does not support the -j flag; the caller MUST
+        short-circuit with the closed-set last_error literal
+        "ip -j flag not supported by node's iproute2".
+
+        H5 WI-4 implementation (REQ-H5-19 / B-RT07 / B-RT14 / B-RT15):
+
+        - Cache lookup: on hit, return the cached tuple unchanged.
+        - On miss: run `ip -j link show lo` against the node namespace
+          via rt.exec, classify the result (rc==0 AND non-empty stdout
+          AND parseable JSON AND list-of->=1-with-dict-shape -> ok;
+          else -> not ok), store the tuple in the cache, return it.
+        - Cache lifetime: per cmd_test invocation (closure scope).
+          Fresh cmd_test calls bind a fresh _ip_j_capability_cache
+          dict, satisfying REQ-H5-19's cross-gate-run prohibition
+          structurally — no explicit reset needed.
+
+        H5 LD-gamma resolution: cache lives at cmd_test's closure
+        scope as `_ip_j_capability_cache` (dict[str, tuple[bool, str]]).
+        Captured by closure; not exposed as module-level state.
+
+        H5 LD-epsilon parallel: classifies cap_ok via membership and
+        structural checks only (no positional indexing), consistent
+        with the evaluator branch's D02 / B-A04 discipline.
+        """
+        # B-RT14: cache hit short-circuits without re-probing.
+        if node in _ip_j_capability_cache:
+            return _ip_j_capability_cache[node]
+
+        # B-RT14: cache miss — run capability probe via rt.exec.
+        # 'lo' is the universal loopback interface present on every
+        # Linux network namespace; the probe is non-disturbing.
+        try:
+            cp = rt.exec(lab, node, ["ip", "-j", "link", "show", "lo"], check=False)
+        except Exception:
+            # Defensive: if rt.exec raises (runtime infrastructure
+            # error, container not present, etc.), classify as
+            # capability-probe failure. The caller's short-circuit
+            # path will surface the operator-friendly literal.
+            result = (False, "ip -j flag not supported by node's iproute2")
+            _ip_j_capability_cache[node] = result
+            return result
+
+        rc = getattr(cp, "returncode", None)
+        out = (cp.stdout or "") if hasattr(cp, "stdout") else ""
+
+        # Classification: ok iff rc==0 AND stdout parses as JSON AND
+        # parsed object is a list of length >= 1 with dict-shape entries.
+        # (Length>=1 rather than ==1: `lo` may be the only interface in
+        # an empty namespace, but on populated namespaces with explicit
+        # `lo` arg the kernel still returns just the matching record.
+        # We only care that the output is structurally JSON-list-of-dict;
+        # the per-test probe will use the explicit interface arg.)
+        cap_ok = False
+        if rc == 0 and out.strip():
+            try:
+                data = json.loads(out)
+                if (
+                    isinstance(data, list)
+                    and len(data) >= 1
+                    and isinstance(data[0], dict)
+                ):
+                    cap_ok = True
+            except Exception:
+                # JSON parse failure -> BusyBox `ip` (which on the -j
+                # flag emits help text or non-JSON garbage) or other
+                # non-iproute2 build. Treat as capability failure.
+                cap_ok = False
+
+        if cap_ok:
+            result = (True, "")
+        else:
+            result = (False, "ip -j flag not supported by node's iproute2")
+
+        _ip_j_capability_cache[node] = result
+        return result
+
     def _evaluate_invariant_attempt(
         *,
         inv_type: str,
@@ -5791,6 +5882,221 @@ def cmd_test(args: argparse.Namespace) -> None:
                 "returncode": getattr(cp, "returncode", None),
             }
             return vtysh_ok, predicate_ok, observed_state, evidence
+
+        if inv_type == "interface_state":
+            # H5: interface state evaluator (REQ-H5-11, REQ-H5-12,
+            # REQ-H5-17, REQ-H5-18, REQ-H5-19, REQ-H5-20).
+            # NOS-agnostic — uses Linux primitives (ip -j link show
+            # <iface>) via rt.exec, works on any node type with a Linux
+            # network namespace (frr, host, nft-fw).
+            #
+            # Tuple-element naming note: the first return slot is named
+            # `vtysh_ok` in this helper's contract (see docstring above),
+            # but for interface_state the probe is `ip`, not `vtysh`.
+            # Local variable name `probe_ok` reflects the H5 vocabulary;
+            # the return statement binds it into the existing `vtysh_ok`
+            # slot per the function contract. Renaming the contract is
+            # BL-H5-6 (out of scope; would touch every existing branch).
+            #
+            # H5 LD-epsilon: evidence carries `returncode` to match the
+            # H4 OSPF convention at L5791 (handover §5.3 R-IS-RT05
+            # describes "rc"; existing convention wins per workflow
+            # §6.6 Implementation-Time UX Discipline). Dispatch reads
+            # evidence.get("returncode") into meta.last_rc at WI-3.
+            iface = str(t.get("interface") or "").strip()
+            expected_state = str(t.get("state") or "up").strip()
+
+            observed_state_str: str = "unknown"
+            operstate_str: str = "UNKNOWN"
+            carrier_str: str = "unknown"
+            last_error: str = ""
+            parse_error: str = ""
+            iface_present: bool = False
+            rc: int | None = None
+
+            # B-RT08 (defensive): WI-1 Resolve enforces non-empty
+            # 'interface'; this dispatch-time defensive check guards
+            # against any future Resolve regression. last_error literal
+            # per §5.4.b closed set.
+            if not iface:
+                last_error = "interface field missing or empty"
+                observed_state = {
+                    "interface_present": iface_present,
+                    "admin_state": observed_state_str,
+                    "operstate": operstate_str,
+                    "carrier": carrier_str,
+                    "last_error": last_error,
+                    "expected_state": expected_state,
+                    "interface": iface,
+                }
+                evidence = {
+                    "cmd": "ip -j link show",
+                    "parse_error": parse_error,
+                    "returncode": rc,
+                }
+                return False, False, observed_state, evidence
+
+            # B-RT09 (defensive): WI-1 Resolve enforces non-empty
+            # 'node/src'; this dispatch-time defensive check guards
+            # against any future Resolve regression.
+            if not src:
+                last_error = "node field missing or empty"
+                observed_state = {
+                    "interface_present": iface_present,
+                    "admin_state": observed_state_str,
+                    "operstate": operstate_str,
+                    "carrier": carrier_str,
+                    "last_error": last_error,
+                    "expected_state": expected_state,
+                    "interface": iface,
+                }
+                evidence = {
+                    "cmd": f"ip -j link show {iface}",
+                    "parse_error": parse_error,
+                    "returncode": rc,
+                }
+                return False, False, observed_state, evidence
+
+            # B-RT07 / B-RT14 / B-RT15: capability-probe cache hook.
+            # WI-2 stub returns (True, "") unconditionally; WI-4 fills
+            # in the per-(lab, node) cache. On capability-probe failure
+            # (WI-4 path), short-circuit with the closed-set literal
+            # "ip -j flag not supported by node's iproute2".
+            cap_ok, cap_last_error = _interface_state_capability_check(src)
+            if not cap_ok:
+                last_error = cap_last_error
+                observed_state = {
+                    "interface_present": iface_present,
+                    "admin_state": observed_state_str,
+                    "operstate": operstate_str,
+                    "carrier": carrier_str,
+                    "last_error": last_error,
+                    "expected_state": expected_state,
+                    "interface": iface,
+                }
+                evidence = {
+                    "cmd": f"ip -j link show {iface}",
+                    "parse_error": parse_error,
+                    "returncode": rc,
+                }
+                return False, False, observed_state, evidence
+
+            # B-RT01: probe via rt.exec (Runtime.exec abstraction).
+            # ALWAYS pass explicit interface argument (D04 mitigation —
+            # never invoke `ip -j link show` without it, which would
+            # return the full interface table).
+            cp = rt.exec(lab, src, ["ip", "-j", "link", "show", iface], check=False)
+            rc = getattr(cp, "returncode", None)
+            out = (cp.stdout or "") if hasattr(cp, "stdout") else ""
+            err = (cp.stderr or "") if hasattr(cp, "stderr") else ""
+            probe_ok = False  # B-RT02: True only after full classification.
+
+            # B-RT02 / B-RT03 / B-RT04 / B-RT05 / B-RT06: classify probe
+            # result into the §5.4.b closed set of last_error literals.
+            if rc != 0:
+                # B-RT03: rc != 0 with stderr indicating interface
+                # does not exist. iproute2 emits messages like
+                # 'Device "eth99" does not exist.' or
+                # 'Cannot find device "eth99"'.
+                err_lower = err.lower()
+                if "does not exist" in err_lower or "cannot find device" in err_lower:
+                    last_error = "interface not present"
+                else:
+                    # B-RT04: any other rc != 0 cause (permission,
+                    # namespace error, etc.).
+                    last_error = "ip command failed"
+            else:
+                # rc == 0 — try to parse JSON.
+                try:
+                    data = json.loads(out or "")
+                except Exception:
+                    # B-RT05: JSON parse failure. Empty stdout with
+                    # rc==0 also lands here (json.loads("") raises).
+                    last_error = "ip output not parseable as JSON"
+                    parse_error = "ip output not parseable as JSON"
+                    data = None
+
+                if data is not None:
+                    if (
+                        not isinstance(data, list)
+                        or len(data) != 1
+                        or not isinstance(data[0], dict)
+                    ):
+                        # B-RT06: structural surprise — list of length 1
+                        # with dict shape required.
+                        last_error = "ip output structurally unexpected"
+                    else:
+                        entry = data[0]
+                        # B-A04 / D02: extract by name only;
+                        # flag membership only — never positional
+                        # indexing or array equality (REQ-H5-20).
+                        flags = entry.get("flags")
+                        if not isinstance(flags, list):
+                            flags = []
+                        # admin_state from "UP" flag presence.
+                        if "UP" in flags:
+                            observed_state_str = "up"
+                        else:
+                            observed_state_str = "down"
+                        # carrier from "LOWER_UP" flag presence.
+                        if "LOWER_UP" in flags:
+                            carrier_str = "present"
+                        else:
+                            carrier_str = "absent"
+                        # operstate: D03 closed-set seven literals.
+                        # Out-of-set kernel literal -> UNKNOWN AND
+                        # last_error = "ip output structurally
+                        # unexpected" per B-RT06.
+                        raw_oper = entry.get("operstate")
+                        operstate_closed = (
+                            "UP",
+                            "DOWN",
+                            "UNKNOWN",
+                            "LOWERLAYERDOWN",
+                            "NOTPRESENT",
+                            "TESTING",
+                            "DORMANT",
+                        )
+                        if isinstance(raw_oper, str) and raw_oper in operstate_closed:
+                            operstate_str = raw_oper
+                            iface_present = True
+                            probe_ok = True
+                        else:
+                            operstate_str = "UNKNOWN"
+                            last_error = "ip output structurally unexpected"
+                            iface_present = True
+
+            # B-RT10 (state: up): conjunction admin==up AND operstate==UP.
+            # B-RT11 (state: down): disjunction admin==down OR
+            # operstate!=UP.
+            # Carrier is reported in observed_state but does NOT gate
+            # the verdict (LD-4.b ruling A; documented asymmetry).
+            predicate_ok = False
+            if probe_ok:
+                if expected_state == "up":
+                    predicate_ok = (
+                        observed_state_str == "up" and operstate_str == "UP"
+                    )
+                elif expected_state == "down":
+                    predicate_ok = (
+                        observed_state_str == "down" or operstate_str != "UP"
+                    )
+
+            observed_state = {
+                "interface_present": iface_present,
+                "admin_state": observed_state_str,
+                "operstate": operstate_str,
+                "carrier": carrier_str,
+                "last_error": last_error,
+                "expected_state": expected_state,
+                "interface": iface,
+            }
+            evidence = {
+                "cmd": f"ip -j link show {iface}",
+                "parse_error": parse_error,
+                "returncode": rc,
+            }
+            return probe_ok, predicate_ok, observed_state, evidence
 
         # WI-1 Repair Set complete: all 12 invariant types now wire through
         # this helper. This fallback is reached only if a new invariant type
@@ -7022,6 +7328,185 @@ def cmd_test(args: argparse.Namespace) -> None:
             )
             return verdict
 
+        if inv_type == "interface_state":
+            # H5: interface_state TEST-phase dispatch (REQ-H5-13, REQ-H5-14,
+            # REQ-H5-15, REQ-H5-16). LD-2 ruling D retry defaults:
+            # timeout_s=10, retry_interval_s=0.5. observed_state emitted on
+            # FAIL records only via the existing _stabilize_record contract
+            # (cassian_engine.py L961, untouched per REQ-H5-16). meta
+            # emitted on every record (PASS or FAIL) per H4 audit-trail
+            # pattern; LD-4.c ruling A: meta has 7 keys, NO 'state' key —
+            # operators read observed_state.admin_state / operstate / carrier
+            # for the three orthogonal facts on FAIL records.
+            iface = str(t.get("interface") or "").strip()
+            expected_state = str(t.get("state") or "up").strip()
+
+            # Defensive validation (WI-1 Resolve already enforces these;
+            # here to keep the dispatch self-defending against any future
+            # Resolve regression). Closed-set last_error literals per
+            # handover §5.4.b.
+            if not iface:
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=int((time.time() - start) * 1000),
+                    error="interface missing or empty",
+                    evidence={
+                        "cmd": "ip -j link show",
+                        "parse_error": "interface field missing or empty",
+                    },
+                    meta={
+                        "type": "interface_state",
+                        "interface": iface,
+                        "expected_state": expected_state,
+                        "attempts": 0,
+                        "timeout_s": 0,
+                        "retry_interval_s": 0.0,
+                        "last_rc": None,
+                    },
+                    observed_state={
+                        "type": "interface_state",
+                        "interface": iface,
+                        "expected_state": expected_state,
+                        "admin_state": "unknown",
+                        "operstate": "UNKNOWN",
+                        "carrier": "unknown",
+                        "last_error": "interface field missing or empty",
+                        "source_node": src,
+                    },
+                )
+                return "fail"
+
+            if not src:
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst=iface,
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=int((time.time() - start) * 1000),
+                    error="src missing or empty",
+                    evidence={
+                        "cmd": f"ip -j link show {iface}",
+                        "parse_error": "node field missing or empty",
+                    },
+                    meta={
+                        "type": "interface_state",
+                        "interface": iface,
+                        "expected_state": expected_state,
+                        "attempts": 0,
+                        "timeout_s": 0,
+                        "retry_interval_s": 0.0,
+                        "last_rc": None,
+                    },
+                    observed_state={
+                        "type": "interface_state",
+                        "interface": iface,
+                        "expected_state": expected_state,
+                        "admin_state": "unknown",
+                        "operstate": "UNKNOWN",
+                        "carrier": "unknown",
+                        "last_error": "node field missing or empty",
+                        "source_node": src,
+                    },
+                )
+                return "fail"
+
+            # LD-2 ruling D retry defaults; per-test overrides accepted
+            # for both keys. B-RT12: retry on expect=pass until predicate
+            # satisfied OR timeout. B-RT13: single attempt on expect=fail.
+            timeout_s = int(t.get("timeout_s") or (10 if expected == "pass" else 0))
+            interval_s = float(t.get("retry_interval_s") or 0.5)
+
+            def attempt():
+                _probe_ok, _predicate_ok, attempt_state, attempt_evidence = (
+                    _evaluate_invariant_attempt(inv_type="interface_state", t=t, src=src)
+                )
+                # Drive retry on the predicate (B-RT12); a probe-success
+                # with predicate-mismatch on expect=pass should retry
+                # until timeout in case kernel state catches up.
+                return _predicate_ok, (attempt_state, attempt_evidence)
+
+            if expected == "pass" and timeout_s > 0:
+                ok, last_payload, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
+                last_state, last_evidence = last_payload
+            else:
+                ok_a, payload_a = attempt()
+                last_state, last_evidence = payload_a
+                attempts = 1
+                dur_ms = int((time.time() - start) * 1000)
+                ok = ok_a
+
+            admin_state = str(last_state.get("admin_state") or "unknown")
+            operstate = str(last_state.get("operstate") or "UNKNOWN")
+            carrier = str(last_state.get("carrier") or "unknown")
+            last_error = str(last_state.get("last_error") or "")
+            parse_error = str(last_evidence.get("parse_error") or "")
+
+            # Verdict from predicate (computed by evaluator with the
+            # asymmetric semantics in REQ-H5-17 / REQ-H5-18). Negative-test
+            # contract: observed=fail with expect=fail produces verdict=pass.
+            observed = "pass" if bool(ok) else "fail"
+            verdict = "pass" if observed == expected else "fail"
+
+            evidence = {
+                "cmd": f"ip -j link show {iface}",
+                "parse_error": parse_error,
+            }
+            # REQ-H5-15 / LD-4.c ruling A: meta has exactly 7 keys, NO
+            # 'state' key. Operators read three observed_state axes on FAIL.
+            meta = {
+                "type": "interface_state",
+                "interface": iface,
+                "expected_state": expected_state,
+                "attempts": int(attempts),
+                "timeout_s": int(timeout_s),
+                "retry_interval_s": float(interval_s),
+                "last_rc": last_evidence.get("returncode"),
+            }
+
+            # REQ-H5-16: FAIL-only observed_state emission preserved via
+            # _stabilize_record (cassian_engine.py L961, untouched). Pass
+            # observed_state=None on PASS records; existing strip rule is
+            # unaffected because _stabilize_record only acts on
+            # verdict!=fail records that nonetheless carry observed_state.
+            if verdict == "pass":
+                observed_state_record = None
+            else:
+                observed_state_record = {
+                    "type": "interface_state",
+                    "interface": iface,
+                    "expected_state": expected_state,
+                    "admin_state": admin_state,
+                    "operstate": operstate,
+                    "carrier": carrier,
+                    "last_error": last_error,
+                    "source_node": src,
+                }
+
+            record_fn(
+                name=test_name,
+                kind="invariant",
+                src=src,
+                dst=iface,
+                expected=expected,
+                observed=observed,
+                verdict=verdict,
+                duration_ms=int(dur_ms),
+                error="" if verdict == "pass" else f"interface_state mismatch (expected {expected}, observed {observed})",
+                evidence=evidence,
+                meta=meta,
+                observed_state=observed_state_record,
+            )
+            return verdict
+
         observed_state_payload: dict | None = None
         if inv_type == "bgp_session_up":
             observed_state_payload = {
@@ -7175,6 +7660,36 @@ def cmd_test(args: argparse.Namespace) -> None:
                             meta={"type": inv_type, "expected": expv},
                         )
                         return "fail"
+
+        # H5 WI-3 fix (Debug Window Mode): interface_state dispatch for the
+        # scenario `run: <test_name>` path. run_named_test's existing
+        # invariant pre-validation (above) handles bgp_session_up /
+        # route_present / route_absent / bgp_med_equals / bgp_localpref_equals
+        # / route_advertised_to / route_not_advertised_to. For
+        # interface_state, route to run_invariant_test (where WI-3's primary
+        # dispatch lives at L7263) so the per-attempt evaluator + meta /
+        # observed_state emission contract is honored identically for both
+        # standalone and scenario invocations.
+        #
+        # H5 LD-eta (closure-report finding): run_named_test's L7464 `else`
+        # branch demands `dst`, which works for bgp_session_up only because
+        # Resolve aliases neighbor -> dst at cassian_model.py L2050-2053.
+        # For interface_state (and latently for ospf_neighbor_up which has
+        # no such alias), the L7464 fallback emits "missing src/dst" before
+        # any dispatch fires. The narrow fix here covers interface_state;
+        # generalizing run_named_test to dispatch all invariant types via
+        # run_invariant_test is BL-H5-7 (latent OSPF-via-scenario issue,
+        # not in H5 scope).
+        if kind == "invariant" and inv_type == "interface_state":
+            record_fn_local = (
+                (lambda **kw: record_event_test_run(
+                    scenario_id=scenario_ctx[0], step_index=scenario_ctx[1], **kw
+                ))
+                if scenario_ctx else record_test
+            )
+            return run_invariant_test(
+                test_name=ref, src=src, t=t, record_fn=record_fn_local
+            )
 
         if kind == "ping":
             if not src or not (dst or t.get("to") or t.get("to_ip")):
