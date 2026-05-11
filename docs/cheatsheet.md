@@ -1668,6 +1668,128 @@ It does **not** by itself prove:
 
 ---
 
+### Interface State Invariant
+
+Invariant type:
+
+```
+interface_state
+```
+
+Purpose:
+
+Verify that an interface declared by a `links:` endpoint has the expected administrative/operational state inside its node's network namespace.
+
+This is useful for validating interface posture such as:
+
+- post-deploy confirmation that all topology interfaces came up
+- post-fault confirmation that a `fault: interface_down` step actually brought the interface down
+- pre-test posture gate before subsequent reachability invariants
+
+This invariant is **NOS-agnostic**: it uses the Linux primitive `ip -j link show <iface>` and works on any node type with a Linux network namespace (`frr`, `host`, `nft-fw`).
+
+Required fields:
+
+| Field     | Description                                                                |
+| --------- | -------------------------------------------------------------------------- |
+| node      | Node whose namespace is probed                                             |
+| interface | Interface name as seen inside the node namespace (e.g. `eth1`)             |
+
+Optional fields:
+
+| Field | Description                                                                                                        |
+| ----- | ------------------------------------------------------------------------------------------------------------------ |
+| state | Expected state literal; one of `up`, `down`. Default `up` materialised at Resolve.                                  |
+
+The verdict predicate is **asymmetric**:
+
+- `state: up` requires `admin_state == "up"` AND `operstate == "UP"` (conjunction; both must hold).
+- `state: down` requires `admin_state == "down"` OR `operstate != "UP"` (disjunction; either suffices).
+
+Carrier (link-layer signal) is reported in `observed_state` for diagnostic clarity but does NOT participate in the verdict.
+
+iproute2 capability dependency: the probe requires an `ip` binary supporting the `-j` JSON flag. BusyBox `ip` (the default in `alpine:latest`, the engine default for `host` and `nft-fw`) does NOT support `-j`. Topologies exercising `interface_state` on `host` or `nft-fw` nodes MUST pin a compatible image (e.g. `nicolaka/netshoot:v0.15`) explicitly in the node declaration. FRR's default image already includes full iproute2.
+
+Example:
+
+```yaml
+nodes:
+  - name: r1
+    type: frr
+  - name: h1
+    type: host
+    image: nicolaka/netshoot:v0.15
+    ip: 192.168.10.10/24
+    gw: 192.168.10.1
+  - name: fw1
+    type: nft-fw
+    image: nicolaka/netshoot:v0.15
+    routed: true
+    interfaces:
+      eth1: 10.0.0.1/31
+      eth2: 192.168.10.1/24
+    allow_icmp: true
+
+links:
+  - endpoints: ["r1:eth1", "fw1:eth1"]
+    ipv4: ["10.0.0.0/31", "10.0.0.1/31"]
+  - endpoints: ["h1:eth1", "fw1:eth2"]
+    ipv4: ["192.168.10.10/24", "192.168.10.1/24"]
+
+tests:
+  - name: r1_eth1_up
+    kind: invariant
+    type: interface_state
+    node: r1
+    interface: eth1
+    state: up
+    expect: pass
+```
+
+Behavior:
+
+- The invariant runs `ip -j link show <iface>` on the specified `node` and parses the JSON output.
+- It passes when the kernel-reported `admin_state` and `operstate` together satisfy the asymmetric predicate above.
+- It fails when the predicate does not hold OR when the probe itself fails (closed-set `last_error` literal indicates which path: capability-probe failure, interface-not-present, ip-command-failure, JSON parse failure, structural surprise, missing field).
+- A per-(lab, node) capability probe runs at most once per gate run on first use of `interface_state` against that node; capability-probe failures short-circuit with `last_error: "ip -j flag not supported by node's iproute2"`.
+- If the invariant definition is invalid (missing `node`, missing `interface`, unknown `node` reference, invalid `state` literal, unknown key), the run fails with misuse exit code `2`.
+- Retry policy: bounded by the test's `timeout_s` (default `10` seconds) and `retry_interval_s` (default `0.5` seconds) when `expect: pass`. Single attempt for `expect: fail`.
+
+Artifacts produced:
+
+```
+labs/<lab>/results.json
+labs/<lab>/results.summary.txt
+```
+
+When `verdict: fail`, the test record carries a structured eight-key `observed_state` payload (`type`, `interface`, `expected_state`, `admin_state`, `operstate`, `carrier`, `last_error`, `source_node`). See `docs/topology-schema-v1.5.md` §4.9 for the full per-type schema, including the closed-set documentation for all four state-axis fields (admin_state, operstate, carrier, last_error).
+
+Positive proof example:
+
+```bash
+cassian test topologies/interface_state_up.yaml
+```
+
+Replay:
+
+```bash
+cassian replay labs/clab-interface-state-up --gate --verify-results
+```
+
+Scope boundary:
+
+This invariant validates only kernel-reported interface administrative/operational state inside a node's Linux network namespace.
+
+It does **not** by itself prove:
+
+- L2 reachability across the link (use `ping` for that)
+- L3 reachability or routing-table correctness (use `ping`, `route_present`, or BGP invariants)
+- MTU, speed, duplex, error counters, or other interface-level metrics
+- vendor NOS-specific interface state (the probe is a Linux primitive; SONiC/Arista VM nodes are out of scope)
+- carrier-level signal — `carrier` is reported in `observed_state` for diagnostic clarity but is NOT part of the verdict predicate
+
+---
+
 ## EVPN Invariants
 
 

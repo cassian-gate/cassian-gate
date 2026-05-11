@@ -193,6 +193,8 @@ Rules:
 
 Links define **connectivity only**, not routing.
 
+For the corresponding `interface_state` invariant test type (which asserts an interface declared by a `links:` endpoint has a specific administrative/operational state inside its node's network namespace), the per-test-record `observed_state` payload schema, the asymmetric verdict predicate, and the iproute2 capability dependency, see `docs/topology-schema-v1.5.md` §4.9.
+
 ---
 
 ## 5) Tests (Authoritative)
