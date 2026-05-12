@@ -1,0 +1,19 @@
+name: route-absent-expected-absent-present
+
+nodes:
+  - name: r1
+    type: frr
+  - name: r2
+    type: frr
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["10.10.10.1/24", "10.10.10.2/24"]
+
+tests:
+  - name: r1_expects_10_10_10_0_24_absent_but_present
+    kind: invariant
+    type: route_absent
+    node: r1
+    prefix: 10.10.10.0/24
+    expect: pass
