@@ -1,0 +1,17 @@
+name: route-invalid-absent-invariant
+
+nodes:
+  - name: r1
+    type: frr
+  - name: r2
+    type: frr
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+
+tests:
+  - name: invalid_route_absent_missing_prefix
+    kind: invariant
+    type: route_absent
+    node: r1
+    expect: pass
