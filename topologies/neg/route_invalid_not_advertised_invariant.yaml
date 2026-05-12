@@ -1,0 +1,18 @@
+name: route-invalid-not-advertised-invariant
+
+nodes:
+  - name: r1
+    type: frr
+  - name: r2
+    type: frr
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+
+tests:
+  - name: invalid_route_not_advertised_missing_peer
+    kind: invariant
+    type: route_not_advertised_to
+    node: r1
+    prefix: 10.10.10.0/24
+    expect: pass
