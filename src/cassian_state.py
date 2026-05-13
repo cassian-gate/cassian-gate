@@ -197,6 +197,17 @@ def _state_capture_validate_argv_or_die(*, profile: str, node: str, node_type: s
 
     # Node-type-specific allowlists
     if node_type == "frr":
+        # Bounded allowlist extension (Phase 1a H6, LD-3 ruled (a)):
+        # permit two exact ip -j argv tuples for frr-interfaces-basic and
+        # frr-comprehensive Linux-primitive interface-state probes.
+        # All other argv on FRR node type continues through the vtysh-only
+        # allowlist below; default-deny floor preserved.
+        _frr_ip_j_allowed = {
+            ("ip", "-j", "link", "show"),
+            ("ip", "-j", "addr", "show"),
+        }
+        if tuple(argv) in _frr_ip_j_allowed:
+            return
         # Only: vtysh -c "show ..."
         if not (len(argv) == 3 and argv[0] == "vtysh" and argv[1] == "-c"):
             die(
