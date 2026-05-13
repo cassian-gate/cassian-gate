@@ -1,0 +1,20 @@
+name: frr-ospf-basic
+
+authority: non-authoritative
+
+purpose: |
+  Captures OSPFv2 control-plane state from the FRR ospfd daemon via
+  `vtysh -c "show ip ospf neighbor json"`, `vtysh -c "show ip ospf interface json"`,
+  and `vtysh -c "show ip ospf database json"`. Use this profile when
+  debugging OSPF neighbor adjacency state, per-interface OSPF posture,
+  or link-state database content; the runtime FRR node must declare an
+  `ospf:` block (topology-schema-v1 §3.1 / topology-schema-v1.5 §4.8)
+  for ospfd to be enabled and captures to contain meaningful entries.
+
+node_types:
+  - frr
+
+commands:
+  - ["vtysh", "-c", "show ip ospf neighbor json"]
+  - ["vtysh", "-c", "show ip ospf interface json"]
+  - ["vtysh", "-c", "show ip ospf database json"]

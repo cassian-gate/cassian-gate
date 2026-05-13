@@ -1,0 +1,29 @@
+name: frr-comprehensive
+
+authority: non-authoritative
+
+purpose: |
+  Aggregates the routing, BGP, OSPF, and interface diagnostic surfaces of
+  `frr-routing-basic`, `frr-bgp-basic`, `frr-ospf-basic`, and
+  `frr-interfaces-basic` into a single 10-command capture. Use this
+  profile when the specific FRR failure domain is unknown and you want a
+  broad snapshot — incident triage, post-mortem evidence, AI advisory
+  consumption — at the cost of larger captured artifacts. OSPF commands
+  are included unconditionally; on non-OSPF topologies they produce empty
+  or daemon-not-running output recorded non-fatally without affecting
+  verdicts.
+
+node_types:
+  - frr
+
+commands:
+  - ["vtysh", "-c", "show ip route json"]
+  - ["vtysh", "-c", "show ipv6 route json"]
+  - ["vtysh", "-c", "show bgp summary json"]
+  - ["vtysh", "-c", "show bgp neighbors json"]
+  - ["vtysh", "-c", "show bgp ipv4 unicast json"]
+  - ["vtysh", "-c", "show ip ospf neighbor json"]
+  - ["vtysh", "-c", "show ip ospf interface json"]
+  - ["vtysh", "-c", "show ip ospf database json"]
+  - ["ip", "-j", "link", "show"]
+  - ["ip", "-j", "addr", "show"]
