@@ -200,6 +200,26 @@ Listing:
 * `--list-scenarios`  
   List scenarios from `labs/clab-<lab>/topology.resolved.yaml` (no deploy/execute).
 
+State capture flags:
+
+* `--state-capture {none, pre, post, both}`  
+  When to run state-capture probes. `none` disables (default), `pre` runs probes before tests, `post` runs after, `both` runs at both points. Captures are written as non-authoritative supporting evidence and never change verdicts, exit codes, or authoritative artifacts.
+
+* `--state-profile <name>` (repeatable)  
+  Select which built-in state-capture profile(s) to run. Repeat the flag to run multiple profiles in one invocation. Required when `--state-capture` is not `none`. The built-in profiles are:
+
+    * `frr-routing-basic` — IPv4 and IPv6 routing tables from FRR zebra (`show ip route json`, `show ipv6 route json`).
+    * `frr-bgp-basic` — BGP control-plane state from FRR bgpd (summary, neighbors, IPv4-unicast prefixes).
+    * `frr-ospf-basic` — OSPFv2 state from FRR ospfd (neighbors, interfaces, LSA database). Requires the topology to declare an `ospf:` block.
+    * `frr-interfaces-basic` — interface admin/operational state on FRR nodes via Linux iproute2 `ip -j link show` and `ip -j addr show` (not vtysh). Pairs naturally with the `interface_state` invariant.
+    * `frr-comprehensive` — aggregate of the four FRR profiles above (10 commands). OSPF commands included unconditionally; produce empty/non-fatal output on non-OSPF topologies.
+    * `linux-net-basic` — basic interface, route, and neighbor state on Linux hosts (`ip addr`, `ip link`, `ip route`, `ip neigh`).
+    * `linux-sockets-basic` — listening TCP/UDP sockets on Linux hosts (`ss -tulpn`).
+    * `nft-ruleset-basic` — nftables ruleset on nft-fw firewall nodes (`nft list ruleset`).
+    * `linux-forwarding-basic` — IP forwarding and rp_filter sysctls on nft-fw nodes (`net.ipv4.ip_forward`, `net.ipv4.conf.all.rp_filter`, `net.ipv4.conf.default.rp_filter`).
+
+  Full per-profile descriptions live in `contrib/state-profiles/README.md`.
+
 ---
 
 ## 4) One-shot Workflow (Non-authoritative)
