@@ -1,0 +1,48 @@
+# Phase 1a / Handover 6 of 8 — proof topology for the state-capture
+# OSPF profile (REQ-H6-23 / PROOF-6).
+#
+# Two FRR nodes (r1, r2) form a single-area OSPF adjacency on a
+# point-to-point auto-IP /31 link. Both nodes declare area 0 and
+# OSPF networks that cover (a) the auto-allocated /31 link subnet
+# at 10.0.0.0/31 and (b) the per-node loopback /32 derived from
+# router_id. Under steady state the OSPF FSM reaches "Full" on
+# both sides; the declared invariant verifies r1 observes r2's
+# router-id (2.2.2.2) at "Full".
+#
+# Auto-IP allocation (Cassian engine convention): the engine
+# assigns /31 subnets sequentially from 10.0.0.0/16 in
+# link-declaration order. Link 0 -> [10.0.0.0/31, 10.0.0.1/31].
+# The 10.0.0.0/16 supernet in ospf.networks therefore covers all
+# auto-allocated link IPs.
+#
+# This fixture intentionally exercises the frr-ospf-basic
+# state-capture profile (3 vtysh `show ip ospf ... json` commands).
+# Engine-default FRR image is sufficient (no netshoot pin needed —
+# LD-4 deferred to H5 PROOF-H5-2).
+name: state-capture-ospf-smoke
+nodes:
+  - name: r1
+    type: frr
+    router_id: 1.1.1.1
+    ospf:
+      area: 0
+      networks:
+        - 10.0.0.0/16
+        - 1.1.1.1/32
+  - name: r2
+    type: frr
+    router_id: 2.2.2.2
+    ospf:
+      area: 0
+      networks:
+        - 10.0.0.0/16
+        - 2.2.2.2/32
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+tests:
+  - name: r1_neighbor_up_to_r2
+    kind: invariant
+    type: ospf_neighbor_up
+    src: r1
+    neighbor: 2.2.2.2
+    expect: pass

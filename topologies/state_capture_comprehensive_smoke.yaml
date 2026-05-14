@@ -1,0 +1,42 @@
+# Phase 1a / Handover 6 of 8 — proof topology for the state-capture
+# comprehensive profile (REQ-H6-22 / PROOF-5).
+#
+# Two FRR nodes (r1, r2) form a single eBGP session over a /30 link.
+# The declared invariant verifies r1 observes the BGP session to r2's
+# link IP (10.0.0.2) as up. This topology intentionally does NOT
+# declare an `ospf:` block — the state-capture exercise will run the
+# frr-comprehensive profile (10 commands including 3 OSPF
+# `show ip ospf ... json`), and the OSPF commands will produce
+# empty/non-fatal output on this non-OSPF substrate per LD-7 ruled (a)
+# unconditional OSPF inclusion. State captures (pre + post) and the
+# resulting state_diff.json artifact still complete without breaking
+# the lifecycle. Engine-default FRR image is sufficient (no netshoot
+# pin needed — LD-4 deferred to H5 PROOF-H5-2).
+name: state-capture-comprehensive-smoke
+nodes:
+  - name: r1
+    type: frr
+    asn: 65001
+    router_id: 1.1.1.1
+    bgp:
+      neighbors:
+        - peer: r2
+          remote_as: 65002
+  - name: r2
+    type: frr
+    asn: 65002
+    router_id: 2.2.2.2
+    bgp:
+      neighbors:
+        - peer: r1
+          remote_as: 65001
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["10.0.0.1/30", "10.0.0.2/30"]
+tests:
+  - name: r1_bgp_session_up_to_r2
+    kind: invariant
+    type: bgp_session_up
+    node: r1
+    neighbor: 10.0.0.2
+    expect: pass
