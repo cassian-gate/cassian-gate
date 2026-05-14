@@ -79,30 +79,53 @@ STATE_CAPTURE_PLAN_VERSION = "1.0.0"
 # Deterministic truncation for state outputs (bytes)
 _STATE_CAPTURE_MAX_BYTES = 64 * 1024  # 65536
 
-# Built-in profiles (LOCKED list for v1.5)
+# Built-in profiles (LOCKED list — expanded under Phase 1a §4.5)
 # Each command is argv (no shell). Default deny everywhere else.
 STATE_CAPTURE_PROFILES: dict[str, dict] = {
     # FRR
     "frr-routing-basic": {
         "node_types": ["frr"],
         "commands": [
-            ["vtysh", "-c", "show ip route"],
-            ["vtysh", "-c", "show ipv6 route"],
+            ["vtysh", "-c", "show ip route json"],
+            ["vtysh", "-c", "show ipv6 route json"],
         ],
     },
     "frr-bgp-basic": {
         "node_types": ["frr"],
         "commands": [
-            ["vtysh", "-c", "show bgp summary"],
-            ["vtysh", "-c", "show bgp ipv6 summary"],
+            ["vtysh", "-c", "show bgp summary json"],
+            ["vtysh", "-c", "show bgp neighbors json"],
+            ["vtysh", "-c", "show bgp ipv4 unicast json"],
+        ],
+    },
+    "frr-ospf-basic": {
+        "node_types": ["frr"],
+        "commands": [
+            ["vtysh", "-c", "show ip ospf neighbor json"],
+            ["vtysh", "-c", "show ip ospf interface json"],
+            ["vtysh", "-c", "show ip ospf database json"],
         ],
     },
     "frr-interfaces-basic": {
         "node_types": ["frr"],
         "commands": [
-            ["vtysh", "-c", "show interface brief"],
-            ["vtysh", "-c", "show ip interface brief"],
-            ["vtysh", "-c", "show ipv6 interface brief"],
+            ["ip", "-j", "link", "show"],
+            ["ip", "-j", "addr", "show"],
+        ],
+    },
+    "frr-comprehensive": {
+        "node_types": ["frr"],
+        "commands": [
+            ["vtysh", "-c", "show ip route json"],
+            ["vtysh", "-c", "show ipv6 route json"],
+            ["vtysh", "-c", "show bgp summary json"],
+            ["vtysh", "-c", "show bgp neighbors json"],
+            ["vtysh", "-c", "show bgp ipv4 unicast json"],
+            ["vtysh", "-c", "show ip ospf neighbor json"],
+            ["vtysh", "-c", "show ip ospf interface json"],
+            ["vtysh", "-c", "show ip ospf database json"],
+            ["ip", "-j", "link", "show"],
+            ["ip", "-j", "addr", "show"],
         ],
     },
     # Linux hosts
@@ -174,6 +197,17 @@ def _state_capture_validate_argv_or_die(*, profile: str, node: str, node_type: s
 
     # Node-type-specific allowlists
     if node_type == "frr":
+        # Bounded allowlist extension (Phase 1a H6, LD-3 ruled (a)):
+        # permit two exact ip -j argv tuples for frr-interfaces-basic and
+        # frr-comprehensive Linux-primitive interface-state probes.
+        # All other argv on FRR node type continues through the vtysh-only
+        # allowlist below; default-deny floor preserved.
+        _frr_ip_j_allowed = {
+            ("ip", "-j", "link", "show"),
+            ("ip", "-j", "addr", "show"),
+        }
+        if tuple(argv) in _frr_ip_j_allowed:
+            return
         # Only: vtysh -c "show ..."
         if not (len(argv) == 3 and argv[0] == "vtysh" and argv[1] == "-c"):
             die(

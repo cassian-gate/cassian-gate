@@ -2927,6 +2927,8 @@ cassian test topologies/three-frr-two-hosts-fw-routed.yaml \
   --state-profile nft-ruleset-basic
 ```
 
+Phase 1a expanded the built-in FRR profile set (now: `frr-routing-basic`, `frr-bgp-basic`, `frr-ospf-basic`, `frr-interfaces-basic`, `frr-comprehensive`) and switched FRR probes to JSON form (`vtysh -c "show ... json"`) with Linux iproute2 primitives for the interfaces profile. See [`docs/cli-reference-v1.md`](cli-reference-v1.md) for the full `--state-capture` / `--state-profile` flag reference and per-profile descriptions.
+
 ### Artifact Path
 
 ```text
@@ -3182,9 +3184,8 @@ Inspect structured state diff output:
 ```bash
 cassian test topologies/three-frr-two-hosts-fw-routed.yaml \
   --state-capture both \
+  --state-profile frr-comprehensive \
   --state-profile linux-net-basic \
-  --state-profile frr-interfaces-basic \
-  --state-profile frr-routing-basic \
   --state-profile nft-ruleset-basic
 
 python -m json.tool labs/clab-three-frr-two-hosts-fw-routed/artifacts/state-diff/state_diff.json
