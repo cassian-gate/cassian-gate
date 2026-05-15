@@ -5,7 +5,7 @@
 # Build determinism (D01) depends on pinned versions in requirements-docs.txt.
 #
 # Note: nav references three new pages (index.md, proof-kit.md,
-# doctrine-summary.md) authored by WI-7 / WI-8 / WI-9. `mkdocs build --strict`
+# project-principles.md) authored by WI-7 / WI-8 / WI-9. `mkdocs build --strict`
 # will FAIL at WI-1 lock because those targets don't exist yet, and will
 # pass only after WI-9 completes. WI-1 verifies `mkdocs config` parse
 # validity, not strict-build success.
@@ -15,6 +15,9 @@ site_url: https://docs.cassiangate.dev/
 site_description: Deterministic pre-production network change validation gate.
 
 docs_dir: docs
+
+exclude_docs: |
+  README.md
 
 strict: true
 
@@ -88,4 +91,4 @@ nav:
     - GitLab CI: ci/GITLAB_CI.md
   - Admin Guide: admin-guide-v1.md
   - Proof Kit / Examples: proof-kit.md
-  - Doctrine Summary: doctrine-summary.md
+  - Project principles: project-principles.md

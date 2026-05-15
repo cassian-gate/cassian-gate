@@ -3,7 +3,7 @@
 **Deterministic pre-production proof layer for network changes.**
 
 [Get started :octicons-arrow-right-24:](quickstart.md){ .md-button .md-button--primary }
-[Read the doctrine :octicons-arrow-right-24:](doctrine-summary.md){ .md-button }
+[Read the principles :octicons-arrow-right-24:](project-principles.md){ .md-button }
 
 ---
 
@@ -63,12 +63,12 @@ Cassian Gate is built for network engineers who need proof before production, pl
 
     [:octicons-arrow-right-24: CI Integration](ci/GITHUB_ACTIONS.md)
 
--   :material-scale-balance:{ .lg .middle } __Doctrine__
+-   :material-scale-balance:{ .lg .middle } __Project principles__
 
     ---
 
-    What the gate guarantees, and what it deliberately does not.
+    What Cassian Gate decides, and what it does not.
 
-    [:octicons-arrow-right-24: Doctrine summary](doctrine-summary.md)
+    [:octicons-arrow-right-24: Project principles](project-principles.md)
 
 </div>
