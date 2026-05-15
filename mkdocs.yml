@@ -1,0 +1,90 @@
+# mkdocs.yml — cassiangate.dev documentation site
+#
+# Public mkdocs-material site for Cassian Gate.
+# Handover H7 (Phase 1a §4.6). Strict-build enforced via `strict: true`.
+# Build determinism (D01) depends on pinned versions in requirements-docs.txt.
+#
+# Note: nav references three new pages (index.md, proof-kit.md,
+# doctrine-summary.md) authored by WI-7 / WI-8 / WI-9. `mkdocs build --strict`
+# will FAIL at WI-1 lock because those targets don't exist yet, and will
+# pass only after WI-9 completes. WI-1 verifies `mkdocs config` parse
+# validity, not strict-build success.
+
+site_name: Cassian Gate
+site_url: https://docs.cassiangate.dev/
+site_description: Deterministic pre-production network change validation gate.
+
+docs_dir: docs
+
+strict: true
+
+theme:
+  name: material
+  palette:
+    # Dark default (REQ-H7-2)
+    - scheme: slate
+      primary: black
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+    # Light alternate
+    - scheme: default
+      primary: black
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+  features:
+    # Navigation (v3 UI-5)
+    - navigation.tabs
+    - navigation.instant
+    - navigation.top
+    # Search (v3 UI-5)
+    - search.highlight
+    - search.suggest
+    # Code blocks (v3 UI-5)
+    - content.code.copy
+    - content.code.annotate
+    # Table of contents (v3 UI-5)
+    - toc.follow
+
+markdown_extensions:
+  # Built-in python-markdown extensions (v3 UI-5)
+  - admonition
+  - attr_list
+  - md_in_html
+  # pymdown-extensions (v3 UI-5)
+  - pymdownx.details
+  - pymdownx.highlight:
+      linenums: true
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+plugins:
+  - search
+  - mike:
+      canonical_version: latest
+
+extra:
+  # mike versioning (REQ-H7-18 / LD-6)
+  version:
+    provider: mike
+    default: latest
+
+nav:
+  # Eight baseline sections per REQ-H7-3.
+  # LD-3 additional entries (Cheatsheet, AI Advisory, Input Adapters,
+  # Extensions, VM Runtime Capabilities) are added at WI-10.
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - Topology Schema Reference: topology-schema-v1.5.md
+  - CLI Reference: cli-reference-v1.md
+  - CI Integration:
+    - GitHub Actions: ci/GITHUB_ACTIONS.md
+    - GitLab CI: ci/GITLAB_CI.md
+  - Admin Guide: admin-guide-v1.md
+  - Proof Kit / Examples: proof-kit.md
+  - Doctrine Summary: doctrine-summary.md

@@ -49,3 +49,6 @@ src/*.egg-info/
 
 # Python packaging metadata
 *.egg-info/
+
+# mkdocs build output (H7)
+site/
