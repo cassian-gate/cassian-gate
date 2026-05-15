@@ -81,6 +81,7 @@ nav:
   - Home: index.md
   - Quickstart: quickstart.md
   - Topology Schema Reference: topology-schema-v1.5.md
+  - Legacy schema (v1): topology-schema-v1.md
   - CLI Reference: cli-reference-v1.md
   - CI Integration:
     - GitHub Actions: ci/GITHUB_ACTIONS.md
