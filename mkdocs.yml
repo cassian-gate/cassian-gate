@@ -17,7 +17,7 @@ site_description: Deterministic pre-production network change validation gate.
 docs_dir: docs
 
 exclude_docs: |
-  README.md
+  /README.md
 
 strict: true
 
@@ -78,17 +78,28 @@ extra:
     default: latest
 
 nav:
-  # Eight baseline sections per REQ-H7-3.
-  # LD-3 additional entries (Cheatsheet, AI Advisory, Input Adapters,
-  # Extensions, VM Runtime Capabilities) are added at WI-10.
+  # Eight baseline sections per REQ-H7-3 plus LD-3 entries
+  # applied at WI-10 (Cheatsheet, Input Adapters, VM Runtime Capabilities,
+  # AI Advisory, Extension & Adoption, plus interim First-run failure
+  # narrative pending BL-N relocation to contrib/topologies/first-run-proof/).
   - Home: index.md
   - Quickstart: quickstart.md
   - Topology Schema Reference: topology-schema-v1.5.md
   - Legacy schema (v1): topology-schema-v1.md
   - CLI Reference: cli-reference-v1.md
+  - Cheatsheet: cheatsheet.md
   - CI Integration:
     - GitHub Actions: ci/GITHUB_ACTIONS.md
     - GitLab CI: ci/GITLAB_CI.md
+  - Input Adapters: input-adapters.md
   - Admin Guide: admin-guide-v1.md
+  - VM Runtime Capabilities: vm-runtime-capabilities.md
   - Proof Kit / Examples: proof-kit.md
+  - First-run failure narrative: examples/first-run-proof-failure-narrative.md
+  - AI Advisory:
+    - Overview: ai/README.md
+    - Guardrails: ai/guardrails.md
+    - CLI Contract: ai/cli-contract-ai.md
+    - Online AI: ai/online_ai.md
+  - Extension & Adoption: extensions/extension-and-adoption.md
   - Project principles: project-principles.md
