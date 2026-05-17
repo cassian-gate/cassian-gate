@@ -2,6 +2,8 @@
 
 Deterministic pre-production proof layer for network changes.
 
+Full documentation: [docs.cassiangate.dev](https://docs.cassiangate.dev/)
+
 ## What it is
 
 Cassian Gate is an execution-backed validation gate for network changes. It lets engineers declare topology, tests, and scenarios, run them through a clean-state authoritative path, and get explicit PASS/FAIL outcomes with auditable artifacts. It is behavior-first, artifact-authoritative, CI-safe, local-first, and any AI usage remains advisory only.
@@ -19,6 +21,8 @@ Cassian Gate is for network engineers who need proof before production, platform
 Cassian Gate is not yet for teams expecting broad multi-vendor parity, teams that want exploratory lab workflows to count as authoritative validation, or teams that need commercial NOS coverage before adoption.
 
 ## Install
+
+Full install and first-run guide: [docs.cassiangate.dev/quickstart](https://docs.cassiangate.dev/quickstart/)
 
 Primary public install path for the v2 release surface:
 
@@ -55,6 +59,7 @@ v2 includes the deterministic gate engine, FRR-based validation, named routing a
 
 ## Links
 
+* Documentation site: [docs.cassiangate.dev](https://docs.cassiangate.dev/)
 * Docs index: [`docs/README.md`](docs/README.md)
 * Quickstart: [`docs/quickstart.md`](docs/quickstart.md)
 * Operator cheatsheet: [`docs/cheatsheet.md`](docs/cheatsheet.md)
