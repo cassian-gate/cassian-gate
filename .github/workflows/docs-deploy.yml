@@ -1,0 +1,43 @@
+name: Deploy docs to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+      - develop/phase1a
+
+permissions:
+  contents: write
+
+concurrency:
+  group: docs-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install docs dependencies
+        run: pip install -r requirements-docs.txt
+
+      - name: Configure git for mike deploy
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Deploy via mike
+        run: |
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          mike deploy --push --update-aliases "${BRANCH}" latest
+          mike set-default --push latest

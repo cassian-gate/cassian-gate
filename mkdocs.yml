@@ -17,12 +17,22 @@ site_description: Deterministic pre-production network change validation gate.
 docs_dir: docs
 
 exclude_docs: |
+  /REexclude_docs: |
   /README.md
+
+not_in_nav: |
+  /404.md
 
 strict: true
 
+extra_css:
+  - stylesheets/extra.css
+
 theme:
   name: material
+  custom_dir: overrides
+  favicon: assets/favicon.svg
+  logo: assets/favicon.svg
   palette:
     # Dark default (REQ-H7-2)
     - scheme: slate
@@ -65,6 +75,9 @@ markdown_extensions:
   - pymdownx.superfences
   - pymdownx.tabbed:
       alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
 plugins:
   - search
