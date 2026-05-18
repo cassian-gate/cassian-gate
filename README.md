@@ -47,6 +47,22 @@ cassian test topologies/first-run-proof-minimal.yaml
 
 That gives you the shortest path to an authoritative first PASS verdict from this repository surface.
 
+## What does PASS mean?
+
+A PASS verdict from `cassian test` means:
+
+- All declared tests passed against real execution behavior
+- All declared scenarios completed as expected within the executed scope
+
+PASS does not mean:
+
+- Validation of behaviors not declared in this topology
+- Coverage of all possible failure modes
+
+PASS is bounded by what you declared. Cassian Gate validates the
+topology, tests, and scenarios you specified — not implicit
+expectations about behaviors you did not declare.
+
 ## Proof Kit
 
 * Passing first-run proof: [`topologies/first-run-proof-minimal.yaml`](topologies/first-run-proof-minimal.yaml) — shortest path to a first authoritative PASS verdict proving the declared TCP flow is allowed.
