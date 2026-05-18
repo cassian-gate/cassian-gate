@@ -128,7 +128,7 @@ Authority boundary:
 
 ### What PASS means
 
-PASS means the declared checks passed for this declared topology and this authoritative execution.
+PASS means all declared tests passed against real execution behavior, and all declared scenarios completed as expected within the executed scope.
 
 ### What PASS does not mean
 
