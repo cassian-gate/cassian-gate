@@ -3991,10 +3991,12 @@ def write_test_summary_artifact(lab: str, results: dict) -> Path:
         pass_meaning_block = (
             "\n"
             "PASS means:\n"
-            "  All executed declared checks matched their expected outcomes within the scope shown above\n"
+            "  All declared tests passed against real execution behavior\n"
+            "  All declared scenarios completed as expected within the executed scope\n"
             "\n"
             "PASS does not mean:\n"
-            "  Full network correctness outside the executed scope\n"
+            "  Validation of behaviors not declared in this topology\n"
+            "  Coverage of all possible failure modes\n"
         )
         fail_meaning_block = ""
     else:
