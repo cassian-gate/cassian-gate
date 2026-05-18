@@ -38,6 +38,8 @@ jobs:
 
       - name: Deploy via mike
         run: |
+          # mike rejects '/' in version names; transform develop/phase1a -> develop-phase1a
           BRANCH="${GITHUB_REF#refs/heads/}"
-          mike deploy --push --update-aliases "${BRANCH}" latest
+          VERSION="${BRANCH//\//-}"
+          mike deploy --push --update-aliases "${VERSION}" latest
           mike set-default --push latest
