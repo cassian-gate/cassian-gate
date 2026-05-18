@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://docs.cassiangate.dev/latest/ci/GITHUB_ACTIONS/">
+        <link rel="canonical" href="https://docs.cassiangate.dev/latest/ci/gitlab-ci/">
       
       
-        <link rel="prev" href="../../cheatsheet/">
+        <link rel="prev" href="../github-actions/">
       
       
-        <link rel="next" href="../GITLAB_CI/">
+        <link rel="next" href="../../input-adapters/">
       
       
         
@@ -27,7 +27,7 @@
     
     
       
-        <title>GitHub Actions - Cassian Gate</title>
+        <title>GitLab CI - Cassian Gate</title>
       
     
     
@@ -63,11 +63,11 @@
     
   
   
-  <meta property="og:image" content="https://docs.cassiangate.dev/latestassets/og-image.png">
+  <meta property="og:image" content="https://docs.cassiangate.dev/latest/assets/og-image.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:image" content="https://docs.cassiangate.dev/latestassets/og-image.png">
+  <meta name="twitter:image" content="https://docs.cassiangate.dev/latest/assets/og-image.png">
 
   </head>
   
@@ -88,7 +88,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#github-actions-cassian-gate-gate-template" class="md-skip">
+        <a href="#gitlab-ci-cassian-gate-gate-template" class="md-skip">
           Skip to content
         </a>
       
@@ -125,7 +125,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              GitHub Actions
+              GitLab CI
             
           </span>
         </div>
@@ -344,7 +344,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="./" class="md-tabs__link">
+        <a href="../github-actions/" class="md-tabs__link">
           
   
   
@@ -762,6 +762,34 @@
                 
   
   
+  
+  
+    <li class="md-nav__item">
+      <a href="../github-actions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitHub Actions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
     
   
   
@@ -781,7 +809,7 @@
   <span class="md-ellipsis">
     
   
-    GitHub Actions
+    GitLab CI
   
 
     
@@ -799,7 +827,7 @@
   <span class="md-ellipsis">
     
   
-    GitHub Actions
+    GitLab CI
   
 
     
@@ -825,10 +853,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#what-this-workflow-is-for" class="md-nav__link">
+  <a href="#what-this-pipeline-is-for" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What this workflow is for
+        What this pipeline is for
       
     </span>
   </a>
@@ -836,10 +864,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#what-this-workflow-is-not" class="md-nav__link">
+  <a href="#what-this-pipeline-is-not" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What this workflow is not
+        What this pipeline is not
       
     </span>
   </a>
@@ -916,34 +944,6 @@
   
 </nav>
       
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../GITLAB_CI/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    GitLab CI
-  
-
-    
-  </span>
-  
-  
-
-      </a>
     </li>
   
 
@@ -1341,10 +1341,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#what-this-workflow-is-for" class="md-nav__link">
+  <a href="#what-this-pipeline-is-for" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What this workflow is for
+        What this pipeline is for
       
     </span>
   </a>
@@ -1352,10 +1352,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#what-this-workflow-is-not" class="md-nav__link">
+  <a href="#what-this-pipeline-is-not" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What this workflow is not
+        What this pipeline is not
       
     </span>
   </a>
@@ -1445,26 +1445,26 @@
 
 
 
-<h1 id="github-actions-cassian-gate-gate-template">GitHub Actions — Cassian Gate gate template</h1>
-<p>This document describes a GitHub Actions pattern for running <strong>Cassian Gate</strong> as a
+<h1 id="gitlab-ci-cassian-gate-gate-template">GitLab CI — Cassian Gate gate template</h1>
+<p>This document describes a GitLab CI pattern for running <strong>Cassian Gate</strong> as a
 <strong>deterministic, clean-state validation gate</strong>.</p>
 <p>It is a supporting CI guide. It does <strong>not</strong> replace deterministic execution,
 authoritative artifacts, or the project design contract.</p>
-<h2 id="what-this-workflow-is-for">What this workflow is for</h2>
-<p>Use this pattern when you want a CI job to:</p>
+<h2 id="what-this-pipeline-is-for">What this pipeline is for</h2>
+<p>Use this pattern when you want a GitLab pipeline to:</p>
 <ul>
 <li>validate topology input before execution</li>
 <li>run the authoritative gate with <code>cassian test</code></li>
 <li>preserve generated artifacts for audit and debugging</li>
 <li>avoid treating exploratory workflows as deployment authority</li>
 </ul>
-<h2 id="what-this-workflow-is-not">What this workflow is not</h2>
-<p>This workflow is <strong>not</strong>:</p>
+<h2 id="what-this-pipeline-is-not">What this pipeline is not</h2>
+<p>This pipeline is <strong>not</strong>:</p>
 <ul>
 <li>a broad CI automation framework</li>
 <li>a substitute for the Cassian Gate authority model</li>
 <li>a reason to treat <code>cassian run</code> as a gate</li>
-<li>a promise that every GitHub-hosted runner shape supports containerlab reliably</li>
+<li>a promise that every GitLab runner shape supports containerlab reliably</li>
 </ul>
 <h2 id="authority-rules">Authority rules</h2>
 <p>Keep these boundaries explicit:</p>
@@ -1476,18 +1476,18 @@ authoritative artifacts, or the project design contract.</p>
 <li><code>labs/</code> remains generated evidence only</li>
 </ul>
 <h2 id="runner-requirements">Runner requirements</h2>
-<p>This pattern is generally intended for a Linux environment with the privileges needed by the
-current Cassian Gate runtime.</p>
-<p>Typical requirements include:</p>
+<p>A practical GitLab runner for current Cassian Gate usage typically needs:</p>
 <ul>
 <li>Linux host or runner</li>
 <li>Docker available to the runner</li>
 <li><code>containerlab</code> installed ahead of time</li>
 <li>sufficient privileges for containerlab networking</li>
 </ul>
-<p>Self-hosted runners are typically the most practical choice.</p>
+<p>A shell executor on a Linux host is often the simplest fit.</p>
+<p>If you use another runner model, keep the required runtime privileges explicit and review them
+carefully.</p>
 <h2 id="typical-ci-shape">Typical CI shape</h2>
-<p>A narrow, truthful CI flow usually looks like this:</p>
+<p>A narrow, truthful pipeline usually looks like this:</p>
 <ol>
 <li>install pinned Python dependencies</li>
 <li>run repository verification or syntax checks as needed</li>
