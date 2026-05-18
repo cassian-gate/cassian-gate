@@ -1,0 +1,15 @@
+# requirements-docs.txt
+#
+# Build-time dependencies for the cassiangate.dev documentation site.
+# Pinned exact versions per H7 REQ-H7-5; isolated from pyproject.toml
+# (the cassian-gate runtime package).
+#
+# Maintenance posture: mkdocs-material is in upstream maintenance mode
+# as of Nov 2025 with security updates committed through Nov 2026.
+# Migration to a successor (Zensical, mkdocs-materialx, or other) is
+# a separate handover.
+
+mkdocs==1.6.1
+mkdocs-material==9.7.6
+mike==2.1.4
+pymdown-extensions==10.21.2
