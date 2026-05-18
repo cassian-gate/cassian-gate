@@ -61,7 +61,7 @@ Cassian Gate is built for network engineers who need proof before production, pl
 
     GitHub Actions and GitLab CI templates that gate merges on proof.
 
-    [:octicons-arrow-right-24: CI Integration](ci/GITHUB_ACTIONS.md)
+    [:octicons-arrow-right-24: CI Integration](ci/github-actions.md)
 
 -   :material-scale-balance:{ .lg .middle } __Project principles__
 

@@ -19,5 +19,5 @@ For CI gate reviews, vendor questionnaires, and security teams: this tool does n
 - [Quickstart](quickstart.md) — shortest path to a first authoritative PASS verdict from this repository.
 - [Topology Schema Reference](topology-schema-v1.5.md) — declared shape of topologies, tests, scenarios, and invariants.
 - [CLI Reference](cli-reference-v1.md) — every `cassian` subcommand and its exit codes.
-- [CI Integration](ci/GITHUB_ACTIONS.md) — gate-on-merge templates for GitHub Actions and GitLab CI.
+- [CI Integration](ci/github-actions.md) — gate-on-merge templates for GitHub Actions and GitLab CI.
 - [Project README](https://github.com/cassian-gate/cassian-gate/blob/main/README.md) — full v2 capability list and v2.0 ship status.

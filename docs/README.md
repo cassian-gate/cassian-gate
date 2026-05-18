@@ -84,8 +84,8 @@ Recommended reading order:
 
 - `extensions/extension-and-adoption.md`
 - `examples/first-run-proof-failure-narrative.md`
-- `ci/GITHUB_ACTIONS.md`
-- `ci/GITLAB_CI.md`
+- `ci/github-actions.md`
+- `ci/gitlab-ci.md`
 
 ### AI docs (active surface)
 
