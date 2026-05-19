@@ -25,3 +25,27 @@ Two bounded policy outcomes in one small example: TCP/8443 is allowed, TCP/2222 
 A bounded deterministic failure-choreography example. A directly connected reachability topology with a deliberate interface bounce scenario, run only through the normal authoritative gate path.
 
 - [Source: `contrib/topologies/recipes/failover-does-validation-fail-when-a-link-drops/`](https://github.com/cassian-gate/cassian-gate/tree/main/contrib/topologies/recipes/failover-does-validation-fail-when-a-link-drops)
+
+## Recipe — What changed between baseline and change?
+
+Uses `cassian test --two-run` to validate a proposed change against a known-good baseline. Two clean-state authoritative gate executions plus an advisory `comparison.json` artifact recording what differs between the runs.
+
+- [Source: `contrib/topologies/recipes/two-run-what-changed-between-baseline-and-change/`](https://github.com/cassian-gate/cassian-gate/tree/main/contrib/topologies/recipes/two-run-what-changed-between-baseline-and-change)
+
+## Recipe — How do I validate an IaC change?
+
+Uses `cassian adapt terraform` to convert a `terraform show -json` plan into an advisory `adapters.v1` JSON, then `cassian preflight --adapter <adapter-output>` to surface the IaC change context inside preflight findings. Both adapter output and preflight output are advisory and do not affect the gate verdict.
+
+- [Source: `contrib/topologies/recipes/terraform-adapter-how-do-i-validate-an-iac-change/`](https://github.com/cassian-gate/cassian-gate/tree/main/contrib/topologies/recipes/terraform-adapter-how-do-i-validate-an-iac-change)
+
+## Recipe — What does my gate actually cover?
+
+Demonstrates the advisory `blast_radius.json` artifact produced during `cassian test`'s Collect phase. The recipe topology declares a scenario that touches only some of the available fault and wait classes, producing a meaningful `coverage.summary` block; blast radius does not affect the gate verdict.
+
+- [Source: `contrib/topologies/recipes/blast-radius-what-does-my-gate-actually-cover/`](https://github.com/cassian-gate/cassian-gate/tree/main/contrib/topologies/recipes/blast-radius-what-does-my-gate-actually-cover)
+
+## Recipe — What coverage gaps do I have?
+
+Demonstrates `cassian preflight` producing the advisory `preflight.json` artifact via declared-only static analysis (no deploy, no runtime). The recipe topology declares deliberate coverage gaps so the findings are meaningful; preflight does not affect the gate verdict.
+
+- [Source: `contrib/topologies/recipes/preflight-what-coverage-gaps-do-i-have/`](https://github.com/cassian-gate/cassian-gate/tree/main/contrib/topologies/recipes/preflight-what-coverage-gaps-do-i-have)
