@@ -68,6 +68,10 @@ expectations about behaviors you did not declare.
 * Passing first-run proof: [`topologies/first-run-proof-minimal.yaml`](topologies/first-run-proof-minimal.yaml) — shortest path to a first authoritative PASS verdict proving the declared TCP flow is allowed.
 * Fail-catching first-run proof: [`topologies/first-run-proof-fail-catching.yaml`](topologies/first-run-proof-fail-catching.yaml) — shows Cassian Gate returning an authoritative FAIL when the declared TCP expectation is wrong.
 * Copy-paste GitHub Actions template: [`contrib/ci/cassian-gate-ci.yml`](contrib/ci/cassian-gate-ci.yml) — ready-to-copy CI workflow that runs the proof gate and uploads `results.json` and `topology.resolved.yaml`.
+* Two-run comparison recipe: [`contrib/topologies/recipes/two-run-what-changed-between-baseline-and-change/README.md`](contrib/topologies/recipes/two-run-what-changed-between-baseline-and-change/README.md) — what changed between a baseline and a proposed change using `cassian test --two-run`.
+* Terraform adapter recipe: [`contrib/topologies/recipes/terraform-adapter-how-do-i-validate-an-iac-change/README.md`](contrib/topologies/recipes/terraform-adapter-how-do-i-validate-an-iac-change/README.md) — validate an IaC change context with `cassian adapt terraform` and `cassian preflight`.
+* Blast radius recipe: [`contrib/topologies/recipes/blast-radius-what-does-my-gate-actually-cover/README.md`](contrib/topologies/recipes/blast-radius-what-does-my-gate-actually-cover/README.md) — what the gate actually exercised at runtime via `blast_radius.json`.
+* Preflight advisory recipe: [`contrib/topologies/recipes/preflight-what-coverage-gaps-do-i-have/README.md`](contrib/topologies/recipes/preflight-what-coverage-gaps-do-i-have/README.md) — declared-only coverage gaps via `cassian preflight` (advisory; does not affect the gate verdict).
 
 ## What's in v2
 
