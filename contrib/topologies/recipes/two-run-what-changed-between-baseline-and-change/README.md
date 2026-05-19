@@ -10,22 +10,27 @@ This recipe answers a first-use question:
 
 **What changed between my baseline and my proposed change?**
 
-`cassian test --two-run` is the comparison execution mode. It runs
-Cassian Gate twice — once against a baseline topology, once against
-a change topology — and produces an advisory `comparison.json`
-artifact that records what differs between the two runs.
+`cassian test --two-run` runs Cassian Gate twice — once against a
+baseline topology, once against a change topology with a candidate
+operational-config directory applied — and writes a two-run bundle
+that records both runs alongside an evidence-only diff summary.
 
-Each run produces its own authoritative `results.json` verdict from
-its own clean-state gate execution. The `comparison.json` artifact
-is advisory; it does not own a verdict on its own.
+The "change" is the combination of the change topology and the
+candidate-config directory. The candidate-config directory contains
+the device configs (FRR `.conf` files, and optionally nft rulesets)
+that are applied to the live devices during the change run only.
+Per-run `results.json` files carry each run's verdict at
+`overall.verdict`; the diff summary in the bundle is advisory
+evidence describing what differs between the two runs.
 
-The recipe references the existing reference pair:
+The recipe references three existing inputs:
 
-- Baseline: [`topologies/rw-bgp-tenant30-baseline.yaml`](../../../topologies/rw-bgp-tenant30-baseline.yaml)
-- Change: [`topologies/rw-bgp-tenant30-change.yaml`](../../../topologies/rw-bgp-tenant30-change.yaml)
+- Baseline topology: [`topologies/rw-bgp-tenant30-baseline.yaml`](../../../topologies/rw-bgp-tenant30-baseline.yaml)
+- Change topology: [`topologies/rw-bgp-tenant30-change.yaml`](../../../topologies/rw-bgp-tenant30-change.yaml)
+- Candidate-config directory: [`tests/fixtures/rw-bgp-tenant30-change/`](../../../tests/fixtures/rw-bgp-tenant30-change) (the FRR configs applied on the change run)
 
-These topologies live in the repository's authoritative `topologies/`
-directory; the recipe does not copy or modify them.
+These all live in the repository; the recipe does not copy or
+modify them.
 
 ## How to run it
 
@@ -37,28 +42,40 @@ per [`docs/quickstart.md`](../../../docs/quickstart.md) (also at
 cassian test \
   --two-run \
   --two-run-topology topologies/rw-bgp-tenant30-change.yaml \
+  --candidate-config tests/fixtures/rw-bgp-tenant30-change/ \
   topologies/rw-bgp-tenant30-baseline.yaml
 ```
 
 The positional argument is the baseline topology;
-`--two-run-topology` supplies the change topology. Cassian Gate runs
-both topologies from clean state in sequence.
+`--two-run-topology` supplies the change topology; and
+`--candidate-config` supplies the directory of FRR (and optionally
+nft) configs applied to the change run only. Cassian Gate runs
+both topologies from clean state in sequence and assembles a
+two-run bundle under `labs/`.
 
 ## What to look for
 
-After the run completes, inspect:
+After the run completes, inspect the two-run bundle at
+`labs/clab-<change-topology-name>/two_run/` (named after the
+`--two-run-topology` topology — in this recipe,
+`labs/clab-rw-bgp-tenant30-change/two_run/`):
 
-- `labs/clab-<base>/two_run/comparison.json` — the advisory
-  comparison artifact for the run. It records the differences
-  between the baseline run and the change run. Use this to
-  understand what the change altered.
-- Each run's `results.json`, written to its own lab directory under
-  `labs/`. These are the authoritative per-run verdicts.
+- `two_run/baseline/results.json` — the baseline run's per-run
+  results. The verdict lives at `overall.verdict`;
+  `authority.verdict_source` reports `"tests"`.
+- `two_run/change/results.json` — the change run's per-run results,
+  same structure, plus a `candidate_apply` section recording the
+  applied candidate-config directory and per-node apply outcome.
+- `two_run/diff/summary.json` and `two_run/diff/summary.txt` — the
+  evidence-only diff summary comparing the two runs. Advisory.
+- Each run's full artifact tree under `two_run/<baseline|change>/artifacts/`
+  including blast-radius, coverage, and per-node interface/route
+  dumps.
 
-Read each `results.json` first; it owns the pass/fail verdict for
-its run. Consult `comparison.json` after you have the authoritative
-verdicts in hand, when you want to understand specifically what
-changed between the two runs.
+Read each `results.json`'s `overall.verdict` first; that is where
+the per-run verdict lives. Consult `diff/summary.{json,txt}` after
+you have both verdicts in hand, when you want to understand
+specifically what changed between the two runs.
 
 For artifact schemas and the full CLI flag reference:
 
