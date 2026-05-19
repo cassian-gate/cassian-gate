@@ -1,0 +1,41 @@
+name: preflight-coverage-gaps-recipe
+
+# Two hosts behind a routed nft-fw. The declared test only
+# exercises h1's directly-connected reachability to fw1. The rest
+# of the topology surface (node h2, link h2 <-> fw1:eth2, all
+# fault classes, all wait classes, the declared TCP/443 allow
+# rule) is declared but never exercised by any declared test or
+# scenario. `cassian preflight` reports these declared-but-untouched
+# surfaces as advisory coverage findings.
+
+nodes:
+  - name: h1
+    type: host
+    ip: 10.60.1.10/24
+    gw: 10.60.1.1
+
+  - name: h2
+    type: host
+    ip: 10.60.2.10/24
+    gw: 10.60.2.1
+
+  - name: fw1
+    type: nft-fw
+    routed: true
+    interfaces:
+      eth1: 10.60.1.1/24
+      eth2: 10.60.2.1/24
+    allow_icmp: true
+    allow_tcp: [443]
+
+links:
+  - endpoints: ["h1:eth1", "fw1:eth1"]
+  - endpoints: ["h2:eth1", "fw1:eth2"]
+
+tests:
+  - name: h1_to_fw1_ping
+    kind: ping
+    src: h1
+    dst: fw1
+    expect: pass
+    count: 1
