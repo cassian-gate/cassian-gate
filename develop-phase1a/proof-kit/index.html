@@ -1007,6 +1007,50 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#recipe-what-changed-between-baseline-and-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recipe — What changed between baseline and change?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recipe-how-do-i-validate-an-iac-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recipe — How do I validate an IaC change?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recipe-what-does-my-gate-actually-cover" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recipe — What does my gate actually cover?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recipe-what-coverage-gaps-do-i-have" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recipe — What coverage gaps do I have?
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1335,6 +1379,50 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#recipe-what-changed-between-baseline-and-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recipe — What changed between baseline and change?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recipe-how-do-i-validate-an-iac-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recipe — How do I validate an IaC change?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recipe-what-does-my-gate-actually-cover" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recipe — What does my gate actually cover?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recipe-what-coverage-gaps-do-i-have" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recipe — What coverage gaps do I have?
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1373,6 +1461,26 @@
 <p>A bounded deterministic failure-choreography example. A directly connected reachability topology with a deliberate interface bounce scenario, run only through the normal authoritative gate path.</p>
 <ul>
 <li><a href="https://github.com/cassian-gate/cassian-gate/tree/main/contrib/topologies/recipes/failover-does-validation-fail-when-a-link-drops">Source: <code>contrib/topologies/recipes/failover-does-validation-fail-when-a-link-drops/</code></a></li>
+</ul>
+<h2 id="recipe-what-changed-between-baseline-and-change">Recipe — What changed between baseline and change?</h2>
+<p>Uses <code>cassian test --two-run</code> to validate a proposed change against a known-good baseline. Two clean-state authoritative gate executions plus an advisory <code>comparison.json</code> artifact recording what differs between the runs.</p>
+<ul>
+<li><a href="https://github.com/cassian-gate/cassian-gate/tree/main/contrib/topologies/recipes/two-run-what-changed-between-baseline-and-change">Source: <code>contrib/topologies/recipes/two-run-what-changed-between-baseline-and-change/</code></a></li>
+</ul>
+<h2 id="recipe-how-do-i-validate-an-iac-change">Recipe — How do I validate an IaC change?</h2>
+<p>Uses <code>cassian adapt terraform</code> to convert a <code>terraform show -json</code> plan into an advisory <code>adapters.v1</code> JSON, then <code>cassian preflight --adapter &lt;adapter-output&gt;</code> to surface the IaC change context inside preflight findings. Both adapter output and preflight output are advisory and do not affect the gate verdict.</p>
+<ul>
+<li><a href="https://github.com/cassian-gate/cassian-gate/tree/main/contrib/topologies/recipes/terraform-adapter-how-do-i-validate-an-iac-change">Source: <code>contrib/topologies/recipes/terraform-adapter-how-do-i-validate-an-iac-change/</code></a></li>
+</ul>
+<h2 id="recipe-what-does-my-gate-actually-cover">Recipe — What does my gate actually cover?</h2>
+<p>Demonstrates the advisory <code>blast_radius.json</code> artifact produced during <code>cassian test</code>'s Collect phase. The recipe topology declares a scenario that touches only some of the available fault and wait classes, producing a meaningful <code>coverage.summary</code> block; blast radius does not affect the gate verdict.</p>
+<ul>
+<li><a href="https://github.com/cassian-gate/cassian-gate/tree/main/contrib/topologies/recipes/blast-radius-what-does-my-gate-actually-cover">Source: <code>contrib/topologies/recipes/blast-radius-what-does-my-gate-actually-cover/</code></a></li>
+</ul>
+<h2 id="recipe-what-coverage-gaps-do-i-have">Recipe — What coverage gaps do I have?</h2>
+<p>Demonstrates <code>cassian preflight</code> producing the advisory <code>preflight.json</code> artifact via declared-only static analysis (no deploy, no runtime). The recipe topology declares deliberate coverage gaps so the findings are meaningful; preflight does not affect the gate verdict.</p>
+<ul>
+<li><a href="https://github.com/cassian-gate/cassian-gate/tree/main/contrib/topologies/recipes/preflight-what-coverage-gaps-do-i-have">Source: <code>contrib/topologies/recipes/preflight-what-coverage-gaps-do-i-have/</code></a></li>
 </ul>
 
 
