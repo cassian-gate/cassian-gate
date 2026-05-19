@@ -1,0 +1,86 @@
+name: blast-radius-recipe
+
+# Two hosts on either side of a routed nft-fw chain (fw1 <-> fw2).
+# The scenario exercises one fault class (interface_down/up on
+# fw1:eth1) and one wait class (wait_for: ping, positive and
+# negative). Other fault classes (link_down, packet_loss, latency,
+# bandwidth_cap, prefix_blackhole) and the `wait` elapsed-time
+# class remain available in the topology but untouched by the
+# scenario, producing meaningful coverage gaps in the
+# blast_radius.json coverage.summary block.
+
+nodes:
+  - name: h1
+    type: host
+    ip: 10.50.1.10/24
+    gw: 10.50.1.1
+
+  - name: h2
+    type: host
+    ip: 10.50.2.10/24
+    gw: 10.50.2.1
+
+  - name: fw1
+    type: nft-fw
+    routed: true
+    interfaces:
+      eth1: 10.50.1.1/24
+      eth2: 10.50.99.1/30
+    allow_icmp: true
+    allow_tcp: [443]
+
+  - name: fw2
+    type: nft-fw
+    routed: true
+    interfaces:
+      eth1: 10.50.99.2/30
+      eth2: 10.50.2.1/24
+    allow_icmp: true
+    allow_tcp: [443]
+
+links:
+  - endpoints: ["h1:eth1", "fw1:eth1"]
+  - endpoints: ["fw1:eth2", "fw2:eth1"]
+  - endpoints: ["h2:eth1", "fw2:eth2"]
+
+tests:
+  - name: h1_to_fw1_ping
+    kind: ping
+    src: h1
+    dst: fw1
+    expect: pass
+    count: 1
+
+scenarios:
+  - id: partial_fault_coverage
+    description: "Exercises one fault class (interface_down/up on fw1:eth1) and one wait class (wait_for: ping). Other fault classes and wait classes available in the topology remain untouched, producing meaningful coverage.summary content in blast_radius.json."
+    steps:
+      - run: h1_to_fw1_ping
+
+      - fault:
+          interface_down:
+            node: fw1
+            if: eth1
+
+      - wait_for:
+          type: ping
+          from: h1
+          to: 10.50.1.1
+          expect: fail
+          timeout: 10
+          interval_s: 1.0
+
+      - fault:
+          interface_up:
+            node: fw1
+            if: eth1
+
+      - wait_for:
+          type: ping
+          from: h1
+          to: 10.50.1.1
+          expect: pass
+          timeout: 10
+          interval_s: 1.0
+
+      - run: h1_to_fw1_ping
