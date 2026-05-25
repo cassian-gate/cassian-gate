@@ -1,9 +1,14 @@
 [
   {
-    "version": "develop-phase1a",
-    "title": "develop-phase1a",
+    "version": "main",
+    "title": "main",
     "aliases": [
       "latest"
     ]
+  },
+  {
+    "version": "develop-phase1a",
+    "title": "develop-phase1a",
+    "aliases": []
   }
 ]
