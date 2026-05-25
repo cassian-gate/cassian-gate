@@ -998,6 +998,84 @@ def ensure_valid_topology(topo: dict) -> None:
                     f"(e.g. 1.1.1.1)."
                 )
 
+        # H4: node-level 'ospf:' schema validation (FRR-only by virtue of the
+        # enclosing 'if n.get("type") != "frr": continue' guard at the start of
+        # this loop).
+        # LD-3: 'ospf:' carries exactly two keys, 'area' (int >= 0) and
+        #       'networks' (list of >= 1 canonical IPv4 CIDR strings); top-level
+        #       node.router_id is reused as the OSPF router-ID.
+        # LD-6: no timer customisation keys (hello/dead/SPF intervals).
+        # DC 2.7: unknown keys under 'ospf:' are hard-fail.
+        if "ospf" in n and n.get("ospf") is not None:
+            ospf = n.get("ospf")
+            if not isinstance(ospf, dict):
+                die(
+                    f"Topology invalid: nodes[{i}] '{name}': 'ospf:' must be a mapping "
+                    f"(allowed keys: 'area', 'networks')"
+                )
+
+            # LD-3: top-level node.router_id is required when 'ospf:' is declared.
+            if "router_id" not in n or n.get("router_id") is None or not str(n.get("router_id") or "").strip():
+                die(
+                    f"Topology invalid: nodes[{i}] '{name}': declares 'ospf:' but is missing required "
+                    f"top-level 'router_id' (OSPF requires a router-ID; reuse the node's top-level "
+                    f"'router_id' field)"
+                )
+
+            # DC 2.7: reject unknown keys under 'ospf:' (Unknown-Key Strictness).
+            allowed_ospf_keys = {"area", "networks"}
+            for k in ospf.keys():
+                if k not in allowed_ospf_keys:
+                    die(
+                        f"Topology invalid: nodes[{i}] '{name}': declares unknown key {k!r} under 'ospf:' "
+                        f"(allowed keys: 'area', 'networks')"
+                    )
+
+            # area: required, int >= 0.
+            if "area" not in ospf:
+                die(
+                    f"Topology invalid: nodes[{i}] '{name}': declares 'ospf:' but is missing required key "
+                    f"'area' (expected: int >= 0)"
+                )
+            area_raw = ospf.get("area")
+            if isinstance(area_raw, bool) or not isinstance(area_raw, int):
+                die(
+                    f"Topology invalid: nodes[{i}] '{name}': 'ospf.area' must be an integer "
+                    f"(got {area_raw!r}, expected: int >= 0)"
+                )
+            if area_raw < 0:
+                die(
+                    f"Topology invalid: nodes[{i}] '{name}': 'ospf.area' must be >= 0 "
+                    f"(got {area_raw!r}, expected: int >= 0)"
+                )
+
+            # networks: required, list of >= 1 canonical IPv4 CIDR strings.
+            if "networks" not in ospf:
+                die(
+                    f"Topology invalid: nodes[{i}] '{name}': declares 'ospf:' but is missing required key "
+                    f"'networks' (expected: list of canonical IPv4 CIDR strings, e.g. ['10.0.0.0/24'])"
+                )
+            networks_raw = ospf.get("networks")
+            if not isinstance(networks_raw, list) or len(networks_raw) < 1:
+                die(
+                    f"Topology invalid: nodes[{i}] '{name}': 'ospf.networks' must be a non-empty list of "
+                    f"canonical IPv4 CIDR strings (e.g. ['10.0.0.0/24'])"
+                )
+            for cidr_raw in networks_raw:
+                if not isinstance(cidr_raw, str) or not cidr_raw.strip():
+                    die(
+                        f"Topology invalid: nodes[{i}] '{name}': has invalid CIDR {cidr_raw!r} in "
+                        f"'ospf.networks' (expected: canonical IPv4 CIDR, e.g. '10.0.0.0/24')"
+                    )
+                cidr_s = cidr_raw.strip()
+                try:
+                    _net = ipaddress.IPv4Network(cidr_s, strict=True)
+                except Exception:
+                    die(
+                        f"Topology invalid: nodes[{i}] '{name}': has invalid CIDR {cidr_s!r} in "
+                        f"'ospf.networks' (expected: canonical IPv4 CIDR, e.g. '10.0.0.0/24')"
+                    )
+
     for i, link in enumerate(topo["links"], start=1):
         eps = link.get("endpoints")
         if not isinstance(eps, list) or len(eps) != 2:
@@ -1175,10 +1253,29 @@ def ensure_valid_topology(topo: dict) -> None:
                     f"Affected tests: {', '.join(offenders)}"
                 )
 
-def gen_frr_daemons() -> str:
-    return """zebra=yes
+def gen_frr_daemons(topo: dict | None = None) -> str:
+    # H4: topology-aware emission of the 'ospfd' line (REQ-H4-5 / B05).
+    # Default ('ospfd=no') is byte-identical to pre-H4 rendering for any
+    # topology that declares no 'ospf:' on any FRR node, preserving the
+    # daemons-file byte-stability surface (D-5 / P1).
+    # 'ospfd=yes' is emitted iff at least one FRR node in the resolved
+    # topology declares an 'ospf:' section. Only the 'ospfd' line is
+    # affected; all other lines are byte-identical to pre-H4.
+    # Backward-compat: the no-arg call (topo is None) continues to return
+    # the original 'ospfd=no' content byte-identically.
+    ospfd_value = "no"
+    if isinstance(topo, dict):
+        for n in (topo.get("nodes") or []):
+            if not isinstance(n, dict):
+                continue
+            if str(n.get("type") or "").strip().lower() != "frr":
+                continue
+            if n.get("ospf"):
+                ospfd_value = "yes"
+                break
+    return f"""zebra=yes
 bgpd=yes
-ospfd=no
+ospfd={ospfd_value}
 ospf6d=no
 ripd=no
 ripngd=no
@@ -1455,6 +1552,41 @@ def gen_frr_conf(node: dict, topo: dict) -> str:
         if route_maps:
             cfg.append("!")
 
+    # H4: OSPF rendering (REQ-H4-6 / B06).
+    # Emit a deterministic 'router ospf' block when the node declares
+    # 'ospf:'. Per LD-5: no passive-interface logic. Per LD-6: no timer
+    # customisation keys. Per D-4: 'network <cidr> area <area>' lines are
+    # sorted in canonical IPv4-CIDR ascending order. Single-area-per-node
+    # in H4 (NG-3); multi-area is OOS.
+    ospf_section = node.get("ospf")
+    if isinstance(ospf_section, dict):
+        ospf_area = ospf_section.get("area")
+        ospf_networks_raw = ospf_section.get("networks") or []
+        # WI-2 schema validation guarantees: area is int >= 0; networks is
+        # a non-empty list of canonical IPv4 CIDR strings; top-level
+        # node.router_id is present and is an IPv4 literal.
+        if isinstance(ospf_area, int) and isinstance(ospf_networks_raw, list) and ospf_networks_raw:
+            try:
+                ospf_networks_sorted = sorted(
+                    (str(c).strip() for c in ospf_networks_raw if isinstance(c, str) and str(c).strip()),
+                    key=lambda c: ipaddress.IPv4Network(c, strict=True),
+                )
+            except Exception:
+                # Defensive: schema validation should have rejected any
+                # non-canonical CIDR earlier; if it slips through, fall
+                # back to declaration-order to avoid a non-deterministic
+                # crash here. This branch is unreachable from validated
+                # input.
+                ospf_networks_sorted = [
+                    str(c).strip() for c in ospf_networks_raw if isinstance(c, str) and str(c).strip()
+                ]
+            cfg.append("router ospf")
+            if rid:
+                cfg.append(f" ospf router-id {rid}")
+            for cidr in ospf_networks_sorted:
+                cfg.append(f" network {cidr} area {int(ospf_area)}")
+            cfg.append("!")
+
     cfg.append("line vty")
     cfg.append("!")
     return "\n".join(cfg) + "\n"
@@ -1508,7 +1640,7 @@ def topo_to_containerlab(topo: dict) -> dict:
 
             if frr_mode == "generated":
                 cfgdir = node_cfg_dir(topo["name"], n["name"])
-                write_file(cfgdir / "daemons", gen_frr_daemons())
+                write_file(cfgdir / "daemons", gen_frr_daemons(topo))
                 write_file(cfgdir / "vtysh.conf", gen_vtysh_conf())
                 write_file(cfgdir / "frr.conf", gen_frr_conf(n, topo))
 
@@ -1868,13 +2000,15 @@ def resolve_topology(topo: dict) -> dict:
                 "evpn_mac_route_absent",
                 "evpn_vni_route_present",
                 "evpn_bgp_session_up",
+                "ospf_neighbor_up",
+                "interface_state",
             ):
                 die(
                     f"tests[{i}]: invariant.type unsupported ({inv_type!r}) "
                     f"(supported: bgp_session_up, route_present, route_absent, "
                     f"bgp_med_equals, bgp_localpref_equals, route_advertised_to, route_not_advertised_to, "
                     f"evpn_mac_route_present, evpn_mac_route_absent, "
-                    f"evpn_vni_route_present, evpn_bgp_session_up)"
+                    f"evpn_vni_route_present, evpn_bgp_session_up, ospf_neighbor_up, interface_state)"
                 )
             t["type"] = inv_type
         else:
@@ -1892,7 +2026,7 @@ def resolve_topology(topo: dict) -> dict:
         #   node: <node name>
         # Normalized aliases:
         #   node -> src
-        #   neighbor -> dst   (bgp_session_up only)
+        #   neighbor -> dst   (bgp_session_up invariants; bgp_neighbor tests)
         # ----------------------------
         if (t.get("kind") or "").strip() == "invariant":
             ctx = f"tests[{i}] ({t.get('name', '<unnamed>')})"
@@ -1905,6 +2039,18 @@ def resolve_topology(topo: dict) -> dict:
 
             if "src" not in t and "node" in t:
                 t["src"] = t.get("node")
+
+            if (t.get("type") or "").strip().lower() == "bgp_session_up":
+                if "neighbor" in t and "dst" in t:
+                    a = str(t.get("neighbor") or "").strip()
+                    b = str(t.get("dst") or "").strip()
+                    if a and b and a != b:
+                        die(f"{ctx}: 'neighbor' and 'dst' disagree ({a!r} vs {b!r})")
+
+                if "neighbor" in t:
+                    if "dst" not in t:
+                        t["dst"] = str(t.get("neighbor") or "").strip()
+                    t.pop("neighbor", None)
 
             inv_type = str(t.get("type") or "").strip().lower()
             src = t.get("src")
@@ -1980,6 +2126,218 @@ def resolve_topology(topo: dict) -> dict:
                     die(f"{ctx}: evpn_bgp_session_up requires non-empty 'peer'")
                 t["peer"] = peer.strip()
 
+            elif inv_type == "ospf_neighbor_up":
+                # H4: OSPF neighbor-state invariant (FRR-only NOS-tag).
+                # LD-1: 'neighbor' is IPv4 literal of peer's router-ID.
+                # LD-2: declarable 'state' set is the closed FSM set
+                #       {Down, Attempt, Init, 2-Way, ExStart, Exchange, Loading, Full};
+                #       'NotConfigured' and 'Unknown' are observed-only (D-1).
+                #       Default "Full" is materialised at Resolve in a later WI per DC §2.6.
+                # REQ-H4-3 / B03: src must reference a node of type "frr".
+                neighbor = t.get("neighbor")
+                if not isinstance(neighbor, str) or not neighbor.strip():
+                    die(
+                        f"{ctx}: invariant 'ospf_neighbor_up' requires 'neighbor' "
+                        f"(IPv4 literal of the peer's router-ID, e.g. '2.2.2.2')"
+                    )
+                neighbor_s = neighbor.strip()
+                try:
+                    _addr = ipaddress.IPv4Address(neighbor_s)
+                except Exception:
+                    die(
+                        f"{ctx}: invariant 'ospf_neighbor_up' has invalid 'neighbor' value "
+                        f"{neighbor_s!r} (expected: IPv4 literal of the peer's router-ID, "
+                        f"e.g. '2.2.2.2')"
+                    )
+                t["neighbor"] = neighbor_s
+
+                state = t.get("state")
+                if state is not None:
+                    if not isinstance(state, str) or not state.strip():
+                        die(
+                            f"{ctx}: invariant 'ospf_neighbor_up' has invalid 'state' value "
+                            f"{state!r} (expected one of: Down, Attempt, Init, 2-Way, "
+                            f"ExStart, Exchange, Loading, Full)"
+                        )
+                    state_s = state.strip()
+                    if state_s not in (
+                        "Down",
+                        "Attempt",
+                        "Init",
+                        "2-Way",
+                        "ExStart",
+                        "Exchange",
+                        "Loading",
+                        "Full",
+                    ):
+                        die(
+                            f"{ctx}: invariant 'ospf_neighbor_up' has invalid 'state' value "
+                            f"{state_s!r} (expected one of: Down, Attempt, Init, 2-Way, "
+                            f"ExStart, Exchange, Loading, Full)"
+                        )
+                    t["state"] = state_s
+
+                # FRR-only NOS-tag enforcement (REQ-H4-3 / B03).
+                # Build a local node-name -> node lookup from the resolved nodes
+                # list; resolved["nodes"] is fully populated at this point of
+                # resolve_topology() per the deep-copy at function entry.
+                _nodes_for_lookup = {
+                    str(_n.get("name") or "").strip(): _n
+                    for _n in (resolved.get("nodes") or [])
+                    if isinstance(_n, dict)
+                    and isinstance(_n.get("name"), str)
+                    and str(_n.get("name") or "").strip()
+                }
+                _src_node = _nodes_for_lookup.get(src.strip())
+                if _src_node is None:
+                    die(
+                        f"{ctx}: invariant 'ospf_neighbor_up' references src "
+                        f"{src!r} but no node by that name exists in the topology"
+                    )
+                _src_kind = str(_src_node.get("type") or "").strip().lower()
+                if _src_kind != "frr":
+                    die(
+                        f"{ctx}: invariant 'ospf_neighbor_up' references src "
+                        f"{src!r} of type {_src_kind!r}; this invariant requires "
+                        f"src to be a node of type 'frr'"
+                    )
+
+                # H4: Resolve-time default materialisation (REQ-H4-24 / B11).
+                # DC 2.6: defaults must be visible in topology.resolved.yaml; no
+                # concealed defaults. LD-2: when 'state' is omitted, materialise
+                # 'Full' explicitly. D-8: identical input -> byte-identical
+                # resolved-form output.
+                if "state" not in t:
+                    t["state"] = "Full"
+
+            elif inv_type == "interface_state":
+                # H5: interface state invariant (NOS-agnostic, ip -j link show).
+                # LD-1 ruling C: 'node' is the canonical operator key for this
+                # invariant; 'src' is engine-internal alias from L2040
+                # normalization. Field-name harmonisation deferred to BL-H5-1.
+                # LD-3 ruling B: 'state' default 'up' materialised at Resolve
+                # (DC 2.6 — defaults must be visible in topology.resolved.yaml).
+                # LD-4.b ruling A: predicate is asymmetric (state: down is
+                # disjunction, state: up is conjunction); evaluator owns the
+                # predicate; this branch is schema-only.
+                # LD-delta (closure-report finding): missing/null/empty 'node'
+                # is structurally caught by the shared pre-dispatch check at
+                # L2055-2057 ("invariant test requires 'node/src' as a node
+                # name") before this branch is reached. Wording deviates from
+                # handover §16.1 first clause but satisfies Doctrine §1.13
+                # (Engineer-First Safety) — names the field, identifies
+                # operator-friendly remediation. Restructuring the shared
+                # pre-dispatch check is out of scope for H5.
+
+                # REQ-H5-3 / B-V01: defensive 'node' presence re-statement.
+                # Practically unreachable behind L2055-2057; kept for clarity
+                # if a future refactor moves that check.
+                if "node" not in t:
+                    die(
+                        f"{ctx}: invariant 'interface_state' requires 'node' "
+                        f"(the node whose interface state is being asserted, e.g. 'r1')"
+                    )
+
+                # REQ-H5-5 / B-V03: 'interface' required, non-empty after .strip().
+                if "interface" not in t:
+                    die(
+                        f"{ctx}: invariant 'interface_state' requires 'interface' "
+                        f"(the interface name as seen inside the node namespace, e.g. 'eth1')"
+                    )
+                iface = t.get("interface")
+                if not isinstance(iface, str) or not iface.strip():
+                    die(
+                        f"{ctx}: invariant 'interface_state' has invalid 'interface' value "
+                        f"{iface!r} (expected: non-empty interface name string)"
+                    )
+                t["interface"] = iface.strip()
+
+                # REQ-H5-6 / B-V04: 'state' optional; if present must be in
+                # {up, down}. 'state: null' (None) is invalid per REQ-H5-6 —
+                # distinguish "key absent" from "key present with null value".
+                if "state" in t:
+                    state = t.get("state")
+                    if not isinstance(state, str) or state not in ("up", "down"):
+                        die(
+                            f"{ctx}: invariant 'interface_state' has invalid 'state' value "
+                            f"{state!r} (expected one of: up, down)"
+                        )
+
+                # REQ-H5-8 / B-V06: 'timeout_s' optional; if present positive integer.
+                if "timeout_s" in t:
+                    timeout_s = t.get("timeout_s")
+                    if (
+                        isinstance(timeout_s, bool)
+                        or not isinstance(timeout_s, int)
+                        or timeout_s <= 0
+                    ):
+                        die(
+                            f"{ctx}: invariant 'interface_state' has invalid 'timeout_s' value "
+                            f"{timeout_s!r} (expected: positive integer)"
+                        )
+
+                # REQ-H5-9 / B-V07: 'retry_interval_s' optional; if present
+                # positive number > 0.
+                if "retry_interval_s" in t:
+                    rinterval = t.get("retry_interval_s")
+                    if (
+                        isinstance(rinterval, bool)
+                        or not isinstance(rinterval, (int, float))
+                        or rinterval <= 0
+                    ):
+                        die(
+                            f"{ctx}: invariant 'interface_state' has invalid 'retry_interval_s' value "
+                            f"{rinterval!r} (expected: positive number)"
+                        )
+
+                # REQ-H5-10 / B-V08: Unknown-Key Strictness (DC 2.7).
+                # Engine-internal allowed set includes 'src' (alias-normalized
+                # from 'node' at L2040); user-facing message lists 'node' per
+                # LD-1 ruling C.
+                allowed_iface_state_keys = {
+                    "name",
+                    "kind",
+                    "type",
+                    "node",
+                    "src",
+                    "interface",
+                    "state",
+                    "expect",
+                    "timeout_s",
+                    "retry_interval_s",
+                }
+                for k in t.keys():
+                    if k not in allowed_iface_state_keys:
+                        die(
+                            f"{ctx}: invariant 'interface_state' declares unknown key {k!r} "
+                            f"(allowed keys: 'name', 'kind', 'type', 'node', 'interface', "
+                            f"'state', 'expect', 'timeout_s', 'retry_interval_s')"
+                        )
+
+                # REQ-H5-4 / B-V02: 'node' must reference a node in topology.
+                # LD-alpha: explicit text, parallel to OSPF L2191-2195 (no
+                # canonical blast-radius validator exists for invariant
+                # unknown-node references in cassian_model.py).
+                _nodes_for_lookup = {
+                    str(_n.get("name") or "").strip(): _n
+                    for _n in (resolved.get("nodes") or [])
+                    if isinstance(_n, dict)
+                    and isinstance(_n.get("name"), str)
+                    and str(_n.get("name") or "").strip()
+                }
+                node_s = str(t.get("node") or "").strip()
+                if node_s not in _nodes_for_lookup:
+                    die(
+                        f"{ctx}: invariant 'interface_state' references unknown 'node' value "
+                        f"{node_s!r} (node not declared in topology 'nodes:' section)"
+                    )
+
+                # REQ-H5-7 / B-V05: state default 'up' materialised at Resolve
+                # (LD-3 ruling B). DC 2.6: defaults must be visible in
+                # topology.resolved.yaml.
+                if "state" not in t:
+                    t["state"] = "up"
+
         # ----------------------------
         # v1.5: route_prefix alias normalization
         # Accept 'on' as an alias for 'src' (vantage node), with strict disagreement checks.
@@ -2025,6 +2383,19 @@ def resolve_topology(topo: dict) -> dict:
         # v1: normalize test field aliases
         # Accept 'from'/'to' as aliases for 'src'/'dst' with strict disagreement checks.
         # ----------------------------
+        if t.get("kind") == "bgp_neighbor":
+            ctx = f"tests[{i}] ({t.get('name', '<unnamed>')})"
+            if "neighbor" in t and "dst" in t:
+                a = str(t.get("neighbor") or "").strip()
+                b = str(t.get("dst") or "").strip()
+                if a and b and a != b:
+                    die(f"{ctx}: 'neighbor' and 'dst' disagree ({a!r} vs {b!r})")
+
+            if "neighbor" in t:
+                if "dst" not in t:
+                    t["dst"] = str(t.get("neighbor") or "").strip()
+                t.pop("neighbor", None)
+
         if "from" in t and "src" in t:
             a = str(t.get("from") or "").strip()
             b = str(t.get("src") or "").strip()

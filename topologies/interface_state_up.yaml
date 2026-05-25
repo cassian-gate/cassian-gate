@@ -1,0 +1,95 @@
+# Phase 1a / Handover 5 of 8 — positive proof topology for the
+# interface_state invariant (REQ-H5-21 / PROOF-H5-2).
+#
+# Three nodes, one per current node type with a Linux network namespace:
+# FRR (r1), host (h1), and nft-fw (fw1). The topology declares two
+# point-to-point links: r1<->fw1 and h1<->fw1. Each link's `eth1` end
+# is exercised by an `interface_state, state: up, expect: pass` test
+# record on the corresponding node, demonstrating the NOS-agnostic
+# nature of the invariant (LD-5 ruling A: combined positive proof).
+#
+# Image pinning (REQ-H5-31 / LD-beta resolution):
+# - host and nft-fw nodes pin `nicolaka/netshoot:v0.15` because the
+#   engine default `alpine:latest` (cassian_common.py L20-26) carries
+#   BusyBox `ip` which lacks the `-j` flag. v0.15 is the current
+#   latest stable tag on Docker Hub (4 months old at WI-5 lock time);
+#   supersedes the handover §17.2 v0.13 suggestion.
+# - FRR nodes use the engine default `frrouting/frr:latest`; FRR's
+#   image already includes full iproute2 (no override needed per
+#   handover §17.2).
+# - The image pin is explicit (never `:latest` per handover §17.2);
+#   v0.15 is captured in the topology so a downstream operator can
+#   reproduce the proof bit-for-bit.
+#
+# §8.4a Integration Verification Gate target: this topology is the
+# first end-to-end exercise of WI-1 (Resolve schema validation) +
+# WI-2 (TEST-phase evaluator branch) + WI-3 (TEST-phase dispatch
+# wiring + meta) + WI-4 (capability-probe + per-(lab, node) cache).
+# PASS at this gate confirms the four-WI code chain composes
+# correctly under a real container lab.
+#
+# Auto-IP allocation (Cassian engine convention, see ospf_neighbor_up.yaml):
+# /31 subnets are assigned sequentially from 10.0.0.0/16 in
+# link-declaration order. Link 0 (r1:eth1<->fw1:eth1) gets
+# [10.0.0.0/31, 10.0.0.1/31]; link 1 (h1:eth1<->fw1:eth2) carries
+# host h1's explicit /24 declaration which wins over auto-IP for that
+# link. The host needs an explicit IP/gw because nft-fw is routed.
+name: interface-state-up
+
+nodes:
+  - name: r1
+    type: frr
+
+  - name: h1
+    type: host
+    image: nicolaka/netshoot:v0.15
+    ip: 192.168.10.10/24
+    gw: 192.168.10.1
+
+  - name: fw1
+    type: nft-fw
+    image: nicolaka/netshoot:v0.15
+    routed: true
+    interfaces:
+      eth1: 10.0.0.1/31
+      eth2: 192.168.10.1/24
+    allow_icmp: true
+
+links:
+  - endpoints: ["r1:eth1", "fw1:eth1"]
+    ipv4: ["10.0.0.0/31", "10.0.0.1/31"]
+  - endpoints: ["h1:eth1", "fw1:eth2"]
+    ipv4: ["192.168.10.10/24", "192.168.10.1/24"]
+
+tests:
+  - name: r1_eth1_up
+    kind: invariant
+    type: interface_state
+    node: r1
+    interface: eth1
+    state: up
+    expect: pass
+
+  - name: h1_eth1_up
+    kind: invariant
+    type: interface_state
+    node: h1
+    interface: eth1
+    state: up
+    expect: pass
+
+  - name: fw1_eth1_up
+    kind: invariant
+    type: interface_state
+    node: fw1
+    interface: eth1
+    state: up
+    expect: pass
+
+  - name: fw1_eth2_up
+    kind: invariant
+    type: interface_state
+    node: fw1
+    interface: eth2
+    state: up
+    expect: pass

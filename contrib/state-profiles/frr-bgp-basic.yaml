@@ -1,0 +1,20 @@
+name: frr-bgp-basic
+
+authority: non-authoritative
+
+purpose: |
+  Captures BGP control-plane state from the FRR bgpd daemon via
+  `vtysh -c "show bgp summary json"`, `vtysh -c "show bgp neighbors json"`,
+  and `vtysh -c "show bgp ipv4 unicast json"`. Use this profile when
+  debugging BGP session establishment, neighbor capability negotiation,
+  policy outcomes, or IPv4-unicast prefix advertisement and reception;
+  the runtime FRR node must have BGP configured with at least one
+  declared neighbor for captures to contain meaningful entries.
+
+node_types:
+  - frr
+
+commands:
+  - ["vtysh", "-c", "show bgp summary json"]
+  - ["vtysh", "-c", "show bgp neighbors json"]
+  - ["vtysh", "-c", "show bgp ipv4 unicast json"]

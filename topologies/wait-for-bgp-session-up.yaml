@@ -1,0 +1,72 @@
+# Cassian Gate Phase 1a Handover 3 / WI-5 PP1 (revised)
+#
+# REQ-WF-20 / P2 positive proof: wait_for type `bgp_session_up`.
+#
+# Topology shape derived from the current topologies/bgp_invariant.yaml:
+# two FRR routers with explicit BGP configuration (asn, router_id, neighbors)
+# directly connected on a /30. The engine generates FRR BGP config from
+# the per-node `bgp:` blocks; without them, FRR comes up with no `router bgp`
+# stanza and no peering occurs (revision: original PP1 omitted these and
+# the test failed with observed_state.last_error="peers not found in summary").
+#
+# Scenario: a single wait_for step with type=bgp_session_up, expect=pass,
+# evaluated AFTER the TEST phase has already established the session. This
+# is the minimum dispatch-routing proof: the wait_for-path reaches the
+# shared evaluator via cassian_engine.wait_for_predicate -> _evaluate_invariant_attempt,
+# the helper returns predicate_ok=True on the first attempt, retry_until
+# exits early, and the scenario step records verdict=pass.
+#
+# This topology DOES NOT inject a fault. Stronger fault-then-converge
+# proofs are out of scope for this PP; REQ-WF-21's negative timeout proof
+# is in WI-5 PP4.
+
+name: wait-for-bgp-session-up
+
+nodes:
+  - name: r1
+    type: frr
+    asn: 65001
+    router_id: 1.1.1.1
+    bgp:
+      neighbors:
+        - peer: r2
+          remote_as: 65002
+
+  - name: r2
+    type: frr
+    asn: 65002
+    router_id: 2.2.2.2
+    bgp:
+      neighbors:
+        - peer: r1
+          remote_as: 65001
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["10.0.0.1/30", "10.0.0.2/30"]
+
+# Zero-assertion compliance: gate mode rejects topologies with no
+# declared assertion. The bgp_session_up invariant from the current
+# bgp_invariant.yaml is reused as the assertion-bearing element.
+tests:
+  - name: inv_bgp_up_r1_to_10_0_0_2
+    kind: invariant
+    type: bgp_session_up
+    node: r1
+    dst: 10.0.0.2
+    expect: pass
+
+scenarios:
+  - id: wait_for_bgp_session_up_positive
+    description: |
+      After the TEST phase establishes the BGP session, a wait_for step
+      with type=bgp_session_up and expect=pass should converge on the
+      first attempt and record verdict=pass.
+    steps:
+      - wait_for:
+          type: bgp_session_up
+          from: r1
+          dst: 10.0.0.2
+          expect: pass
+          timeout: 30
+          interval_s: 2

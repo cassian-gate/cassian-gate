@@ -975,6 +975,7 @@ Supported kinds:
 
 - `ping`
 - `tcp`
+- `invariant` — see "Invariant tests" below for the supported invariant `type` values
 
 ---
 
@@ -1296,9 +1297,501 @@ It does **not** by itself prove:
 - community / AS-path behavior
 - broader route-map intent
 
+### BGP Session Up Invariant
+
+Invariant type:
+
+```
+bgp_session_up
+```
+
+Purpose:
+
+Verify that an IPv4-AFI BGP session from the specified node to a declared neighbor IPv4 address is in the FRR `Established` state.
+
+This is useful for validating BGP session establishment such as:
+
+- iBGP session presence to a known neighbor
+- eBGP session presence to a known neighbor
+- post-change BGP session re-establishment
+- guarded assertion of session up before further routing-policy invariants
+
+Required fields:
+
+| Field  | Description                                                         |
+| ------ | ------------------------------------------------------------------- |
+| node   | Node where the BGP session is checked (FRR-typed)                   |
+| neighbor | IPv4 literal of the BGP neighbor on that node (canonical alias `dst` accepted) |
+
+Example:
+
+```yaml
+tests:
+  - name: r1_bgp_up_to_10_0_0_2
+    kind: invariant
+    type: bgp_session_up
+    node: r1
+    neighbor: 10.0.0.2
+    expect: pass
+```
+
+Behavior:
+
+- The invariant runs `vtysh -c 'show bgp summary json'` on the specified node and parses the structured output.
+- It passes when the queried neighbor is present in FRR's BGP summary and its session state is `Established`.
+- It fails when the session is in any other FRR FSM state (`Idle`, `Active`, `Connect`, `OpenSent`, `OpenConfirm`), when the neighbor is not configured (engine-synthesized state literal `NotConfigured`), or when vtysh fails or its output is not parseable as JSON (engine-synthesized state literal `Unknown`).
+- If the invariant definition itself is invalid (missing or malformed `dst` IPv4 literal), the run fails with misuse exit code `2`.
+- The retry policy mirrors the existing `bgp_neighbor` test surface: retries are bounded by the test's `timeout_s` (default 15 seconds) and `retry_interval_s` (default 1.0 seconds); the loop terminates on first vtysh-rc success and the post-retry block reads the parsed state.
+
+Typical exit semantics follow the standard Cassian Gate model:
+
+- satisfied invariant → passing gate outcome
+- invariant mismatch → validation failure
+- invalid invariant declaration → usage / contract error
+
+Artifacts produced:
+
+The invariant result is recorded in the standard artifacts:
+
+```
+labs/<lab>/results.json
+labs/<lab>/results.summary.txt
+```
+
+When `verdict: fail`, the test record carries a structured `observed_state` payload with deterministic keys (`type`, `peer`, `state`, `last_error`, `source_node`). See "Failed-Invariant Observed State" below and `docs/topology-schema-v1.5.md` §4.1 for the full per-type schema.
+
+Positive proof example:
+
+```bash
+cassian test topologies/bgp_invariant.yaml
+```
+
+Replay:
+
+This invariant can be checked again using standard gate replay workflows.
+
+```bash
+cassian replay labs/clab-bgp-invariant --gate --verify-results
+```
+
+Scope boundary:
+
+This invariant validates only IPv4-AFI BGP session-Established truth from one node to one neighbor IPv4.
+
+It does **not** by itself prove:
+
+- EVPN-AFI session state (use `evpn_bgp_session_up`)
+- route presence or attribute correctness
+- route advertisement boundaries
+- generic routing policy correctness
+
+---
+
+### Route Present Invariant
+
+Invariant type:
+
+```
+route_present
+```
+
+Purpose:
+
+Verify that a specific route is present on the specified node's IPv4 routing table.
+
+This is useful for validating route installation such as:
+
+- expected RIB presence after policy or session establishment
+- verification that a prefix is actually installed on the node
+- guarded assertion of route presence before further routing-policy invariants
+
+Required fields:
+
+| Field  | Description                                |
+| ------ | ------------------------------------------ |
+| node   | Node where the route presence is checked   |
+| prefix | Prefix being validated (canonical IPv4 CIDR) |
+
+Example:
+
+```yaml
+tests:
+  - name: r1_has_10_10_10_0_24
+    kind: invariant
+    type: route_present
+    node: r1
+    prefix: 10.10.10.0/24
+    expect: pass
+```
+
+Behavior:
+
+- The invariant inspects the IPv4 routing table on the specified node.
+- It passes when the queried prefix is observed in the routing table.
+- It fails when the queried prefix is not observed.
+- If the invariant definition itself is invalid, the run fails with misuse exit code `2`.
+
+Artifacts produced:
+
+```
+labs/<lab>/results.json
+labs/<lab>/results.summary.txt
+```
+
+When `verdict: fail`, the test record carries a structured `observed_state` payload (`type`, `prefix`, `routes`, `source_node`). See `docs/topology-schema-v1.5.md` §4.3 for the full per-type schema.
+
+Replay:
+
+```bash
+cassian replay labs/clab-route-present-missing --gate --verify-results
+```
+
+### Route Absent Invariant
+
+Invariant type:
+
+```
+route_absent
+```
+
+Purpose:
+
+Verify that a specific route is **not** present on the specified node's IPv4 routing table.
+
+This is useful for validating intentional route absence such as:
+
+- prefix-blackhole effectiveness
+- expected suppression after withdrawal
+- verification that a route is genuinely not installed
+- negative-complement of `route_present`
+
+Required fields:
+
+| Field  | Description                                  |
+| ------ | -------------------------------------------- |
+| node   | Node where the route absence is checked      |
+| prefix | Prefix being validated (canonical IPv4 CIDR) |
+
+Example:
+
+```yaml
+tests:
+  - name: r1_does_not_have_10_20_20_0_24
+    kind: invariant
+    type: route_absent
+    node: r1
+    prefix: 10.20.20.0/24
+    expect: pass
+```
+
+Behavior:
+
+- The invariant inspects the IPv4 routing table on the specified node.
+- It passes when the queried prefix is **not** observed in the routing table.
+- It fails when the queried prefix is observed.
+- If the invariant definition itself is invalid, the run fails with misuse exit code `2`.
+
+Artifacts produced:
+
+```
+labs/<lab>/results.json
+labs/<lab>/results.summary.txt
+```
+
+When `verdict: fail`, the test record carries a structured `observed_state` payload (`type`, `prefix`, `routes`, `source_node`). See `docs/topology-schema-v1.5.md` §4.3 for the full per-type schema.
+
+### BGP MED Equals Invariant
+
+Invariant type:
+
+```
+bgp_med_equals
+```
+
+Purpose:
+
+Verify that a BGP route installed on a node has the expected **MED** (Multi-Exit Discriminator) value.
+
+This is useful for validating routing policy behavior such as:
+
+- inbound MED-rewriting policy
+- expected MED preservation across boundaries
+- iBGP MED propagation consistency
+- companion to `bgp_localpref_equals` for full attribute coverage
+
+Required fields:
+
+| Field    | Description                                |
+| -------- | ------------------------------------------ |
+| node     | Node where the route must be observed      |
+| prefix   | Prefix being validated                     |
+| expected | Expected BGP MED value (integer)           |
+
+Example:
+
+```yaml
+tests:
+  - name: r2_sees_1_1_1_1_32_with_med_50
+    kind: invariant
+    type: bgp_med_equals
+    node: r2
+    prefix: 1.1.1.1/32
+    expected: 50
+    expect: pass
+```
+
+Behavior:
+
+- The invariant inspects the BGP route entry on the specified node.
+- The route must exist and contain the declared MED value.
+- If the route is present but the MED differs from the expected value, the invariant fails.
+- If the invariant definition itself is invalid, the run fails with misuse exit code `2`.
+
+Artifacts produced:
+
+```
+labs/<lab>/results.json
+labs/<lab>/results.summary.txt
+```
+
+When `verdict: fail`, the test record carries a structured `observed_state` payload (`type`, `prefix`, `peer`, `actual`, `expected`, `source_node`). See `docs/topology-schema-v1.5.md` §4.5 for the full per-type schema.
+
+### OSPF Neighbor Up Invariant
+
+Invariant type:
+
+```
+ospf_neighbor_up
+```
+
+Purpose:
+
+Verify that an OSPF neighbor adjacency from the specified node to a declared peer router-ID has reached the expected FSM state (default `Full`).
+
+This is useful for validating OSPF adjacency establishment such as:
+
+- backbone-area neighbor convergence
+- post-change OSPF re-adjacency
+- guarded assertion of OSPF Full adjacency before further routing-policy invariants
+
+This invariant is **FRR-only**; declaring `ospf_neighbor_up` against a non-FRR `src` node is rejected at validation with exit code `2`.
+
+Required fields:
+
+| Field    | Description                                                                    |
+| -------- | ------------------------------------------------------------------------------ |
+| src      | Node where the OSPF neighbor table is checked (must be `type: frr`)            |
+| neighbor | IPv4 literal of the peer's OSPF router-ID (NOT a node name)                    |
+
+Optional fields:
+
+| Field   | Description                                                                                     |
+| ------- | ----------------------------------------------------------------------------------------------- |
+| state   | Expected FSM state literal; one of `Down`, `Attempt`, `Init`, `2-Way`, `ExStart`, `Exchange`, `Loading`, `Full`. Default `Full` materialised at Resolve. |
+
+The companion node-level `ospf:` block (declared on FRR nodes) carries `area` (int ≥ 0, required) and `networks` (non-empty list of canonical IPv4 CIDRs, required); declaring `ospf:` requires the node to also declare top-level `router_id`. Timer customization (`hello-interval`, `dead-interval`, `spf-delay`) and `passive-interface` posture are out of scope; FRR defaults govern. See `docs/topology-schema-v1.md` §3.1 (`Optional ospf: block`) for the topology-side schema.
+
+Example:
+
+```yaml
+nodes:
+  - name: r1
+    type: frr
+    router_id: 1.1.1.1
+    ospf:
+      area: 0
+      networks:
+        - 10.0.0.0/16
+        - 1.1.1.1/32
+  - name: r2
+    type: frr
+    router_id: 2.2.2.2
+    ospf:
+      area: 0
+      networks:
+        - 10.0.0.0/16
+        - 2.2.2.2/32
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+
+tests:
+  - name: r1_neighbor_up_to_r2
+    kind: invariant
+    type: ospf_neighbor_up
+    src: r1
+    neighbor: 2.2.2.2
+    expect: pass
+```
+
+Behavior:
+
+- The invariant runs `vtysh -c 'show ip ospf neighbor json'` on the specified `src` node and parses the structured output.
+- It passes when the queried neighbor's router-ID is present in FRR's neighbor table and its FSM state matches `state` (default `Full`).
+- It fails when the FSM state differs (engine-synthesized state literals `NotConfigured` and `Unknown` may also appear on the FAIL path).
+- If the invariant definition is invalid (non-FRR `src`, non-IPv4 `neighbor`, undeclared `state` literal), the run fails with misuse exit code `2`.
+- Retry policy: bounded by the test's `timeout_s` (default `60` seconds — pragmatic to OSPF dead-interval reality) and `retry_interval_s` (default `1.0` seconds) when `expect: pass`. Single attempt for `expect: fail`.
+
+Artifacts produced:
+
+```
+labs/<lab>/results.json
+labs/<lab>/results.summary.txt
+```
+
+When `verdict: fail`, the test record carries a structured six-key `observed_state` payload (`type`, `neighbor`, `state`, `expected_state`, `last_error`, `source_node`). See `docs/topology-schema-v1.5.md` §4.8 for the full per-type schema, including the comprehensive 10-FSM-literal closed-set documentation (8 declarable + 2 observed-only).
+
+Positive proof example:
+
+```bash
+cassian test topologies/ospf_neighbor_up.yaml
+```
+
+Replay:
+
+```bash
+cassian replay labs/clab-ospf-neighbor-up --gate --verify-results
+```
+
+Scope boundary:
+
+This invariant validates only OSPFv2 single-area FRR adjacency from one node to one neighbor router-ID.
+
+It does **not** by itself prove:
+
+- OSPFv3 / IPv6 OSPF adjacency
+- multi-area OSPF design correctness
+- OSPF LSA-level inspection
+- non-FRR (SONiC, Arista) OSPF — `src` must be `type: frr`
+- area-mismatch as an invariant (the negative proof topology demonstrates the FAIL pathology, but no `ospf_area_match` invariant exists in v1.5)
+- routing policy or attribute correctness
+
+---
+
+### Interface State Invariant
+
+Invariant type:
+
+```
+interface_state
+```
+
+Purpose:
+
+Verify that an interface declared by a `links:` endpoint has the expected administrative/operational state inside its node's network namespace.
+
+This is useful for validating interface posture such as:
+
+- post-deploy confirmation that all topology interfaces came up
+- post-fault confirmation that a `fault: interface_down` step actually brought the interface down
+- pre-test posture gate before subsequent reachability invariants
+
+This invariant is **NOS-agnostic**: it uses the Linux primitive `ip -j link show <iface>` and works on any node type with a Linux network namespace (`frr`, `host`, `nft-fw`).
+
+Required fields:
+
+| Field     | Description                                                                |
+| --------- | -------------------------------------------------------------------------- |
+| node      | Node whose namespace is probed                                             |
+| interface | Interface name as seen inside the node namespace (e.g. `eth1`)             |
+
+Optional fields:
+
+| Field | Description                                                                                                        |
+| ----- | ------------------------------------------------------------------------------------------------------------------ |
+| state | Expected state literal; one of `up`, `down`. Default `up` materialised at Resolve.                                  |
+
+The verdict predicate is **asymmetric**:
+
+- `state: up` requires `admin_state == "up"` AND `operstate == "UP"` (conjunction; both must hold).
+- `state: down` requires `admin_state == "down"` OR `operstate != "UP"` (disjunction; either suffices).
+
+Carrier (link-layer signal) is reported in `observed_state` for diagnostic clarity but does NOT participate in the verdict.
+
+iproute2 capability dependency: the probe requires an `ip` binary supporting the `-j` JSON flag. BusyBox `ip` (the default in `alpine:latest`, the engine default for `host` and `nft-fw`) does NOT support `-j`. Topologies exercising `interface_state` on `host` or `nft-fw` nodes MUST pin a compatible image (e.g. `nicolaka/netshoot:v0.15`) explicitly in the node declaration. FRR's default image already includes full iproute2.
+
+Example:
+
+```yaml
+nodes:
+  - name: r1
+    type: frr
+  - name: h1
+    type: host
+    image: nicolaka/netshoot:v0.15
+    ip: 192.168.10.10/24
+    gw: 192.168.10.1
+  - name: fw1
+    type: nft-fw
+    image: nicolaka/netshoot:v0.15
+    routed: true
+    interfaces:
+      eth1: 10.0.0.1/31
+      eth2: 192.168.10.1/24
+    allow_icmp: true
+
+links:
+  - endpoints: ["r1:eth1", "fw1:eth1"]
+    ipv4: ["10.0.0.0/31", "10.0.0.1/31"]
+  - endpoints: ["h1:eth1", "fw1:eth2"]
+    ipv4: ["192.168.10.10/24", "192.168.10.1/24"]
+
+tests:
+  - name: r1_eth1_up
+    kind: invariant
+    type: interface_state
+    node: r1
+    interface: eth1
+    state: up
+    expect: pass
+```
+
+Behavior:
+
+- The invariant runs `ip -j link show <iface>` on the specified `node` and parses the JSON output.
+- It passes when the kernel-reported `admin_state` and `operstate` together satisfy the asymmetric predicate above.
+- It fails when the predicate does not hold OR when the probe itself fails (closed-set `last_error` literal indicates which path: capability-probe failure, interface-not-present, ip-command-failure, JSON parse failure, structural surprise, missing field).
+- A per-(lab, node) capability probe runs at most once per gate run on first use of `interface_state` against that node; capability-probe failures short-circuit with `last_error: "ip -j flag not supported by node's iproute2"`.
+- If the invariant definition is invalid (missing `node`, missing `interface`, unknown `node` reference, invalid `state` literal, unknown key), the run fails with misuse exit code `2`.
+- Retry policy: bounded by the test's `timeout_s` (default `10` seconds) and `retry_interval_s` (default `0.5` seconds) when `expect: pass`. Single attempt for `expect: fail`.
+
+Artifacts produced:
+
+```
+labs/<lab>/results.json
+labs/<lab>/results.summary.txt
+```
+
+When `verdict: fail`, the test record carries a structured eight-key `observed_state` payload (`type`, `interface`, `expected_state`, `admin_state`, `operstate`, `carrier`, `last_error`, `source_node`). See `docs/topology-schema-v1.5.md` §4.9 for the full per-type schema, including the closed-set documentation for all four state-axis fields (admin_state, operstate, carrier, last_error).
+
+Positive proof example:
+
+```bash
+cassian test topologies/interface_state_up.yaml
+```
+
+Replay:
+
+```bash
+cassian replay labs/clab-interface-state-up --gate --verify-results
+```
+
+Scope boundary:
+
+This invariant validates only kernel-reported interface administrative/operational state inside a node's Linux network namespace.
+
+It does **not** by itself prove:
+
+- L2 reachability across the link (use `ping` for that)
+- L3 reachability or routing-table correctness (use `ping`, `route_present`, or BGP invariants)
+- MTU, speed, duplex, error counters, or other interface-level metrics
+- vendor NOS-specific interface state (the probe is a Linux primitive; SONiC/Arista VM nodes are out of scope)
+- carrier-level signal — `carrier` is reported in `observed_state` for diagnostic clarity but is NOT part of the verdict predicate
+
 ---
 
 ## EVPN Invariants
+
 
 Cassian Gate supports deterministic EVPN invariant checks as standard authoritative test results.
 
@@ -1457,6 +1950,85 @@ They do **not** by themselves prove:
 
 ---
 
+## Failed-Invariant Observed State
+
+When an invariant test produces `verdict: fail`, the test record in `results.json` carries a structured `observed_state` payload alongside the existing `observed` string. This is the authoritative deterministic failure-reason artifact.
+
+Where it appears:
+
+- on records in `results["tests"]` whose `kind == "invariant"` AND `verdict == "fail"`
+- on records in `results["events"]` whose `type == "scenario_test_run"` AND `kind == "invariant"` AND `verdict == "fail"`
+
+Where it does NOT appear:
+
+- on passing-invariant records
+- on non-invariant test kinds (`ping`, `tcp`)
+- on `prereq` failure paths (those surface as `hard_failure:` in the summary)
+- on records with `observed: blocked, verdict: fail, error: blocked before execution` (those are recorded explicitly per the Blocked declared validation items rules above)
+
+Determinism contract:
+
+- every value in `observed_state` is derived from declared topology / test inputs or from deterministically-computable scalars in parsed `vtysh` JSON
+- environmental nondeterminism (host clocks, container IDs, runtime PIDs, hostnames-of-the-runner, containerlab-allocated veth MAC addresses) MUST NOT enter `observed_state`
+- two clean runs of the same topology produce byte-identical `observed_state` payloads
+
+Per-record byte ceiling:
+
+- a single record's `observed_state` is bounded at 8192 bytes of canonical JSON
+- when a payload would exceed the ceiling, the engine deterministically suffix-drops trailing entries from the longest list field until it fits and sets `observed_state_truncated: true` on the record
+- the supporting `evidence` field still carries the full pre-truncation list
+
+Example failed-invariant record shape in `results.json`:
+
+```json
+{
+  "name": "leaf2_evpn_mac_route_for_unknown_mac",
+  "kind": "invariant",
+  "type": "evpn_mac_route_present",
+  "verdict": "fail",
+  "observed": "fail",
+  "observed_state": {
+    "type": "evpn_mac_route_present",
+    "mac": "de:ad:be:ef:00:01",
+    "vni": 10100,
+    "evpn_routes": [
+      {"mac": "00:11:22:33:44:55", "vni": 10100, "rd": "", "prefix": "", "route_type": 2}
+    ],
+    "source_node": "leaf2"
+  }
+}
+```
+
+Summary rendering in `results.summary.txt`:
+
+Each failed-invariant line in the `failed_tests:` block is followed by an indented `observed:` block. Indentation is fixed: header at 4-space, key/value lines at 6-space, list entries at 8-space. List values are capped at 5 entries with a trailing `(+<N> more)` over-cap line. When the record carries `observed_state_truncated: true`, the renderer emits a literal trailing line `(observed_state truncated; full payload in results.json)` at 6-space indent.
+
+Example summary block:
+
+```text
+failed_tests:
+ - leaf2_evpn_mac_route_for_unknown_mac (invariant) leaf2-> : evpn_mac_route_present mismatch (expected pass, observed fail)
+    observed:
+      evpn_routes:
+        - mac=00:11:22:33:44:01, prefix=, rd=, route_type=2, vni=10100
+        - mac=00:11:22:33:44:02, prefix=, rd=, route_type=2, vni=10100
+        (+58 more)
+      mac: de:ad:be:ef:00:01
+      source_node: leaf2
+      type: evpn_mac_route_present
+      vni: 10100
+      (observed_state truncated; full payload in results.json)
+```
+
+Authority boundary unchanged:
+
+- `results.json` `observed_state` field = authoritative structured failure reason
+- `results.summary.txt` `observed:` block = explanatory rendering only
+
+For the per-type `observed_state` schema (which keys are required for each invariant type) see `docs/topology-schema-v1.5.md` §4.
+
+---
+
 # 🔟 Scenarios (Failure Choreography)
 
 Scenarios define **ordered fault injection sequences**.
@@ -1518,6 +2090,44 @@ Use `wait_for` or `wait_for_bgp` when you want condition-based convergence check
 
 No implicit retries.
 Timeout = failure.
+
+---
+
+### `wait_for` (condition-based convergence)
+
+Polls a deterministic predicate until satisfied or `timeout`. Records a scenario step verdict (no test verdict).
+
+Required keys (every `wait_for` step):
+
+- `type` — one of the nine condition types listed below
+- `from` — source node name
+- `expect` — `pass` or `fail`
+- `timeout` — int (seconds)
+- `interval_s` — number (polling cadence)
+
+Optional: `per_attempt_timeout_s`.
+
+Accepted condition types:
+
+- `ping` — ICMP from `from` to `to` (node name or IPv4 literal)
+- `tcp` — TCP from `from` to `to:port`
+- `route_prefix` — `prefix` (CIDR) present in RIB on `from`
+- `bgp_session_up` — BGP session to `dst` (IPv4 neighbor) reaches Established
+- `route_present` — `prefix` (CIDR) present in BGP RIB on `from`
+- `route_advertised_to` — `prefix` (CIDR) advertised toward `peer` (node name)
+- `evpn_bgp_session_up` — EVPN BGP session to `peer` (node name) reaches Established
+- `evpn_vni_route_present` — EVPN type-2/3 route present for `vni` (integer)
+- `evpn_mac_route_present` — EVPN type-2 route for `mac` + `vni` is present
+
+Per-type parameter requirements: see `docs/topology-schema-v1.md` §6 (`### wait_for`) and `docs/topology-schema-v1.5.md` §2.
+
+Notes:
+
+- A successful `wait_for` step does **not** count as a passing test. Verdicts come only from items in `tests:`.
+- `expect: fail` inverts the convergence semantics (succeeds if the condition does not become satisfied within `timeout`).
+- `wait_for: bgp_session_up` is a single-neighbor check (explicit `dst`); `wait_for_bgp` is a coarse all-neighbors-of-one-node readiness check. Both remain available.
+
+Prefer `wait_for` with an invariant condition over fixed `wait: { seconds: N }` for convergence purposes.
 
 ---
 
@@ -2247,6 +2857,7 @@ Important boundary:
 
 - omission does not mean success
 - a blocked declared item should appear explicitly in `results.json`
+- failed-invariant records carry a structured `observed_state` payload — see §9 "Failed-Invariant Observed State" and `docs/topology-schema-v1.5.md` §4 for the schema
 
 ---
 
@@ -2315,6 +2926,8 @@ cassian test topologies/three-frr-two-hosts-fw-routed.yaml \
   --state-profile frr-routing-basic \
   --state-profile nft-ruleset-basic
 ```
+
+Phase 1a expanded the built-in FRR profile set (now: `frr-routing-basic`, `frr-bgp-basic`, `frr-ospf-basic`, `frr-interfaces-basic`, `frr-comprehensive`) and switched FRR probes to JSON form (`vtysh -c "show ... json"`) with Linux iproute2 primitives for the interfaces profile. See [`docs/cli-reference-v1.md`](cli-reference-v1.md) for the full `--state-capture` / `--state-profile` flag reference and per-profile descriptions.
 
 ### Artifact Path
 
@@ -2571,9 +3184,8 @@ Inspect structured state diff output:
 ```bash
 cassian test topologies/three-frr-two-hosts-fw-routed.yaml \
   --state-capture both \
+  --state-profile frr-comprehensive \
   --state-profile linux-net-basic \
-  --state-profile frr-interfaces-basic \
-  --state-profile frr-routing-basic \
   --state-profile nft-ruleset-basic
 
 python -m json.tool labs/clab-three-frr-two-hosts-fw-routed/artifacts/state-diff/state_diff.json

@@ -2,6 +2,8 @@
 
 Deterministic pre-production proof layer for network changes.
 
+Full documentation: [docs.cassiangate.dev](https://docs.cassiangate.dev/)
+
 ## What it is
 
 Cassian Gate is an execution-backed validation gate for network changes. It lets engineers declare topology, tests, and scenarios, run them through a clean-state authoritative path, and get explicit PASS/FAIL outcomes with auditable artifacts. It is behavior-first, artifact-authoritative, CI-safe, local-first, and any AI usage remains advisory only.
@@ -19,6 +21,8 @@ Cassian Gate is for network engineers who need proof before production, platform
 Cassian Gate is not yet for teams expecting broad multi-vendor parity, teams that want exploratory lab workflows to count as authoritative validation, or teams that need commercial NOS coverage before adoption.
 
 ## Install
+
+Full install and first-run guide: [docs.cassiangate.dev/quickstart](https://docs.cassiangate.dev/quickstart/)
 
 Primary public install path for the v2 release surface:
 
@@ -43,11 +47,31 @@ cassian test topologies/first-run-proof-minimal.yaml
 
 That gives you the shortest path to an authoritative first PASS verdict from this repository surface.
 
+## What does PASS mean?
+
+A PASS verdict from `cassian test` means:
+
+- All declared tests passed against real execution behavior
+- All declared scenarios completed as expected within the executed scope
+
+PASS does not mean:
+
+- Validation of behaviors not declared in this topology
+- Coverage of all possible failure modes
+
+PASS is bounded by what you declared. Cassian Gate validates the
+topology, tests, and scenarios you specified — not implicit
+expectations about behaviors you did not declare.
+
 ## Proof Kit
 
 * Passing first-run proof: [`topologies/first-run-proof-minimal.yaml`](topologies/first-run-proof-minimal.yaml) — shortest path to a first authoritative PASS verdict proving the declared TCP flow is allowed.
 * Fail-catching first-run proof: [`topologies/first-run-proof-fail-catching.yaml`](topologies/first-run-proof-fail-catching.yaml) — shows Cassian Gate returning an authoritative FAIL when the declared TCP expectation is wrong.
 * Copy-paste GitHub Actions template: [`contrib/ci/cassian-gate-ci.yml`](contrib/ci/cassian-gate-ci.yml) — ready-to-copy CI workflow that runs the proof gate and uploads `results.json` and `topology.resolved.yaml`.
+* Two-run comparison recipe: [`contrib/topologies/recipes/two-run-what-changed-between-baseline-and-change/README.md`](contrib/topologies/recipes/two-run-what-changed-between-baseline-and-change/README.md) — what changed between a baseline and a proposed change using `cassian test --two-run`.
+* Terraform adapter recipe: [`contrib/topologies/recipes/terraform-adapter-how-do-i-validate-an-iac-change/README.md`](contrib/topologies/recipes/terraform-adapter-how-do-i-validate-an-iac-change/README.md) — validate an IaC change context with `cassian adapt terraform` and `cassian preflight`.
+* Blast radius recipe: [`contrib/topologies/recipes/blast-radius-what-does-my-gate-actually-cover/README.md`](contrib/topologies/recipes/blast-radius-what-does-my-gate-actually-cover/README.md) — what the gate actually exercised at runtime via `blast_radius.json`.
+* Preflight advisory recipe: [`contrib/topologies/recipes/preflight-what-coverage-gaps-do-i-have/README.md`](contrib/topologies/recipes/preflight-what-coverage-gaps-do-i-have/README.md) — declared-only coverage gaps via `cassian preflight` (advisory; does not affect the gate verdict).
 
 ## What's in v2
 
@@ -55,6 +79,7 @@ v2 includes the deterministic gate engine, FRR-based validation, named routing a
 
 ## Links
 
+* Documentation site: [docs.cassiangate.dev](https://docs.cassiangate.dev/)
 * Docs index: [`docs/README.md`](docs/README.md)
 * Quickstart: [`docs/quickstart.md`](docs/quickstart.md)
 * Operator cheatsheet: [`docs/cheatsheet.md`](docs/cheatsheet.md)

@@ -1,0 +1,84 @@
+name: Deploy docs to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+      - develop/phase1a
+
+permissions:
+  contents: write
+
+concurrency:
+  group: docs-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install docs dependencies
+        run: pip install -r requirements-docs.txt
+
+      - name: Configure git for mike deploy
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Deploy via mike
+        run: |
+          # mike rejects '/' in version names; transform develop/phase1a -> develop-phase1a
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          VERSION="${BRANCH//\//-}"
+          mike deploy --push --update-aliases "${VERSION}" latest
+          mike set-default --push latest
+
+      - name: Publish root-level robots.txt and sitemap.xml for SEO
+        run: |
+          # mike publishes mkdocs output into version subdirectories
+          # (/latest/, /develop-phase1a/, etc.); search engines query
+          # robots.txt and sitemap.xml at the site root. Mirror them to /
+          # on the gh-pages branch after mike's deploy completes.
+          mkdir -p /tmp/gh-pages-publish
+          cd /tmp/gh-pages-publish
+          git clone --branch gh-pages --depth 1 \
+            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
+            gh-pages
+          cd gh-pages
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # robots.txt — static; allow all crawlers; declare canonical sitemap URL
+          cat > robots.txt <<'ROBOTS_EOF'
+          User-agent: *
+          Allow: /
+
+          Sitemap: https://docs.cassiangate.dev/sitemap.xml
+          ROBOTS_EOF
+
+          # sitemap.xml — mirror /latest/sitemap.xml so root-served sitemap
+          # stays in sync with the canonical version's content
+          if [ -f latest/sitemap.xml ]; then
+            cp latest/sitemap.xml sitemap.xml
+          else
+            echo "WARNING: latest/sitemap.xml not found; root sitemap.xml not refreshed"
+          fi
+
+          git add robots.txt sitemap.xml
+          if git diff --cached --quiet; then
+            echo "Root-level robots.txt and sitemap.xml unchanged; nothing to commit"
+          else
+            git commit -m "chore(docs-deploy): refresh root-level robots.txt and sitemap.xml"
+            git push origin gh-pages
+          fi

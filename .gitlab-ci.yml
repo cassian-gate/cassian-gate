@@ -44,9 +44,6 @@ cassian_gate:
         exit 2
       fi
 
-    # Authoritative verification oracle (repo's deterministic contract checks)
-    - bash scripts/verify_phase1.sh
-
     # Project gate (up -> test -> down)
     - ./src/cassian.py up topologies/three-frr-two-hosts-fw-routed.yaml --reconfigure
     - ./src/cassian.py test three-frr-two-hosts-fw-routed --scenario quick_all

@@ -1,0 +1,25 @@
+# Phase 1a / Handover 5 — schema-negative fixture for the
+# interface_state invariant (REQ-H5-24 fixture 6).
+#
+# Contract: cassian validate MUST exit 2 with stderr matching:
+#   tests[0] (bad_empty_interface): invariant 'interface_state' has invalid 'interface' value '   ' (expected: non-empty interface name string)
+#
+# WI-1 R-IS-V02: 'interface' must be a non-empty string after .strip().
+# Whitespace-only values must reject; absent values produce the §16.2
+# missing-form text (fixture 2 covers the absent path).
+name: bad-interface-state-empty-interface
+
+nodes:
+  - name: r1
+    type: frr
+
+links: []
+
+tests:
+  - name: bad_empty_interface
+    kind: invariant
+    type: interface_state
+    node: r1
+    interface: "   "
+    state: up
+    expect: pass

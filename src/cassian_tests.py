@@ -1828,8 +1828,23 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                     die(f"{sctx}.wait_for.type: must be a non-empty string")
                 t = t.strip()
 
-                if t not in ("ping", "tcp", "route_prefix"):
-                    die(f"{sctx}.wait_for.type: must be ping|tcp|route_prefix")
+                if t not in (
+                    "ping",
+                    "tcp",
+                    "route_prefix",
+                    "bgp_session_up",
+                    "route_present",
+                    "route_advertised_to",
+                    "evpn_bgp_session_up",
+                    "evpn_vni_route_present",
+                    "evpn_mac_route_present",
+                ):
+                    die(
+                        f"{sctx}.wait_for.type: must be one of "
+                        f"ping|tcp|route_prefix|bgp_session_up|route_present|"
+                        f"route_advertised_to|evpn_bgp_session_up|"
+                        f"evpn_vni_route_present|evpn_mac_route_present"
+                    )
 
                 # Base required keys (all types)
                 base_required = {"type", "from", "expect", "timeout", "interval_s"}
@@ -1853,8 +1868,7 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                         "src_ip",
                         "src_if",
                     }
-                else:
-                    # route_prefix
+                elif t == "route_prefix":
                     # Accept 'on' as alias for 'src' (fail-fast if both present and disagree)
                     on_v = wf.get("on")
                     src_v = wf.get("src")
@@ -1866,6 +1880,51 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                     type_required = {"src", "prefix"}
                     allowed_wf = base_required | type_required | {
                         "on",
+                        "per_attempt_timeout_s",
+                    }
+                elif t == "bgp_session_up":
+                    # Required parameters match the bgp_session_up invariant (REQ-WF-1):
+                    # 'dst' is the peer IPv4 literal that the BGP session targets.
+                    type_required = {"dst"}
+                    allowed_wf = base_required | type_required | {
+                        "per_attempt_timeout_s",
+                    }
+                elif t == "route_present":
+                    # Required parameters match the route_present invariant (REQ-WF-2):
+                    # 'prefix' is the CIDR to look for in the source node's RIB.
+                    type_required = {"prefix"}
+                    allowed_wf = base_required | type_required | {
+                        "per_attempt_timeout_s",
+                    }
+                elif t == "route_advertised_to":
+                    # Required parameters match the route_advertised_to invariant
+                    # (REQ-WF-3): 'peer' is the receiving neighbor's node name;
+                    # 'prefix' is the CIDR expected to appear in the
+                    # advertised-routes set toward that peer.
+                    type_required = {"peer", "prefix"}
+                    allowed_wf = base_required | type_required | {
+                        "per_attempt_timeout_s",
+                    }
+                elif t == "evpn_bgp_session_up":
+                    # Required parameters match the evpn_bgp_session_up invariant
+                    # (REQ-WF-4): 'peer' is the EVPN BGP peer node name.
+                    type_required = {"peer"}
+                    allowed_wf = base_required | type_required | {
+                        "per_attempt_timeout_s",
+                    }
+                elif t == "evpn_vni_route_present":
+                    # Required parameters match the evpn_vni_route_present
+                    # invariant (REQ-WF-5): 'vni' is the L2VNI to check for an
+                    # EVPN route.
+                    type_required = {"vni"}
+                    allowed_wf = base_required | type_required | {
+                        "per_attempt_timeout_s",
+                    }
+                else:
+                    # evpn_mac_route_present (REQ-WF-6): 'mac' is the host MAC,
+                    # 'vni' is the L2VNI for the EVPN type-2 route.
+                    type_required = {"mac", "vni"}
+                    allowed_wf = base_required | type_required | {
                         "per_attempt_timeout_s",
                     }
 
@@ -1999,6 +2058,95 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                         die(f"{sctx}.wait_for.prefix: invalid CIDR {pfx!r}")
                     # Keep normalized form (deterministic) for downstream execution
                     wf["prefix"] = norm
+
+                if t == "bgp_session_up":
+                    # 'dst' is a peer IPv4 literal (matches the bgp_session_up
+                    # invariant schema). IPv6 and hostnames are rejected
+                    # deterministically (Doctrine §1.6 / Design Contract §2).
+                    v_dst = wf.get("dst")
+                    if not isinstance(v_dst, str) or not v_dst.strip():
+                        die(f"{sctx}.wait_for.dst: must be a non-empty IPv4 string")
+                    dst_raw = v_dst.strip()
+                    if not is_ip_literal(dst_raw):
+                        die(
+                            f"{sctx}.wait_for.dst: must be an IPv4 literal "
+                            f"(got {dst_raw!r}). Hostnames/DNS are not supported (determinism)."
+                        )
+                    if ":" in dst_raw:
+                        die(
+                            f"{sctx}.wait_for.dst: must be an IPv4 literal, IPv6 not supported "
+                            f"(got {dst_raw!r})."
+                        )
+                    validate_ip_literal(dst_raw, f"{sctx}.wait_for.dst")
+
+                if t == "evpn_bgp_session_up":
+                    # 'peer' is a known node name (matches the evpn_bgp_session_up
+                    # invariant schema).
+                    v_peer = wf.get("peer")
+                    if not isinstance(v_peer, str) or not v_peer.strip():
+                        die(f"{sctx}.wait_for.peer: must be a non-empty string")
+                    peer_s = v_peer.strip()
+                    if peer_s not in by_name:
+                        die(f"{sctx}.wait_for.peer: unknown node '{peer_s}'")
+
+                if t == "route_present":
+                    # 'prefix' is a CIDR; normalized for deterministic
+                    # downstream execution (matches route_present invariant).
+                    pfx = wf.get("prefix")
+                    if not isinstance(pfx, str) or not pfx.strip():
+                        die(f"{sctx}.wait_for.prefix: must be a non-empty string CIDR")
+                    norm = _normalize_prefix(pfx.strip())
+                    if not norm:
+                        die(f"{sctx}.wait_for.prefix: invalid CIDR {pfx!r}")
+                    wf["prefix"] = norm
+
+                if t == "route_advertised_to":
+                    # 'peer' is a known node name; 'prefix' is a CIDR
+                    # (matches route_advertised_to invariant).
+                    v_peer = wf.get("peer")
+                    if not isinstance(v_peer, str) or not v_peer.strip():
+                        die(f"{sctx}.wait_for.peer: must be a non-empty string")
+                    peer_s = v_peer.strip()
+                    if peer_s not in by_name:
+                        die(f"{sctx}.wait_for.peer: unknown node '{peer_s}'")
+
+                    pfx = wf.get("prefix")
+                    if not isinstance(pfx, str) or not pfx.strip():
+                        die(f"{sctx}.wait_for.prefix: must be a non-empty string CIDR")
+                    norm = _normalize_prefix(pfx.strip())
+                    if not norm:
+                        die(f"{sctx}.wait_for.prefix: invalid CIDR {pfx!r}")
+                    wf["prefix"] = norm
+
+                if t == "evpn_vni_route_present":
+                    # 'vni' is a positive L2VNI integer in 1..16777215
+                    # (24-bit identifier per RFC 7432).
+                    vni_v = wf.get("vni")
+                    if not isinstance(vni_v, int) or isinstance(vni_v, bool):
+                        die(f"{sctx}.wait_for.vni: must be an int")
+                    if vni_v < 1 or vni_v > 16777215:
+                        die(f"{sctx}.wait_for.vni: must be in range 1..16777215")
+
+                if t == "evpn_mac_route_present":
+                    # 'mac' is a colon-separated 6-octet MAC; 'vni' is a
+                    # positive L2VNI int (matches evpn_mac_route_present
+                    # invariant).
+                    v_mac = wf.get("mac")
+                    if not isinstance(v_mac, str) or not v_mac.strip():
+                        die(f"{sctx}.wait_for.mac: must be a non-empty MAC string")
+                    mac_raw = v_mac.strip()
+                    import re as _re
+                    if not _re.match(r"^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$", mac_raw):
+                        die(
+                            f"{sctx}.wait_for.mac: invalid MAC {mac_raw!r} "
+                            "(expected colon-separated 6-octet form, e.g. '00:11:22:33:44:55')"
+                        )
+
+                    vni_v = wf.get("vni")
+                    if not isinstance(vni_v, int) or isinstance(vni_v, bool):
+                        die(f"{sctx}.wait_for.vni: must be an int")
+                    if vni_v < 1 or vni_v > 16777215:
+                        die(f"{sctx}.wait_for.vni: must be in range 1..16777215")
 
             # ---- wait_for_bgp ----
             if "wait_for_bgp" in step:
@@ -3004,6 +3152,81 @@ def _render_scenarios_summary(results: dict) -> str:
                     if isinstance(src_if, str) and src_if.strip():
                         line_parts.append(f"src_if={src_if.strip()}")
 
+                # H3 / WI-6 / F6 follow-up (Reviewer Condition 2):
+                # Surface type-specific identifiers and timeout diagnostics for
+                # the 6 new wait_for condition types. Reads from the actual
+                # scenario step record schema (st.wait_type / st.meta), not from
+                # the legacy st.wait_for path which is None on the success path
+                # (see scen_step() canonical_keys in cassian_engine.run_scenario).
+                #
+                # Scoped to new types only; existing types (ping, tcp,
+                # route_prefix) continue to be rendered by the legacy block
+                # above, preserving REQ-WF-13 byte-identity.
+                wait_type = st.get("wait_type")
+                meta = st.get("meta") if isinstance(st.get("meta"), dict) else {}
+                if isinstance(wait_type, str) and wait_type.strip() in (
+                    "bgp_session_up",
+                    "route_present",
+                    "route_advertised_to",
+                    "evpn_bgp_session_up",
+                    "evpn_vni_route_present",
+                    "evpn_mac_route_present",
+                ):
+                    wt = wait_type.strip()
+                    # type
+                    line_parts.append(f"type={wt}")
+                    # source node
+                    frm = meta.get("from")
+                    if isinstance(frm, str) and frm.strip():
+                        line_parts.append(f"from={frm.strip()}")
+                    # type-specific target identifiers
+                    if wt == "bgp_session_up":
+                        m_dst = meta.get("dst")
+                        if isinstance(m_dst, str) and m_dst.strip():
+                            line_parts.append(f"dst={m_dst.strip()}")
+                    elif wt == "route_present":
+                        m_pfx = meta.get("prefix")
+                        if isinstance(m_pfx, str) and m_pfx.strip():
+                            line_parts.append(f"prefix={m_pfx.strip()}")
+                    elif wt == "route_advertised_to":
+                        m_peer = meta.get("peer")
+                        if isinstance(m_peer, str) and m_peer.strip():
+                            line_parts.append(f"peer={m_peer.strip()}")
+                        m_pfx = meta.get("prefix")
+                        if isinstance(m_pfx, str) and m_pfx.strip():
+                            line_parts.append(f"prefix={m_pfx.strip()}")
+                    elif wt == "evpn_bgp_session_up":
+                        m_peer = meta.get("peer")
+                        if isinstance(m_peer, str) and m_peer.strip():
+                            line_parts.append(f"peer={m_peer.strip()}")
+                    elif wt == "evpn_vni_route_present":
+                        m_vni = meta.get("vni")
+                        if m_vni is not None:
+                            line_parts.append(f"vni={m_vni}")
+                    elif wt == "evpn_mac_route_present":
+                        m_mac = meta.get("mac")
+                        if isinstance(m_mac, str) and m_mac.strip():
+                            line_parts.append(f"mac={m_mac.strip()}")
+                        m_vni = meta.get("vni")
+                        if m_vni is not None:
+                            line_parts.append(f"vni={m_vni}")
+                    # expect
+                    m_succeeded = meta.get("succeeded")
+                    # When the underlying check did not succeed (timeout path or
+                    # negative-convergence path), surface the helper's
+                    # observed_state diagnostic literals (state + last_error).
+                    # This is the operator-readable equivalent of digging into
+                    # results.json[scenarios][].steps[].meta.evidence.observed_state.
+                    if m_succeeded is False:
+                        evidence = meta.get("evidence") if isinstance(meta.get("evidence"), dict) else {}
+                        obs_state = evidence.get("observed_state") if isinstance(evidence.get("observed_state"), dict) else {}
+                        os_state = obs_state.get("state")
+                        os_last_error = obs_state.get("last_error")
+                        if isinstance(os_state, str) and os_state.strip():
+                            line_parts.append(f"state={os_state.strip()}")
+                        if isinstance(os_last_error, str) and os_last_error.strip():
+                            line_parts.append(f"last_error=\"{os_last_error.strip()}\"")
+
             elif stype == "wait_for_bgp":
                 node = st.get("node")
                 if isinstance(node, str) and node.strip():
@@ -3028,6 +3251,106 @@ def _render_scenarios_summary(results: dict) -> str:
             out.append("  " + " ".join(line_parts))
 
     return "\n".join(out) + "\n"
+
+
+# -----------------------------------------------------------------------------
+# Handover 2 / WI-2: observed_state summary rendering helpers.
+# Render the per-failed-invariant `observed:` block in results.summary.txt
+# from the observed_state payload populated by WI-1. Deterministic,
+# byte-stable for identical observed_state inputs.
+# -----------------------------------------------------------------------------
+
+_OBSERVED_STATE_LIST_KEYS: tuple[str, ...] = (
+    "advertised_routes",
+    "evpn_routes",
+    "routes",
+)
+
+_OBSERVED_STATE_LIST_CAP: int = 5
+
+
+def _format_observed_state_value_scalar(value) -> str:
+    """
+    Deterministic scalar rendering for an observed_state value.
+
+    Booleans render as 'true' / 'false'; None as 'null'; empty lists as '[]';
+    everything else as str(value).
+    """
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if value is None:
+        return "null"
+    if isinstance(value, list) and len(value) == 0:
+        return "[]"
+    return str(value)
+
+
+def _format_observed_state_list_entry(entry) -> str:
+    """
+    Deterministic single-entry rendering for a list entry inside an
+    observed_state list field.
+
+    Dict entries render as 'key=value, key=value, ...' with keys in
+    canonical-sorted order; non-dict entries render via str().
+    """
+    if isinstance(entry, dict):
+        parts = []
+        for k in sorted(entry.keys()):
+            parts.append(f"{k}={_format_observed_state_value_scalar(entry[k])}")
+        return ", ".join(parts)
+    return str(entry)
+
+
+def _format_observed_state_block(observed_state: dict, truncated: bool) -> list[str]:
+    """
+    Deterministic multi-line rendering of a failed-invariant observed_state
+    payload for results.summary.txt (Handover 2 R24-R28).
+
+    Layout:
+      - header 'observed:' at 4-space indent
+      - <key>: <value> lines at 6-space indent in canonical-sorted key order
+      - known list fields ('routes', 'advertised_routes', 'evpn_routes')
+        with at least one entry render multi-line at 8-space indent,
+        capped at _OBSERVED_STATE_LIST_CAP entries with a trailing
+        '(+<N> more)' over-cap line at 8-space indent
+      - empty lists render inline as '[]'
+      - truncation marker '(observed_state truncated; full payload in results.json)'
+        at 6-space indent appears iff truncated is True
+
+    Returns the block as a list of lines (no trailing newline).
+    Returns [] when observed_state is not a dict.
+    """
+    if not isinstance(observed_state, dict):
+        return []
+
+    out: list[str] = []
+    out.append("    observed:")
+
+    for key in sorted(observed_state.keys()):
+        value = observed_state[key]
+
+        if (
+            key in _OBSERVED_STATE_LIST_KEYS
+            and isinstance(value, list)
+            and len(value) > 0
+        ):
+            out.append(f"      {key}:")
+            cap = _OBSERVED_STATE_LIST_CAP
+            for entry in value[:cap]:
+                out.append(f"        - {_format_observed_state_list_entry(entry)}")
+            extra = len(value) - cap
+            if extra > 0:
+                out.append(f"        (+{extra} more)")
+        else:
+            out.append(f"      {key}: {_format_observed_state_value_scalar(value)}")
+
+    if truncated:
+        out.append("      (observed_state truncated; full payload in results.json)")
+
+    return out
+
 
 def _format_test_summary(results: dict) -> str:
     lab = results.get("lab", "")
@@ -3135,18 +3458,39 @@ def _format_test_summary(results: dict) -> str:
                 else:
                     err = err
 
-            failed_tests.append((name, kind, src, dst, err))
+            # WI-2: capture observed_state and observed_state_truncated for
+            # per-failed-invariant `observed:` block rendering. None / False
+            # for non-invariant or unpopulated records (R27).
+            observed_state = t.get("observed_state")
+            observed_state_truncated = bool(t.get("observed_state_truncated"))
 
-    failed_tests.sort()
+            failed_tests.append(
+                (name, kind, src, dst, err, observed_state, observed_state_truncated)
+            )
+
+    # WI-2: sort by name only because tuple positions 5-6 may carry dict /
+    # bool values that are not orderable across equal-name tuples. Test
+    # names are unique under model validation; sort remains deterministic.
+    failed_tests.sort(key=lambda x: x[0])
 
     if failed_tests:
         lines.append("failed_tests:")
         cap = 10
-        for (name, kind, src, dst, err) in failed_tests[:cap]:
+        for (name, kind, src, dst, err, observed_state, observed_state_truncated) in failed_tests[:cap]:
             line = f" - {name} ({kind}) {src}->{dst}"
             if err:
                 line += f" : {err}"
             lines.append(line)
+
+            # WI-2: per-failed-invariant `observed:` block (R24-R28).
+            # Suppressed for non-invariant kinds (ping/tcp/bgp_neighbor/prereq)
+            # and when observed_state is missing or not a dict (R27).
+            if kind == "invariant" and isinstance(observed_state, dict):
+                lines.extend(
+                    _format_observed_state_block(
+                        observed_state, observed_state_truncated
+                    )
+                )
         if len(failed_tests) > cap:
             lines.append(f" - (+{len(failed_tests) - cap} more)")
     else:
@@ -3647,10 +3991,12 @@ def write_test_summary_artifact(lab: str, results: dict) -> Path:
         pass_meaning_block = (
             "\n"
             "PASS means:\n"
-            "  All executed declared checks matched their expected outcomes within the scope shown above\n"
+            "  All declared tests passed against real execution behavior\n"
+            "  All declared scenarios completed as expected within the executed scope\n"
             "\n"
             "PASS does not mean:\n"
-            "  Full network correctness outside the executed scope\n"
+            "  Validation of behaviors not declared in this topology\n"
+            "  Coverage of all possible failure modes\n"
         )
         fail_meaning_block = ""
     else:

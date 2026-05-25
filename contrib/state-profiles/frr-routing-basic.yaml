@@ -2,11 +2,17 @@ name: frr-routing-basic
 
 authority: non-authoritative
 
-purpose: Supporting state-capture profile for basic FRR routing inspection only.
+purpose: |
+  Captures the IPv4 and IPv6 routing tables from the FRR zebra daemon via
+  `vtysh -c "show ip route json"` and `vtysh -c "show ipv6 route json"`. Use
+  this profile when debugging missing routes, unexpected next-hops, ECMP
+  behaviour, or protocol-source attribution in the RIB; the runtime FRR
+  node must have at least one routing protocol installing routes (BGP,
+  OSPF, or static) for captures to contain meaningful entries.
 
 node_types:
   - frr
 
 commands:
-  - ["vtysh", "-c", "show ip route"]
-  - ["vtysh", "-c", "show ipv6 route"]
+  - ["vtysh", "-c", "show ip route json"]
+  - ["vtysh", "-c", "show ipv6 route json"]

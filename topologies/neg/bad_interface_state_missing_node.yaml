@@ -1,0 +1,30 @@
+# Phase 1a / Handover 5 — schema-negative fixture for the
+# interface_state invariant (REQ-H5-24 fixture 1).
+#
+# Contract: cassian validate MUST exit 2 with stderr matching:
+#   tests[0] (bad_missing_node): invariant test requires 'node/src' as a node name
+#
+# H5 LD-delta: this verbatim message originates from the structural
+# pre-dispatch check at cassian_model.py L2055-2058 (shared across all
+# invariant types). The WI-1 interface_state branch's own §16.1
+# first-clause text ("invariant 'interface_state' requires 'node'...")
+# is structurally unreachable in the current code path because the
+# pre-dispatch check fires first. Doctrinally compliant per
+# Doctrine §1.13 — names the field and identifies the gap. LD-1
+# ruling C deferred field-name harmonisation to BL-H5-1; restructuring
+# the shared pre-dispatch check is out of H5 scope.
+name: bad-interface-state-missing-node
+
+nodes:
+  - name: r1
+    type: frr
+
+links: []
+
+tests:
+  - name: bad_missing_node
+    kind: invariant
+    type: interface_state
+    interface: eth1
+    state: up
+    expect: pass

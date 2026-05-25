@@ -3,8 +3,20 @@ name: bgp-invariant
 nodes:
   - name: r1
     type: frr
+    asn: 65001
+    router_id: 1.1.1.1
+    bgp:
+      neighbors:
+        - peer: r2
+          remote_as: 65002
   - name: r2
     type: frr
+    asn: 65002
+    router_id: 2.2.2.2
+    bgp:
+      neighbors:
+        - peer: r1
+          remote_as: 65001
 
 links:
   - endpoints: ["r1:eth1", "r2:eth1"]

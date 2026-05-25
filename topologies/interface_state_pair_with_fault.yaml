@@ -1,0 +1,79 @@
+# Phase 1a / Handover 5 of 8 — pair-with-fault-injection proof topology
+# for the interface_state invariant (REQ-H5-23 / PROOF-H5-4).
+#
+# Contract: cassian test --scenario after_fault_iface_state
+#   topologies/interface_state_pair_with_fault.yaml MUST exit 0.
+# The relevant interface_state scenario_test_run record in
+# results.events MUST have verdict: pass AND meta.attempts == 1
+# (handover §15.3 first-attempt determinism requirement).
+#
+# Scenario sequence:
+#   step 1: fault interface_down on r1:eth1 (existing scenario action,
+#           cassian_runtime_container.py L325-342)
+#   step 2: run iface_down_after_fault (the new interface_state
+#           invariant test asserting state: down, expect: pass)
+#   step 3: fault interface_up on r1:eth1 (restore for clean teardown)
+#
+# H5 LD-zeta: verification uses --scenario <id> flag to skip
+# standalone execution of the top-level tests: block. The top-level
+# tests: block declaration is required (scenario `run: <name>` only
+# accepts named references to top-level tests; cassian_engine.py
+# L8443-8453). At deploy/provision time the interface starts up, so
+# standalone execution of iface_down_after_fault (state: down,
+# expect: pass) would fail before any fault is injected. The
+# --scenario <id> flag (cassian_cli.py L266) skips standalone tests
+# and exercises only the named scenario, which is the intended
+# proof shape per handover §15.3.
+#
+# Why interface_down on r1:eth1 not link_down: handover §3.1 item 10
+# specifies "scenario step interface_down followed by an
+# interface_state test asserting state: down" — exercises the
+# explicit interface_down/interface_up scenario actions
+# (cassian_runtime_container.py L325 paired class), not link_down.
+#
+# Why state: down, expect: pass is first-attempt deterministic:
+# rt.sh in interface_down (cassian_runtime_container.py L329) is
+# synchronous; kernel state changes are immediate from the
+# subprocess perspective. The subsequent ip -j link show eth1 in
+# the interface_state evaluator (WI-2) sees admin==down,
+# operstate==DOWN. Predicate (REQ-H5-18 disjunction
+# admin==down OR operstate!=UP) is satisfied on first probe.
+# meta.attempts == 1 expected. If meta.attempts > 1 reproducibly,
+# halt-and-escalate per handover §15.3 (signals BL-H5-2
+# wait_for: interface_state earlier-than-backlog need).
+name: interface-state-pair-with-fault
+
+nodes:
+  - name: r1
+    type: frr
+
+  - name: r2
+    type: frr
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+
+tests:
+  - name: iface_down_after_fault
+    kind: invariant
+    type: interface_state
+    node: r1
+    interface: eth1
+    state: down
+    expect: pass
+
+scenarios:
+  - id: after_fault_iface_state
+    description: "Bring r1:eth1 down via interface_down, assert state: down via interface_state invariant, restore for clean teardown."
+    steps:
+      - fault:
+          interface_down:
+            node: r1
+            if: eth1
+
+      - run: iface_down_after_fault
+
+      - fault:
+          interface_up:
+            node: r1
+            if: eth1

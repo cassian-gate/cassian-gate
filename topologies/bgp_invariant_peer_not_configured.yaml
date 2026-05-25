@@ -1,0 +1,31 @@
+name: bgp-invariant-peer-not-configured
+
+nodes:
+  - name: r1
+    type: frr
+    asn: 65001
+    router_id: 1.1.1.1
+    bgp:
+      neighbors:
+        - peer: r2
+          remote_as: 65002
+  - name: r2
+    type: frr
+    asn: 65002
+    router_id: 2.2.2.2
+    bgp:
+      neighbors:
+        - peer: r1
+          remote_as: 65001
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["10.0.0.1/30", "10.0.0.2/30"]
+
+tests:
+  - name: inv_bgp_up_r1_to_unconfigured_peer
+    kind: invariant
+    type: bgp_session_up
+    node: r1
+    dst: 10.0.0.99
+    expect: pass

@@ -1,0 +1,21 @@
+name: frr-interfaces-basic
+
+authority: non-authoritative
+
+purpose: |
+  Captures interface administrative and operational state from the FRR
+  node's network namespace using the Linux iproute2 primitives `ip -j
+  link show` and `ip -j addr show` (not vtysh). Use this profile when
+  debugging interface admin/operational state, link-layer attributes
+  (MAC, MTU, master/slave bridging), or per-interface IPv4/IPv6
+  addressing as seen by the kernel; this is the NOS-agnostic substrate
+  that pairs naturally with the `interface_state` invariant. The FRR
+  container image's iproute2 must support the `-j` JSON flag (engine
+  default suffices).
+
+node_types:
+  - frr
+
+commands:
+  - ["ip", "-j", "link", "show"]
+  - ["ip", "-j", "addr", "show"]
