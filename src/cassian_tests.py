@@ -3352,6 +3352,64 @@ def _format_observed_state_block(observed_state: dict, truncated: bool) -> list[
     return out
 
 
+def _format_observed_state_absence_block(
+    meta: dict,
+    src: str,
+    dst: str,
+    expected: str,
+) -> list[str]:
+    """
+    Deterministic absence indicator for a genuine failed-invariant record whose
+    observed_state is non-dict (BL-6 B02 / REQ-BL6-2/3/4/12).
+
+    Parallel to the present `observed:` block, surfaces:
+      - header 'observed:' at 4-space indent
+      - 'type:'     <invariant type>              (a)
+      - 'target:'   <declaration-derived target>  (a)
+      - 'expected:' <declared expectation>        (b)
+      - 'detail:'   explicit structured-detail-unavailable statement (c)
+
+    All values are deterministic and declaration-derived (no host / path /
+    run-id / timestamp / PID; only an allowlist of declaration-derived meta
+    target keys is read, so runtime-variant meta keys such as
+    observed_neighbor_count never enter the rendered surface). This preserves
+    the H2 D06 environmental-drift filter and byte-identity across replay
+    (REQ-BL6-8 / REQ-BL6-10).
+
+    Returns the block as a list of lines (no trailing newline).
+    """
+    if not isinstance(meta, dict):
+        meta = {}
+
+    inv_type = str(meta.get("type") or "").strip() or "<unknown>"
+
+    # Declaration-derived target locator keys only. Runtime / observed_* keys
+    # are deliberately excluded to preserve byte-identity (D06).
+    target_keys = ("peer", "prefix", "neighbor", "target", "network")
+    target_parts: list[str] = []
+    src_s = str(src or "").strip()
+    if src_s:
+        target_parts.append(src_s)
+    for key in target_keys:
+        if key in meta:
+            val = str(meta.get(key) or "").strip()
+            if val:
+                target_parts.append(f"{key}={val}")
+    dst_s = str(dst or "").strip()
+    if not target_parts and dst_s:
+        target_parts.append(dst_s)
+    target = " ".join(target_parts) if target_parts else "<unspecified>"
+
+    expected_s = str(expected or "").strip() or "<unspecified>"
+
+    return [
+        "    observed:",
+        f"      type: {inv_type}",
+        f"      target: {target}",
+        f"      expected: {expected_s}",
+        "      detail: (structured failure detail unavailable for this invariant type)",
+    ]
+
 def _format_test_summary(results: dict) -> str:
     lab = results.get("lab", "")
     summ = results.get("summary", {}) or {}
@@ -3458,14 +3516,22 @@ def _format_test_summary(results: dict) -> str:
                 else:
                     err = err
 
-            # WI-2: capture observed_state and observed_state_truncated for
-            # per-failed-invariant `observed:` block rendering. None / False
-            # for non-invariant or unpopulated records (R27).
+            # WI-1 (BL-6): capture observed_state + truncation for the present
+            # `observed:` block (R24-R28 / B01), and the invariant meta + declared
+            # expectation for the genuine-absence indicator (REQ-BL6-2/3/4). Empty
+            # defaults ({} / "") for non-invariant or unpopulated records; R27
+            # suppression on non-invariant kinds is preserved at the render branch.
             observed_state = t.get("observed_state")
             observed_state_truncated = bool(t.get("observed_state_truncated"))
+            inv_meta = t.get("meta") or {}
+            inv_expected = t.get("expected", "")
 
             failed_tests.append(
-                (name, kind, src, dst, err, observed_state, observed_state_truncated)
+                (
+                    name, kind, src, dst, err,
+                    observed_state, observed_state_truncated,
+                    inv_meta, inv_expected,
+                )
             )
 
     # WI-2: sort by name only because tuple positions 5-6 may carry dict /
@@ -3476,21 +3542,36 @@ def _format_test_summary(results: dict) -> str:
     if failed_tests:
         lines.append("failed_tests:")
         cap = 10
-        for (name, kind, src, dst, err, observed_state, observed_state_truncated) in failed_tests[:cap]:
+        for (
+            name, kind, src, dst, err,
+            observed_state, observed_state_truncated,
+            inv_meta, inv_expected,
+        ) in failed_tests[:cap]:
             line = f" - {name} ({kind}) {src}->{dst}"
             if err:
                 line += f" : {err}"
             lines.append(line)
 
-            # WI-2: per-failed-invariant `observed:` block (R24-R28).
-            # Suppressed for non-invariant kinds (ping/tcp/bgp_neighbor/prereq)
-            # and when observed_state is missing or not a dict (R27).
-            if kind == "invariant" and isinstance(observed_state, dict):
-                lines.extend(
-                    _format_observed_state_block(
-                        observed_state, observed_state_truncated
+            # WI-1 (BL-6): per-failed-invariant observed_state surface.
+            # Present path (dict) -> explicit `observed:` block (R24-R28 / B01,
+            # unchanged). Genuine-absence path (non-dict) -> explicit absence
+            # indicator surfacing (a) type+target, (b) expectation, and an
+            # explicit (c)-unavailable statement (REQ-BL6-2/3/4/12). Both are
+            # suppressed for non-invariant kinds (ping/tcp/bgp_neighbor/prereq):
+            # R27 preserved by the outer kind == "invariant" guard.
+            if kind == "invariant":
+                if isinstance(observed_state, dict):
+                    lines.extend(
+                        _format_observed_state_block(
+                            observed_state, observed_state_truncated
+                        )
                     )
-                )
+                else:
+                    lines.extend(
+                        _format_observed_state_absence_block(
+                            inv_meta, src, dst, inv_expected
+                        )
+                    )
         if len(failed_tests) > cap:
             lines.append(f" - (+{len(failed_tests) - cap} more)")
     else:
