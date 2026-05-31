@@ -2001,7 +2001,7 @@ Example failed-invariant record shape in `results.json`:
 
 Summary rendering in `results.summary.txt`:
 
-Each failed-invariant line in the `failed_tests:` block is followed by an indented `observed:` block. Indentation is fixed: header at 4-space, key/value lines at 6-space, list entries at 8-space. List values are capped at 5 entries with a trailing `(+<N> more)` over-cap line. When the record carries `observed_state_truncated: true`, the renderer emits a literal trailing line `(observed_state truncated; full payload in results.json)` at 6-space indent.
+Each failed-invariant line in the `failed_tests:` block is always followed by an indented `observed:` block — never a silent line — in one of two forms: the present payload block (illustrated below), or, when the record's `observed_state` is absent or non-dict, an explicit **absence indicator** carrying `type:`, `target:`, `expected:`, and a literal `detail: (structured failure detail unavailable for this invariant type)` line. Indentation is fixed: header at 4-space, key/value lines at 6-space, list entries at 8-space. List values are capped at 5 entries with a trailing `(+<N> more)` over-cap line. When the record carries `observed_state_truncated: true`, the renderer emits a literal trailing line `(observed_state truncated; full payload in results.json)` at 6-space indent. See `docs/topology-schema-v1.5.md` §5–§6 for the absence-indicator render rule and the suppression boundary.
 
 Example summary block:
 

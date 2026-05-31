@@ -73,6 +73,31 @@ jobs:
           ./src/cassian.py test three-frr-two-hosts-fw-routed --scenario quick_all
           ./src/cassian.py down three-frr-two-hosts-fw-routed
 
+      - name: B-9 observed_state render determinism (replay byte-identity)
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOPO=topologies/neg/h2_invariant_observability_demo.yaml
+          LAB=h2-invariant-observability-demo
+          SUM="labs/clab-${LAB}/results.summary.txt"
+          # By-design failing-invariant topology, run twice from clean state.
+          # Verdict is FAIL by design (|| true); B-9 asserts byte-identity of the
+          # rendered observed_state surface (results.summary.txt) across replay,
+          # not the verdict. The H2 D06 filter keeps env-variant tokens out.
+          ./src/cassian.py up "$TOPO" --reconfigure
+          ./src/cassian.py test "$LAB" || true
+          cp "$SUM" /tmp/bl6_b9_run1.summary.txt
+          ./src/cassian.py down "$LAB"
+          ./src/cassian.py up "$TOPO" --reconfigure
+          ./src/cassian.py test "$LAB" || true
+          cp "$SUM" /tmp/bl6_b9_run2.summary.txt
+          ./src/cassian.py down "$LAB"
+          if ! diff -u /tmp/bl6_b9_run1.summary.txt /tmp/bl6_b9_run2.summary.txt; then
+            echo "ERROR: B-9 observed_state render differs across replay (non-deterministic)."
+            exit 1
+          fi
+          echo "B-9 OK: observed_state render byte-identical across replay."
+
       - name: Upload artifacts (always; bounded on success)
         if: always()
         uses: actions/upload-artifact@v4

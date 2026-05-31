@@ -341,20 +341,23 @@ Rendering rules:
 * empty lists render inline as `[]`
 * when `observed_state_truncated: true`, the renderer emits the trailing line `(observed_state truncated; full payload in results.json)` at 6-space indent (the post-truncation list cap and the truncation marker line can co-occur)
 
+When a failed-invariant record's `observed_state` is absent or non-dict, the present `observed:` block above cannot be rendered; the renderer then emits an explicit **absence indicator** in its place — never silence — so a failed invariant always surfaces an `observed:` block in one of two forms (present payload block, or absence indicator). The absence indicator uses the same `observed:` header at 4-space indent with 6-space `<key>: <value>` lines, carrying, in order: `type:` (the specific invariant type), `target:` (the invariant's source node plus its declaration-derived locator, e.g. `peer=` / `prefix=` / `neighbor=`), `expected:` (the declared expectation), and a literal `detail: (structured failure detail unavailable for this invariant type)` line. Per the §3.2 determinism contract, only declared and declaration-derived locator fields enter `target:`; runtime-variant tokens are excluded, so the indicator is byte-stable across runs.
+
 `results.summary.txt` is human-only and non-authoritative. The structured `observed_state` in `results.json` is the authoritative artifact.
 
 ---
 
 ## 6) Suppression Rules
 
-The `observed:` block is NEVER rendered on:
+The present `observed:` payload block is NEVER rendered on:
 
 * passing-invariant records (`verdict == "pass"`)
 * non-invariant test kinds (`ping`, `tcp`, `bgp_neighbor`)
 * `prereq` failure paths (those surface as `hard_failure:` in the summary, not as `failed_tests:` entries)
-* records with a missing or non-dict `observed_state` field (defensive — should not occur in normal runs)
 
 The above rules guarantee that v1.x topologies exercising only `ping` / `tcp` / `bgp_neighbor` produce `results.summary.txt` byte-identical to pre-v1.5 output.
+
+A failed-invariant record with a missing or non-dict `observed_state` field (defensive — should not occur in normal runs) is NOT a suppression case: the present payload block is omitted, but the explicit absence indicator (§5) renders in its place, so a failed invariant never produces a silent `observed:`-less line.
 
 ---
 
