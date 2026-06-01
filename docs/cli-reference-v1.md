@@ -151,15 +151,18 @@ Notes:
 
 ## 3) Gate Command
 
-### `cassian test <lab> [flags]`
+### `cassian test <lab | topology.yaml> [flags]`
 
-**Purpose:** Run declared tests and scenarios for a lab.
+**Purpose:** Run declared tests and scenarios. The single positional argument accepts **two forms** with distinct semantics, selected by whether the value is a topology file path:
 
-**Authority:** This is the gate path (clean-state semantics are enforced by your operational workflow; the contract remains binding).
+* **`cassian test <topology.yaml>` (gate mode)** — when the positional ends in `.yaml`/`.yml`, runs an **authoritative clean-state gate** (`up → test → down`) using the topology name (or filename stem). This is the authoritative gate path.
+* **`cassian test <lab>` (lab-test mode)** — when the positional is a lab name, runs the declared tests and scenarios against an **existing** `labs/clab-<lab>/` artifact set (no deploy/teardown). This does not perform the clean-state gate cycle.
+
+**Authority:** Gate mode (`<topology.yaml>`) is the authoritative clean-state gate (`up → test → down`); lab-test mode (`<lab>`) runs tests against pre-existing lab artifacts. The contract remains binding in both.
 
 Arguments:
 
-* `<lab>`: lab name (e.g. `three-frr-two-hosts-fw-routed`)
+* `<lab | topology.yaml>`: **either** a lab name (e.g. `three-frr-two-hosts-fw-routed`, → lab-test mode) **or** a topology file path ending in `.yaml`/`.yml` (e.g. `topologies/three-frr.yaml`, → authoritative clean-state gate mode). Optional when using `--two-run` (then provide `--two-run-topology`).
 
 Test selection flags:
 

@@ -83,7 +83,6 @@ Recommended reading order:
 ### Extensions / adoption / examples
 
 - `extensions/extension-and-adoption.md`
-- `examples/first-run-proof-failure-narrative.md`
 - `ci/github-actions.md`
 - `ci/gitlab-ci.md`
 

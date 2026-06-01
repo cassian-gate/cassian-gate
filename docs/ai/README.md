@@ -20,16 +20,13 @@ AI does not:
 
 Read these files in this order:
 
-1. `docs/design-contract.md`  
-   The authoritative system contract.
-
-2. `docs/ai/guardrails.md`  
+1. `docs/ai/guardrails.md`  
    The behavioral boundaries AI must obey.
 
-3. `docs/ai/cli-contract-ai.md`  
+2. `docs/ai/cli-contract-ai.md`  
    The CLI-level AI contract.
 
-4. `docs/ai/online_ai.md`  
+3. `docs/ai/online_ai.md`  
    Optional online AI behavior and constraints.
 
 ---
