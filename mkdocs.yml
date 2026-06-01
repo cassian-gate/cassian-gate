@@ -108,7 +108,6 @@ nav:
   - Admin Guide: admin-guide-v1.md
   - VM Runtime Capabilities: vm-runtime-capabilities.md
   - Proof Kit / Examples: proof-kit.md
-  - First-run failure narrative: examples/first-run-proof-failure-narrative.md
   - AI Advisory:
     - Overview: ai/README.md
     - Guardrails: ai/guardrails.md
