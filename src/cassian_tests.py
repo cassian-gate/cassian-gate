@@ -3227,6 +3227,50 @@ def _render_scenarios_summary(results: dict) -> str:
                         if isinstance(os_last_error, str) and os_last_error.strip():
                             line_parts.append(f"last_error=\"{os_last_error.strip()}\"")
 
+                # BL-H3-8: existing wait_for types (ping, tcp, route_prefix) read
+                # their type label and type-specific identifiers from the
+                # F6-stabilized scenario step schema (st.wait_type / st.meta),
+                # mirroring the new-type block above. The legacy st.wait_for path
+                # is None on the normal path, so without this the existing types
+                # render a bare line with no type label or endpoint/selector
+                # identifiers. Scoped to the three existing types only; no
+                # state=/last_error= diagnostics (those remain new-type behavior).
+                elif isinstance(wait_type, str) and wait_type.strip() in (
+                    "ping",
+                    "tcp",
+                    "route_prefix",
+                ):
+                    wt = wait_type.strip()
+                    # type
+                    line_parts.append(f"type={wt}")
+                    # source node (all existing types)
+                    frm = meta.get("from")
+                    if isinstance(frm, str) and frm.strip():
+                        line_parts.append(f"from={frm.strip()}")
+                    # type-specific endpoint / selector identifiers
+                    if wt in ("ping", "tcp"):
+                        m_to = meta.get("to")
+                        if isinstance(m_to, str) and m_to.strip():
+                            line_parts.append(f"to={m_to.strip()}")
+                        m_src_if = meta.get("src_if")
+                        if isinstance(m_src_if, str) and m_src_if.strip():
+                            line_parts.append(f"src_if={m_src_if.strip()}")
+                        if wt == "ping":
+                            m_count = meta.get("count")
+                            if m_count is not None:
+                                line_parts.append(f"count={m_count}")
+                        if wt == "tcp":
+                            m_port = meta.get("port")
+                            if m_port is not None:
+                                line_parts.append(f"port={m_port}")
+                    elif wt == "route_prefix":
+                        m_src = meta.get("src")
+                        if isinstance(m_src, str) and m_src.strip():
+                            line_parts.append(f"src={m_src.strip()}")
+                        m_pfx = meta.get("prefix")
+                        if isinstance(m_pfx, str) and m_pfx.strip():
+                            line_parts.append(f"prefix={m_pfx.strip()}")
+
             elif stype == "wait_for_bgp":
                 node = st.get("node")
                 if isinstance(node, str) and node.strip():
