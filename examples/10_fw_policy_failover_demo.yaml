@@ -1,3 +1,5 @@
+name: fw_policy_failover_demo
+
 nodes:
   - name: h1
     type: host
@@ -44,7 +46,7 @@ tests:
   - name: app_to_db_icmp_blocked
     type: ping
     from: h1
-    to: h2
+    dst: h2
     expect: fail
 
   # Control-plane check (state only; does not imply reachability)
