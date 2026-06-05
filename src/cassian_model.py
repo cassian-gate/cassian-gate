@@ -2332,6 +2332,33 @@ def resolve_topology(topo: dict) -> dict:
                         f"{node_s!r} (node not declared in topology 'nodes:' section)"
                     )
 
+                # REQ-ENGVAL-H53-1/-2/-3 / B04-B06 (§4.4 BL-H5-3): the
+                # referenced interface must exist in node_s's resolved
+                # interface set, parallel to the node-existence check above.
+                # Resolved interface set (LD-2): link interfaces + 'lo' +
+                # fw/host interfaces. Assembled here (no pre-existing per-node
+                # interface structure exists). Link node:iface endpoints
+                # (~L1085-1086) and fw.interfaces (~L1781-1795) are the source
+                # of names, not re-validated here (B06 "Not").
+                _declared_ifaces = {"lo"}
+                for _link in (resolved.get("links") or []):
+                    for _ep in (_link.get("endpoints") or []):
+                        if isinstance(_ep, str) and ":" in _ep:
+                            _ep_node, _ep_iface = _ep.split(":", 1)
+                            if _ep_node.strip() == node_s and _ep_iface.strip():
+                                _declared_ifaces.add(_ep_iface.strip())
+                _node_intfs = _nodes_for_lookup[node_s].get("interfaces")
+                if isinstance(_node_intfs, dict):
+                    for _ifname in _node_intfs.keys():
+                        if isinstance(_ifname, str) and _ifname.strip():
+                            _declared_ifaces.add(_ifname.strip())
+                if t["interface"] not in _declared_ifaces:
+                    die(
+                        f"{ctx}: invariant 'interface_state' references unknown 'interface' "
+                        f"value {t['interface']!r} on node {node_s!r} "
+                        f"(declared interfaces: {', '.join(sorted(_declared_ifaces))})"
+                    )
+
                 # REQ-H5-7 / B-V05: state default 'up' materialised at Resolve
                 # (LD-3 ruling B). DC 2.6: defaults must be visible in
                 # topology.resolved.yaml.
