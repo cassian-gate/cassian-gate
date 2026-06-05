@@ -1,0 +1,29 @@
+# Phase 1b / §4.4 (BL-H5-3) — resolve-negative fixture for the new
+# interface-existence check (REQ-ENGVAL-H53-1/-2; proof P-H53-POS).
+#
+# Extends the topologies/neg/ corpus. An interface_state invariant
+# references interface 'eth9' on r1, whose resolved interface set is
+# eth1 + eth2 (from links) + lo. cassian validate MUST hard-fail at
+# resolve time (exit 2) with a DC v2.1 §13(a)-sufficient rejection:
+# (a) unknown interface + value, (b) {ctx} location, (c) the sorted
+# declared-interface set.
+#
+# Contract: cassian validate MUST exit 2 with stderr matching:
+#   tests[1] (bad_nonexistent_interface): invariant 'interface_state' references unknown 'interface' value 'eth9' on node 'r1' (declared interfaces: eth1, eth2, lo)
+name: bad-interface-state-nonexistent-interface
+nodes:
+  - name: r1
+    type: frr
+  - name: r2
+    type: frr
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+  - endpoints: ["r1:eth2", "r2:eth2"]
+tests:
+  - name: bad_nonexistent_interface
+    kind: invariant
+    type: interface_state
+    node: r1
+    interface: eth9
+    state: up
+    expect: pass
