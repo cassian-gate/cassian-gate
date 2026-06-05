@@ -1752,7 +1752,7 @@ Behavior:
 - It passes when the kernel-reported `admin_state` and `operstate` together satisfy the asymmetric predicate above.
 - It fails when the predicate does not hold OR when the probe itself fails (closed-set `last_error` literal indicates which path: capability-probe failure, interface-not-present, ip-command-failure, JSON parse failure, structural surprise, missing field).
 - A per-(lab, node) capability probe runs at most once per gate run on first use of `interface_state` against that node; capability-probe failures short-circuit with `last_error: "ip -j flag not supported by node's iproute2"`.
-- If the invariant definition is invalid (missing `node`, missing `interface`, unknown `node` reference, invalid `state` literal, unknown key), the run fails with misuse exit code `2`.
+- If the invariant definition is invalid (missing `node`, missing `interface`, unknown `node` reference, unknown `interface` reference, invalid `state` literal, unknown key), the run fails with misuse exit code `2`.
 - Retry policy: bounded by the test's `timeout_s` (default `10` seconds) and `retry_interval_s` (default `0.5` seconds) when `expect: pass`. Single attempt for `expect: fail`.
 
 Artifacts produced:
@@ -2066,6 +2066,12 @@ Currently implemented scenario step types:
 - `wait_for_bgp`
 - `pcap_start`
 - `pcap_stop`
+
+### `run` (dispatch a declared test item)
+
+A `run:` step dispatches a declared item from `tests:` by name as part of the scenario sequence.
+
+A scenario `run:` step may invoke **any of the 13 catalog invariant types** — the same set available to standalone `cassian test` — not only `interface_state`. In particular, an `ospf_neighbor_up` invariant referenced by a scenario `run:` step now dispatches and evaluates correctly (it does not emit a spurious pre-dispatch failure).
 
 ### `wait` (explicit elapsed-time pause)
 
