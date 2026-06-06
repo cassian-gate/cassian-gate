@@ -1,0 +1,30 @@
+# Q4 expect: fail fixture for ospf_neighbor_up (holding predicate -> verdict: fail).
+# Cloned from ospf_neighbor_up.yaml: matched area 0 both sides -> adjacency reaches Full
+# (observed: pass); expect: fail -> the expected failure did not occur -> verdict: fail.
+name: ospf-neighbor-up-expect-fail
+nodes:
+  - name: r1
+    type: frr
+    router_id: 1.1.1.1
+    ospf:
+      area: 0
+      networks:
+        - 10.0.0.0/16
+        - 1.1.1.1/32
+  - name: r2
+    type: frr
+    router_id: 2.2.2.2
+    ospf:
+      area: 0
+      networks:
+        - 10.0.0.0/16
+        - 2.2.2.2/32
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+tests:
+  - name: q4_ospf_neighbor_up_r1_to_r2_holds_but_expect_fail
+    kind: invariant
+    type: ospf_neighbor_up
+    src: r1
+    neighbor: 2.2.2.2
+    expect: fail

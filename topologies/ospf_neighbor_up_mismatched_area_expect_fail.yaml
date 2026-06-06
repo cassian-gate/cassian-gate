@@ -1,0 +1,30 @@
+# Q3 expect: fail fixture for ospf_neighbor_up (failing predicate -> verdict: pass).
+# Cloned from neg/ospf_neighbor_up_mismatched_area.yaml: r1 area 0, r2 area 1 -> adjacency
+# never forms (observed: fail); expect: fail -> the expected failure occurred -> verdict: pass.
+name: ospf-neighbor-up-mismatched-area-expect-fail
+nodes:
+  - name: r1
+    type: frr
+    router_id: 1.1.1.1
+    ospf:
+      area: 0
+      networks:
+        - 10.0.0.0/16
+        - 1.1.1.1/32
+  - name: r2
+    type: frr
+    router_id: 2.2.2.2
+    ospf:
+      area: 1
+      networks:
+        - 10.0.0.0/16
+        - 2.2.2.2/32
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+tests:
+  - name: q3_ospf_neighbor_up_r1_to_r2_mismatched_area_fails_expect_fail
+    kind: invariant
+    type: ospf_neighbor_up
+    src: r1
+    neighbor: 2.2.2.2
+    expect: fail
