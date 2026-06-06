@@ -37,6 +37,21 @@ Rules:
 * invariant tests run after the v1.x prerequisite phases (`Resolve` → `Generate` → `Deploy` → `Provision`); they execute during the `Test` phase
 * the `kind:` discriminator is required because the `type:` namespace overlaps with v1.x test types only up to the ordinary disambiguation rule (`kind: invariant` selects the invariant evaluator dispatch path)
 
+### 1.1) Verdict contract (four quadrants)
+
+The verdict for every `kind: invariant` test is `pass` when `observed` equals `expected` and `fail` otherwise. Because `expect:` may be declared `pass` or `fail`, this yields four cases:
+
+| `expect:` | predicate | `observed` | `verdict:` |
+| --------- | --------- | ---------- | ---------- |
+| `pass`    | holds     | `pass`     | `pass`     |
+| `pass`    | fails     | `fail`     | `fail`     |
+| `fail`    | fails     | `fail`     | `pass`     |
+| `fail`    | holds     | `pass`     | `fail`     |
+
+The two `verdict: fail` rows (`expect: pass` over a failing predicate, and `expect: fail` over a holding predicate) each carry the structured `observed_state` payload described in §3; the two `verdict: pass` rows do not.
+
+A structural evaluation error (missing field, probe failure, unparseable output, or unsupported type) forces `verdict: fail` regardless of `expect:` — including `expect: fail` — so an error path never satisfies a negative test; only a genuinely-failing predicate satisfies `expect: fail`.
+
 ---
 
 ## 2) Supported Invariant Types
