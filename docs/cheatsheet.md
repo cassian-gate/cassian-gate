@@ -1030,6 +1030,19 @@ kind: invariant
 
 They validate declared truth conditions and return authoritative pass/fail results like any other test.
 
+### Expect / verdict (four quadrants)
+
+`expect:` declares whether the predicate should hold. The verdict is `pass` when `observed` matches `expected`, otherwise `fail`:
+
+| `expect:` | predicate | `verdict:` |
+| --------- | --------- | ---------- |
+| `pass`    | holds     | `pass`     |
+| `pass`    | fails     | `fail`     |
+| `fail`    | fails     | `pass`     |
+| `fail`    | holds     | `fail`     |
+
+Use `expect: fail` to assert a condition must NOT hold (a negative test). A `fail` verdict carries the `observed:` block (see the v1.5 schema guide §3); a structural error forces `fail` regardless of `expect:`.
+
 ### Blocked declared validation items
 
 If a declared test or selected scenario reaches authoritative execution scope but cannot execute normally because execution is blocked later in the gate path, Cassian Gate records that item explicitly in `results.json`.
