@@ -7539,6 +7539,31 @@ def cmd_test(args: argparse.Namespace) -> None:
         )
         return "fail"
 
+    def run_exec_test(*, test_name: str, src: str, t: dict, record_fn=record_test) -> str:
+        # §4.7 exec evaluator (WI-2 dispatch shell). Parallel to run_invariant_test,
+        # a DISTINCT evaluator -- exec never routes through the 13-type invariant
+        # catalog (REQ-UDI-DISPATCH-2). Execution (rt.exec, bounded timeout_s),
+        # assertion evaluation, four-quadrant verdict, and meta.exec are wired in
+        # WI-3 (EXEC-1/2/3, VERDICT-1/2, AUTH-1/2). For now this records a
+        # deterministic dispatch-reached marker so standalone/scenario routing
+        # parity is provable (REQ-UDI-DISPATCH-3).
+        expected = str(t.get("expect") or "pass").strip().lower()
+        if expected not in ("pass", "fail"):
+            expected = "pass"
+        record_fn(
+            name=test_name,
+            kind="exec",
+            src=src or "",
+            dst="",
+            expected=expected,
+            observed="fail",
+            verdict="fail",
+            evidence={"reason": "exec_runtime_pending_wi3"},
+            duration_ms=0,
+            error="exec runtime not yet wired (WI-3)",
+        )
+        return "fail"
+
     def run_named_test(ref: str, *, scenario_ctx: tuple[str, int] | None = None) -> str:
         """
         Execute a declared atomic test by name (used by scenarios).
@@ -7682,6 +7707,17 @@ def cmd_test(args: argparse.Namespace) -> None:
                 if scenario_ctx else record_test
             )
             return run_invariant_test(
+                test_name=ref, src=src, t=t, record_fn=record_fn_local
+            )
+
+        if kind == "exec":
+            record_fn_local = (
+                (lambda **kw: record_event_test_run(
+                    scenario_id=scenario_ctx[0], step_index=scenario_ctx[1], **kw
+                ))
+                if scenario_ctx else record_test
+            )
+            return run_exec_test(
                 test_name=ref, src=src, t=t, record_fn=record_fn_local
             )
 
@@ -9962,7 +9998,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 src = t.get("src")
                 dst = t.get("dst")
 
-                if kind not in ("ping", "tcp", "bgp_neighbor", "route_prefix", "invariant"):
+                if kind not in ("ping", "tcp", "bgp_neighbor", "route_prefix", "invariant", "exec"):
                     record_test(
                         name=test_name,
                         kind=str(kind),
@@ -10117,6 +10153,16 @@ def cmd_test(args: argparse.Namespace) -> None:
                     if verdict != "pass":
                         fail_or_continue(
                             f"tests[{i}] route_prefix mismatch: on {src} prefix {t.get('prefix')} expected {t.get('expect','pass')}"
+                        )
+                    continue
+
+                if kind == "exec":
+                    verdict = run_exec_test(test_name=test_name, src=src, t=t)
+                    verdict_txt = (verdict or "fail").upper()
+                    _tv(f"[TEST END]   {exec_idx:03d} {test_name} verdict={verdict_txt}")
+                    if verdict != "pass":
+                        fail_or_continue(
+                            f"tests[{i}] exec mismatch: on {src} expected {t.get('expect','pass')}"
                         )
                     continue
 
