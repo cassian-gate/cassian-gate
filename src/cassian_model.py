@@ -1747,14 +1747,22 @@ def _validate_exec_assertion(assertion, ctx: str) -> None:
     if _op == "count":
         if not isinstance(_val.get("pattern"), str) or not _val["pattern"].strip():
             die(f"{ctx}: exec assertion 'count' requires a non-empty string 'pattern'")
+        try:
+            re.compile(_val["pattern"])
+        except re.error as _e:
+            die(f"{ctx}: exec assertion 'count' 'pattern' is not a valid regex: {_e}")
         if not isinstance(_val.get("value"), int) or isinstance(_val.get("value"), bool):
             die(f"{ctx}: exec assertion 'count' requires an integer 'value'")
         _extra = set(_val.keys()) - {"pattern", "op", "value"}
         if _extra:
             die(f"{ctx}: exec assertion 'count' has unknown key(s) {sorted(_extra)!r} (allowed: pattern, op, value)")
     else:
-        if not isinstance(_val.get("path"), str) or not _val["path"].strip():
-            die(f"{ctx}: exec assertion 'field' requires a non-empty string 'path'")
+        _path = _val.get("path")
+        if not isinstance(_path, list) or not _path:
+            die(f"{ctx}: exec assertion 'field' requires a non-empty list 'path' of literal key segments (e.g. [peers, '10.0.0.1', state])")
+        for _seg in _path:
+            if not isinstance(_seg, str) or not _seg.strip():
+                die(f"{ctx}: exec assertion 'field' 'path' segments must be non-empty strings")
         if isinstance(_val.get("value"), (dict, list)):
             die(f"{ctx}: exec assertion 'field' requires a scalar 'value'")
         _extra = set(_val.keys()) - {"path", "op", "value"}

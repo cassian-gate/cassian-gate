@@ -99,8 +99,11 @@ def main():
 
     # D2-REC + D-DET on the evaluator shell
     check("D2-REC run_exec_test records via record_fn", "record_fn(" in fexec)
-    _nd = ("time.", "random.", "uuid", "datetime", "os.environ", "getenv")
-    check("D-DET run_exec_test has no nondeterministic surface",
+    # WI-3: real evaluator uses time.time() for duration_ms (replay-normalized,
+    # exactly as the invariant evaluator). Guard only UNEXPECTED nondeterminism;
+    # record replay-stability is proven by udi_replay_determinism_proof.py.
+    _nd = ("random.", "uuid", "datetime", "os.environ", "getenv")
+    check("D-DET run_exec_test has no unexpected nondeterministic surface",
           bool(fexec) and not any(tok in fexec for tok in _nd))
 
     ok = True

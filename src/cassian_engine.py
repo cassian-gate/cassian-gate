@@ -965,8 +965,8 @@ def _observed_state_finalize_in_results(results: dict) -> None:
         kind = str(rec.get("kind") or "").strip().lower()
         verdict = str(rec.get("verdict") or "").strip().lower()
 
-        if kind != "invariant" or verdict != "fail":
-            # observed_state belongs only on failed invariant records.
+        if kind not in ("invariant", "exec") or verdict != "fail":
+            # observed_state belongs on failed invariant and exec records.
             for k in (
                 "observed_state",
                 "observed_state_truncated",
@@ -3086,6 +3086,72 @@ def cmd_run(args: argparse.Namespace) -> None:
         raise SystemExit(code)
 
     return
+
+_EXEC_TIMEOUT_S = 30
+_EXEC_EVIDENCE_CAP = 4096
+
+
+def _eval_exec_assertion(assertion: dict, stdout: str) -> tuple[str, str]:
+    """Evaluate a pre-validated typed exec assertion against captured stdout
+    (Amendment A7). Returns (observed, error); observed in {"pass", "fail"}.
+    Schema is validated at resolve time (_validate_exec_assertion); any
+    failure-to-evaluate here is a deterministic Cassian-owned "fail" (never raises)."""
+    if not isinstance(assertion, dict) or len(assertion) != 1:
+        return ("fail", "exec assertion malformed at evaluation")
+    out = stdout if isinstance(stdout, str) else str(stdout)
+    op = next(iter(assertion))
+    val = assertion[op]
+    try:
+        if op == "contains":
+            return ("pass" if val in out else "fail", "")
+        if op == "not_contains":
+            return ("pass" if val not in out else "fail", "")
+        if op == "equals":
+            return ("pass" if out.strip() == val else "fail", "")
+        if op == "matches":
+            return ("pass" if re.search(val, out) is not None else "fail", "")
+        if op == "count":
+            n = len(re.findall(val["pattern"], out))
+            want = val["value"]
+            cop = val["op"]
+            if cop == "==":
+                return ("pass" if n == want else "fail", "")
+            if cop == ">=":
+                return ("pass" if n >= want else "fail", "")
+            if cop == "<=":
+                return ("pass" if n <= want else "fail", "")
+            return ("fail", f"count: unknown op {cop!r}")
+        if op == "field":
+            try:
+                doc = json.loads(out)
+            except Exception:
+                return ("fail", "field: stdout is not valid JSON")
+            cur = doc
+            for seg in val["path"]:
+                if not isinstance(cur, dict) or seg not in cur:
+                    return ("fail", f"field: path segment {seg!r} missing or parent not a dict")
+                cur = cur[seg]
+            want = val["value"]
+            fop = val["op"]
+            if fop == "==":
+                if isinstance(cur, bool) or isinstance(want, bool):
+                    return ("pass" if (isinstance(cur, bool) and isinstance(want, bool) and cur == want) else "fail", "")
+                if isinstance(cur, (int, float)) and isinstance(want, (int, float)):
+                    return ("pass" if cur == want else "fail", "")
+                if isinstance(cur, str) and isinstance(want, str):
+                    return ("pass" if cur == want else "fail", "")
+                return ("fail", "")
+            if not (isinstance(cur, (int, float)) and not isinstance(cur, bool)) or not (isinstance(want, (int, float)) and not isinstance(want, bool)):
+                return ("fail", "field: ordering comparison requires numeric operands")
+            if fop == ">=":
+                return ("pass" if cur >= want else "fail", "")
+            if fop == "<=":
+                return ("pass" if cur <= want else "fail", "")
+            return ("fail", f"field: unknown op {fop!r}")
+    except Exception as _e:
+        return ("fail", f"exec assertion evaluation error: {_e}")
+    return ("fail", f"exec assertion unknown operator {op!r} at evaluation")
+
 
 def cmd_test(args: argparse.Namespace) -> None:
     """
@@ -7550,19 +7616,70 @@ def cmd_test(args: argparse.Namespace) -> None:
         expected = str(t.get("expect") or "pass").strip().lower()
         if expected not in ("pass", "fail"):
             expected = "pass"
+        command = str(t.get("command") or "")
+        assertion = t.get("assertion") if isinstance(t.get("assertion"), dict) else {}
+
+        _start = time.time()
+        exec_error = ""
+        stdout = ""
+        stderr = ""
+        returncode = None
+        try:
+            cp = rt.exec(lab, src, shlex.split(command), check=False,
+                         capture_output=True, timeout_s=_EXEC_TIMEOUT_S)
+            if isinstance(cp, str):
+                stdout = cp
+            else:
+                stdout = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
+                stderr = getattr(cp, "stderr", "") or ""
+                returncode = getattr(cp, "returncode", None)
+            if isinstance(stdout, (bytes, bytearray)):
+                stdout = stdout.decode("utf-8", errors="replace")
+            if isinstance(stderr, (bytes, bytearray)):
+                stderr = stderr.decode("utf-8", errors="replace")
+        except Exception as _exc:
+            exec_error = f"exec failed: {_exc}"
+
+        if exec_error:
+            observed, eval_error = "fail", exec_error
+        else:
+            observed, eval_error = _eval_exec_assertion(assertion, stdout)
+
+        verdict = "pass" if observed == expected else "fail"
+
+        _truncated = len(stdout) > _EXEC_EVIDENCE_CAP or len(stderr) > _EXEC_EVIDENCE_CAP
+        evidence = {
+            "stdout": stdout[:_EXEC_EVIDENCE_CAP],
+            "stderr": stderr[:_EXEC_EVIDENCE_CAP],
+            "returncode": returncode,
+            "truncated": _truncated,
+        }
+
+        observed_state_payload = None
+        if observed == "fail":
+            observed_state_payload = {
+                "command": command,
+                "returncode": returncode,
+                "stdout_excerpt": stdout[:_EXEC_EVIDENCE_CAP],
+            }
+            if eval_error:
+                observed_state_payload["eval_error"] = eval_error
+
         record_fn(
             name=test_name,
             kind="exec",
             src=src or "",
             dst="",
             expected=expected,
-            observed="fail",
-            verdict="fail",
-            evidence={"reason": "exec_runtime_pending_wi3"},
-            duration_ms=0,
-            error="exec runtime not yet wired (WI-3)",
+            observed=observed,
+            verdict=verdict,
+            duration_ms=int((time.time() - _start) * 1000),
+            error="" if verdict == "pass" else (eval_error or f"exec assertion not satisfied (observed {observed}, expected {expected})"),
+            meta={"exec": {"command": command, "assertion": assertion}},
+            evidence=evidence,
+            observed_state=observed_state_payload,
         )
-        return "fail"
+        return verdict
 
     def run_named_test(ref: str, *, scenario_ctx: tuple[str, int] | None = None) -> str:
         """

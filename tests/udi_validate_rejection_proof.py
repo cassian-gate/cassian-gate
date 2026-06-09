@@ -75,7 +75,7 @@ def main():
 
     # P-NEG: well-formed exec tests resolve (no false-fail)
     o, _ = _resolve(_topo(_exec(src="r1", command='vtysh -c "show ip route"',
-                                assertion={"field": {"path": "0.prefix", "op": "==",
+                                assertion={"field": {"path": ["0", "prefix"], "op": "==",
                                                      "value": "0.0.0.0/0"}})))
     check("P-NEG frr show + field assertion resolves", o == "ok")
     o, _ = _resolve(_topo(_exec(src="fw1", command='nft list ruleset',
