@@ -77,6 +77,7 @@ jobs:
           python tests/udi_replay_determinism_proof.py
           python tests/udi_render_boundary_proof.py
           python tests/udi_blast_radius_coverage_proof.py
+          python tests/udi_preservation_proof.py
 
       - name: Project gate (up -> test -> down)
         shell: bash
