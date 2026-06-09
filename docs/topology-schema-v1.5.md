@@ -87,6 +87,79 @@ Rules:
 
 ---
 
+## 2a) The `kind: exec` Test Category — User-Defined Invariants
+
+The built-in invariant catalog (§2) is fixed: an operator can only assert truths the engine already encodes an evaluator for. The `kind: exec` category lifts that ceiling. An `exec` test is a **user-defined invariant** — the operator names a target node, supplies a single **read-only** command, and attaches a **typed assertion** over that command's output. It is authoritative: it produces a four-quadrant verdict and records to `results.json` with the same record structure as a built-in invariant. It is not advisory, and it is not freeform grep.
+
+```yaml
+tests:
+  - name: bgp_peer_established
+    kind: exec
+    src: r1
+    command: vtysh -c "show bgp summary json"
+    assertion:
+      field:
+        path: [ipv4Unicast, peers, "10.0.0.2", state]
+        op: "=="
+        value: Established
+    expect: pass
+```
+
+### 2a.1) Closed key set
+
+An `exec` test declares exactly the keys below; any other key is a hard-failure at validation (exit code `2`), parallel to the unknown-key strictness elsewhere in this schema.
+
+| Key | Meaning |
+|---|---|
+| `name` | unique test name |
+| `kind` | literal `exec` |
+| `src` | target node to run on (aliases `node` / `on` / `from`, normalised to `src` at Resolve) |
+| `command` | a single read-only command (see §2a.3) |
+| `assertion` | exactly one typed predicate (see §2a.4) |
+| `expect` | `pass` or `fail` — same four-quadrant contract as §1.1 |
+
+Unlike `kind: invariant`, an `exec` test has no `type:` field, and there is no operator-facing timeout key — invocation is bounded by an internal default.
+
+### 2a.2) Target node and derived type
+
+`src` MUST reference a node declared in `nodes:`. The engine **derives** the node's type from the topology — the operator does not declare it. In v1 the derived type MUST be one of `frr` or `nft-fw`; a target whose derived type is anything else is rejected at validation. The derived type also selects the read-only allow-list.
+
+### 2a.3) Read-only allow-list
+
+Commands are constrained to a node-type-aware read-only allow-list at a single validation site (default-deny). Raw shell (e.g. `sh -lc …`) is never an accepted command form.
+
+| Derived type | Allowed command form |
+|---|---|
+| `frr` | `vtysh -c "show …"` (read-only `show` commands) |
+| `nft-fw` | `nft list …` (e.g. `nft list ruleset`; mutating verbs such as `add` / `delete` / `flush` / `insert` / `replace` are denied) |
+
+A command outside the allow-list for the target's derived type is rejected at validation (exit code `2`) with a deterministic error; it never reaches runtime.
+
+### 2a.4) Typed assertions
+
+The assertion is exactly one typed predicate over the command's captured stdout. Freeform grep is not expressible by construction.
+
+| Operator | YAML shape | Meaning |
+|---|---|---|
+| `contains` | `contains: <substr>` | case-sensitive substring present in stdout |
+| `not_contains` | `not_contains: <substr>` | substring absent |
+| `equals` | `equals: <value>` | `stdout.strip() == value`, case-sensitive |
+| `matches` | `matches: <regex>` | `re.search(pattern, stdout)`; the pattern MUST compile — an uncompilable pattern is a validation-time rejection |
+| `count` | `count: {pattern: <regex>, op: == \| >= \| <=, value: <int>}` | `len(re.findall(pattern, stdout))` compared to `value` |
+| `field` | `field: {path: [<seg>, …], op: == \| >= \| <=, value: <value>}` | parse stdout as JSON, walk the literal-key `path`, then compare |
+
+The `field` `path` is an **explicit list of literal key segments** — not a dotted string — so a key that itself contains dots (e.g. a peer address `"10.0.0.2"`) is unambiguous. Traversal descends the parsed JSON one literal key per segment, in order. `==` is **typed**: string↔string, number↔number, bool↔bool; a type mismatch is a deterministic non-match, never a silent coercion. `>=` / `<=` require both operands to be numeric.
+
+Any failure to evaluate — unparseable JSON, a missing path segment, descent into a non-dict, a value type the operator cannot compare, a command timeout, or an exec error — is a deterministic Cassian-owned `observed: fail`. It is never a crash and never a silent pass.
+
+### 2a.5) Verdict, failure rendering, and blast-radius
+
+* **Verdict** uses the canonical four-quadrant contract in §1.1, unchanged: `verdict: pass` iff `observed == expected`. There is no exec-specific verdict path.
+* **`observed_state`** — an `exec` record whose `verdict` is `fail` carries an `observed_state` payload (`command`, `returncode`, `stdout_excerpt`) on the same terms as a failed invariant (§3); a passing `exec` record does not.
+* **Blast-radius** — in an opt-in `blast_radius.enabled` topology, an `exec` test participates in the coverage graph via its `src` node. It does not crash the coverage build, and it is not silently dropped.
+
+---
+
 ## 3) Failure Verdicts and `observed_state`
 
 Every invariant test record that resolves to `verdict: fail` carries a structured `observed_state` payload alongside the existing `observed` string field. The `observed_state` payload is the **deterministic** structured failure-reason artifact.
@@ -380,6 +453,8 @@ A failed-invariant record with a missing or non-dict `observed_state` field (def
 ## 7) Cross-references
 
 * The supported invariant evaluator dispatch is implemented in `cassian_engine.py` `run_invariant_test`.
+* The `exec` user-defined-invariant evaluator dispatch is implemented in `cassian_engine.py` `run_exec_test` and the assertion evaluator `_eval_exec_assertion`; resolve-time validation (closed keys, derived-type allow-list, typed-assertion schema) is in `cassian_model.py`.
+
 * The summary rendering is implemented in `cassian_tests.py` `_format_test_summary` and its `_format_observed_state_*` helpers.
 * The truncation discipline is implemented in `cassian_engine.py` `_observed_state_finalize_in_results` and `_observed_state_truncate`.
 * The negative-case proof topology exercising one invariant per category lives at `topologies/neg/h2_invariant_observability_demo.yaml`.

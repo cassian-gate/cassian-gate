@@ -976,6 +976,8 @@ Supported kinds:
 - `ping`
 - `tcp`
 - `invariant` — see "Invariant tests" below for the supported invariant `type` values
+- `exec` — user-defined invariant: a read-only command on a node plus a typed assertion; see "Exec tests" below
+
 
 ---
 
@@ -1043,6 +1045,9 @@ They validate declared truth conditions and return authoritative pass/fail resul
 
 Use `expect: fail` to assert a condition must NOT hold (a negative test). A `fail` verdict carries the `observed:` block (see the v1.5 schema guide §3); a structural error forces `fail` regardless of `expect:`.
 
+This same four-quadrant contract governs `exec` user-defined invariants (see "Exec tests"); there is no separate verdict path per kind.
+
+
 ### Blocked declared validation items
 
 If a declared test or selected scenario reaches authoritative execution scope but cannot execute normally because execution is blocked later in the gate path, Cassian Gate records that item explicitly in `results.json`.
@@ -1061,6 +1066,39 @@ Example meaning:
 - it was in authoritative scope
 - it did not run normally
 - the result was recorded explicitly rather than omitted
+
+---
+
+## Exec tests (user-defined invariants)
+
+When the built-in invariant catalog can't express the check you need, an `exec` test lets you define your own: a read-only command on a node plus a typed assertion. It is authoritative — same verdict and record structure as a built-in invariant.
+
+```yaml
+- name: bgp_peer_established
+  kind: exec
+  src: r1                                    # target node; type derived (frr | nft-fw)
+  command: vtysh -c "show bgp summary json"  # read-only: frr -> vtysh -c "show …"; nft-fw -> nft list …
+  assertion:
+    field:
+      path: [ipv4Unicast, peers, "10.0.0.2", state]
+      op: "=="
+      value: Established
+  expect: pass
+```
+
+Closed key set: `name`, `kind`, `src`, `command`, `assertion`, `expect` — any other key is rejected at `cassian validate`.
+
+Typed assertions (pick exactly one):
+
+| Operator | Shape |
+| --- | --- |
+| `contains` / `not_contains` | `contains: "<substr>"` |
+| `equals` | `equals: "<value>"` |
+| `matches` | `matches: "<regex>"` |
+| `count` | `count: { pattern: "<regex>", op: ">=", value: 2 }` |
+| `field` | `field: { path: [k1, "k2"], op: "==", value: X }` — JSON output; walks literal dict keys |
+
+Verdict uses the four-quadrant table above (same contract as invariants). Full reference: [schema guide §2a](topology-schema-v1.5.md) and the [recipe](recipes/exec-user-defined-invariants.md).
 
 ---
 

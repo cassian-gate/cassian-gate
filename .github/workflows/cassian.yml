@@ -65,6 +65,19 @@ jobs:
           set -euo pipefail
           python -m py_compile src/*.py
 
+      - name: User-defined invariant (exec) proof harnesses (§4.7)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/udi_validate_rejection_proof.py
+          python tests/udi_guardrail_uniformity_proof.py
+          python tests/udi_dispatch_parity_proof.py
+          python tests/udi_assertion_eval_proof.py
+          python tests/udi_four_quadrant_proof.py
+          python tests/udi_replay_determinism_proof.py
+          python tests/udi_render_boundary_proof.py
+          python tests/udi_blast_radius_coverage_proof.py
+
       - name: Project gate (up -> test -> down)
         shell: bash
         run: |
