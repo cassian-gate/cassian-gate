@@ -4067,7 +4067,17 @@ def cmd_test(args: argparse.Namespace) -> None:
                         _add_node(str(test_obj.get(fld) or ""), f"{basis_label}.{fld}")
                 return
 
-            die(f"blast-radius: unsupported test kind '{kind}' in {basis_label}", code=2)
+            if kind in ("exec", "bgp_neighbor", "route_prefix"):
+                # A6 BLAST-1/2 (LD-C1): running-node coverage via src only; non-node
+                # fields (bgp_neighbor peer-IP dst, route_prefix prefix) are never
+                # coverage nodes and are not looked up (no unknown-node die).
+                if test_obj.get("src") is not None:
+                    _add_node(str(test_obj.get("src") or ""), f"{basis_label}.src")
+                return
+
+            # A6 BLAST-3 (LD-C2/C3): unrecognized/future kind -> skip with an explicit
+            # notation in the surfaced coverage_basis; never die, never silently drop.
+            coverage_basis.append(f"uncovered_kind:{kind}:{basis_label}")
 
         tests_decl = topo_obj.get("tests") or []
         tests_by_name: dict[str, dict[str, Any]] = {}
