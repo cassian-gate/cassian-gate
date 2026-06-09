@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shlex
 
 import ipaddress
 import yaml
@@ -1683,6 +1684,84 @@ def topo_to_containerlab(topo: dict) -> dict:
 
     return clab
 
+def _exec_command_allowed(command: str, derived_type: str) -> tuple[bool, str]:
+    """Single canonical read-only allow-list decision site for exec commands
+    (LD-B; DOCTRINE-1). Default-deny; raw shell closed. Returns (allowed, reason)."""
+    cmd = str(command or "").strip()
+    if not cmd:
+        return (False, "command is empty")
+    for _ch in (";", "|", "&", "$", "`", "<", ">", "(", ")", "{", "}", "\n", "\\"):
+        if _ch in cmd:
+            return (False, "raw shell / shell metacharacters are not an accepted exec command form")
+    try:
+        argv = shlex.split(cmd)
+    except ValueError:
+        return (False, "command is not a well-formed single command")
+    if not argv:
+        return (False, "command is empty")
+    if derived_type == "frr":
+        if argv[0] != "vtysh" or "-c" not in argv:
+            return (False, "frr exec commands must be read-only 'vtysh -c \"show \u2026\"'")
+        _ci = argv.index("-c")
+        if _ci + 1 >= len(argv):
+            return (False, "frr exec commands must be read-only 'vtysh -c \"show \u2026\"'")
+        _vc = argv[_ci + 1].strip().lower()
+        if _vc != "show" and not _vc.startswith("show "):
+            return (False, "frr exec commands must be read-only 'vtysh -c \"show \u2026\"'")
+        return (True, "")
+    if derived_type == "nft-fw":
+        if argv[0] != "nft" or len(argv) < 2 or argv[1] != "list":
+            return (False, "nft-fw exec commands must be read-only 'nft list \u2026' (mutation subcommands denied)")
+        return (True, "")
+    return (False, f"no read-only allow-list for node type {derived_type!r}")
+
+
+def _validate_exec_assertion(assertion, ctx: str) -> None:
+    """Validate a typed-predicate exec assertion (LD-C; VALIDATE-2/DOCTRINE-2).
+    Freeform grep impossible by construction; raises via die() on any non-typed/malformed form."""
+    _ops = ("contains", "not_contains", "equals", "matches", "count", "field")
+    if assertion is None:
+        die(f"{ctx}: exec test requires an 'assertion' (a typed predicate, e.g. {{contains: \"...\"}}); allowed operators: {', '.join(_ops)}")
+    if not isinstance(assertion, dict):
+        die(f"{ctx}: exec 'assertion' must be a typed predicate ({{<op>: ...}}), not freeform text; allowed operators: {', '.join(_ops)}")
+    _keys = list(assertion.keys())
+    if len(_keys) != 1 or _keys[0] not in _ops:
+        die(f"{ctx}: exec 'assertion' must declare exactly one typed operator from {{{', '.join(_ops)}}} (got {_keys!r})")
+    _op = _keys[0]
+    _val = assertion[_op]
+    if _op in ("contains", "not_contains", "equals", "matches"):
+        if not isinstance(_val, str) or not _val.strip():
+            die(f"{ctx}: exec assertion {_op!r} requires a non-empty string value")
+        if _op == "matches":
+            try:
+                re.compile(_val)
+            except re.error as _e:
+                die(f"{ctx}: exec assertion 'matches' is not a valid regex: {_e}")
+        return
+    if not isinstance(_val, dict):
+        die(f"{ctx}: exec assertion {_op!r} requires a typed mapping with 'op' in {{==,>=,<=}} and 'value'")
+    if _val.get("op") not in ("==", ">=", "<="):
+        die(f"{ctx}: exec assertion {_op!r} requires 'op' in {{==, >=, <=}} (got {_val.get('op')!r})")
+    if "value" not in _val:
+        die(f"{ctx}: exec assertion {_op!r} requires a 'value'")
+    if _op == "count":
+        if not isinstance(_val.get("pattern"), str) or not _val["pattern"].strip():
+            die(f"{ctx}: exec assertion 'count' requires a non-empty string 'pattern'")
+        if not isinstance(_val.get("value"), int) or isinstance(_val.get("value"), bool):
+            die(f"{ctx}: exec assertion 'count' requires an integer 'value'")
+        _extra = set(_val.keys()) - {"pattern", "op", "value"}
+        if _extra:
+            die(f"{ctx}: exec assertion 'count' has unknown key(s) {sorted(_extra)!r} (allowed: pattern, op, value)")
+    else:
+        if not isinstance(_val.get("path"), str) or not _val["path"].strip():
+            die(f"{ctx}: exec assertion 'field' requires a non-empty string 'path'")
+        if isinstance(_val.get("value"), (dict, list)):
+            die(f"{ctx}: exec assertion 'field' requires a scalar 'value'")
+        _extra = set(_val.keys()) - {"path", "op", "value"}
+        if _extra:
+            die(f"{ctx}: exec assertion 'field' has unknown key(s) {sorted(_extra)!r} (allowed: path, op, value)")
+
+
 def resolve_topology(topo: dict) -> dict:
     """
     Return a copy of topo with missing link IPv4 addresses allocated.
@@ -2011,6 +2090,55 @@ def resolve_topology(topo: dict) -> dict:
                     f"evpn_vni_route_present, evpn_bgp_session_up, ospf_neighbor_up, interface_state)"
                 )
             t["type"] = inv_type
+        elif kind_norm == "exec":
+            ctx = f"tests[{i}] ({t.get('name', '<unnamed>')})"
+            for _alias in ("node", "on", "from"):
+                if _alias in t:
+                    _av = str(t.get(_alias) or "").strip()
+                    if "src" in t:
+                        _sv = str(t.get("src") or "").strip()
+                        if _av and _sv and _av != _sv:
+                            die(f"{ctx}: exec target {_alias!r} and 'src' disagree ({_av!r} vs {_sv!r})")
+                    elif _av:
+                        t["src"] = _av
+                    t.pop(_alias, None)
+            allowed_exec_keys = {"name", "kind", "src", "command", "assertion", "expect"}
+            for _k in list(t.keys()):
+                if _k not in allowed_exec_keys:
+                    die(
+                        f"{ctx}: exec test declares unknown key {_k!r} "
+                        f"(allowed: name, kind, src, command, assertion, expect)"
+                    )
+            src_val = t.get("src")
+            if not isinstance(src_val, str) or not src_val.strip():
+                die(f"{ctx}: exec test requires a target node ('src', or alias 'node'/'on'/'from')")
+            src_node = src_val.strip()
+            _exec_node_types = {
+                str(_n.get("name") or "").strip(): str(_n.get("type") or "").strip().lower()
+                for _n in (resolved.get("nodes") or [])
+                if isinstance(_n, dict) and str(_n.get("name") or "").strip()
+            }
+            if src_node not in _exec_node_types:
+                die(f"{ctx}: exec test target node {src_node!r} is not declared in topology 'nodes:'")
+            derived_type = _exec_node_types[src_node]
+            if derived_type not in ("frr", "nft-fw"):
+                die(
+                    f"{ctx}: exec test target node {src_node!r} has node type "
+                    f"{derived_type!r}; exec supports only node types 'frr', 'nft-fw'"
+                )
+            t["src"] = src_node
+            cmd_raw = t.get("command")
+            if not isinstance(cmd_raw, str) or not cmd_raw.strip():
+                die(f"{ctx}: exec test requires a 'command' (a read-only command for node type {derived_type!r})")
+            _allowed, _why = _exec_command_allowed(cmd_raw, derived_type)
+            if not _allowed:
+                die(
+                    f"{ctx}: exec command rejected \u2014 {cmd_raw.strip()!r} is not read-only "
+                    f"for node {src_node!r} (type {derived_type!r}): {_why}. "
+                    f"Allowed: frr -> vtysh -c \"show \u2026\"; nft-fw -> nft list \u2026"
+                )
+            t["command"] = cmd_raw.strip()
+            _validate_exec_assertion(t.get("assertion"), ctx)
         else:
             if "kind" in t and "type" in t:
                 die(f"tests[{i}]: has both 'kind' and 'type' (use only 'kind')")
