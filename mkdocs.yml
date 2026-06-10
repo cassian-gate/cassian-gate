@@ -101,6 +101,8 @@ nav:
   - Legacy schema (v1): topology-schema-v1.md
   - CLI Reference: cli-reference-v1.md
   - Cheatsheet: cheatsheet.md
+  - Writing a user-defined invariant: recipes/exec-user-defined-invariants.md
+
   - CI Integration:
     - GitHub Actions: ci/github-actions.md
     - GitLab CI: ci/gitlab-ci.md

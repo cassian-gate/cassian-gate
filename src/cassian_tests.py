@@ -3616,6 +3616,33 @@ def _format_test_summary(results: dict) -> str:
                             inv_meta, src, dst, inv_expected
                         )
                     )
+            elif kind == "exec":
+                # RENDER-1/2: failed exec renders identity (meta.exec) + expectation +
+                # observed_state via _format_observed_state_block. Additive; the
+                # kind == "invariant" path above stays byte-unchanged (RENDER-3 / PRES-2).
+                _x = inv_meta.get("exec") if isinstance(inv_meta.get("exec"), dict) else {}
+                lines.append("    exec:")
+                lines.append(f"      command: {_x.get('command', '<unknown>')}")
+                lines.append(f"      assertion: {json.dumps(_x.get('assertion'), sort_keys=True)}")
+                lines.append(f"      expected: {str(inv_expected or '').strip() or '<unspecified>'}")
+                if isinstance(observed_state, dict):
+                    lines.extend(
+                        _format_observed_state_block(
+                            observed_state, observed_state_truncated
+                        )
+                    )
+                else:
+                    # F-1 (Fix-B): §13(c) absence-clause symmetry with the invariant
+                    # path. A failed exec record with no structured observed_state is the
+                    # observed:pass x expect:fail quadrant -- the command ran and the
+                    # assertion was satisfied, so there is no failure-state payload. Emit
+                    # an explicit unavailable indicator rather than an implicitly-absent
+                    # (c); silence != pass (DC §1.11) stays doubly guarded by the err line
+                    # and the rendered expected: above.
+                    lines.append("    observed:")
+                    lines.append(
+                        "      detail: (structured failure detail unavailable: assertion satisfied, declared expectation was fail)"
+                    )
         if len(failed_tests) > cap:
             lines.append(f" - (+{len(failed_tests) - cap} more)")
     else:
