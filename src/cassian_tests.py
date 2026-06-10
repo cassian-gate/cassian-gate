@@ -3631,6 +3631,18 @@ def _format_test_summary(results: dict) -> str:
                             observed_state, observed_state_truncated
                         )
                     )
+                else:
+                    # F-1 (Fix-B): §13(c) absence-clause symmetry with the invariant
+                    # path. A failed exec record with no structured observed_state is the
+                    # observed:pass x expect:fail quadrant -- the command ran and the
+                    # assertion was satisfied, so there is no failure-state payload. Emit
+                    # an explicit unavailable indicator rather than an implicitly-absent
+                    # (c); silence != pass (DC §1.11) stays doubly guarded by the err line
+                    # and the rendered expected: above.
+                    lines.append("    observed:")
+                    lines.append(
+                        "      detail: (structured failure detail unavailable: assertion satisfied, declared expectation was fail)"
+                    )
         if len(failed_tests) > cap:
             lines.append(f" - (+{len(failed_tests) - cap} more)")
     else:

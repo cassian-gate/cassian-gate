@@ -10,9 +10,13 @@ SP #1 render-boundary pattern: drives _format_test_summary with synthetic result
   EXEC-3    the present-path renderer fires on the dict observed_state
   RENDER-3  the kind == "invariant" render path is byte-unchanged; non-invariant/
             non-exec kinds (ping) get no observed block (R27 preserved)
+  F-1       §13(c) absence-clause symmetry: a failed exec on the observed:pass x
+            expect:fail quadrant (non-dict observed_state) renders an EXPLICIT
+            structured-detail-unavailable indicator, not an implicitly-absent (c)
   silence != pass: a failed exec is present in failed_tests
 
-Non-vacuity: a passing exec is NOT rendered as a failure.
+Non-vacuity: a passing exec is NOT rendered as a failure; the F-1 absence check
+fails on a pre-Fix-B tree (no explicit unavailable indicator).
 """
 import os, sys
 
@@ -37,6 +41,16 @@ def _exec_fail():
                error="exec assertion not satisfied (observed fail, expected pass)",
                meta={"exec": {"command": 'vtysh -c "show ip route"', "assertion": {"contains": "0.0.0.0/0"}}},
                observed_state={"command": 'vtysh -c "show ip route"', "returncode": 0, "stdout_excerpt": "no default route"})
+
+def _exec_expectfail_observedpass():
+    # F-1 Q2: observed:pass x expect:fail -> verdict:fail with NO observed_state.
+    # The command ran and the assertion held (observed:pass), but the operator
+    # declared expect:fail, so the verdict is fail and there is no failure-state
+    # payload. observed_state is deliberately absent on this record.
+    return _rec(name="exec_q2_t", kind="exec", **{"from": "r1", "to": ""},
+                expected="fail", verdict="fail",
+                error="exec assertion not satisfied (observed pass, expected fail)",
+                meta={"exec": {"command": 'vtysh -c "show bgp summary json"', "assertion": {"contains": "Established"}}})
 
 def _exec_pass():
     return _rec(name="exec_pass_t", kind="exec", **{"from": "r1", "to": ""},
@@ -68,10 +82,22 @@ check("RENDER-2 (b) expectation rendered", "expected: pass" in s)
 check("EXEC-3 (c) observed_state block fires (present path)", "    observed:" in s and "stdout_excerpt:" in s)
 check("exec header block present", "    exec:" in s)
 
+# ---- F-1 (Fix-B): §13(c) absence-clause symmetry on the observed:pass x expect:fail quadrant ----
+s_q2 = summary([_exec_expectfail_observedpass()])
+check("F-1 Q2 failed exec present in failed_tests (silence != pass)", "exec_q2_t (exec)" in s_q2)
+check("F-1 Q2 exec header + identity rendered", "    exec:" in s_q2 and '"contains": "Established"' in s_q2)
+check("F-1 Q2 (b) expectation rendered (expected: fail)", "expected: fail" in s_q2)
+check("F-1 Q2 (c) EXPLICIT unavailable indicator, not implicitly-absent",
+      "structured failure detail unavailable" in s_q2)
+check("F-1 Q2 (c) absence emits explicit observed: section (symmetric with invariant path)",
+      "    observed:" in s_q2)
+
 # ---- RENDER-3: invariant render path byte-unchanged (exec branch does not interfere) ----
 s_inv = summary([_inv_fail()])
 check("RENDER-3 invariant fail still renders observed block", "    observed:" in s_inv and "state:" in s_inv)
 check("RENDER-3 invariant render has no exec header", "    exec:" not in s_inv)
+check("RENDER-3 invariant absence wording unchanged (present-path inv has dict, so not triggered here)",
+      "for this invariant type" not in s_inv)  # this inv_fail has a dict observed_state
 
 # ---- R27 preserved: non-invariant/non-exec kind gets no observed block ----
 s_ping = summary([_ping_fail()])
