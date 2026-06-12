@@ -140,6 +140,23 @@ def main():
     nr2_o, _ = _validate(_exec())
     check("P-NR exec without tags validates", nr2_o == "ok")
 
+    # P-V2: zero-match selector (REQ-TAG-VALIDATE-2, added WI-3). A --tag matching no declared
+    # test excludes all of them => matched == 0 => hard-fail via the filter:no-match path.
+    # The pure-logic zero-match condition is proven here; the actual exit(2) at the gate is
+    # lab-confirmed (integration smoke / verify_phase1.sh --name DOES_NOT_EXIST analogue).
+    import cassian_engine as _E
+    import inspect as _insp
+    _declared = [{"name": "t1", "tags": ["bgp"]}, {"name": "t2", "tags": ["edge"]}]
+    check("P-V2 selector matching nothing excludes all (matched==0 condition)",
+          all(not _E._tag_selected(_t, ["does-not-exist"]) for _t in _declared))
+    check("P-V2 a present tag still matches (non-zero proceeds)",
+          any(_E._tag_selected(_t, ["bgp"]) for _t in _declared))
+    _esrc = _insp.getsource(_E)
+    check("P-V2 zero-match label wired for --tag",
+          "--tag {filter_tags!r}" in _esrc)
+    check("P-V2 zero-match summary emits filtered_by_tag",
+          'results["summary"]["filtered_by_tag"]' in _esrc)
+
     failed = [n for n, ok in checks if not ok]
     for n, ok in checks:
         print(("  PASS " if ok else "  FAIL ") + n)
