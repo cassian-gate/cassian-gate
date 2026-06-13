@@ -160,6 +160,35 @@ Any failure to evaluate — unparseable JSON, a missing path segment, descent in
 
 ---
 
+## 2b) Test Tags and Selective Execution
+
+Any test record — of any `kind` (`ping`, `tcp`, `bgp_neighbor`, `invariant`, `exec`) — MAY carry an optional `tags:` field: a list of short string labels used to select a subset of declared tests at run time. Tags are selection metadata only; they never change a test's verdict, the gate result, or the artifact schema of an executed test.
+
+```yaml
+tests:
+  - name: leaf1_evpn_session_to_spine1
+    kind: invariant
+    type: evpn_bgp_session_up
+    src: leaf1
+    neighbor: 10.0.0.1
+    tags: [evpn, fabric]
+```
+
+* `tags:` MUST be a list of strings; each label MUST match `[a-z0-9_-]+` (lowercase alphanumerics, hyphen, underscore). A non-list value, a non-string element, an empty-string element, or a charset violation is rejected at validation time with a deterministic hard-failure (exit code `2`).
+* `tags:` is optional and kind-agnostic; tag validation is applied uniformly across `kind: invariant` and `kind: exec` records.
+* A test with no `tags:` is selectable only when no tag filter is supplied.
+
+### 2b.1) Selecting tests with `--tag`
+
+`cassian test <topology.yaml> --tag <label>` runs only the tests whose `tags:` include `<label>`. The flag is repeatable (`--tag a --tag b`) and the match is an **OR-union**: a test is selected if its tags intersect the requested set.
+
+* **Explicit non-execution (silence is not pass — Doctrine §1.11).** Every declared test that is *not* selected is recorded explicitly in `results.json` with `verdict: not_executed` and a `meta.not_executed_reason` of `filtered_by_tag` (or `filtered_by_name` / `filtered_by_kind` for those filters, or `fail_fast` when a halting failure drops the remainder). A non-executed test is never silently omitted and never counted as a pass. `not_executed` is a distinct verdict value — neither `pass`, `fail`, nor `skip` — and it never changes the gate result, which is computed from executed failures only.
+* **Reconciliation.** The run summary reconciles as `total == executed + not_executed (+ skipped)`, and the operator summary surfaces the non-executed tests and their reasons explicitly.
+* **Zero-match is a hard failure.** If `--tag` matches no declared test, the run hard-fails rather than passing with zero executed tests — identical to the existing `--name` / `--kind` zero-match behavior.
+* **Mutually exclusive with scenarios.** `--tag` (like `--name` / `--kind`) is rejected together with `--scenario` / `--all-scenarios`, because filtering would skip scenario run steps.
+
+---
+
 ## 3) Failure Verdicts and `observed_state`
 
 Every invariant test record that resolves to `verdict: fail` carries a structured `observed_state` payload alongside the existing `observed` string field. The `observed_state` payload is the **deterministic** structured failure-reason artifact.
