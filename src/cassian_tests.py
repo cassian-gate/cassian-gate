@@ -3473,7 +3473,12 @@ def _format_test_summary(results: dict) -> str:
     # Authoritative duration remains in results.json; do not duplicate nondeterminism here.
 
     # Keep tests as declared tests summary (Option A)
-    lines.append(f"tests: total={total} passed={passed} failed={failed}")
+    # §4.8 WI-4 (REQ-TAG-RENDER-1): surface not_executed when present so the summary line
+    # reconciles (total == passed + failed + not_executed + skipped); silence != pass
+    # (Doctrine §1.11). Additive: suffix omitted when zero (byte-unchanged for prior runs).
+    not_executed = int(summ.get("not_executed") or 0)
+    _ne_suffix = f" not_executed={not_executed}" if not_executed else ""
+    lines.append(f"tests: total={total} passed={passed} failed={failed}{_ne_suffix}")
 
     # -------------------------------------------------------------------------
     # Hard failure (runtime fault) summary
@@ -3647,6 +3652,25 @@ def _format_test_summary(results: dict) -> str:
             lines.append(f" - (+{len(failed_tests) - cap} more)")
     else:
         lines.append("failed_tests: (none)")
+
+    # -------------------------------------------------------------------------
+    # §4.8 WI-4 (REQ-TAG-RENDER-1/2): explicitly-recorded non-executed tests.
+    # Doctrine §1.11 (silence != pass): every declared test excluded by a selector
+    # (--tag/--name/--kind) or dropped by fail-fast is rendered with an explicit
+    # indicator (name + kind + reason) in declared order. Additive; the failed_tests
+    # collection and its invariant/exec detail branches above stay byte-unchanged.
+    not_executed_tests = []
+    for t in results.get("tests", []) or []:
+        if isinstance(t, dict) and t.get("verdict") == "not_executed":
+            ne_name = t.get("name", "<unnamed>")
+            ne_kind = t.get("kind", "")
+            ne_meta = t.get("meta") or {}
+            ne_reason = str(ne_meta.get("not_executed_reason") or "unspecified")
+            not_executed_tests.append((ne_name, ne_kind, ne_reason))
+    if not_executed_tests:
+        lines.append("not_executed_tests:")
+        for ne_name, ne_kind, ne_reason in not_executed_tests:
+            lines.append(f" - {ne_name} ({ne_kind}) not_executed: {ne_reason}")
 
     # -------------------------------------------------------------------------
     # Failed scenarios list (optional)
