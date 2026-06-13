@@ -4519,6 +4519,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 passed = int(summ.get("passed") or 0)
                 failed = int(summ.get("failed") or 0)
                 skipped = int(summ.get("skipped") or 0)
+                not_executed = int(summ.get("not_executed") or 0)
 
                 # Exit is presentation-only: mirrors gate exit bands (0/1/2).
                 r = str(results.get("result") or "").strip().lower()
@@ -4531,6 +4532,8 @@ def cmd_test(args: argparse.Namespace) -> None:
                 print(f"PASS: {passed}")
                 print(f"FAIL: {failed}")
                 print(f"SKIP: {skipped}")
+                if not_executed:
+                    print(f"NOT_EXECUTED: {not_executed}")
                 print(f"EXIT: {exit_code}")
             except Exception:
                 pass
@@ -10381,7 +10384,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     port = t.get("port")
                     fail_or_continue(f"tests[{i}] tcp mismatch: {src} -> {dst}:{port} expected {t.get('expect','pass')}")
 
-            if (filter_name or filter_kind) and matched == 0:
+            if (filter_name or filter_kind or filter_tags) and matched == 0:
                 label_parts = []
                 if filter_name:
                     label_parts.append(f"--name {filter_name!r}")

@@ -52,6 +52,22 @@ ck("absence: summary suffix omitted (byte-unchanged)", "tests: total=2 passed=2 
 ck("F-1 sensitivity: indicator present iff records present",
    (" - t3 (invariant) not_executed: filtered_by_tag" in out) and ("not_executed_tests:" not in out0))
 
+# --- operator-facing gate-result block (render_gate_result_block) -- F2 repair coverage ---
+# WI-3 emits not_executed records; the operator stdout MUST surface them, never as PASS.
+gate_pass = {"lab": "demo", "result": "pass",
+             "summary": {"total": 4, "passed": 2, "failed": 0, "skipped": 0, "not_executed": 2},
+             "tests": [{"name": "x1", "kind": "ping", "verdict": "pass"},
+                       {"name": "x2", "kind": "ping", "verdict": "pass"},
+                       {"name": "x3", "kind": "ping", "verdict": "not_executed", "meta": {"not_executed_reason": "filtered_by_tag"}},
+                       {"name": "x4", "kind": "exec", "verdict": "not_executed", "meta": {"not_executed_reason": "fail_fast"}}]}
+gb = T.render_gate_result_block(gate_pass, authority_kind="gate")
+ck("gate-block: declared_executed excludes not_executed (=2)", "Declared tests executed: 2" in gb)
+ck("gate-block: declared not-executed surfaced (=2)", "Declared tests not executed: 2" in gb)
+ck("gate-block: Not executed section present", "Not executed:" in gb)
+ck("gate-block: excluded shown with reason, never PASS",
+   ("x3 (not_executed: filtered_by_tag)" in gb) and ("- PASS x3" not in gb) and ("- PASS x4" not in gb))
+ck("gate-block: executed still PASS-listed", "- PASS x1" in gb and "- PASS x2" in gb)
+
 fail = [n for n, ok in C if not ok]
 for n, ok in C: print(("  PASS " if ok else "  FAIL ") + n)
 print(("\nAll %d passed." % len(C)) if not fail else ("\nFAILED: " + "; ".join(fail)))

@@ -156,6 +156,8 @@ def main():
           "--tag {filter_tags!r}" in _esrc)
     check("P-V2 zero-match summary emits filtered_by_tag",
           'results["summary"]["filtered_by_tag"]' in _esrc)
+    check("P-V2 zero-match TRIGGER gates on filter_tags (F1 repair)",
+          "if (filter_name or filter_kind or filter_tags) and matched == 0:" in _esrc)
 
     failed = [n for n, ok in checks if not ok]
     for n, ok in checks:
