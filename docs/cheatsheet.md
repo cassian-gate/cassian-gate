@@ -66,12 +66,15 @@ cassian preflight <topology.yaml>
 
 ```bash
 cassian test <topology.yaml>
+cassian test <topology.yaml> --tag <label>   # run only tests tagged <label> (repeatable; OR-union)
 cassian replay <artifacts-dir>
 cassian run <topology.yaml>
 cassian up <topology.yaml>
 cassian down <lab>
 cassian cleanup --all
 ```
+
+**Selective execution (`--tag`).** Selects declared tests whose `tags:` include the label (repeatable; OR-union). Tests not selected are recorded explicitly as `verdict: not_executed` (`meta.not_executed_reason: filtered_by_tag`) and surfaced in the summary — never silently dropped, never counted as pass. A `--tag` that matches **no** test hard-fails (it does not pass with zero tests). `--tag` cannot be combined with `--scenario` / `--all-scenarios`. See `docs/topology-schema-v1.5.md` §2b.
 
 ### Inspection
 

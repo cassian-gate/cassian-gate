@@ -1171,6 +1171,31 @@ def ensure_valid_topology(topo: dict) -> None:
             nm = t.get("name")
             label = nm.strip() if isinstance(nm, str) and nm.strip() else f"tests[{idx}]"
 
+            # §4.8 WI-1: optional declarative 'tags' (kind-agnostic; REQ-TAG-SCHEMA-1/2,
+            # REQ-TAG-VALIDATE-1). Declarative metadata only; never an authority axis
+            # (REQ-TAG-SCHEMA-3). Validated structurally here; admission for exec tests is
+            # via allowed_exec_keys in resolve_topology (REQ-TAG-SCHEMA-2).
+            if "tags" in t and t.get("tags") is not None:
+                _tags_loc = (
+                    f"tests[{idx}] {nm.strip()!r}"
+                    if isinstance(nm, str) and nm.strip()
+                    else f"tests[{idx}]"
+                )
+                _tags_val = t.get("tags")
+                if not isinstance(_tags_val, list):
+                    die(
+                        f"Topology invalid: {_tags_loc}: 'tags' must be a list of strings "
+                        f"matching [a-z0-9_-] (got {_tags_val!r})",
+                        code=2,
+                    )
+                for _tag in _tags_val:
+                    if not isinstance(_tag, str) or not re.match(r"^[a-z0-9_-]+$", _tag):
+                        die(
+                            f"Topology invalid: {_tags_loc}: 'tags' must be a list of strings "
+                            f"matching [a-z0-9_-] (got {_tag!r})",
+                            code=2,
+                        )
+
             exp = t.get("expect") or "pass"
             exp = exp.strip().lower() if isinstance(exp, str) else exp
             if exp not in ("pass", "fail"):
@@ -2110,12 +2135,12 @@ def resolve_topology(topo: dict) -> dict:
                     elif _av:
                         t["src"] = _av
                     t.pop(_alias, None)
-            allowed_exec_keys = {"name", "kind", "src", "command", "assertion", "expect"}
+            allowed_exec_keys = {"name", "kind", "src", "command", "assertion", "expect", "tags"}
             for _k in list(t.keys()):
                 if _k not in allowed_exec_keys:
                     die(
                         f"{ctx}: exec test declares unknown key {_k!r} "
-                        f"(allowed: name, kind, src, command, assertion, expect)"
+                        f"(allowed: name, kind, src, command, assertion, expect, tags)"
                     )
             src_val = t.get("src")
             if not isinstance(src_val, str) or not src_val.strip():

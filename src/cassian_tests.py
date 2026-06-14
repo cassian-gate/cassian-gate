@@ -3473,7 +3473,12 @@ def _format_test_summary(results: dict) -> str:
     # Authoritative duration remains in results.json; do not duplicate nondeterminism here.
 
     # Keep tests as declared tests summary (Option A)
-    lines.append(f"tests: total={total} passed={passed} failed={failed}")
+    # §4.8 WI-4 (REQ-TAG-RENDER-1): surface not_executed when present so the summary line
+    # reconciles (total == passed + failed + not_executed + skipped); silence != pass
+    # (Doctrine §1.11). Additive: suffix omitted when zero (byte-unchanged for prior runs).
+    not_executed = int(summ.get("not_executed") or 0)
+    _ne_suffix = f" not_executed={not_executed}" if not_executed else ""
+    lines.append(f"tests: total={total} passed={passed} failed={failed}{_ne_suffix}")
 
     # -------------------------------------------------------------------------
     # Hard failure (runtime fault) summary
@@ -3649,6 +3654,25 @@ def _format_test_summary(results: dict) -> str:
         lines.append("failed_tests: (none)")
 
     # -------------------------------------------------------------------------
+    # §4.8 WI-4 (REQ-TAG-RENDER-1/2): explicitly-recorded non-executed tests.
+    # Doctrine §1.11 (silence != pass): every declared test excluded by a selector
+    # (--tag/--name/--kind) or dropped by fail-fast is rendered with an explicit
+    # indicator (name + kind + reason) in declared order. Additive; the failed_tests
+    # collection and its invariant/exec detail branches above stay byte-unchanged.
+    not_executed_tests = []
+    for t in results.get("tests", []) or []:
+        if isinstance(t, dict) and t.get("verdict") == "not_executed":
+            ne_name = t.get("name", "<unnamed>")
+            ne_kind = t.get("kind", "")
+            ne_meta = t.get("meta") or {}
+            ne_reason = str(ne_meta.get("not_executed_reason") or "unspecified")
+            not_executed_tests.append((ne_name, ne_kind, ne_reason))
+    if not_executed_tests:
+        lines.append("not_executed_tests:")
+        for ne_name, ne_kind, ne_reason in not_executed_tests:
+            lines.append(f" - {ne_name} ({ne_kind}) not_executed: {ne_reason}")
+
+    # -------------------------------------------------------------------------
     # Failed scenarios list (optional)
     # -------------------------------------------------------------------------
     if scenarios:
@@ -3737,14 +3761,18 @@ def render_gate_result_block(results: dict, *, authority_kind: str | None = None
     tests = results.get("tests", []) or []
     prereqs_executed = 0
     declared_executed = 0
+    declared_not_executed = 0  # §4.8 repair (F2): non-executed records are not "executed"
     if isinstance(tests, list):
         for t in tests:
             if not isinstance(t, dict):
                 continue
             nm = str(t.get("name") or "").strip().lower()
             kd = str(t.get("kind") or "").strip().lower()
+            vd = str(t.get("verdict") or "").strip().lower()
             if kd == "prereq" or nm.startswith("prereq:"):
                 prereqs_executed += 1
+            elif vd == "not_executed":
+                declared_not_executed += 1
             else:
                 declared_executed += 1
 
@@ -3765,6 +3793,8 @@ def render_gate_result_block(results: dict, *, authority_kind: str | None = None
     out.append(mode_line)
     out.append(f"Prereqs executed: {prereqs_executed}")
     out.append(f"Declared tests executed: {declared_executed}")
+    if declared_not_executed:
+        out.append(f"Declared tests not executed: {declared_not_executed}")
     out.append(f"Scenarios executed: {scen_total}")
     out.append("")
 
@@ -3847,16 +3877,29 @@ def render_gate_result_block(results: dict, *, authority_kind: str | None = None
     # WI-1: On PASS, show which tests ran (bounded; deterministic; derived from results["tests"]).
     # Presentation-only: must not affect verdicts, exit codes, or artifacts.
     if verdict_s == "PASS" and (not is_smoke) and isinstance(tests, list) and tests:
+        # §4.8 repair (F2): non-executed records surfaced separately, never as PASS
+        # (Doctrine §1.11 silence != pass). Executed-record PASS rendering is byte-stable.
+        executed = [t for t in tests if isinstance(t, dict) and str(t.get("verdict") or "").strip().lower() != "not_executed"]
         out.append("")
         out.append("Tests:")
         cap = 10
-        for t in tests[:cap]:
+        for t in executed[:cap]:
             if not isinstance(t, dict):
                 continue
             name = str(t.get("name") or "<unnamed>").strip() or "<unnamed>"
             out.append(f" - PASS {name}")
-        if len(tests) > cap:
-            out.append(f" - (+{len(tests) - cap} more)")
+        if len(executed) > cap:
+            out.append(f" - (+{len(executed) - cap} more)")
+        not_exec = [t for t in tests if isinstance(t, dict) and str(t.get("verdict") or "").strip().lower() == "not_executed"]
+        if not_exec:
+            out.append("")
+            out.append("Not executed:")
+            for t in not_exec[:cap]:
+                name = str(t.get("name") or "<unnamed>").strip() or "<unnamed>"
+                reason = str((t.get("meta") or {}).get("not_executed_reason") or "unspecified")
+                out.append(f" - {name} (not_executed: {reason})")
+            if len(not_exec) > cap:
+                out.append(f" - (+{len(not_exec) - cap} more)")
 
     if verdict_s == "FAIL":
         out.append("")

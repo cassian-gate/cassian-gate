@@ -173,6 +173,10 @@ Test selection flags:
   Run only tests of this kind.  
   **Note:** this filter is limited to `ping|tcp` even though v1.x supports `bgp_neighbor` as an atomic test type.
 
+* `--tag <tag>` (repeatable)  
+  Run only tests carrying at least one of the supplied tags (OR-union across repeats). Kind-agnostic.  
+  Non-matching declared tests are recorded explicitly as `not_executed` (never silently dropped); the gate verdict is computed from executed tests only. A `--tag` selection matching nothing hard-fails, like `--name`/`--kind` zero-match.
+
 * `--keep-going`  
   Run all tests even if one fails (still exits non-zero if any fail).
 

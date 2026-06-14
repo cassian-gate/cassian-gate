@@ -237,6 +237,7 @@ def main() -> None:
     )
     p_test.add_argument("--name", help="Run only the test with this name (e.g. tests[4] or a named test)")
     p_test.add_argument("--kind", choices=["ping", "tcp"], help="Run only tests of this kind")
+    p_test.add_argument("--tag", action="append", dest="tag", metavar="TAG", help="Run only tests carrying this tag (repeatable; OR-union). Mutually exclusive with --scenario.")
     p_test.add_argument(
         "--keep-going",
         action="store_true",

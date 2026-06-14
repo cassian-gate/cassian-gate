@@ -3153,6 +3153,43 @@ def _eval_exec_assertion(assertion: dict, stdout: str) -> tuple[str, str]:
     return ("fail", f"exec assertion unknown operator {op!r} at evaluation")
 
 
+def _tag_selected(test, filter_tags):
+    """§4.8 WI-3 (REQ-TAG-CLI-1/B03): OR-union tag membership. None/[] filter => selected."""
+    if not filter_tags:
+        return True
+    have = test.get("tags") if isinstance(test, dict) else None
+    if not isinstance(have, list):
+        return False
+    return bool(set(filter_tags).intersection(have))
+
+
+def _summarize_test_counts(tests):
+    """§4.8 WI-3 (REQ-TAG-NONEXEC-2/B09): reconcile total == executed + not_executed (+ skipped)."""
+    total = len(tests)
+    failed = sum(1 for r in tests if isinstance(r, dict) and r.get("verdict") == "fail")
+    not_executed = sum(1 for r in tests if isinstance(r, dict) and r.get("verdict") == "not_executed")
+    skipped = sum(1 for r in tests if isinstance(r, dict) and r.get("verdict") == "skip")
+    passed = total - failed - not_executed - skipped
+    return {"total": total, "passed": passed, "failed": failed,
+            "skipped": skipped, "not_executed": not_executed}
+
+
+def _fail_fast_drops(declared_tests, from_idx):
+    """§4.8 WI-3 (REQ-TAG-NONEXEC-3/B08): not_executed records for tests dropped by fail-fast."""
+    out = []
+    for j in range(from_idx + 1, len(declared_tests)):
+        dt = declared_tests[j]
+        nm = (dt.get("name") if isinstance(dt, dict) else None) or f"tests[{j + 1}]"
+        dk = (dt.get("kind") or dt.get("type") or "unknown") if isinstance(dt, dict) else "unknown"
+        out.append({
+            "name": nm, "kind": str(dk), "from": "", "to": "",
+            "expected": "pass", "observed": "not_executed", "verdict": "not_executed",
+            "duration_ms": 0, "error": "", "evidence": None,
+            "meta": {"not_executed_reason": "fail_fast"},
+        })
+    return out
+
+
 def cmd_test(args: argparse.Namespace) -> None:
     """
     v1 update (Section C): Scenarios wired into cmd_test (minimal invasive).
@@ -3722,6 +3759,8 @@ def cmd_test(args: argparse.Namespace) -> None:
             )
     filter_name: str | None = getattr(args, "name", None)
     filter_kind: str | None = getattr(args, "kind", None)
+    filter_tags: list[str] | None = getattr(args, "tag", None)
+    _ff_state = {"idx": -1}  # §4.8 WI-3: current test-loop index for fail-fast drop recording
     keep_going: bool = bool(getattr(args, "keep_going", False))
     print_json: bool = bool(getattr(args, "json", False))
 
@@ -3769,9 +3808,9 @@ def cmd_test(args: argparse.Namespace) -> None:
         validate_scenario_run_refs_or_die(topo, scenario_ids=scenario_ids)
 
     # Disallow filters when running scenarios: avoids silent "pass" with 0 executed runs
-    if want_scenarios and (filter_name or filter_kind):
+    if want_scenarios and (filter_name or filter_kind or filter_tags):
         die(
-            "ERROR: --name/--kind filters are not supported with --scenario/--all-scenarios "
+            "ERROR: --name/--kind/--tag filters are not supported with --scenario/--all-scenarios "
             "(would skip scenario run steps).",
             code=2,
         )
@@ -4480,6 +4519,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 passed = int(summ.get("passed") or 0)
                 failed = int(summ.get("failed") or 0)
                 skipped = int(summ.get("skipped") or 0)
+                not_executed = int(summ.get("not_executed") or 0)
 
                 # Exit is presentation-only: mirrors gate exit bands (0/1/2).
                 r = str(results.get("result") or "").strip().lower()
@@ -4492,6 +4532,8 @@ def cmd_test(args: argparse.Namespace) -> None:
                 print(f"PASS: {passed}")
                 print(f"FAIL: {failed}")
                 print(f"SKIP: {skipped}")
+                if not_executed:
+                    print(f"NOT_EXECUTED: {not_executed}")
                 print(f"EXIT: {exit_code}")
             except Exception:
                 pass
@@ -4546,33 +4588,26 @@ def cmd_test(args: argparse.Namespace) -> None:
             print(f"{msg}")
             return
 
+        # §4.8 WI-3 (REQ-TAG-NONEXEC-3/B08): record fail-fast-dropped remaining tests as
+        # not_executed before finalizing (closes BL-1b7-1). Guarded to the test loop only.
+        if _ff_state["idx"] >= 0:
+            results["tests"].extend(_fail_fast_drops(declared_tests, _ff_state["idx"]))
+            _ff_state["idx"] = -1
+
         # WI-2: Fail-fast test failures must still finalize + write authoritative artifacts
         # so the Gate Result block reflects executed tests (no "Declared tests executed: 0"
         # when a declared test actually ran).
         try:
             tests_list = results.get("tests", []) or []
             if isinstance(tests_list, list):
-                total = len(tests_list)
-                passed = 0
-                failed = 0
-                skipped = 0
-                for tr in tests_list:
-                    if not isinstance(tr, dict):
-                        continue
-                    v = str(tr.get("verdict") or "").strip().lower()
-                    if v == "pass":
-                        passed += 1
-                    elif v == "fail":
-                        failed += 1
-                    elif v == "skip":
-                        skipped += 1
-
+                _tc_ff = _summarize_test_counts(tests_list)
                 results.setdefault("summary", {})
                 if isinstance(results.get("summary"), dict):
-                    results["summary"]["total"] = total
-                    results["summary"]["passed"] = passed
-                    results["summary"]["failed"] = failed
-                    results["summary"]["skipped"] = skipped
+                    results["summary"]["total"] = _tc_ff["total"]
+                    results["summary"]["passed"] = _tc_ff["passed"]
+                    results["summary"]["failed"] = _tc_ff["failed"]
+                    results["summary"]["skipped"] = _tc_ff["skipped"]
+                    results["summary"]["not_executed"] = _tc_ff["not_executed"]
 
             results["result"] = "fail"
             write_results()
@@ -10052,12 +10087,20 @@ def cmd_test(args: argparse.Namespace) -> None:
             exec_idx = 0
 
             for idx, t in enumerate(declared_tests):
+                _ff_state["idx"] = idx  # §4.8 WI-3: fail-fast drop anchor
                 i = idx + 1
                 test_name = t.get("name") if isinstance(t, dict) else None
                 if not test_name:
                     test_name = f"tests[{i}]"
 
                 if filter_name and test_name != filter_name:
+                    record_test(
+                        name=test_name,
+                        kind=str((t.get("kind") or t.get("type") or "unknown") if isinstance(t, dict) else "unknown"),
+                        src="", dst="", expected="pass", observed="not_executed",
+                        verdict="not_executed", duration_ms=0,
+                        meta={"not_executed_reason": "filtered_by_name"},
+                    )
                     continue
 
                 if not isinstance(t, dict):
@@ -10146,7 +10189,22 @@ def cmd_test(args: argparse.Namespace) -> None:
                     )
                     continue
 
+                if not _tag_selected(t, filter_tags):
+                    record_test(
+                        name=test_name, kind=str(kind), src="", dst="",
+                        expected="pass", observed="not_executed",
+                        verdict="not_executed", duration_ms=0,
+                        meta={"not_executed_reason": "filtered_by_tag"},
+                    )
+                    continue
+
                 if filter_kind and kind != filter_kind:
+                    record_test(
+                        name=test_name, kind=str(kind), src="", dst="",
+                        expected="pass", observed="not_executed",
+                        verdict="not_executed", duration_ms=0,
+                        meta={"not_executed_reason": "filtered_by_kind"},
+                    )
                     continue
 
                 matched += 1
@@ -10326,12 +10384,14 @@ def cmd_test(args: argparse.Namespace) -> None:
                     port = t.get("port")
                     fail_or_continue(f"tests[{i}] tcp mismatch: {src} -> {dst}:{port} expected {t.get('expect','pass')}")
 
-            if (filter_name or filter_kind) and matched == 0:
+            if (filter_name or filter_kind or filter_tags) and matched == 0:
                 label_parts = []
                 if filter_name:
                     label_parts.append(f"--name {filter_name!r}")
                 if filter_kind:
                     label_parts.append(f"--kind {filter_kind!r}")
+                if filter_tags:
+                    label_parts.append(f"--tag {filter_tags!r}")
                 label = " ".join(label_parts) if label_parts else "(none)"
                 record_test(
                     name="filter:no-match",
@@ -10351,18 +10411,19 @@ def cmd_test(args: argparse.Namespace) -> None:
                     if isinstance(results.get("summary"), dict):
                         results["summary"]["filtered_by_name"] = filter_name or ""
                         results["summary"]["filtered_by_kind"] = filter_kind or ""
+                        results["summary"]["filtered_by_tag"] = ",".join(filter_tags) if filter_tags else ""
                     else:
-                        results["summary"] = {"filtered_by_name": (filter_name or ""), "filtered_by_kind": (filter_kind or "")}
+                        results["summary"] = {"filtered_by_name": (filter_name or ""), "filtered_by_kind": (filter_kind or ""), "filtered_by_tag": (",".join(filter_tags) if filter_tags else "")}
                 except Exception:
                     pass
 
-                total = len(results.get("tests") or [])
-                failed_count = sum(1 for r in (results.get("tests") or []) if isinstance(r, dict) and r.get("verdict") == "fail")
+                _tc_zm = _summarize_test_counts(results.get("tests") or [])
                 results.setdefault("summary", {})
                 if isinstance(results["summary"], dict):
-                    results["summary"]["total"] = total
-                    results["summary"]["failed"] = failed_count
-                    results["summary"]["passed"] = total - failed_count
+                    results["summary"]["total"] = _tc_zm["total"]
+                    results["summary"]["failed"] = _tc_zm["failed"]
+                    results["summary"]["passed"] = _tc_zm["passed"]
+                    results["summary"]["not_executed"] = _tc_zm["not_executed"]
 
                 results["result"] = "fail"
                 write_results()
@@ -10604,9 +10665,11 @@ def cmd_test(args: argparse.Namespace) -> None:
         results["summary"]["finished_at"] = finished_at
         results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
 
-        test_total = len(results["tests"])
-        test_failed = sum(1 for r in results["tests"] if r.get("verdict") == "fail")
-        test_passed = test_total - test_failed
+        _tc = _summarize_test_counts(results["tests"])
+        test_total = _tc["total"]
+        test_failed = _tc["failed"]
+        test_not_executed = _tc["not_executed"]
+        test_passed = _tc["passed"]
 
         scenario_results = results.get("scenarios") or []
         if not isinstance(scenario_results, list):
@@ -10623,6 +10686,8 @@ def cmd_test(args: argparse.Namespace) -> None:
         results["summary"]["total"] = total
         results["summary"]["passed"] = passed_count
         results["summary"]["failed"] = failed_count
+        results["summary"]["not_executed"] = test_not_executed
+        results["summary"]["filtered_by_tag"] = ",".join(filter_tags) if filter_tags else ""
 
         results["result"] = "fail" if failed_count > 0 else "pass"
         write_results()
