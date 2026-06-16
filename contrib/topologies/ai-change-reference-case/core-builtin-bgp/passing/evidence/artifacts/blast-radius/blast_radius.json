@@ -1,0 +1,36 @@
+{
+  "authority": "supporting_evidence",
+  "counts": {
+    "directly_covered_links": 0,
+    "directly_covered_nodes": 1,
+    "potentially_affected_links": 1,
+    "potentially_affected_nodes": 1
+  },
+  "coverage_basis": [
+    "test:r1_bgp_session_to_r2_up"
+  ],
+  "directly_covered": {
+    "links": [],
+    "nodes": [
+      "r1"
+    ]
+  },
+  "potentially_affected": {
+    "links": [
+      {
+        "id": "r1:eth1 -- r2:eth1",
+        "reason": "component_touching_covered_scope"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "r2",
+        "reason": "graph_connected_to_covered_scope"
+      }
+    ]
+  },
+  "schema": "blast_radius.v1",
+  "topology": {
+    "name": "ai-change-core-bgp-passing"
+  }
+}

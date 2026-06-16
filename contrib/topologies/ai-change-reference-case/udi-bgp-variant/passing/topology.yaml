@@ -1,0 +1,54 @@
+# =============================================================================
+# AI-Change Reference Case — UDI (exec) variant — PASSING (detection story)
+#
+# Two regions of distinct authorship, kept visible (REQ-4_9-2 / LD-B):
+#   [AI-GENERATED IMPLEMENTATION]  the nodes + BGP config + advertised networks.
+#                                  Ordinary candidate input; no special
+#                                  treatment (Doctrine §1.12 / REQ-4_9-5).
+#   [HUMAN-AUTHORED INTENT]        the `tests:` block — a user-defined (`exec`)
+#                                  route-present check. BYTE-IDENTICAL to
+#                                  failing/topology.yaml.
+#
+# The session CONVERGES in both variants (peering is correct), so the gate's
+# control-plane precheck passes and the invariant actually executes and
+# observes route state. Verdict here: PASS — r1 advertises 1.1.1.1/32 and r2
+# learns it. Evidence is lab-generated; commit it.
+# =============================================================================
+
+name: ai-change-udi-route-passing
+
+# ----- [AI-GENERATED IMPLEMENTATION]  eBGP peering r1 <-> r2 + advertisement --
+nodes:
+  - name: r1
+    type: frr
+    asn: 65001
+    router_id: 1.1.1.1
+    bgp:
+      neighbors:
+        - peer: r2
+          remote_as: 65002          # correct -> session converges
+    networks:
+      - 1.1.1.1/32                  # AI correctly advertises r1's loopback
+
+  - name: r2
+    type: frr
+    asn: 65002
+    router_id: 2.2.2.2
+    bgp:
+      neighbors:
+        - peer: r1
+          remote_as: 65001
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["10.0.0.1/30", "10.0.0.2/30"]
+
+# ----- [HUMAN-AUTHORED INTENT]  route-present exec check; identical in both ---
+tests:
+  - name: r2_learns_route_1_1_1_1_32
+    kind: exec
+    src: r2
+    command: vtysh -c "show bgp ipv4 unicast 1.1.1.1/32 json"
+    assertion:
+      contains: "1.1.1.1/32"
+    expect: pass

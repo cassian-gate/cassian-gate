@@ -1,0 +1,133 @@
+{
+  "authority": {
+    "supporting_evidence": [
+      {
+        "authority": "supporting_evidence",
+        "counts": {
+          "directly_covered_links": 0,
+          "directly_covered_nodes": 1,
+          "potentially_affected_links": 1,
+          "potentially_affected_nodes": 1
+        },
+        "path": "/home/auser/projects/cassian-gate/labs/clab-ai-change-udi-route-passing/artifacts/blast-radius/blast_radius.json",
+        "type": "blast_radius"
+      }
+    ],
+    "verdict_source": "tests"
+  },
+  "blast_radius": {
+    "authority": "supporting_evidence",
+    "directly_covered": {
+      "links": 0,
+      "nodes": 1
+    },
+    "enabled": true,
+    "path": "/home/auser/projects/cassian-gate/labs/clab-ai-change-udi-route-passing/artifacts/blast-radius/blast_radius.json",
+    "potentially_affected": {
+      "links": 1,
+      "nodes": 1
+    }
+  },
+  "command": "test",
+  "events": [],
+  "hard_failure": {
+    "error": "",
+    "occurred": false,
+    "phase": ""
+  },
+  "lab": "ai-change-udi-route-passing",
+  "lab_obj": {
+    "name": "ai-change-udi-route-passing"
+  },
+  "overall": {
+    "exit_code": 0,
+    "expected": "pass",
+    "observed": "pass",
+    "phase": "collect",
+    "verdict": "pass"
+  },
+  "result": "pass",
+  "results_schema": "results.v1",
+  "results_schema_version": "1.0.0",
+  "scenarios": [],
+  "schema_version": "1",
+  "state_capture": {
+    "enabled": false,
+    "mode": "none",
+    "plan_path": "",
+    "post": {
+      "error": 0,
+      "ok": 0,
+      "ran": 0,
+      "timeout": 0
+    },
+    "pre": {
+      "error": 0,
+      "ok": 0,
+      "ran": 0,
+      "timeout": 0
+    },
+    "profiles": [],
+    "state_diff": {
+      "added": 0,
+      "authority": "supporting_evidence",
+      "changed": 0,
+      "compared": 0,
+      "enabled": false,
+      "path": "",
+      "removed": 0
+    }
+  },
+  "summary": {
+    "all_scenarios": false,
+    "duration_ms": 6416,
+    "failed": 0,
+    "filtered_by_kind": "",
+    "filtered_by_name": "",
+    "filtered_by_tag": "",
+    "finished_at": 1781588620.9937692,
+    "keep_going": false,
+    "not_executed": 0,
+    "passed": 1,
+    "precheck_controlplane": true,
+    "resolved_topology_mtime": 1781588613.5233498,
+    "resolved_topology_path": "/home/auser/projects/cassian-gate/labs/clab-ai-change-udi-route-passing/topology.resolved.yaml",
+    "scenario": "",
+    "started_at": 1781588614.5770402,
+    "total": 1
+  },
+  "tests": [
+    {
+      "duration_ms": 85,
+      "error": "",
+      "evidence": {
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "{\n  \"prefix\":\"1.1.1.1/32\",\n  \"version\":1,\n  \"advertisedTo\":{\n    \"10.0.0.1\":{\n      \"hostname\":\"r1\"\n    }\n  },\n  \"paths\":[\n    {\n      \"aspath\":{\n        \"string\":\"65001\",\n        \"segments\":[\n          {\n            \"type\":\"as-sequence\",\n            \"list\":[\n              65001\n            ]\n          }\n        ],\n        \"length\":1\n      },\n      \"origin\":\"IGP\",\n      \"metric\":0,\n      \"valid\":true,\n      \"version\":1,\n      \"bestpath\":{\n        \"overall\":true,\n        \"selectionReason\":\"First path received\"\n      },\n      \"lastUpdate\":{\n        \"epoch\":1781588615,\n        \"string\":\"Tue Jun 16 05:43:35 2026\\n\"\n      },\n      \"nexthops\":[\n        {\n          \"ip\":\"10.0.0.1\",\n          \"hostname\":\"r1\",\n          \"afi\":\"ipv4\",\n          \"metric\":0,\n          \"accessible\":true,\n          \"used\":true\n        }\n      ],\n      \"peer\":{\n        \"peerId\":\"10.0.0.1\",\n        \"routerId\":\"1.1.1.1\",\n        \"hostname\":\"r1\",\n        \"domainname\":\"localdomain\",\n        \"type\":\"external\"\n      }\n    }\n  ]\n}\n",
+        "truncated": false
+      },
+      "expected": "pass",
+      "from": "r2",
+      "kind": "exec",
+      "meta": {
+        "exec": {
+          "assertion": {
+            "contains": "1.1.1.1/32"
+          },
+          "command": "vtysh -c \"show bgp ipv4 unicast 1.1.1.1/32 json\""
+        }
+      },
+      "name": "r2_learns_route_1_1_1_1_32",
+      "observed": "pass",
+      "to": "",
+      "verdict": "pass"
+    }
+  ],
+  "timing": {
+    "duration_ms": 6416
+  },
+  "tool": "cassian-gate",
+  "topology": {
+    "name": "ai-change-udi-route-passing"
+  }
+}

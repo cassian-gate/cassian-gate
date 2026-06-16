@@ -1,0 +1,53 @@
+# =============================================================================
+# AI-Change Reference Case — CORE variant (built-in invariant) — FAILING
+#
+# Same two regions as passing/topology.yaml.
+#   [AI-GENERATED IMPLEMENTATION]  the AI made ONE mistake: on r1 it set the
+#                                  neighbor's remote_as to 65003 instead of
+#                                  65002. Syntactically valid, easy to miss.
+#                                  The eBGP session never establishes.
+#   [HUMAN-AUTHORED INTENT]        the `tests:` block — BYTE-IDENTICAL to
+#                                  passing/topology.yaml. The contract is fixed;
+#                                  only the AI implementation changed.
+#
+# Verdict: FAIL — the built-in bgp_session_up invariant observes the session is
+# not Established. Same gate, same check, no privileged path (Doctrine §1.12).
+# Evidence is lab-generated; commit it.
+# =============================================================================
+
+name: ai-change-core-bgp-failing
+
+# ----- [AI-GENERATED IMPLEMENTATION]  eBGP peering r1 <-> r2 (FLAWED) --------
+nodes:
+  - name: r1
+    type: frr
+    asn: 65001
+    router_id: 1.1.1.1
+    bgp:
+      neighbors:
+        - peer: r2
+          remote_as: 65003          # AI ERROR: should be 65002 (r2's real ASN).
+                                    # r1 expects peer AS 65003; r2 announces
+                                    # 65002 -> OPEN rejected -> session never up.
+
+  - name: r2
+    type: frr
+    asn: 65002
+    router_id: 2.2.2.2
+    bgp:
+      neighbors:
+        - peer: r1
+          remote_as: 65001
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["10.0.0.1/30", "10.0.0.2/30"]
+
+# ----- [HUMAN-AUTHORED INTENT]  built-in invariant; identical in both --------
+tests:
+  - name: r1_bgp_session_to_r2_up
+    kind: invariant
+    type: bgp_session_up
+    node: r1
+    dst: 10.0.0.2
+    expect: pass
