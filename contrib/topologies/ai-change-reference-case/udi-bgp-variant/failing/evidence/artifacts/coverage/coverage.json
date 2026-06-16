@@ -1,0 +1,51 @@
+{
+  "authority": "advisory",
+  "generated_from": {
+    "topology_hash": "c30d5b7a395b3d15ef5655921967bb91a6b246083fe33b9080bfc85c889e7578",
+    "topology_name": "ai-change-udi-route-failing",
+    "topology_path": "contrib/topologies/ai-change-reference-case/udi-bgp-variant/failing/topology.yaml"
+  },
+  "inventory": {
+    "links": [
+      "r1:eth1<->r2:eth1"
+    ],
+    "nodes": [
+      "r1",
+      "r2"
+    ]
+  },
+  "scenarios": {
+    "by_scenario": {},
+    "declared": []
+  },
+  "schema_version": "coverage.v1",
+  "summary": {
+    "touched_fault_classes": [],
+    "touched_links": [],
+    "touched_nodes": [
+      "r2"
+    ],
+    "touched_wait_classes": [],
+    "untouched_links": [
+      "r1:eth1<->r2:eth1"
+    ],
+    "untouched_nodes": [
+      "r1"
+    ]
+  },
+  "tests": {
+    "by_test": {
+      "r2_learns_route_1_1_1_1_32": {
+        "notes": [],
+        "touched_links": [],
+        "touched_nodes": [
+          "r2"
+        ],
+        "touched_wait_classes": []
+      }
+    },
+    "declared": [
+      "r2_learns_route_1_1_1_1_32"
+    ]
+  }
+}

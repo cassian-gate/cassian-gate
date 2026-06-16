@@ -1,0 +1,104 @@
+{
+  "authority": {
+    "supporting_evidence": [],
+    "verdict_source": "tests"
+  },
+  "blast_radius": {
+    "authority": "supporting_evidence",
+    "directly_covered": {
+      "links": 0,
+      "nodes": 0
+    },
+    "enabled": true,
+    "path": "/home/auser/projects/cassian-gate/labs/clab-ai-change-core-bgp-failing/artifacts/blast-radius/blast_radius.json",
+    "potentially_affected": {
+      "links": 0,
+      "nodes": 0
+    }
+  },
+  "command": "test",
+  "events": [],
+  "hard_failure": {
+    "error": "",
+    "occurred": false,
+    "phase": ""
+  },
+  "lab": "ai-change-core-bgp-failing",
+  "lab_obj": {
+    "name": "ai-change-core-bgp-failing"
+  },
+  "overall": {
+    "exit_code": 1,
+    "expected": "pass",
+    "observed": "fail",
+    "phase": "collect",
+    "verdict": "fail"
+  },
+  "result": "fail",
+  "results_schema": "results.v1",
+  "results_schema_version": "1.0.0",
+  "scenarios": [],
+  "schema_version": "1",
+  "state_capture": {
+    "enabled": false,
+    "mode": "none",
+    "plan_path": "",
+    "post": {
+      "error": 0,
+      "ok": 0,
+      "ran": 0,
+      "timeout": 0
+    },
+    "pre": {
+      "error": 0,
+      "ok": 0,
+      "ran": 0,
+      "timeout": 0
+    },
+    "profiles": [],
+    "state_diff": {
+      "added": 0,
+      "authority": "supporting_evidence",
+      "changed": 0,
+      "compared": 0,
+      "enabled": false,
+      "path": "",
+      "removed": 0
+    }
+  },
+  "summary": {
+    "all_scenarios": false,
+    "duration_ms": 30863,
+    "failed": 1,
+    "filtered_by_kind": "",
+    "filtered_by_name": "",
+    "finished_at": 1781588612.6253083,
+    "keep_going": false,
+    "passed": 0,
+    "precheck_controlplane": true,
+    "resolved_topology_mtime": 1781588580.7639794,
+    "resolved_topology_path": "/home/auser/projects/cassian-gate/labs/clab-ai-change-core-bgp-failing/topology.resolved.yaml",
+    "scenario": "",
+    "started_at": 1781588581.762163,
+    "tests_executed": 0,
+    "total": 1
+  },
+  "tests": [
+    {
+      "duration_ms": 0,
+      "error": "blocked before execution",
+      "expected": "pass",
+      "kind": "invariant",
+      "name": "r1_bgp_session_to_r2_up",
+      "observed": "blocked",
+      "verdict": "fail"
+    }
+  ],
+  "timing": {
+    "duration_ms": 30863
+  },
+  "tool": "cassian-gate",
+  "topology": {
+    "name": "ai-change-core-bgp-failing"
+  }
+}

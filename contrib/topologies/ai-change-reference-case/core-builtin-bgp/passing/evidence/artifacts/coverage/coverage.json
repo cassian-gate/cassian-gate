@@ -1,0 +1,51 @@
+{
+  "authority": "advisory",
+  "generated_from": {
+    "topology_hash": "c2e198ff20219378b37f2c36db61c8d1f543a5e340efcbf497a56df003f6052f",
+    "topology_name": "ai-change-core-bgp-passing",
+    "topology_path": "contrib/topologies/ai-change-reference-case/core-builtin-bgp/passing/topology.yaml"
+  },
+  "inventory": {
+    "links": [
+      "r1:eth1<->r2:eth1"
+    ],
+    "nodes": [
+      "r1",
+      "r2"
+    ]
+  },
+  "scenarios": {
+    "by_scenario": {},
+    "declared": []
+  },
+  "schema_version": "coverage.v1",
+  "summary": {
+    "touched_fault_classes": [],
+    "touched_links": [],
+    "touched_nodes": [
+      "r1"
+    ],
+    "touched_wait_classes": [],
+    "untouched_links": [
+      "r1:eth1<->r2:eth1"
+    ],
+    "untouched_nodes": [
+      "r2"
+    ]
+  },
+  "tests": {
+    "by_test": {
+      "r1_bgp_session_to_r2_up": {
+        "notes": [],
+        "touched_links": [],
+        "touched_nodes": [
+          "r1"
+        ],
+        "touched_wait_classes": []
+      }
+    },
+    "declared": [
+      "r1_bgp_session_to_r2_up"
+    ]
+  }
+}

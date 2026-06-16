@@ -1,0 +1,51 @@
+{
+  "authority": "advisory",
+  "generated_from": {
+    "topology_hash": "0c8d10eb99ef0c4896d679f073f7fa5d39f18c69b16f54bd0b320060478e5b53",
+    "topology_name": "ai-change-udi-route-passing",
+    "topology_path": "contrib/topologies/ai-change-reference-case/udi-bgp-variant/passing/topology.yaml"
+  },
+  "inventory": {
+    "links": [
+      "r1:eth1<->r2:eth1"
+    ],
+    "nodes": [
+      "r1",
+      "r2"
+    ]
+  },
+  "scenarios": {
+    "by_scenario": {},
+    "declared": []
+  },
+  "schema_version": "coverage.v1",
+  "summary": {
+    "touched_fault_classes": [],
+    "touched_links": [],
+    "touched_nodes": [
+      "r2"
+    ],
+    "touched_wait_classes": [],
+    "untouched_links": [
+      "r1:eth1<->r2:eth1"
+    ],
+    "untouched_nodes": [
+      "r1"
+    ]
+  },
+  "tests": {
+    "by_test": {
+      "r2_learns_route_1_1_1_1_32": {
+        "notes": [],
+        "touched_links": [],
+        "touched_nodes": [
+          "r2"
+        ],
+        "touched_wait_classes": []
+      }
+    },
+    "declared": [
+      "r2_learns_route_1_1_1_1_32"
+    ]
+  }
+}
