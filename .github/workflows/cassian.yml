@@ -92,6 +92,12 @@ jobs:
           python tests/tag_nonexec_render_boundary_proof.py
           python tests/tag_preservation_proof.py
 
+      - name: AI-change canonical reference case proof harness (§4.9)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/ai_change_reference_case_proof.py
+
       - name: Project gate (up -> test -> down)
         shell: bash
         run: |
