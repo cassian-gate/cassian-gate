@@ -1,0 +1,60 @@
+# =============================================================================
+# AI-Change Reference Case — UDI (exec) variant — FAILING
+#
+# `cassian test` consumes this file. Same two regions as passing/topology.yaml.
+#
+#   [AI-GENERATED IMPLEMENTATION]  the nodes + BGP config below. The AI made ONE
+#                                  mistake: on r1, it set the neighbor's
+#                                  remote_as to 65003 instead of 65002. A single
+#                                  digit, syntactically valid, easy to miss in
+#                                  review. The eBGP session never establishes.
+#
+#   [HUMAN-AUTHORED INTENT]        the `tests:` block — BYTE-IDENTICAL to
+#                                  passing/topology.yaml. The contract did not
+#                                  change; only the AI implementation did.
+#
+# Verdict: FAIL — the gate catches the AI's mistake (Doctrine §1.12: the same
+# check, same gate, no privileged path — the verdict tracks implementation
+# quality, not authoring origin).
+# =============================================================================
+
+name: ai-change-udi-bgp-failing
+
+# ----- [AI-GENERATED IMPLEMENTATION]  eBGP peering r1 <-> r2 (FLAWED) --------
+nodes:
+  - name: r1
+    type: frr
+    asn: 65001
+    router_id: 1.1.1.1
+    bgp:
+      neighbors:
+        - peer: r2
+          remote_as: 65003          # AI ERROR: should be 65002 (r2's real ASN).
+                                    # r1 expects peer AS 65003; r2 announces
+                                    # 65002 -> OPEN rejected -> session never up.
+
+  - name: r2
+    type: frr
+    asn: 65002
+    router_id: 2.2.2.2
+    bgp:
+      neighbors:
+        - peer: r1
+          remote_as: 65001
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["10.0.0.1/30", "10.0.0.2/30"]
+
+# ----- [HUMAN-AUTHORED INTENT]  identical in passing/ and failing/ -----------
+tests:
+  - name: r1_bgp_peer_r2_established
+    kind: exec
+    src: r1
+    command: vtysh -c "show bgp summary json"
+    assertion:
+      field:
+        path: [ipv4Unicast, peers, "10.0.0.2", state]
+        op: "=="
+        value: Established
+    expect: pass

@@ -1,0 +1,55 @@
+# =============================================================================
+# AI-Change Reference Case — UDI (exec) variant — PASSING
+#
+# `cassian test` consumes this file. It holds TWO regions of distinct
+# authorship, kept deliberately visible (REQ-4_9-2 / LD-B):
+#
+#   [AI-GENERATED IMPLEMENTATION]  the nodes + BGP config below — produced by an
+#                                  AI agent; the candidate the gate validates.
+#                                  Ordinary input, no special treatment
+#                                  (Doctrine §1.12 / REQ-4_9-5).
+#
+#   [HUMAN-AUTHORED INTENT]        the `tests:` block — the declared truth.
+#                                  BYTE-IDENTICAL to failing/topology.yaml.
+#
+# Verdict: PASS — the AI implementation is correct (r1 expects r2's real ASN).
+# =============================================================================
+
+name: ai-change-udi-bgp-passing
+
+# ----- [AI-GENERATED IMPLEMENTATION]  eBGP peering r1 <-> r2 -----------------
+nodes:
+  - name: r1
+    type: frr
+    asn: 65001
+    router_id: 1.1.1.1
+    bgp:
+      neighbors:
+        - peer: r2
+          remote_as: 65002          # correct: r2's real ASN is 65002
+
+  - name: r2
+    type: frr
+    asn: 65002
+    router_id: 2.2.2.2
+    bgp:
+      neighbors:
+        - peer: r1
+          remote_as: 65001
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["10.0.0.1/30", "10.0.0.2/30"]
+
+# ----- [HUMAN-AUTHORED INTENT]  identical in passing/ and failing/ -----------
+tests:
+  - name: r1_bgp_peer_r2_established
+    kind: exec
+    src: r1
+    command: vtysh -c "show bgp summary json"
+    assertion:
+      field:
+        path: [ipv4Unicast, peers, "10.0.0.2", state]
+        op: "=="
+        value: Established
+    expect: pass
