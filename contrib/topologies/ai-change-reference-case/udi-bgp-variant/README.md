@@ -1,39 +1,35 @@
-# AI-Change Reference Case — UDI (`exec`) variant
+# AI-Change Reference Case — bonus variant (`exec` UDI, detection story)
 
-This is the **user-defined-invariant enrichment** for the §4.9 AI-change reference case (REQ-4_9-14). It tells the same story as the core variant, but the declared truth is a user-defined invariant (`kind: exec`) instead of a built-in one.
+The **user-defined-invariant enrichment** for the §4.9 AI-change reference case (REQ-4_9-14). It tells the **detection** story — the gate inspects the resulting network state and reports a bad route — complementing the core variant's **guardrail** story (the gate refusing to pass an un-evaluable check).
 
 ## What it proves
 
-An AI agent was asked to configure eBGP peering between `r1` (AS 65001) and `r2` (AS 65002). The gate checks the AI's work against a human-authored contract — **the same way it would check a human's work** (Doctrine §1.12: no AI-privileged path).
+An AI agent configured eBGP peering between `r1` (AS 65001) and `r2` (AS 65002) and was supposed to advertise r1's loopback `1.1.1.1/32`. The gate checks the AI's work against a human-authored contract — the same way it checks a human's (Doctrine §1.12: no AI-privileged path).
 
-- `passing/topology.yaml` — the AI got it right → session `Established` → **PASS**
-- `failing/topology.yaml` — the AI fat-fingered one `remote_as` value → session never comes up → **FAIL**
+- `passing/topology.yaml` — AI advertised the route → r2 learns it → **PASS**
+- `failing/topology.yaml` — AI configured peering correctly but **forgot to advertise** the route → r2 never learns it → **FAIL**
 
-## The boundary (read this)
+## Why this is the detection / present-half story
 
-Each topology file has two clearly-banner-marked regions:
+The peering is correct in **both** variants, so the session **converges**. The control-plane precheck therefore passes and the `exec` invariant **runs**: it reads r2's BGP table and observes whether `1.1.1.1/32` is present. In the failing variant it is absent, so the gate records a **FAIL with the observed (empty) state rendered** — the §13(c) **present-half**. (The core variant, by contrast, shows the **absent-half**: a flaw so basic the session never converges and the check is blocked before it can run.) Together the two variants exercise both halves from real lab evidence.
 
-- **[HUMAN-AUTHORED INTENT]** — the `tests:` block. The declared truth: *"on r1, the BGP peer to 10.0.0.2 must be Established."* It is **byte-identical** in both files (see `intent.md`).
-- **[AI-GENERATED IMPLEMENTATION]** — the `nodes:` BGP config. The candidate the gate validates.
+## The boundary
 
-Because the intent is constant and only the AI implementation differs, the verdict difference is caused *solely* by the AI's implementation quality. That is the architectural point made visible.
+Each file has two banner-marked regions: **[HUMAN-AUTHORED INTENT]** (the `tests:` block — byte-identical across both, see `intent.md`) and **[AI-GENERATED IMPLEMENTATION]** (the `nodes:` config — here the difference is whether r1 has a `networks:` advertisement).
 
 ## Commands
 
 ```bash
-cassian test failing/topology.yaml     # run the failing variant first
-cassian test passing/topology.yaml     # then the passing variant
+cassian test failing/topology.yaml     # failing first
+cassian test passing/topology.yaml     # then passing
 ```
 
-Expected verdict difference:
+Expected: `failing/` → **FAIL** (route absent, observed state rendered); `passing/` → **PASS** (exit 0).
 
-- `failing/topology.yaml` → **FAIL** (existing non-zero validation exit code)
-- `passing/topology.yaml` → **PASS** (exit 0)
+## Lab and CI model
 
-## Note on labs and CI
+`exec` runs a command on a live node, so `cassian test` here **deploys a lab**. Run it locally and **commit the evidence** (`labs/clab-*/results.json` + `results.summary.txt`), like `contrib/topologies/first-run-proof`. The CI harness (`tests/ai_change_reference_case_proof.py`) verifies the committed evidence **lab-free** — it never re-runs the lab (REQ-4_9-6 corrected / B07: no lab in CI).
 
-`kind: exec` runs a read-only command on a live node, so `cassian test` here **deploys a containerlab lab**. Run these locally and **commit the produced evidence** (`labs/clab-*/results.json` + `results.summary.txt`), the same way `contrib/topologies/first-run-proof` commits its lab artifacts.
-
-The lab-free CI harness (`tests/ai_change_reference_case_proof.py`) does **not** re-run this lab. It asserts this variant's **committed evidence** at the render boundary (verdict core consistent; the failing record renders both §13(c) halves). The **core variant works the same way** — its built-in invariant also needs a lab to generate evidence; what is lab-free is the harness's verification of committed evidence, not the invariant (REQ-4_9-6 corrected / B07: no lab in CI).
+When you generate evidence, confirm the `contains: "1.1.1.1/32"` assertion against real FRR output (present → contains the prefix; absent → `{}`); swap to a structured `field` check if you prefer, after verifying the JSON shape.
 
 Authoritative artifact: `results.json`. Human-readable only: `results.summary.txt`.

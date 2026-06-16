@@ -1,26 +1,25 @@
 # =============================================================================
-# AI-Change Reference Case — UDI (exec) variant — FAILING
+# AI-Change Reference Case — UDI (exec) variant — FAILING (detection story)
 #
-# `cassian test` consumes this file. Same two regions as passing/topology.yaml.
-#
-#   [AI-GENERATED IMPLEMENTATION]  the nodes + BGP config below. The AI made ONE
-#                                  mistake: on r1, it set the neighbor's
-#                                  remote_as to 65003 instead of 65002. A single
-#                                  digit, syntactically valid, easy to miss in
-#                                  review. The eBGP session never establishes.
-#
+# Same two regions as passing/topology.yaml.
+#   [AI-GENERATED IMPLEMENTATION]  the AI configured the peering correctly (the
+#                                  session DOES come up) but FORGOT to advertise
+#                                  r1's loopback — there is no `networks:` block
+#                                  on r1. r2 therefore never learns 1.1.1.1/32.
 #   [HUMAN-AUTHORED INTENT]        the `tests:` block — BYTE-IDENTICAL to
-#                                  passing/topology.yaml. The contract did not
-#                                  change; only the AI implementation did.
+#                                  passing/topology.yaml.
 #
-# Verdict: FAIL — the gate catches the AI's mistake (Doctrine §1.12: the same
-# check, same gate, no privileged path — the verdict tracks implementation
-# quality, not authoring origin).
+# Because the session converges, the control-plane precheck PASSES and the
+# invariant EXECUTES: the gate inspects r2's BGP table, finds the route absent,
+# and records a FAIL with the observed (empty) state rendered. This is the
+# §13(c) PRESENT-half — the gate observed the bad state and reported it.
+# Same gate, same check, no privileged path (Doctrine §1.12). Evidence is
+# lab-generated; commit it.
 # =============================================================================
 
-name: ai-change-udi-bgp-failing
+name: ai-change-udi-route-failing
 
-# ----- [AI-GENERATED IMPLEMENTATION]  eBGP peering r1 <-> r2 (FLAWED) --------
+# ----- [AI-GENERATED IMPLEMENTATION]  peering OK, advertisement MISSING -------
 nodes:
   - name: r1
     type: frr
@@ -29,9 +28,9 @@ nodes:
     bgp:
       neighbors:
         - peer: r2
-          remote_as: 65003          # AI ERROR: should be 65002 (r2's real ASN).
-                                    # r1 expects peer AS 65003; r2 announces
-                                    # 65002 -> OPEN rejected -> session never up.
+          remote_as: 65002          # correct -> session still converges
+    # AI ERROR: no `networks:` block -> r1 never advertises 1.1.1.1/32,
+    #           so r2 never learns the route. (Compare passing/topology.yaml.)
 
   - name: r2
     type: frr
@@ -46,15 +45,12 @@ links:
   - endpoints: ["r1:eth1", "r2:eth1"]
     ipv4: ["10.0.0.1/30", "10.0.0.2/30"]
 
-# ----- [HUMAN-AUTHORED INTENT]  identical in passing/ and failing/ -----------
+# ----- [HUMAN-AUTHORED INTENT]  route-present exec check; identical in both ---
 tests:
-  - name: r1_bgp_peer_r2_established
+  - name: r2_learns_route_1_1_1_1_32
     kind: exec
-    src: r1
-    command: vtysh -c "show bgp summary json"
+    src: r2
+    command: vtysh -c "show bgp ipv4 unicast 1.1.1.1/32 json"
     assertion:
-      field:
-        path: [ipv4Unicast, peers, "10.0.0.2", state]
-        op: "=="
-        value: Established
+      contains: "1.1.1.1/32"
     expect: pass

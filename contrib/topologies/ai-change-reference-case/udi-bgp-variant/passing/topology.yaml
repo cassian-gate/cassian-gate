@@ -1,23 +1,23 @@
 # =============================================================================
-# AI-Change Reference Case — UDI (exec) variant — PASSING
+# AI-Change Reference Case — UDI (exec) variant — PASSING (detection story)
 #
-# `cassian test` consumes this file. It holds TWO regions of distinct
-# authorship, kept deliberately visible (REQ-4_9-2 / LD-B):
+# Two regions of distinct authorship, kept visible (REQ-4_9-2 / LD-B):
+#   [AI-GENERATED IMPLEMENTATION]  the nodes + BGP config + advertised networks.
+#                                  Ordinary candidate input; no special
+#                                  treatment (Doctrine §1.12 / REQ-4_9-5).
+#   [HUMAN-AUTHORED INTENT]        the `tests:` block — a user-defined (`exec`)
+#                                  route-present check. BYTE-IDENTICAL to
+#                                  failing/topology.yaml.
 #
-#   [AI-GENERATED IMPLEMENTATION]  the nodes + BGP config below — produced by an
-#                                  AI agent; the candidate the gate validates.
-#                                  Ordinary input, no special treatment
-#                                  (Doctrine §1.12 / REQ-4_9-5).
-#
-#   [HUMAN-AUTHORED INTENT]        the `tests:` block — the declared truth.
-#                                  BYTE-IDENTICAL to failing/topology.yaml.
-#
-# Verdict: PASS — the AI implementation is correct (r1 expects r2's real ASN).
+# The session CONVERGES in both variants (peering is correct), so the gate's
+# control-plane precheck passes and the invariant actually executes and
+# observes route state. Verdict here: PASS — r1 advertises 1.1.1.1/32 and r2
+# learns it. Evidence is lab-generated; commit it.
 # =============================================================================
 
-name: ai-change-udi-bgp-passing
+name: ai-change-udi-route-passing
 
-# ----- [AI-GENERATED IMPLEMENTATION]  eBGP peering r1 <-> r2 -----------------
+# ----- [AI-GENERATED IMPLEMENTATION]  eBGP peering r1 <-> r2 + advertisement --
 nodes:
   - name: r1
     type: frr
@@ -26,7 +26,9 @@ nodes:
     bgp:
       neighbors:
         - peer: r2
-          remote_as: 65002          # correct: r2's real ASN is 65002
+          remote_as: 65002          # correct -> session converges
+    networks:
+      - 1.1.1.1/32                  # AI correctly advertises r1's loopback
 
   - name: r2
     type: frr
@@ -41,15 +43,12 @@ links:
   - endpoints: ["r1:eth1", "r2:eth1"]
     ipv4: ["10.0.0.1/30", "10.0.0.2/30"]
 
-# ----- [HUMAN-AUTHORED INTENT]  identical in passing/ and failing/ -----------
+# ----- [HUMAN-AUTHORED INTENT]  route-present exec check; identical in both ---
 tests:
-  - name: r1_bgp_peer_r2_established
+  - name: r2_learns_route_1_1_1_1_32
     kind: exec
-    src: r1
-    command: vtysh -c "show bgp summary json"
+    src: r2
+    command: vtysh -c "show bgp ipv4 unicast 1.1.1.1/32 json"
     assertion:
-      field:
-        path: [ipv4Unicast, peers, "10.0.0.2", state]
-        op: "=="
-        value: Established
+      contains: "1.1.1.1/32"
     expect: pass
