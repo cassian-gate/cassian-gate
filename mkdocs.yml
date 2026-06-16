@@ -102,6 +102,7 @@ nav:
   - CLI Reference: cli-reference-v1.md
   - Cheatsheet: cheatsheet.md
   - Writing a user-defined invariant: recipes/exec-user-defined-invariants.md
+  - The AI-change reference case: recipes/ai-change-reference-case.md
 
   - CI Integration:
     - GitHub Actions: ci/github-actions.md
