@@ -2106,6 +2106,7 @@ def resolve_topology(topo: dict) -> dict:
                 "route_absent",
                 "bgp_med_equals",
                 "bgp_localpref_equals",
+                "bgp_community",
                 "route_advertised_to",
                 "route_not_advertised_to",
                 "evpn_mac_route_present",
@@ -2118,7 +2119,7 @@ def resolve_topology(topo: dict) -> dict:
                 die(
                     f"tests[{i}]: invariant.type unsupported ({inv_type!r}) "
                     f"(supported: bgp_session_up, route_present, route_absent, "
-                    f"bgp_med_equals, bgp_localpref_equals, route_advertised_to, route_not_advertised_to, "
+                    f"bgp_med_equals, bgp_localpref_equals, bgp_community, route_advertised_to, route_not_advertised_to, "
                     f"evpn_mac_route_present, evpn_mac_route_absent, "
                     f"evpn_vni_route_present, evpn_bgp_session_up, ospf_neighbor_up, interface_state)"
                 )
@@ -2248,6 +2249,68 @@ def resolve_topology(topo: dict) -> dict:
                         t["expected"] = int(expv)
                     except Exception:
                         die(f"{ctx}: {inv_type}.expected must be an integer")
+
+            elif inv_type == "bgp_community":
+                # §4.10 bgp_community resolve-time schema + field validation
+                # (SCHEMA-1 / VALIDATE-1..6); each rejection is §13(a)-sufficient
+                # (names field / offending value / corrective action).
+                pfx = t.get("prefix")
+                if not isinstance(pfx, str) or not pfx.strip():
+                    die(f"{ctx}: bgp_community requires 'prefix' as CIDR (e.g. 10.0.0.0/24)")
+                try:
+                    _ = ipaddress.ip_network(pfx.strip(), strict=False)
+                except Exception:
+                    die(f"{ctx}: bgp_community.prefix must be a valid CIDR (e.g. 10.0.0.0/24)")
+
+                expv = t.get("expected")
+                mt = t.get("match")
+                if isinstance(expv, list):
+                    if mt is None or str(mt).strip().lower() not in ("any", "all"):
+                        die(f"{ctx}: bgp_community.match must be one of {{any, all}} and is required when 'expected' is a list")
+                    if not expv:
+                        die(f"{ctx}: bgp_community requires a non-empty 'expected' (a community or a list of communities)")
+                    _exp_items = list(expv)
+                    t["match"] = str(mt).strip().lower()
+                elif isinstance(expv, str) and expv.strip():
+                    if mt is not None:
+                        die(f"{ctx}: bgp_community.match is not permitted when 'expected' is a single community")
+                    _exp_items = [expv]
+                else:
+                    die(f"{ctx}: bgp_community requires 'expected' (a community string or a list of community strings)")
+
+                _wellknown = {"no-export", "no-advertise", "local-as", "internet"}
+                for _c in _exp_items:
+                    _cs = _c.strip() if isinstance(_c, str) else _c
+                    _ok = (
+                        isinstance(_cs, str)
+                        and (
+                            _cs.lower() in _wellknown
+                            or (len(_cs.split(":")) == 2 and all(_p.isdigit() for _p in _cs.split(":")))
+                        )
+                    )
+                    if not _ok:
+                        die(f"{ctx}: bgp_community.expected community {_c!r} is malformed (expected AS:VAL or one of no-export, no-advertise, local-AS, internet)")
+
+                _nodes_for_lookup = {
+                    str(_n.get("name") or "").strip(): _n
+                    for _n in (resolved.get("nodes") or [])
+                    if isinstance(_n, dict)
+                    and isinstance(_n.get("name"), str)
+                    and str(_n.get("name") or "").strip()
+                }
+                _src_node = _nodes_for_lookup.get(src.strip())
+                if _src_node is None:
+                    die(
+                        f"{ctx}: invariant 'bgp_community' references src "
+                        f"{src!r} but no node by that name exists in the topology"
+                    )
+                _src_kind = str(_src_node.get("type") or "").strip().lower()
+                if _src_kind != "frr":
+                    die(
+                        f"{ctx}: invariant 'bgp_community' references src "
+                        f"{src!r} of type {_src_kind!r}; this invariant requires "
+                        f"src to be a node of type 'frr'"
+                    )
 
             elif inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent"):
                 mac = t.get("mac")
