@@ -1575,6 +1575,16 @@ def gen_frr_conf(node: dict, topo: dict) -> str:
                         cfg.append(f" set local-preference {int(set_block.get('localpref'))}")
                     except Exception:
                         pass
+                if "community" in set_block:
+                    community_raw = set_block.get("community")
+                    if isinstance(community_raw, str):
+                        community_tokens = [community_raw.strip()] if community_raw.strip() else []
+                    elif isinstance(community_raw, (list, tuple)):
+                        community_tokens = [str(tok).strip() for tok in community_raw if str(tok).strip()]
+                    else:
+                        community_tokens = []
+                    if community_tokens:
+                        cfg.append(f" set community {' '.join(community_tokens)}")
         if route_maps:
             cfg.append("!")
 
@@ -1795,6 +1805,24 @@ def _validate_exec_assertion(assertion, ctx: str) -> None:
             die(f"{ctx}: exec assertion 'field' has unknown key(s) {sorted(_extra)!r} (allowed: path, op, value)")
 
 
+def _is_valid_community_specifier(value):
+    """True iff value is a valid BGP community specifier: a literal AS:VAL
+    (two colon-separated integer parts) or a well-known token
+    (no-export, no-advertise, local-AS, internet; case-insensitive).
+
+    Shared by the bgp_community invariant validation (REQ-BGPCOM-SCHEMA-1 /
+    VALIDATE) and the route-map set.community validation
+    (REQ-BGPCOM-GEN-2, Amendment A1) -- single source of community grammar.
+    """
+    if not isinstance(value, str):
+        return False
+    _s = value.strip()
+    if _s.lower() in {"no-export", "no-advertise", "local-as", "internet"}:
+        return True
+    _parts = _s.split(":")
+    return len(_parts) == 2 and all(_p.isdigit() for _p in _parts)
+
+
 def resolve_topology(topo: dict) -> dict:
     """
     Return a copy of topo with missing link IPv4 addresses allocated.
@@ -1831,6 +1859,46 @@ def resolve_topology(topo: dict) -> dict:
 
         n["runtime"] = rt
         n["_runtime"] = rt
+
+    # ----------------------------
+    # 0c) §4.10 GEN-2 (Amendment A1): route-map set.community syntax validation.
+    # First validation on the route-map `set` block; community-key only
+    # (set.med / set.localpref retrofit is out of scope -- BL-1b10-2).
+    # Reuses the shared community-specifier validator (single source of grammar).
+    # ----------------------------
+    for _n in (resolved.get("nodes") or []):
+        if not isinstance(_n, dict):
+            continue
+        _bgp = _n.get("bgp") if isinstance(_n.get("bgp"), dict) else {}
+        _rmaps = _bgp.get("route_maps") if isinstance(_bgp.get("route_maps"), list) else []
+        for _rm in _rmaps:
+            if not isinstance(_rm, dict):
+                continue
+            _rm_name = str(_rm.get("name") or "").strip()
+            _entries = _rm.get("entries") if isinstance(_rm.get("entries"), list) else []
+            for _entry in _entries:
+                if not isinstance(_entry, dict):
+                    continue
+                _setblk = _entry.get("set") if isinstance(_entry.get("set"), dict) else {}
+                if "community" not in _setblk:
+                    continue
+                _comm = _setblk.get("community")
+                if isinstance(_comm, str):
+                    _comm_items = [_comm]
+                elif isinstance(_comm, list):
+                    _comm_items = list(_comm)
+                else:
+                    die(
+                        f"Topology invalid: node {_n.get('name')!r} route-map {_rm_name!r}: "
+                        f"set.community must be a community string or a list of community strings"
+                    )
+                for _c in _comm_items:
+                    if not _is_valid_community_specifier(_c):
+                        die(
+                            f"Topology invalid: node {_n.get('name')!r} route-map {_rm_name!r}: "
+                            f"set.community value {_c!r} is malformed "
+                            f"(expected AS:VAL or one of no-export, no-advertise, local-AS, internet)"
+                        )
 
     # ----------------------------
     # 0) v1.5 EVPN Awareness (presence-only): normalize fabric.evpn into resolved output
@@ -2278,17 +2346,8 @@ def resolve_topology(topo: dict) -> dict:
                 else:
                     die(f"{ctx}: bgp_community requires 'expected' (a community string or a list of community strings)")
 
-                _wellknown = {"no-export", "no-advertise", "local-as", "internet"}
                 for _c in _exp_items:
-                    _cs = _c.strip() if isinstance(_c, str) else _c
-                    _ok = (
-                        isinstance(_cs, str)
-                        and (
-                            _cs.lower() in _wellknown
-                            or (len(_cs.split(":")) == 2 and all(_p.isdigit() for _p in _cs.split(":")))
-                        )
-                    )
-                    if not _ok:
+                    if not _is_valid_community_specifier(_c):
                         die(f"{ctx}: bgp_community.expected community {_c!r} is malformed (expected AS:VAL or one of no-export, no-advertise, local-AS, internet)")
 
                 _nodes_for_lookup = {
