@@ -5,7 +5,7 @@
 §1.14 Invariant-Driven Support / uniformity).
 
 Proves that the four-quadrant expect-fail verdict contract for `kind: invariant`
-is UNIFORM across the operative 13-type catalog, computed from the single
+is UNIFORM across the operative 14-type catalog, computed from the single
 canonical dispatch seam in run_invariant_test (cassian_engine.py), rather than
 coincidental per-type correctness. run_invariant_test and its helper
 _evaluate_invariant_attempt are nested closures inside cmd_test (cassian_engine.py
@@ -22,13 +22,13 @@ captured in SNAPSHOT_MAPPING.txt (v2 ≡ v484 pin). Engine is byte-unchanged by
 §4.5 (REQ-EXPF-PRES-1/2): this harness proves and locks already-correct logic.
 
 Proof obligations (handover §15.2):
-  P-EXPF-CAT   the operative catalog is exactly the 13 types declared in
+  P-EXPF-CAT   the operative catalog is exactly the 14 types declared in
                cassian_model.py (drift guard).
   P-EXPF-UNIF  every verdict VALUE assignment in run_invariant_test is either the
                canonical seam `verdict = "pass" if observed == expected else
                "fail"` or the B06 error/guard-path constant `verdict="fail"` —
                there is no divergent per-type verdict path (REQ-EXPF-4 / B05).
-  P-EXPF-Q     for all 13 types x the four (expect, observed) quadrants, the
+  P-EXPF-Q     for all 14 types x the four (expect, observed) quadrants, the
                canonical seam yields the contract verdict: Q1 pass/pass->pass,
                Q2 pass/fail->fail, Q3 fail/fail->pass, Q4 fail/pass->fail
                (REQ-EXPF-1/2/3; B01-B04).
@@ -58,13 +58,14 @@ _ENGINE = os.path.join(_SRC, "cassian_engine.py")
 _MODEL = os.path.join(_SRC, "cassian_model.py")
 _TESTS = os.path.join(_SRC, "cassian_tests.py")
 
-# Authoritative 13-type operative catalog (cross-checked against cassian_model.py).
+# Authoritative 14-type operative catalog (cross-checked against cassian_model.py).
 EXPECTED_CATALOG = (
     "bgp_session_up",
     "route_present",
     "route_absent",
     "bgp_med_equals",
     "bgp_localpref_equals",
+    "bgp_community",
     "route_advertised_to",
     "route_not_advertised_to",
     "evpn_mac_route_present",
@@ -157,14 +158,14 @@ def main():
         checks.append((name, bool(cond)))
 
     # --- P-EXPF-CAT: catalog drift guard ---
-    check("P-EXPF-CAT catalog has 13 types", len(catalog) == 13)
+    check("P-EXPF-CAT catalog has 14 types", len(catalog) == 14)
     check("P-EXPF-CAT catalog matches expected set", set(catalog) == set(EXPECTED_CATALOG))
     check("P-EXPF-CAT catalog order preserved", tuple(catalog) == EXPECTED_CATALOG)
 
     # --- P-EXPF-UNIF: seam uniformity / no divergent verdict path ---
     check("P-EXPF-UNIF run_invariant_test body located", bool(rit))
-    check("P-EXPF-UNIF canonical seam present in engine (locked 11 sites)",
-          engine_src.count(SEAM) == 11)
+    check("P-EXPF-UNIF canonical seam present in engine (locked 13 sites)",
+          engine_src.count(SEAM) == 13)
     check("P-EXPF-UNIF canonical seam present in run_invariant_test", SEAM in rit)
     val_assigns = _verdict_value_assignment_lines(rit)
     allowed = {SEAM, B06_VERDICT}
@@ -173,7 +174,7 @@ def main():
           val_assigns and not divergent)
     check("P-EXPF-UNIF no divergent per-type verdict path", divergent == [])
 
-    # --- P-EXPF-Q: four-quadrant contract, uniform across all 13 types from the seam ---
+    # --- P-EXPF-Q: four-quadrant contract, uniform across all 14 types from the seam ---
     for t in catalog:
         for q, spec in QUADRANTS.items():
             check(f"P-EXPF-Q {t} {q} {spec['expect']}/{spec['observed']}->{spec['verdict']}",
