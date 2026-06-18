@@ -1610,6 +1610,82 @@ labs/<lab>/results.summary.txt
 
 When `verdict: fail`, the test record carries a structured `observed_state` payload (`type`, `prefix`, `peer`, `actual`, `expected`, `source_node`). See `docs/topology-schema-v1.5.md` §4.5 for the full per-type schema.
 
+### BGP Community Invariant
+
+Invariant type:
+
+```
+bgp_community
+```
+
+Purpose:
+
+Verify that a BGP route installed on a node carries the expected **community** attribute(s), matched against operator expectations with standard community-list semantics.
+
+This is useful for validating routing policy behavior such as:
+
+- inbound community-tagging route-maps
+- expected community preservation across boundaries
+- ANY-of / ALL-of community-set membership checks
+- companion to `bgp_med_equals` / `bgp_localpref_equals` for full attribute coverage
+
+Required fields:
+
+| Field    | Description                                                               |
+| -------- | ------------------------------------------------------------------------- |
+| node     | Node where the route must be observed                                     |
+| prefix   | Prefix being validated                                                    |
+| expected | A single community specifier, or a list of specifiers                     |
+| match    | `any` or `all` -- REQUIRED for a list `expected`, REJECTED for a scalar   |
+
+A community specifier is a literal `AS:VAL` token (e.g. `65001:100`) or a well-known token (`no-export`, `no-advertise`, `local-AS`, `internet`).
+
+Example (single community):
+
+```yaml
+tests:
+  - name: r2_sees_1_1_1_1_32_with_community
+    kind: invariant
+    type: bgp_community
+    node: r2
+    prefix: 1.1.1.1/32
+    expected: "65001:100"
+    expect: pass
+```
+
+Example (community list, match all):
+
+```yaml
+tests:
+  - name: r2_sees_1_1_1_1_32_with_all_communities
+    kind: invariant
+    type: bgp_community
+    node: r2
+    prefix: 1.1.1.1/32
+    expected:
+      - "65001:100"
+      - no-export
+    match: all
+    expect: pass
+```
+
+Behavior:
+
+- The invariant inspects the BGP route entry on the specified node and extracts its community set.
+- A scalar `expected` passes when that community is present; `match: any` passes when the declared and observed sets intersect; `match: all` passes when every declared community is present.
+- Well-known tokens are normalised on both sides before comparison (`internet` = community `0:0`).
+- If the route is absent, the invariant fails gracefully (`route_present: false` in the failure record), never a silent pass.
+- Malformed declarations (bad community syntax, a scalar `expected` with `match`, or a list `expected` without a valid `match`) are rejected at `cassian validate` time with a corrective error.
+
+Artifacts produced:
+
+```
+labs/<lab>/results.json
+labs/<lab>/results.summary.txt
+```
+
+When `verdict: fail`, the test record carries a structured `observed_state` payload (`type`, `prefix`, `expected_communities`, `actual_communities`, `match`, `route_present`, `source_node`). See `docs/topology-schema-v1.5.md` §4.10 for the full per-type schema.
+
 ### OSPF Neighbor Up Invariant
 
 Invariant type:

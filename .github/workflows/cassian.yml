@@ -98,6 +98,21 @@ jobs:
           set -euo pipefail
           python tests/ai_change_reference_case_proof.py
 
+      - name: BGP community matching proof harnesses (§4.10)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/bgp_community_validate_rejection_proof.py
+          python tests/bgp_community_catalog_coherence_proof.py
+          python tests/bgp_community_set_gen_proof.py
+          python tests/bgp_community_eval_match_proof.py
+          python tests/bgp_community_four_quadrant_proof.py
+          python tests/bgp_community_authority_parity_proof.py
+          python tests/bgp_community_replay_determinism_proof.py
+          python tests/bgp_community_render_boundary_proof.py
+          python tests/bgp_community_preservation_proof.py
+          python tests/expf_four_quadrant_catalog_proof.py
+
       - name: Project gate (up -> test -> down)
         shell: bash
         run: |

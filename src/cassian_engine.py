@@ -3190,6 +3190,70 @@ def _fail_fast_drops(declared_tests, from_idx):
     return out
 
 
+_BGP_COMMUNITY_CANON = {
+    "no-export": "no-export", "noexport": "no-export",
+    "no-advertise": "no-advertise", "noadvertise": "no-advertise",
+    "local-as": "local-as", "localas": "local-as",
+    "internet": "internet", "0:0": "internet",
+}
+
+
+def _canonical_community_token(token):
+    """Canonicalize one BGP community token for form- and order-insensitive
+    comparison. Maps operator-declared well-known forms (no-export, no-advertise,
+    local-AS, internet) and FRR JSON forms (.list camelCase noExport/noAdvertise/
+    localAs/internet; .string hyphenated; numeric 0:0 for internet) to a single
+    canonical token. AS:VAL literals pass through (lowercased)."""
+    k = str(token).strip().lower()
+    return _BGP_COMMUNITY_CANON.get(k, k)
+
+
+def _route_communities(route_obj):
+    """Extract raw BGP community tokens from a vtysh route object:
+    route_obj['community'] {'list'|'string'} (preferred), else the per-path
+    paths[].community (the FRR per-path location). Returns a list of raw token
+    strings (possibly empty)."""
+    def _from_comm(comm):
+        if isinstance(comm, dict):
+            lst = comm.get("list")
+            if isinstance(lst, list) and lst:
+                return [str(x) for x in lst]
+            s = comm.get("string")
+            if isinstance(s, str) and s.strip():
+                return [tok for tok in s.split() if tok]
+        elif isinstance(comm, str) and comm.strip():
+            return [tok for tok in comm.split() if tok]
+        return []
+
+    if not isinstance(route_obj, dict):
+        return []
+    toks = _from_comm(route_obj.get("community"))
+    if toks:
+        return toks
+    paths = route_obj.get("paths")
+    if isinstance(paths, list):
+        for path in paths:
+            if isinstance(path, dict):
+                toks = _from_comm(path.get("community"))
+                if toks:
+                    return toks
+    return []
+
+
+def _bgp_community_observed(expected, match, observed_canon):
+    """Match-level outcome ('pass'/'fail') for bgp_community. `expected` is a
+    scalar specifier or a list; `match` is 'any'|'all' (list only); `observed_canon`
+    is an iterable of already-canonical observed tokens. Comparison is canonical:
+    scalar -> membership; list+any -> intersection non-empty; list+all -> subset."""
+    obs = set(observed_canon)
+    if isinstance(expected, list):
+        decl = {_canonical_community_token(t) for t in expected}
+        ok = decl.issubset(obs) if str(match).strip().lower() == "all" else bool(decl & obs)
+    else:
+        ok = _canonical_community_token(expected) in obs
+    return "pass" if ok else "fail"
+
+
 def cmd_test(args: argparse.Namespace) -> None:
     """
     v1 update (Section C): Scenarios wired into cmd_test (minimal invasive).
@@ -5906,6 +5970,96 @@ def cmd_test(args: argparse.Namespace) -> None:
             }
             return vtysh_ok, predicate_ok, observed_state, evidence
 
+        if inv_type == "bgp_community":
+            node = str(t.get("node") or "")
+            prefix = str(t.get("_norm_prefix") or "").strip()
+
+            cp = rt.exec(lab, node, ["vtysh", "-c", f"show ip bgp {prefix} json"], check=False)
+            out = cp.stdout or ""
+            rc = cp.returncode
+            if isinstance(out, (bytes, bytearray)):
+                try:
+                    out = out.decode("utf-8", errors="replace")
+                except Exception:
+                    out = str(out)
+
+            vtysh_ok = (rc == 0)
+
+            parse_error = ""
+            route_present = False
+            observed_tokens = []
+            empty_first_doc = False
+            try:
+                _s = str(out or "").strip()
+                doc = json.loads(_s) if _s else {}
+                if isinstance(doc, dict) and not doc:
+                    empty_first_doc = True
+                route_obj = None
+                if isinstance(doc, dict):
+                    cand = doc.get(prefix)
+                    if isinstance(cand, list) and cand:
+                        route_obj = cand[0]
+                    elif isinstance(cand, dict):
+                        route_obj = cand
+                    elif (
+                        doc.get("prefix") is not None
+                        and (_normalize_prefix(str(doc.get("prefix"))) or str(doc.get("prefix"))) == prefix
+                    ):
+                        route_obj = doc
+                    else:
+                        routes = doc.get("routes")
+                        if isinstance(routes, dict):
+                            cand = routes.get(prefix)
+                            if isinstance(cand, list) and cand:
+                                route_obj = cand[0]
+                            elif isinstance(cand, dict):
+                                route_obj = cand
+                            else:
+                                for k, v in routes.items():
+                                    nk = _normalize_prefix(str(k)) or str(k)
+                                    if nk != prefix:
+                                        continue
+                                    if isinstance(v, list) and v:
+                                        route_obj = v[0]
+                                        break
+                                    if isinstance(v, dict):
+                                        route_obj = v
+                                        break
+                        if route_obj is None:
+                            for k, v in doc.items():
+                                nk = _normalize_prefix(str(k)) or str(k)
+                                if nk != prefix:
+                                    continue
+                                if isinstance(v, list) and v:
+                                    route_obj = v[0]
+                                    break
+                                if isinstance(v, dict):
+                                    route_obj = v
+                                    break
+                else:
+                    raise ValueError("unexpected_bgp_prefix_json_shape")
+
+                if isinstance(route_obj, dict):
+                    route_present = True
+                    observed_tokens = _route_communities(route_obj)
+            except Exception as e:
+                parse_error = str(e)
+
+            predicate_ok = route_present
+
+            observed_state = {
+                "norm_prefix": prefix,
+                "route_present": route_present,
+                "observed_communities": sorted({_canonical_community_token(t) for t in observed_tokens}),
+            }
+            evidence = {
+                "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                "rc": rc,
+                "parse_error": parse_error,
+                "empty_first_doc": empty_first_doc,
+            }
+            return vtysh_ok, predicate_ok, observed_state, evidence
+
         if inv_type == "ospf_neighbor_up":
             # H4: OSPF neighbor-state evaluator (REQ-H4-7 / B07).
             # FRR JSON shape: {"neighbors": {"<router-id>": [{"nbrState": ...}]}}.
@@ -7129,6 +7283,102 @@ def cmd_test(args: argparse.Namespace) -> None:
                     "prefix": prefix,
                     "expected_value": exp_localpref_i,
                     "observed_value": observed_localpref,
+                },
+                observed_state=observed_state_payload,
+            )
+            return verdict
+
+        if inv_type == "bgp_community":
+            node = str(t.get("node") or "")
+            prefix = _normalize_prefix(str(t.get("prefix") or ""))
+            exp_comm = t.get("expected")
+            match = t.get("match")
+
+            t["_norm_prefix"] = prefix
+            _vtysh_ok, _pred_ok, last_state, last_evidence = (
+                _evaluate_invariant_attempt(inv_type="bgp_community", t=t, src=node)
+            )
+            rc = last_evidence.get("rc")
+            parse_error = str(last_evidence.get("parse_error") or "")
+            route_present = bool(last_state.get("route_present"))
+            observed_communities = list(last_state.get("observed_communities") or [])
+            empty_first_doc = bool(last_evidence.get("empty_first_doc"))
+
+            if rc not in (0, None):
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=node,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported BGP community evidence provider capability",
+                    evidence={
+                        "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                        "rc": rc,
+                    },
+                    meta={
+                        "type": inv_type,
+                        "prefix": prefix,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
+            if not route_present and empty_first_doc:
+                time.sleep(2)
+                _vtysh_ok2, _pred_ok2, last_state2, last_evidence2 = (
+                    _evaluate_invariant_attempt(inv_type="bgp_community", t=t, src=node)
+                )
+                if bool(last_state2.get("route_present")):
+                    last_state = last_state2
+                    last_evidence = last_evidence2
+                    rc = last_evidence.get("rc")
+                    parse_error = str(last_evidence.get("parse_error") or "")
+                    route_present = bool(last_state.get("route_present"))
+                    observed_communities = list(last_state.get("observed_communities") or [])
+
+            observed = _bgp_community_observed(exp_comm, match, observed_communities)
+            verdict = "pass" if observed == expected else "fail"
+
+            observed_state_payload = None
+            if verdict == "fail":
+                _expected_list = exp_comm if isinstance(exp_comm, list) else [exp_comm]
+                observed_state_payload = {
+                    "type": "bgp_community",
+                    "prefix": prefix,
+                    "expected_communities": [str(_c) for _c in _expected_list],
+                    "actual_communities": sorted(observed_communities),
+                    "match": str(match).strip().lower() if isinstance(exp_comm, list) else "",
+                    "route_present": bool(route_present),
+                    "source_node": node,
+                }
+                if parse_error:
+                    observed_state_payload["parse_error"] = str(parse_error)
+
+            record_fn(
+                name=test_name,
+                kind="invariant",
+                src=node,
+                dst="",
+                expected=expected,
+                observed=observed,
+                verdict=verdict,
+                duration_ms=int((time.time() - start) * 1000),
+                error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
+                evidence={
+                    "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                    "rc": rc,
+                    "prefix": prefix,
+                    "communities": sorted(observed_communities),
+                },
+                meta={
+                    "type": inv_type,
+                    "prefix": prefix,
+                    "route_present": bool(route_present),
+                    "observed_community_count": len(observed_communities),
                 },
                 observed_state=observed_state_payload,
             )
