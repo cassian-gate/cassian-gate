@@ -1,0 +1,55 @@
+name: bgp-community-set-gen
+# §4.10 deployable positive fixture (Amendment A1, realizes P1/P3 deploy path).
+# r1 originates its loopback 1.1.1.1/32; r2 applies an inbound route-map that
+# sets a community on the received route. Exercises GEN-1 emission of an AS:VAL
+# specifier plus all four well-known tokens (incl. casing-risky local-AS / internet).
+nodes:
+  - name: r1
+    type: frr
+    asn: 65001
+    router_id: 1.1.1.1
+    networks:
+      - 1.1.1.1/32
+    bgp:
+      neighbors:
+        - peer: r2
+          remote_as: 65002
+  - name: r2
+    type: frr
+    asn: 65002
+    router_id: 2.2.2.2
+    bgp:
+      neighbors:
+        - peer: r1
+          remote_as: 65001
+          ipv4_unicast:
+            route_map_in: SET-COMM
+      route_maps:
+        - name: SET-COMM
+          entries:
+            - seq: 10
+              action: permit
+              set:
+                community:
+                  - "65000:100"
+                  - no-export
+                  - no-advertise
+                  - local-AS
+                  - internet
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["10.0.0.0/31", "10.0.0.1/31"]
+tests:
+  - name: r2-carries-community
+    kind: invariant
+    type: bgp_community
+    node: r2
+    prefix: 1.1.1.1/32
+    expected:
+      - "65000:100"
+      - no-export
+      - no-advertise
+      - local-AS
+      - internet
+    match: all
+    expect: pass
