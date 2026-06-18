@@ -68,6 +68,7 @@ v1.5 supports the following invariant types. Each type maps to a single determin
 | `route_not_advertised_to` | BGP policy | `node`, `peer` (a known node name), `prefix` (CIDR) |
 | `bgp_med_equals` | BGP policy | `node`, `prefix` (CIDR), `expected` (integer) |
 | `bgp_localpref_equals` | BGP policy | `node`, `prefix` (CIDR), `expected` (integer) |
+| `bgp_community` | BGP policy | `node`, `prefix` (CIDR), `expected` (community specifier OR list of specifiers); `match` (`any` or `all`, list-only — required when `expected` is a list, rejected when scalar) |
 | `evpn_vni_route_present` | EVPN | `node`, `vni` (integer) |
 | `evpn_mac_route_present` | EVPN | `node`, `mac` (canonical MAC literal), `vni` (integer) |
 | `evpn_mac_route_absent` | EVPN | `node`, `mac` (canonical MAC literal), `vni` (integer) |
@@ -81,6 +82,7 @@ Rules:
 * `ospf_neighbor_up`'s `neighbor` field MUST be an IPv4 literal of the peer's OSPF router-ID (NOT a node name); the resolver's IPv4-literal validator hard-fails on non-IPv4 input. The `src` field MUST reference a node of `type: frr` declared in `nodes:` (FRR-only NOS-tag enforcement; non-FRR `src` is rejected at validation with a deterministic error)
 * `interface_state`'s `interface` field MUST reference an interface present in the referenced node's resolved interface set (its link interfaces, `lo`, and any `interfaces:` declared on the node); a reference to an absent interface is rejected at validation time with a hard-failure (exit code `2`), parallel to the unknown-node reference rejection
 * `prefix` fields MUST be canonical IPv4 CIDR notation (e.g. `10.0.0.0/24`); non-canonical values are rejected at validation time
+* `bgp_community`'s `expected` communities MUST each be a literal `AS:VAL` token (e.g. `65001:100`) or a well-known token (`no-export`, `no-advertise`, `local-AS`, `internet`; `internet` normalises to community `0:0` in FRR JSON form); `match` (`any` or `all`) is REQUIRED when `expected` is a list and REJECTED when `expected` is a scalar
 * `mac` fields MUST be canonical lowercase colon-separated form (e.g. `00:11:22:33:44:55`)
 * `vni` MUST be a positive integer matching a VNI declared in the topology's `vlans:` map
 * `route_absent` and `route_not_advertised_to` and `evpn_mac_route_absent` are the negative complements of their `_present` / `_advertised_to` peers; the verdict semantics flip accordingly (`expect: pass` means the route IS NOT present / IS NOT advertised / IS NOT in the EVPN MAC table)
@@ -443,6 +445,27 @@ The retry loop driving `expect: pass` evaluation uses LD-2 defaults: `timeout_s=
 The test record additionally carries a `meta` audit-trail dict on every record (PASS or FAIL), with seven keys: `type`, `interface`, `expected_state`, `attempts`, `timeout_s`, `retry_interval_s`, `last_rc`. The `meta` dict is a sibling field of `observed_state` and is NOT subject to the FAIL-only emission gate; it is present on PASS records as well. Note that `meta` does NOT carry a `state` key — operators read the three orthogonal axes `admin_state`, `operstate`, `carrier` from the FAIL record's `observed_state` instead.
 
 iproute2 capability dependency (companion schema constraint): the runtime probe uses `ip -j link show <iface>` and requires an `ip` binary that supports the `-j` JSON flag. BusyBox `ip` (the default in `alpine:latest`, which is the engine's default image for `host` and `nft-fw` node types) does NOT support `-j` and produces non-JSON help-text output on the unrecognized flag. Topologies exercising `interface_state` on `host` or `nft-fw` nodes MUST pin an image with full iproute2 (e.g. `nicolaka/netshoot:v0.15`) explicitly in the node declaration. FRR's default image (`frrouting/frr:latest`) already includes full iproute2 and requires no override. The engine performs a per-(lab, node) capability probe at first use; on capability-probe failure, the per-test record fails with `last_error: "ip -j flag not supported by node's iproute2"` and the operator is directed to pin a compatible image.
+
+### 4.10) `bgp_community`
+
+```json
+{
+  "actual_communities": [<sorted observed community strings>],
+  "expected_communities": [<declared community strings>],
+  "match": "<any|all, or empty string when `expected` is scalar>",
+  "prefix": "<CIDR>",
+  "route_present": <true|false>,
+  "source_node": "<node where the test runs>",
+  "type": "bgp_community"
+}
+```
+
+* `actual_communities` is the community set observed on the BGP route, normalised and emitted **sorted** (the route community set is semantically unordered); it is empty when the route carries no communities or when the route is absent.
+* `expected_communities` is the test's declared `expected`, always rendered as a list (a scalar `expected` becomes a one-element list).
+* `match` carries the declared selector (`any` or `all`) for a list `expected`; it is an empty string for a scalar `expected`.
+* `route_present` is `false` when no BGP route exists for `prefix` at the node; a route-absent outcome is rendered as a graceful failure (present-half record), never a silent pass.
+* A community specifier is a literal `AS:VAL` token or a well-known token (`no-export`, `no-advertise`, `local-AS`, `internet`); `internet` normalises to community `0:0` in FRR JSON form. Well-known tokens are normalised on both the declared and observed sides before comparison.
+* Match semantics: a scalar `expected` passes iff the community is a member of the observed set; a list with `match: any` passes iff the declared and observed sets intersect; a list with `match: all` passes iff the declared set is a subset of the observed set.
 
 ---
 
