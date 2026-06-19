@@ -1686,6 +1686,79 @@ labs/<lab>/results.summary.txt
 
 When `verdict: fail`, the test record carries a structured `observed_state` payload (`type`, `prefix`, `expected_communities`, `actual_communities`, `match`, `route_present`, `source_node`). See `docs/topology-schema-v1.5.md` §4.10 for the full per-type schema.
 
+### BGP AS-Path Invariant
+
+Invariant type:
+
+```
+bgp_as_path
+```
+
+Purpose:
+
+Verify that a BGP route installed on a node carries an **AS-path** matching a declared regular expression.
+
+This is useful for validating routing policy behavior such as:
+
+- expected upstream / transit AS sequences
+- prepending or other path-manipulation route-maps
+- presence (or absence) of a specific AS anywhere in the path
+- companion to `bgp_community` / `bgp_med_equals` / `bgp_localpref_equals` for full attribute coverage
+
+Required fields:
+
+| Field   | Description                                                       |
+| ------- | ----------------------------------------------------------------- |
+| node    | FRR node (`type: frr`) where the route must be observed           |
+| prefix  | Prefix being validated (CIDR)                                     |
+| as_path | A regular expression matched against the route's AS-path          |
+
+The `as_path` value is a regular expression in the FRR-native AS-path idiom: the `_` token matches a path delimiter (start, space, or end), and operator `^` / `$` anchors are honoured. AS numbers are read in **asplain** notation as FRR emits them.
+
+Example (exact sequence):
+
+```yaml
+tests:
+  - name: r2_sees_10_0_0_0_24_via_65001_65002
+    kind: invariant
+    type: bgp_as_path
+    node: r2
+    prefix: 10.0.0.0/24
+    as_path: '^65001 65002$'
+    expect: pass
+```
+
+Example (AS present anywhere in the path):
+
+```yaml
+tests:
+  - name: r2_path_transits_65002
+    kind: invariant
+    type: bgp_as_path
+    node: r2
+    prefix: 10.0.0.0/24
+    as_path: '_65002_'
+    expect: pass
+```
+
+Behavior:
+
+- The invariant inspects the BGP route entry on the specified node and extracts its AS-path, normalised to a space-separated string of AS numbers **in path order** (never sorted -- path order is significant).
+- The declared `as_path` regex is matched against that string with `re.search`; the FRR-native `_` idiom is translated to a delimiter alternation before compilation.
+- If the route is absent, the invariant fails gracefully (`route_present: false` in the failure record), never a silent pass.
+- Malformed declarations (an empty / non-string `as_path`, a pattern that does not compile, an invalid `prefix`, or a non-`frr` / unknown `node`) are rejected at `cassian validate` time with a corrective error.
+- BGP AS-confederation handling and 4-byte AS distinctions beyond FRR's native parsing are out of scope.
+
+Artifacts produced:
+
+```
+labs/<lab>/results.json
+labs/<lab>/results.summary.txt
+```
+
+When `verdict: fail`, the test record carries a structured `observed_state` payload (`type`, `prefix`, `expected_pattern`, `actual_as_path`, `route_present`, `source_node`). See `docs/topology-schema-v1.5.md` §4.11 for the full per-type schema.
+
+
 ### OSPF Neighbor Up Invariant
 
 Invariant type:

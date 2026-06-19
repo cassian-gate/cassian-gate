@@ -69,6 +69,7 @@ v1.5 supports the following invariant types. Each type maps to a single determin
 | `bgp_med_equals` | BGP policy | `node`, `prefix` (CIDR), `expected` (integer) |
 | `bgp_localpref_equals` | BGP policy | `node`, `prefix` (CIDR), `expected` (integer) |
 | `bgp_community` | BGP policy | `node`, `prefix` (CIDR), `expected` (community specifier OR list of specifiers); `match` (`any` or `all`, list-only — required when `expected` is a list, rejected when scalar) |
+| `bgp_as_path` | BGP policy | `node` (an FRR node), `prefix` (CIDR), `as_path` (a regular expression in the FRR-native AS-path idiom; matched against the route's space-separated, path-ordered AS-path; asplain notation) |
 | `evpn_vni_route_present` | EVPN | `node`, `vni` (integer) |
 | `evpn_mac_route_present` | EVPN | `node`, `mac` (canonical MAC literal), `vni` (integer) |
 | `evpn_mac_route_absent` | EVPN | `node`, `mac` (canonical MAC literal), `vni` (integer) |
@@ -83,6 +84,7 @@ Rules:
 * `interface_state`'s `interface` field MUST reference an interface present in the referenced node's resolved interface set (its link interfaces, `lo`, and any `interfaces:` declared on the node); a reference to an absent interface is rejected at validation time with a hard-failure (exit code `2`), parallel to the unknown-node reference rejection
 * `prefix` fields MUST be canonical IPv4 CIDR notation (e.g. `10.0.0.0/24`); non-canonical values are rejected at validation time
 * `bgp_community`'s `expected` communities MUST each be a literal `AS:VAL` token (e.g. `65001:100`) or a well-known token (`no-export`, `no-advertise`, `local-AS`, `internet`; `internet` normalises to community `0:0` in FRR JSON form); `match` (`any` or `all`) is REQUIRED when `expected` is a list and REJECTED when `expected` is a scalar
+* `bgp_as_path`'s `as_path` MUST be a valid regular expression (compiled after translating the FRR-native `_` word-boundary idiom to a delimiter alternation); it is matched with `re.search` against the canonical space-separated, path-ordered AS-path string (operator `^` / `$` anchors are honoured). The `node` MUST reference a node of `type: frr` (a non-FRR or unknown `node` is rejected at validation). AS numbers are read in asplain notation as FRR emits them; BGP AS-confederation handling and 4-byte AS distinctions beyond FRR's native parsing are out of scope
 * `mac` fields MUST be canonical lowercase colon-separated form (e.g. `00:11:22:33:44:55`)
 * `vni` MUST be a positive integer matching a VNI declared in the topology's `vlans:` map
 * `route_absent` and `route_not_advertised_to` and `evpn_mac_route_absent` are the negative complements of their `_present` / `_advertised_to` peers; the verdict semantics flip accordingly (`expect: pass` means the route IS NOT present / IS NOT advertised / IS NOT in the EVPN MAC table)
@@ -466,6 +468,26 @@ iproute2 capability dependency (companion schema constraint): the runtime probe 
 * `route_present` is `false` when no BGP route exists for `prefix` at the node; a route-absent outcome is rendered as a graceful failure (present-half record), never a silent pass.
 * A community specifier is a literal `AS:VAL` token or a well-known token (`no-export`, `no-advertise`, `local-AS`, `internet`); `internet` normalises to community `0:0` in FRR JSON form. Well-known tokens are normalised on both the declared and observed sides before comparison.
 * Match semantics: a scalar `expected` passes iff the community is a member of the observed set; a list with `match: any` passes iff the declared and observed sets intersect; a list with `match: all` passes iff the declared set is a subset of the observed set.
+
+### 4.11) `bgp_as_path`
+
+```json
+{
+  "actual_as_path": "<observed AS-path, space-separated in path order>",
+  "expected_pattern": "<declared as_path regular expression>",
+  "prefix": "<CIDR>",
+  "route_present": <true|false>,
+  "source_node": "<node where the test runs>",
+  "type": "bgp_as_path"
+}
+```
+
+* `actual_as_path` is the AS-path attribute observed on the BGP route, normalised to a space-separated string of AS numbers **in path order** (path order is semantically significant and is never sorted); it is empty when the route carries no AS-path or when the route is absent.
+* `expected_pattern` is the test's declared `as_path` regular expression, rendered verbatim.
+* `route_present` is `false` when no BGP route exists for `prefix` at the node; a route-absent outcome is rendered as a graceful failure (present-half record), never a silent pass.
+* The `as_path` value is a regular expression matched with `re.search` against the canonical AS-path string; operator-supplied `^` / `$` anchors are honoured per the BGP-regex idiom. The FRR-native `_` idiom (a path delimiter: start, space, or end) is supported and translated deterministically to a delimiter alternation before compilation.
+* AS numbers are read in **asplain** notation as FRR emits them; BGP AS-confederation handling and 4-byte AS distinctions beyond FRR's native parsing are out of scope (the regex matches whatever FRR JSON delivers).
+* `parse_error` is included in the payload only when the FRR JSON for the route could not be parsed; it is absent on the normal path.
 
 ---
 
