@@ -22,6 +22,7 @@ from cassian_model import (
     validate_contrib_path,
     adapt_terraform_plan_json,
     adapt_ansible_rendered_dir,
+    _compile_frr_as_path_regex,
 )
 from cassian_tests import (
     validate_scenarios,
@@ -3254,6 +3255,52 @@ def _bgp_community_observed(expected, match, observed_canon):
     return "pass" if ok else "fail"
 
 
+def _route_as_path(route_obj):
+    """Extract the AS_PATH from a vtysh route object (`show ip bgp <prefix>
+    json`) as a canonical asplain, path-ordered, space-joined string. Read from
+    route_obj['aspath']['string'] (defensive top-level mirror) else the per-path
+    paths[].aspath.string (the FRR per-path location, real-capture confirmed).
+    Returns '' if absent. Order is preserved verbatim -- never sorted (AS_PATH is
+    order-significant)."""
+    def _from_aspath(asp):
+        if isinstance(asp, dict):
+            s = asp.get("string")
+            if isinstance(s, str) and s.strip():
+                return " ".join(tok for tok in s.split() if tok)
+        elif isinstance(asp, str) and asp.strip():
+            return " ".join(tok for tok in asp.split() if tok)
+        return ""
+
+    if not isinstance(route_obj, dict):
+        return ""
+    s = _from_aspath(route_obj.get("aspath"))
+    if s:
+        return s
+    paths = route_obj.get("paths")
+    if isinstance(paths, list):
+        for path in paths:
+            if isinstance(path, dict):
+                s = _from_aspath(path.get("aspath"))
+                if s:
+                    return s
+    return ""
+
+
+def _bgp_as_path_observed(pattern, observed_path):
+    """Match-level outcome ('pass'/'fail') for bgp_as_path. `pattern` is the
+    operator-declared FRR AS-path regex (`_`-delimited); `observed_path` is the
+    canonical asplain space-joined AS_PATH string. Compiles via the model-homed
+    _compile_frr_as_path_regex (LD-C: `_` -> (?:^| |$); operator `^`/`$`
+    preserved) and uses re.search -- the operator anchors explicitly when
+    intended. A regex that fails to compile yields 'fail' (defensive; resolve-time
+    validation already rejects malformed patterns)."""
+    try:
+        rx = _compile_frr_as_path_regex(pattern)
+    except Exception:
+        return "fail"
+    return "pass" if rx.search(observed_path or "") else "fail"
+
+
 def cmd_test(args: argparse.Namespace) -> None:
     """
     v1 update (Section C): Scenarios wired into cmd_test (minimal invasive).
@@ -6060,6 +6107,96 @@ def cmd_test(args: argparse.Namespace) -> None:
             }
             return vtysh_ok, predicate_ok, observed_state, evidence
 
+        if inv_type == "bgp_as_path":
+            node = str(t.get("node") or "")
+            prefix = str(t.get("_norm_prefix") or "").strip()
+
+            cp = rt.exec(lab, node, ["vtysh", "-c", f"show ip bgp {prefix} json"], check=False)
+            out = cp.stdout or ""
+            rc = cp.returncode
+            if isinstance(out, (bytes, bytearray)):
+                try:
+                    out = out.decode("utf-8", errors="replace")
+                except Exception:
+                    out = str(out)
+
+            vtysh_ok = (rc == 0)
+
+            parse_error = ""
+            route_present = False
+            observed_path = ""
+            empty_first_doc = False
+            try:
+                _s = str(out or "").strip()
+                doc = json.loads(_s) if _s else {}
+                if isinstance(doc, dict) and not doc:
+                    empty_first_doc = True
+                route_obj = None
+                if isinstance(doc, dict):
+                    cand = doc.get(prefix)
+                    if isinstance(cand, list) and cand:
+                        route_obj = cand[0]
+                    elif isinstance(cand, dict):
+                        route_obj = cand
+                    elif (
+                        doc.get("prefix") is not None
+                        and (_normalize_prefix(str(doc.get("prefix"))) or str(doc.get("prefix"))) == prefix
+                    ):
+                        route_obj = doc
+                    else:
+                        routes = doc.get("routes")
+                        if isinstance(routes, dict):
+                            cand = routes.get(prefix)
+                            if isinstance(cand, list) and cand:
+                                route_obj = cand[0]
+                            elif isinstance(cand, dict):
+                                route_obj = cand
+                            else:
+                                for k, v in routes.items():
+                                    nk = _normalize_prefix(str(k)) or str(k)
+                                    if nk != prefix:
+                                        continue
+                                    if isinstance(v, list) and v:
+                                        route_obj = v[0]
+                                        break
+                                    if isinstance(v, dict):
+                                        route_obj = v
+                                        break
+                        if route_obj is None:
+                            for k, v in doc.items():
+                                nk = _normalize_prefix(str(k)) or str(k)
+                                if nk != prefix:
+                                    continue
+                                if isinstance(v, list) and v:
+                                    route_obj = v[0]
+                                    break
+                                if isinstance(v, dict):
+                                    route_obj = v
+                                    break
+                else:
+                    raise ValueError("unexpected_bgp_prefix_json_shape")
+
+                if isinstance(route_obj, dict):
+                    route_present = True
+                    observed_path = _route_as_path(route_obj)
+            except Exception as e:
+                parse_error = str(e)
+
+            predicate_ok = route_present
+
+            observed_state = {
+                "norm_prefix": prefix,
+                "route_present": route_present,
+                "observed_as_path": observed_path,
+            }
+            evidence = {
+                "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                "rc": rc,
+                "parse_error": parse_error,
+                "empty_first_doc": empty_first_doc,
+            }
+            return vtysh_ok, predicate_ok, observed_state, evidence
+
         if inv_type == "ospf_neighbor_up":
             # H4: OSPF neighbor-state evaluator (REQ-H4-7 / B07).
             # FRR JSON shape: {"neighbors": {"<router-id>": [{"nbrState": ...}]}}.
@@ -7379,6 +7516,99 @@ def cmd_test(args: argparse.Namespace) -> None:
                     "prefix": prefix,
                     "route_present": bool(route_present),
                     "observed_community_count": len(observed_communities),
+                },
+                observed_state=observed_state_payload,
+            )
+            return verdict
+
+        if inv_type == "bgp_as_path":
+            node = str(t.get("node") or "")
+            prefix = _normalize_prefix(str(t.get("prefix") or ""))
+            as_path_pat = str(t.get("as_path") or "")
+
+            t["_norm_prefix"] = prefix
+            _vtysh_ok, _pred_ok, last_state, last_evidence = (
+                _evaluate_invariant_attempt(inv_type="bgp_as_path", t=t, src=node)
+            )
+            rc = last_evidence.get("rc")
+            parse_error = str(last_evidence.get("parse_error") or "")
+            route_present = bool(last_state.get("route_present"))
+            observed_as_path = str(last_state.get("observed_as_path") or "")
+            empty_first_doc = bool(last_evidence.get("empty_first_doc"))
+
+            if rc not in (0, None):
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=node,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported BGP AS-path evidence provider capability",
+                    evidence={
+                        "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                        "rc": rc,
+                    },
+                    meta={
+                        "type": inv_type,
+                        "prefix": prefix,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
+            if not route_present and empty_first_doc:
+                time.sleep(2)
+                _vtysh_ok2, _pred_ok2, last_state2, last_evidence2 = (
+                    _evaluate_invariant_attempt(inv_type="bgp_as_path", t=t, src=node)
+                )
+                if bool(last_state2.get("route_present")):
+                    last_state = last_state2
+                    last_evidence = last_evidence2
+                    rc = last_evidence.get("rc")
+                    parse_error = str(last_evidence.get("parse_error") or "")
+                    route_present = bool(last_state.get("route_present"))
+                    observed_as_path = str(last_state.get("observed_as_path") or "")
+
+            observed = _bgp_as_path_observed(as_path_pat, observed_as_path) if route_present else "fail"
+            verdict = "pass" if observed == expected else "fail"
+
+            observed_state_payload = None
+            if verdict == "fail":
+                observed_state_payload = {
+                    "type": "bgp_as_path",
+                    "prefix": prefix,
+                    "expected_as_path": str(as_path_pat),
+                    "actual_as_path": observed_as_path,
+                    "route_present": bool(route_present),
+                    "source_node": node,
+                }
+                if parse_error:
+                    observed_state_payload["parse_error"] = str(parse_error)
+
+            record_fn(
+                name=test_name,
+                kind="invariant",
+                src=node,
+                dst="",
+                expected=expected,
+                observed=observed,
+                verdict=verdict,
+                duration_ms=int((time.time() - start) * 1000),
+                error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
+                evidence={
+                    "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                    "rc": rc,
+                    "prefix": prefix,
+                    "as_path": observed_as_path,
+                },
+                meta={
+                    "type": inv_type,
+                    "prefix": prefix,
+                    "route_present": bool(route_present),
+                    "observed_as_path": observed_as_path,
                 },
                 observed_state=observed_state_payload,
             )
