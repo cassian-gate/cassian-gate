@@ -1,0 +1,37 @@
+name: bgp-as-path
+# §4.11 deployable positive fixture (bgp_as_path deployable catalog). r1 (AS 65001)
+# originates its loopback 1.1.1.1/32; r2 (AS 65002) receives it over eBGP, so the
+# AS_PATH observed on r2 for 1.1.1.1/32 is "65001" (asplain, path-order). One
+# passing bgp_as_path test exercising the `_`-delimited operator regex.
+nodes:
+  - name: r1
+    type: frr
+    asn: 65001
+    router_id: 1.1.1.1
+    networks:
+      - 1.1.1.1/32
+    bgp:
+      neighbors:
+        - peer: r2
+          remote_as: 65002
+  - name: r2
+    type: frr
+    asn: 65002
+    router_id: 2.2.2.2
+    bgp:
+      neighbors:
+        - peer: r1
+          remote_as: 65001
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["10.0.0.0/31", "10.0.0.1/31"]
+tests:
+  # AS_PATH observed on r2 for 1.1.1.1/32 is "65001" (single-hop eBGP from r1);
+  # `_65001_` matches -> observed pass; expect (default) pass -> verdict pass.
+  - name: as_path_origin_present
+    kind: invariant
+    type: bgp_as_path
+    node: r2
+    prefix: 1.1.1.1/32
+    as_path: "_65001_"
+    expect: pass

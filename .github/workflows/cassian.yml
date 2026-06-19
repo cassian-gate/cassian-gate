@@ -113,6 +113,19 @@ jobs:
           python tests/bgp_community_preservation_proof.py
           python tests/expf_four_quadrant_catalog_proof.py
 
+      - name: BGP AS-path validation proof harnesses (§4.11)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/bgp_as_path_validate_rejection_proof.py
+          python tests/bgp_as_path_catalog_coherence_proof.py
+          python tests/bgp_as_path_eval_match_proof.py
+          python tests/bgp_as_path_four_quadrant_proof.py
+          python tests/bgp_as_path_authority_parity_proof.py
+          python tests/bgp_as_path_replay_determinism_proof.py
+          python tests/bgp_as_path_render_boundary_proof.py
+          python tests/bgp_as_path_preservation_proof.py
+
       - name: Project gate (up -> test -> down)
         shell: bash
         run: |
