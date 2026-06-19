@@ -1823,6 +1823,23 @@ def _is_valid_community_specifier(value):
     return len(_parts) == 2 and all(_p.isdigit() for _p in _parts)
 
 
+def _compile_frr_as_path_regex(pattern):
+    """Translate an FRR-native AS-path regex to a Python regex and compile it.
+
+    LD-C (§4.11): the FRR ``_`` idiom denotes an AS-path delimiter -- the start
+    of the path, a space between AS numbers, or the end of the path. Cassian's
+    canonical AS-path string is space-separated AS numbers in path order
+    (AS-confederation / AS-SET notation is out of scope, §4.11), so ``_``
+    translates deterministically to the non-capturing alternation ``(?:^| |$)``;
+    all other characters (including operator-supplied ``^``/``$`` anchors) are
+    preserved verbatim. Returns the compiled pattern; raises ``re.error`` if the
+    translated pattern does not compile. Single canonical transform shared by
+    validate-time (this module) and gate-time (cassian_engine).
+    """
+    translated = str(pattern).replace("_", "(?:^| |$)")
+    return re.compile(translated)
+
+
 def resolve_topology(topo: dict) -> dict:
     """
     Return a copy of topo with missing link IPv4 addresses allocated.
@@ -2175,6 +2192,7 @@ def resolve_topology(topo: dict) -> dict:
                 "bgp_med_equals",
                 "bgp_localpref_equals",
                 "bgp_community",
+                "bgp_as_path",
                 "route_advertised_to",
                 "route_not_advertised_to",
                 "evpn_mac_route_present",
@@ -2187,7 +2205,7 @@ def resolve_topology(topo: dict) -> dict:
                 die(
                     f"tests[{i}]: invariant.type unsupported ({inv_type!r}) "
                     f"(supported: bgp_session_up, route_present, route_absent, "
-                    f"bgp_med_equals, bgp_localpref_equals, bgp_community, route_advertised_to, route_not_advertised_to, "
+                    f"bgp_med_equals, bgp_localpref_equals, bgp_community, bgp_as_path, route_advertised_to, route_not_advertised_to, "
                     f"evpn_mac_route_present, evpn_mac_route_absent, "
                     f"evpn_vni_route_present, evpn_bgp_session_up, ospf_neighbor_up, interface_state)"
                 )
@@ -2367,6 +2385,47 @@ def resolve_topology(topo: dict) -> dict:
                 if _src_kind != "frr":
                     die(
                         f"{ctx}: invariant 'bgp_community' references src "
+                        f"{src!r} of type {_src_kind!r}; this invariant requires "
+                        f"src to be a node of type 'frr'"
+                    )
+
+            elif inv_type == "bgp_as_path":
+                # §4.11 bgp_as_path resolve-time schema + field validation
+                # (SCHEMA-1 / VALIDATE-1..5); each rejection is §13(a)-sufficient
+                # (names field / offending value / corrective action).
+                pfx = t.get("prefix")
+                if not isinstance(pfx, str) or not pfx.strip():
+                    die(f"{ctx}: bgp_as_path requires 'prefix' as CIDR (e.g. 10.0.0.0/24)")
+                try:
+                    _ = ipaddress.ip_network(pfx.strip(), strict=False)
+                except Exception:
+                    die(f"{ctx}: bgp_as_path.prefix must be a valid CIDR (e.g. 10.0.0.0/24)")
+
+                ap = t.get("as_path")
+                if not isinstance(ap, str) or not ap.strip():
+                    die(f"{ctx}: bgp_as_path requires 'as_path' as a non-empty AS-path regex")
+                try:
+                    _compile_frr_as_path_regex(ap)
+                except re.error as _e:
+                    die(f"{ctx}: bgp_as_path.as_path {ap!r} is not a valid AS-path regex: {_e}")
+
+                _nodes_for_lookup = {
+                    str(_n.get("name") or "").strip(): _n
+                    for _n in (resolved.get("nodes") or [])
+                    if isinstance(_n, dict)
+                    and isinstance(_n.get("name"), str)
+                    and str(_n.get("name") or "").strip()
+                }
+                _src_node = _nodes_for_lookup.get(src.strip())
+                if _src_node is None:
+                    die(
+                        f"{ctx}: invariant 'bgp_as_path' references src "
+                        f"{src!r} but no node by that name exists in the topology"
+                    )
+                _src_kind = str(_src_node.get("type") or "").strip().lower()
+                if _src_kind != "frr":
+                    die(
+                        f"{ctx}: invariant 'bgp_as_path' references src "
                         f"{src!r} of type {_src_kind!r}; this invariant requires "
                         f"src to be a node of type 'frr'"
                     )
