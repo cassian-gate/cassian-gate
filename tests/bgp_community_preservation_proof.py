@@ -54,7 +54,7 @@ D37A75F_BASELINE = {
     "src/cassian_model.py": "3e2b702ff3a62c55d4d24a7fd1b632cb400121e55107f3a6c9fccc78f08c89f6",
     "src/cassian_runtime_container.py": "b2a493f947c121416c992b8b9788a60acead190d305d58654c3c457def116ba3",
     "src/cassian_state.py": "aec4d412ee53555156cb5275c5d7a1329f54aaef298d4409feebcad2c198a9d6",
-    "src/cassian_tests.py": "2767dff509827678b3cf2b500f49d447ca0be6439459e205ffbe90ce5826e37a",
+    "src/cassian_tests.py": "ba0a1f36245de1ac01853fca4e8a3100ff5aad28525e91ef26ebaf24f404b0af",
     "src/cassian_two_run.py": "694f4e0d8ca7e07e7f4843e4f269a697d74d19bcdece60adf6f339952e471452",
 }
 

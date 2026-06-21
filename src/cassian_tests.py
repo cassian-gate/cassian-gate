@@ -4191,6 +4191,7 @@ def write_test_summary_artifact(lab: str, results: dict) -> Path:
             "\n"
             "PASS does not mean:\n"
             "  Validation of behaviors not declared in this topology\n"
+            "  Validation of items shown under \"Not validated\" above\n"
             "  Coverage of all possible failure modes\n"
         )
         fail_meaning_block = ""
