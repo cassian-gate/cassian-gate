@@ -652,6 +652,25 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     clab = _which("containerlab")
     checks.append(("containerlab detected", clab, "critical"))
 
+    # Advisory: ip(8) JSON capability — read-only, capture + parse (not returncode-only)
+    def _ip_json_capable() -> bool:
+        if shutil.which("ip") is None:
+            return False
+        try:
+            p = subprocess.run(
+                ["ip", "-j", "addr"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+            if p.returncode != 0:
+                return False
+            return isinstance(json.loads(p.stdout.decode("utf-8", errors="replace")), list)
+        except Exception:
+            return False
+
+    checks.append(("ip -j JSON capability", _ip_json_capable(), "advisory"))
+
     # Non-critical: image presence (report only; do not pull)
     # These are resolve-time hard defaults in netsim_model.py.
     image_defaults = [
