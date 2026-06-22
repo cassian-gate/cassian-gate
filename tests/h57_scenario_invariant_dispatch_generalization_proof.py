@@ -55,6 +55,8 @@ EXPECTED_CATALOG = (
     "route_absent",
     "bgp_med_equals",
     "bgp_localpref_equals",
+    "bgp_community",  # F3 re-baseline: section 4.10
+    "bgp_as_path",    # F3 re-baseline: section 4.11
     "route_advertised_to",
     "route_not_advertised_to",
     "evpn_mac_route_present",
@@ -131,7 +133,7 @@ def main():
         checks.append((name, bool(cond)))
 
     # --- catalog drift guard ---
-    check("catalog has 13 types", len(catalog) == 13)
+    check("catalog has 15 types", len(catalog) == 15)
     check("catalog matches expected set", set(catalog) == set(EXPECTED_CATALOG))
 
     # --- source validation of the patched dispatch seam ---
