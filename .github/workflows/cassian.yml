@@ -126,6 +126,15 @@ jobs:
           python tests/bgp_as_path_render_boundary_proof.py
           python tests/bgp_as_path_preservation_proof.py
 
+      - name: P3 hardening cluster proof harnesses (§4.12)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/b6_pass_scope_render_proof.py
+          python tests/b6_13bc_seam_preservation_proof.py
+          python tests/h54_doctor_ip_j_probe_proof.py
+          python tests/wf_12_13_replay_proof.py
+
       - name: Project gate (up -> test -> down)
         shell: bash
         run: |
