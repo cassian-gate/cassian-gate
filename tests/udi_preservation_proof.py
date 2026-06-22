@@ -32,7 +32,7 @@ V484_BASELINE = {
     "src/cassian_ai.py": "6900c52ea52f2a4a588b99478f10e967603b7a1a5f87b3b257878d4fde569361",
     "src/cassian_artifacts.py": "ae8a54302e4fa8fe2f89e3af0e1e16dcda0ff2ae7bc4a805b671f69029fbb04c",
     "src/cassian_candidate.py": "93db9b61e9fd22c74156fc0492119fc4e170a7a192684354c8a31c70876ff52d",
-    "src/cassian_cli.py": "920e0e7f2c259e8b787be12d789a5bbb9c40cdb1599f572133faf112975191c1",
+    "src/cassian_cli.py": "bcf460f7be2d2ec4280569bdfe3f30ab9d0784d6677a98a8db64579bf32ebf75",  # re-baselined from 920e0e7f (F3): section 4.8 --tag flag (dc89591, REQ-TAG-CLI-1)
     "src/cassian_common.py": "a0469a2a1b3cdcc5a1fffc7cd02198447cf1e0cb1ee8657469c3fb2c57139a10",
     "src/cassian_engine.py": "946f25da4a69cf914ae4bac8dabd86ba7021790415bc76f47d8f79500a6fc9d2",
     "src/cassian_model.py": "a7e38daa43db386ed651fd9d1f14ee634b52a429a5c7760d6c9c695c7aa260a7",
