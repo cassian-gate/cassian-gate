@@ -138,5 +138,6 @@ PASS does not mean:
 * complete coverage
 * validation of undeclared behavior
 * that Cassian Gate checked anything you did not explicitly declare
+* validation of items the summary lists under "Not validated"
 
 Cassian Gate is a narrow, deterministic pre-deployment validation gate. It is not a broad simulation platform, chaos tool, or AI decision system.
