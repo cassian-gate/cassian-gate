@@ -1036,6 +1036,87 @@ def _observed_state_finalize_in_results(results: dict) -> None:
             _stabilize_record(ev)
 
 
+# ===== §4.13 WI-1 PP1 audit helpers (additive; inert until wired by PP2) =====
+# Audit-grade evidence artifact format properties (REQ-413-2, REQ-413-3).
+# Field names, Option-A baseline disposition, and the by-name exclusion set are
+# founder-ratified (MS-DISP-§4.13). Exclusion is BY NAME (D02/B-A04 / BR-2),
+# never by value; the set is enumerated against the live v9 bundles (PO-2).
+
+_AUDIT_TAMPER_EXCLUDE_KEYS = frozenset({
+    "duration_ms",            # every duration_ms (summary, tests[*])
+    "started_at",
+    "finished_at",
+    "resolved_topology_mtime",
+    "resolved_topology_path",
+    "tamper_check",           # self-exclusion: the token never hashes itself
+})
+
+_AUDIT_TAMPER_EXCLUDE_PATHS = frozenset({
+    "timing",                               # whole timing.* subtree
+    "blast_radius.path",
+    "authority.supporting_evidence.path",
+})
+
+
+def _audit_filtered_domain(obj, _keypath=""):
+    """REQ-413-3 / D-413-1 / BR-2: remove runtime-variant fields BY NAME (recursive).
+    Deterministic; no value heuristics."""
+    if isinstance(obj, dict):
+        out = {}
+        for _k, _v in obj.items():
+            _kp = (_keypath + "." + _k) if _keypath else _k
+            if _k in _AUDIT_TAMPER_EXCLUDE_KEYS:
+                continue
+            if _kp in _AUDIT_TAMPER_EXCLUDE_PATHS:
+                continue
+            out[_k] = _audit_filtered_domain(_v, _kp)
+        return out
+    if isinstance(obj, list):
+        return [_audit_filtered_domain(_v, _keypath) for _v in obj]
+    return obj
+
+
+def _audit_release_version():
+    """REQ-413-2: Cassian Gate release version from package metadata.
+    Deterministic, never runtime-derived; pyproject fallback for source checkouts."""
+    try:
+        from importlib.metadata import version as _pkg_version
+        return str(_pkg_version("cassian-gate"))
+    except Exception:
+        pass
+    try:
+        import re as _re
+        from pathlib import Path as _Path
+        _pp = _Path(__file__).resolve().parent.parent / "pyproject.toml"
+        _m = _re.search(r'(?m)^\s*version\s*=\s*"([^"]+)"', _pp.read_text(encoding="utf-8"))
+        if _m:
+            return str(_m.group(1))
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _audit_compute_tamper_check(results):
+    """REQ-413-3 / B02 / B08: SHA-256 over the canonical filtered domain.
+    Explicit 'unverifiable' state on failure (never readable as 'verified').
+    Canonical form matches write_json_canonical (cassian_artifacts.py:93)."""
+    try:
+        import hashlib as _hashlib
+        import json as _json
+        _domain = _audit_filtered_domain(results)
+        _s = _json.dumps(_domain, indent=2, sort_keys=True, ensure_ascii=False)
+        _s = _s.replace("\r\n", "\n").replace("\r", "\n")
+        _s = _s.rstrip("\n") + "\n"
+        _digest = _hashlib.sha256(_s.encode("utf-8")).hexdigest()
+        return {"algo": "sha256", "digest": _digest,
+                "domain": "canonical-filtered", "state": "verified"}
+    except Exception:
+        return {"algo": "sha256", "digest": None,
+                "domain": "canonical-filtered", "state": "unverifiable"}
+
+
+# ===== end §4.13 WI-1 PP1 audit helpers =====
+
 def _finalize_results_schema(
     *,
     results: dict,
@@ -1043,6 +1124,8 @@ def _finalize_results_schema(
     topo_name: str,
     lab_name: str,
     phase: str,
+    intent=None,
+    baseline_diff=None,
 ) -> None:
     """
     Additive-only schema stabilization for results.json.
@@ -1111,6 +1194,15 @@ def _finalize_results_schema(
 
     # 6) Hard failure block (additive; keep null when not used)
     results.setdefault("hard_failure", None)
+
+    # §4.13 Audit-grade evidence artifact format properties (additive; tamper_check LAST).
+    # Field names + Option-A baseline disposition founder-ratified (MS-DISP-§4.13).
+    results.setdefault("release_version", _audit_release_version())
+    if intent is not None:
+        results.setdefault("intent", intent)
+    if baseline_diff is not None:
+        results.setdefault("baseline_diff", baseline_diff)
+    results.setdefault("tamper_check", _audit_compute_tamper_check(results))
 
 
 def cmd_up(args: argparse.Namespace) -> None:
@@ -3533,6 +3625,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     results=results,
                     command="test",
                     topo_name=str(lab_name),
+                    intent=(resolved_preview or {}).get("intent"),
                     lab_name=str(lab_name),
                     phase="collect",
                 )
@@ -4496,6 +4589,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 results=results,
                 command="test",
                 topo_name=str(topo.get("name") or lab),
+                intent=topo.get("intent"),
                 lab_name=str(lab),
                 phase="collect",
             )

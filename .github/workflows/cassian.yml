@@ -135,6 +135,21 @@ jobs:
           python tests/h54_doctor_ip_j_probe_proof.py
           python tests/wf_12_13_replay_proof.py
 
+      - name: Audit-grade evidence artifact format proof harnesses (§4.13)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/audit_evidence_schema_format_proof.py
+          python tests/audit_tamper_check_replay_proof.py
+          python tests/audit_release_version_determinism_proof.py
+          python tests/audit_baseline_diff_determinism_proof.py
+          python tests/audit_intent_input_sufficiency_proof.py
+          python tests/audit_intent_verdict_invariance_proof.py
+          python tests/audit_self_contained_interpretation_proof.py
+          python tests/audit_unverifiable_render_boundary_proof.py
+          python tests/audit_seam_preservation_proof.py
+          python tests/audit_nonscoped_preservation_proof.py
+
       - name: Project gate (up -> test -> down)
         shell: bash
         run: |

@@ -821,6 +821,7 @@ def ensure_valid_topology(topo: dict) -> None:
         "fabric",
         "candidate_changes",
         "vlans",
+        "intent",
     }
     unknown_top_level_keys = sorted(k for k in topo.keys() if k not in allowed_top_level_keys)
     if unknown_top_level_keys:
@@ -842,6 +843,26 @@ def ensure_valid_topology(topo: dict) -> None:
     # v1.5 EVPN Awareness (presence-only): validate canonical fabric.evpn shape (fail-fast).
     # This MUST NOT change execution semantics; it only validates declared intent.
     _validate_fabric_evpn_presence_only(topo)
+
+    # §4.13 REQ-413-4-VAL: validate operator-declared intent input under §13(a).
+    # Intent is a single declarative string (echoed verbatim into the evidence
+    # bundle); a malformed (non-string) intent is hard-failed, never silently accepted.
+    _intent = topo.get("intent")
+    if _intent is not None and not isinstance(_intent, str):
+        if isinstance(_intent, dict) and _intent:
+            _bad = sorted(repr(k) for k in _intent.keys())[0]
+            die(
+                f"Invalid 'intent' declaration: unknown key {_bad} "
+                "(allowed: a single declarative string). "
+                "Remove or correct the field and re-run.",
+                code=2,
+            )
+        die(
+            "Topology invalid: 'intent' must be a single declarative string "
+            "(the operator's stated purpose for the run). "
+            "Remove or correct the field and re-run.",
+            code=2,
+        )
 
     if not isinstance(topo["nodes"], list) or not topo["nodes"]:
         die("'nodes' must be a non-empty list.")
