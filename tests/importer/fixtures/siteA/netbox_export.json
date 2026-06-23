@@ -1,0 +1,19 @@
+{
+  "site": {"name": "siteA"},
+  "devices": [
+    {"name": "leaf1", "platform": "frr", "asn": 65001, "router_id": "1.1.1.1"},
+    {"name": "spine1", "platform": "frr", "asn": 65002, "router_id": "2.2.2.2"}
+  ],
+  "cables": [
+    {"a": {"device": "leaf1", "interface": "eth1"},
+     "b": {"device": "spine1", "interface": "eth1"},
+     "a_ip": "10.0.0.1/30", "b_ip": "10.0.0.2/30"}
+  ],
+  "bgp_sessions": [
+    {"local_device": "leaf1", "peer_ip": "10.0.0.2", "remote_asn": 65002},
+    {"local_device": "spine1", "peer_ip": "10.0.0.1", "remote_asn": 65001}
+  ],
+  "static_routes": [
+    {"device": "leaf1", "prefix": "192.0.2.0/24"}
+  ]
+}
