@@ -470,6 +470,7 @@ Optional:
 - `fabric`
 - `candidate_changes`
 - `vlans`
+- `intent` (operator-declared run purpose; single string, echoed verbatim into `results.json`)
 
 ---
 
@@ -3066,6 +3067,7 @@ Important boundary:
 
 - omission does not mean success
 - a blocked declared item should appear explicitly in `results.json`
+- every gate run additionally stamps four additive, verdict-invariant audit-grade evidence fields (`release_version`, `tamper_check`, `intent`, `baseline_diff`) making `results.json` self-contained and tamper-evident; see `docs/audit-grade-evidence.md`
 - failed-invariant records carry a structured `observed_state` payload — see §9 "Failed-Invariant Observed State" and `docs/topology-schema-v1.5.md` §4 for the schema
 
 ---
