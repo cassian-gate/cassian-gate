@@ -1,0 +1,50 @@
+# PO-8 (§4.13) — deploy-class audit-grade evidence bundle proof topology.
+#
+# Exercises the audit-grade evidence bundle END TO END through the full lifecycle
+# (validate -> deploy -> provision -> test -> destroy): the emitted results.json must
+# carry all four audit fields -- release_version, tamper_check, intent (declared below,
+# echoed verbatim), and baseline_diff (absent on a single run, Option A) -- and remain
+# self-contained / interpretable without external lookup. Doubles as the §8.4a
+# integration smoke for §4.13.
+#
+# Minimal & known-good: reuses the repo's first-run routed nft-fw path with a single
+# PASS TCP flow (h1 -> h2 on 8443). Emits to labs/clab-audit-grade-evidence-bundle-proof/.
+
+name: audit-grade-evidence-bundle-proof
+
+# §4.13 operator-declared intent (single declarative string; validated under §13(a),
+# echoed verbatim into results.json by the engine finalize).
+intent: "pre-production change validation -- §4.13 audit-grade evidence bundle proof"
+
+nodes:
+  - name: h1
+    type: host
+    ip: 192.168.1.10/24
+    gw: 192.168.1.1
+
+  - name: h2
+    type: host
+    ip: 192.168.2.10/24
+    gw: 192.168.2.1
+
+  - name: fw1
+    type: nft-fw
+    routed: true
+    interfaces:
+      eth1: 192.168.1.1/24
+      eth2: 192.168.2.1/24
+    allow_icmp: true
+    allow_tcp: [8443]
+
+links:
+  - endpoints: ["h1:eth1", "fw1:eth1"]
+  - endpoints: ["h2:eth1", "fw1:eth2"]
+
+tests:
+  - name: h1_tcp_8443_to_h2_pass
+    kind: tcp
+    src: h1
+    dst: h2
+    port: 8443
+    listener: true
+    expect: pass
