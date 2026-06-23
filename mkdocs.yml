@@ -111,6 +111,7 @@ nav:
   - Admin Guide: admin-guide-v1.md
   - VM Runtime Capabilities: vm-runtime-capabilities.md
   - Proof Kit / Examples: proof-kit.md
+  - Audit-Grade Evidence: audit-grade-evidence.md
   - AI Advisory:
     - Overview: ai/README.md
     - Guardrails: ai/guardrails.md
