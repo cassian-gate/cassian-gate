@@ -150,6 +150,14 @@ jobs:
           python tests/audit_seam_preservation_proof.py
           python tests/audit_nonscoped_preservation_proof.py
 
+      - name: Brownfield importer proof harnesses (§4.14)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/importer/importer_behavior_proof.py
+          python tests/importer/backend_seam_proof.py
+          python tests/importer/preservation_proof.py
+
       - name: Project gate (up -> test -> down)
         shell: bash
         run: |
