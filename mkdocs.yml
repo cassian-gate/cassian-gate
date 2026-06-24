@@ -108,6 +108,7 @@ nav:
     - GitHub Actions: ci/github-actions.md
     - GitLab CI: ci/gitlab-ci.md
   - Input Adapters: input-adapters.md
+  - Brownfield Importer: brownfield-importer.md
   - Admin Guide: admin-guide-v1.md
   - VM Runtime Capabilities: vm-runtime-capabilities.md
   - Proof Kit / Examples: proof-kit.md

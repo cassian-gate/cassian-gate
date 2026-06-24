@@ -12,7 +12,7 @@ V9 = {
     "cassian_ai.py":                "6900c52ea52f2a4a588b99478f10e967603b7a1a5f87b3b257878d4fde569361",
     "cassian_artifacts.py":         "ae8a54302e4fa8fe2f89e3af0e1e16dcda0ff2ae7bc4a805b671f69029fbb04c",
     "cassian_candidate.py":         "93db9b61e9fd22c74156fc0492119fc4e170a7a192684354c8a31c70876ff52d",
-    "cassian_cli.py":               "bcf460f7be2d2ec4280569bdfe3f30ab9d0784d6677a98a8db64579bf32ebf75",
+    "cassian_cli.py":               "9234f3fdb76b5432bac8bf22a9807f234da9dff3a72d7c334ed9e2508183898a",
     "cassian_common.py":            "a0469a2a1b3cdcc5a1fffc7cd02198447cf1e0cb1ee8657469c3fb2c57139a10",
     "cassian_runtime_container.py": "b2a493f947c121416c992b8b9788a60acead190d305d58654c3c457def116ba3",
     "cassian_state.py":             "aec4d412ee53555156cb5275c5d7a1329f54aaef298d4409feebcad2c198a9d6",

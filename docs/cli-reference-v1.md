@@ -73,6 +73,31 @@ Default behavior:
 
 ---
 
+### `cassian import <source> --out <dir> [--backend <name>]`
+
+**Purpose:** Bootstrap an authoritative pair — a topology plus starter invariants — from committed brownfield sources, fully offline.
+
+Arguments:
+
+* `<source>`  
+  Brownfield source directory containing a committed NetBox-derived export (`netbox_export.json`) and rendered device configs under `rendered/`. This is Cassian Gate's **defined input contract**, not a raw NetBox API dump; see the [Brownfield Importer](brownfield-importer.md) guide.
+
+Flags:
+
+* `-o`, `--out <dir>` (required)  
+  Output directory for the emitted pair: an authoritative `topology.yaml` (with embedded scenario tests) and `tests/starter_invariants.yaml`.
+
+* `--backend <name>`  
+  Importer backend (default: `netbox`). The backend seam is open for future sources; additional backends are planned but not yet available.
+
+Behavior:
+
+* **Offline and deterministic.** No network or live-device access; identical inputs always produce byte-identical output.
+* **No synthesis.** Starter invariants are generated only from explicitly declared facts, never inferred or guessed.
+* **Fail-closed.** Unsupported or malformed input is rejected with **exit 2** (input/artifact error; see §6) and an actionable message — the importer never emits a partial or invalid pair.
+
+---
+
 ## 2) Exec and Inspection Helpers
 
 ### `cassian exec <lab> <node> [command...]`

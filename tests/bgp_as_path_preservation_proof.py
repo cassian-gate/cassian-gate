@@ -8,7 +8,7 @@ Two halves, both lab-free (cassian-test-alone CI posture):
          {cassian_model.py, cassian_engine.py} is byte-identical to its
          post-s4.10-merge baseline (the s4.11 fork point,
          `git merge-base HEAD develop/phase1b`) via reproducible per-module
-         SHA-256, plus a module-set-drift guard (denominator 13). This is the
+         SHA-256, plus a module-set-drift guard (denominator 14). This is the
          BL-1b4-1 reproducible regression instrument, NOT the founder-reserved
          composite per-module pin. cassian_tests.py is in the ENFORCED set
          (LD-D (a): byte-unchanged; the s4.11 absence-half is synthetic at the
@@ -51,7 +51,8 @@ FORK_BASELINE = {
     "src/cassian_ai.py": "6900c52ea52f2a4a588b99478f10e967603b7a1a5f87b3b257878d4fde569361",
     "src/cassian_artifacts.py": "ae8a54302e4fa8fe2f89e3af0e1e16dcda0ff2ae7bc4a805b671f69029fbb04c",
     "src/cassian_candidate.py": "93db9b61e9fd22c74156fc0492119fc4e170a7a192684354c8a31c70876ff52d",
-    "src/cassian_cli.py": "bcf460f7be2d2ec4280569bdfe3f30ab9d0784d6677a98a8db64579bf32ebf75",
+    "src/cassian_cli.py": "9234f3fdb76b5432bac8bf22a9807f234da9dff3a72d7c334ed9e2508183898a",
+    "src/cassian_import.py": "604c8d8ff2bc461f8b43d7e5be6f63bd00f653ce6f83b64ffff9cf90450cf71c",  # §4.14 new module, enforced (LD-8/LD-9)
     "src/cassian_common.py": "a0469a2a1b3cdcc5a1fffc7cd02198447cf1e0cb1ee8657469c3fb2c57139a10",
     "src/cassian_engine.py": "34b74fa4d90462626cefd16900f16c6071075d835c1607fcb243593f84009f04",
     "src/cassian_model.py": "f2421e9c5c8c18f847431d45274efe85298372d5b882b80fc84e2a733f7910f1",
@@ -104,7 +105,7 @@ def _p16(checks):
     if removed:
         print("FAIL: baseline modules missing at HEAD: " + str(sorted(removed)))
         set_ok = False
-    checks.append(("P16 module-set matches post-s4.10-merge baseline (denom 13)", set_ok))
+    checks.append(("P16 module-set matches post-s4.10-merge baseline (denom 14)", set_ok))
 
     enforced = 0
     drift_ok = True
@@ -165,7 +166,7 @@ def main():
         print("\nPRESERVATION FAIL: " + str(len(failed)) + " check(s): " + "; ".join(failed))
         sys.exit(1)
     print("\nRESULT: PASS -- " + str(len(checks))
-          + " checks: P16 out-of-scope byte-identity (denom 13) + P17 predecessor resolve intact.")
+          + " checks: P16 out-of-scope byte-identity (denom 14) + P17 predecessor resolve intact.")
     sys.exit(0)
 
 
