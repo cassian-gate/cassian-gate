@@ -62,6 +62,15 @@ cassian validate-contrib <path>
 cassian preflight <topology.yaml>
 ```
 
+### Brownfield Onboarding
+
+```bash
+cassian import <source> --out <dir>                  # NetBox-derived export + rendered FRR configs -> topology + starter invariants
+cassian import <source> --out <dir> --backend netbox # --backend defaults to netbox
+```
+
+Input is Cassian's **defined contract**, not a raw NetBox API dump (BGP/static-routes are plugin-only). See [Brownfield Importer](brownfield-importer.md).
+
 ### Execution (Validation)
 
 ```bash
