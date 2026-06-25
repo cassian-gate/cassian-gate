@@ -1,0 +1,3006 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Deterministic pre-production network change validation gate.">
+      
+      
+      
+        <link rel="canonical" href="https://docs.cassiangate.dev/latest/topology-schema-v1.5/">
+      
+      
+        <link rel="prev" href="../quickstart/">
+      
+      
+        <link rel="next" href="../topology-schema-v1/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/favicon.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Topology Schema Reference - Cassian Gate</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  
+  
+  <meta property="og:image" content="https://docs.cassiangate.dev/latest/assets/og-image.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="https://docs.cassiangate.dev/latest/assets/og-image.png">
+
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#cassian-gate-v15-topology-schema-guide-invariant-tests-and-observed_state" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Cassian Gate" class="md-header__button md-logo" aria-label="Cassian Gate" data-md-component="logo">
+      
+  <img src="../assets/favicon.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Cassian Gate
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Topology Schema Reference
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="./" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Topology Schema Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../topology-schema-v1/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Legacy schema (v1)
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../cli-reference-v1/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  CLI Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../cheatsheet/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Cheatsheet
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../recipes/exec-user-defined-invariants/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Writing a user-defined invariant
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../recipes/ai-change-reference-case/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  The AI-change reference case
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../ci/github-actions/" class="md-tabs__link">
+          
+  
+  
+  CI Integration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../input-adapters/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Input Adapters
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../brownfield-importer/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Brownfield Importer
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../admin-guide-v1/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Admin Guide
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../vm-runtime-capabilities/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  VM Runtime Capabilities
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../proof-kit/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Proof Kit / Examples
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../audit-grade-evidence/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Audit-Grade Evidence
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../ai/" class="md-tabs__link">
+          
+  
+  
+  AI Advisory
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../extensions/extension-and-adoption/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Extension & Adoption
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../project-principles/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Project principles
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../scope-discipline/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Scope and scale discipline
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Cassian Gate" class="md-nav__button md-logo" aria-label="Cassian Gate" data-md-component="logo">
+      
+  <img src="../assets/favicon.svg" alt="logo">
+
+    </a>
+    Cassian Gate
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Topology Schema Reference
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Topology Schema Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-the-kind-invariant-test-category" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1) The kind: invariant Test Category
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1) The kind: invariant Test Category">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#11-verdict-contract-four-quadrants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.1) Verdict contract (four quadrants)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-supported-invariant-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2) Supported Invariant Types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2a-the-kind-exec-test-category-user-defined-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2a) The kind: exec Test Category — User-Defined Invariants
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2a) The kind: exec Test Category — User-Defined Invariants">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#2a1-closed-key-set" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2a.1) Closed key set
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2a2-target-node-and-derived-type" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2a.2) Target node and derived type
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2a3-read-only-allow-list" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2a.3) Read-only allow-list
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2a4-typed-assertions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2a.4) Typed assertions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2a5-verdict-failure-rendering-and-blast-radius" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2a.5) Verdict, failure rendering, and blast-radius
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2b-test-tags-and-selective-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2b) Test Tags and Selective Execution
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2b) Test Tags and Selective Execution">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#2b1-selecting-tests-with-tag" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2b.1) Selecting tests with --tag
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-failure-verdicts-and-observed_state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3) Failure Verdicts and observed_state
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3) Failure Verdicts and observed_state">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-where-observed_state-appears" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1) Where observed_state appears
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-determinism-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2) Determinism contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-truncation-discipline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3) Truncation discipline
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-observed_state-schema-per-invariant-type" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4) observed_state Schema Per Invariant Type
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4) observed_state Schema Per Invariant Type">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-bgp_session_up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.1) bgp_session_up
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-evpn_bgp_session_up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.2) evpn_bgp_session_up
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#43-route_present-and-route_absent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.3) route_present and route_absent
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#44-route_advertised_to-and-route_not_advertised_to" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.4) route_advertised_to and route_not_advertised_to
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#45-bgp_med_equals-and-bgp_localpref_equals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.5) bgp_med_equals and bgp_localpref_equals
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#46-evpn_vni_route_present" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.6) evpn_vni_route_present
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#47-evpn_mac_route_present-and-evpn_mac_route_absent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.7) evpn_mac_route_present and evpn_mac_route_absent
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#48-ospf_neighbor_up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.8) ospf_neighbor_up
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#49-interface_state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.9) interface_state
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#410-bgp_community" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.10) bgp_community
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#411-bgp_as_path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.11) bgp_as_path
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-summary-rendering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5) Summary Rendering
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-suppression-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6) Suppression Rules
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-cross-references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7) Cross-references
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-what-this-schema-guide-does-not-do" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8) What This Schema Guide Does NOT Do
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../topology-schema-v1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy schema (v1)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli-reference-v1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cheatsheet/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cheatsheet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../recipes/exec-user-defined-invariants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Writing a user-defined invariant
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../recipes/ai-change-reference-case/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The AI-change reference case
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CI Integration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    CI Integration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ci/github-actions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitHub Actions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ci/gitlab-ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitLab CI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../input-adapters/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Input Adapters
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../brownfield-importer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Brownfield Importer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../admin-guide-v1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Admin Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vm-runtime-capabilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VM Runtime Capabilities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../proof-kit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Proof Kit / Examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../audit-grade-evidence/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Audit-Grade Evidence
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_16" id="__nav_16_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI Advisory
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    AI Advisory
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ai/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ai/guardrails/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guardrails
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ai/cli-contract-ai/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ai/online_ai/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Online AI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../extensions/extension-and-adoption/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Extension & Adoption
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../project-principles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project principles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scope-discipline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scope and scale discipline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-the-kind-invariant-test-category" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1) The kind: invariant Test Category
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1) The kind: invariant Test Category">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#11-verdict-contract-four-quadrants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1.1) Verdict contract (four quadrants)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-supported-invariant-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2) Supported Invariant Types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2a-the-kind-exec-test-category-user-defined-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2a) The kind: exec Test Category — User-Defined Invariants
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2a) The kind: exec Test Category — User-Defined Invariants">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#2a1-closed-key-set" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2a.1) Closed key set
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2a2-target-node-and-derived-type" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2a.2) Target node and derived type
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2a3-read-only-allow-list" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2a.3) Read-only allow-list
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2a4-typed-assertions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2a.4) Typed assertions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2a5-verdict-failure-rendering-and-blast-radius" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2a.5) Verdict, failure rendering, and blast-radius
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2b-test-tags-and-selective-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2b) Test Tags and Selective Execution
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2b) Test Tags and Selective Execution">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#2b1-selecting-tests-with-tag" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2b.1) Selecting tests with --tag
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-failure-verdicts-and-observed_state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3) Failure Verdicts and observed_state
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3) Failure Verdicts and observed_state">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-where-observed_state-appears" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1) Where observed_state appears
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-determinism-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2) Determinism contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-truncation-discipline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3) Truncation discipline
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-observed_state-schema-per-invariant-type" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4) observed_state Schema Per Invariant Type
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4) observed_state Schema Per Invariant Type">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#41-bgp_session_up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.1) bgp_session_up
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#42-evpn_bgp_session_up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.2) evpn_bgp_session_up
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#43-route_present-and-route_absent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.3) route_present and route_absent
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#44-route_advertised_to-and-route_not_advertised_to" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.4) route_advertised_to and route_not_advertised_to
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#45-bgp_med_equals-and-bgp_localpref_equals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.5) bgp_med_equals and bgp_localpref_equals
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#46-evpn_vni_route_present" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.6) evpn_vni_route_present
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#47-evpn_mac_route_present-and-evpn_mac_route_absent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.7) evpn_mac_route_present and evpn_mac_route_absent
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#48-ospf_neighbor_up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.8) ospf_neighbor_up
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#49-interface_state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.9) interface_state
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#410-bgp_community" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.10) bgp_community
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#411-bgp_as_path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4.11) bgp_as_path
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-summary-rendering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5) Summary Rendering
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-suppression-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6) Suppression Rules
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-cross-references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7) Cross-references
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-what-this-schema-guide-does-not-do" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8) What This Schema Guide Does NOT Do
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<hr />
+<h1 id="cassian-gate-v15-topology-schema-guide-invariant-tests-and-observed_state">Cassian Gate v1.5 Topology Schema Guide — Invariant Tests and observed_state</h1>
+<p><strong>Version:</strong> v1.5
+<strong>Status:</strong> STABLE (Phase 1a Handover 2 onward)
+<strong>Scope:</strong> Invariant test category, supported invariant types, and <code>observed_state</code> failure-payload contract
+<strong>Audience:</strong> Engineers authoring Cassian Gate topologies that exercise routing, BGP, or EVPN behavior</p>
+<p>This document is the v1.5 companion to <code>docs/topology-schema-v1.md</code>. It documents the additional surface that <code>docs/topology-schema-v1.md</code> §8 explicitly defers to v1.5+: the <code>kind: invariant</code> test category, the supported invariant types, and the structured <code>observed_state</code> payload that every failed invariant test record carries.</p>
+<p>The v1 contract (<code>ping</code>, <code>tcp</code>, <code>bgp_neighbor</code>) is unchanged. Everything in this document is additive on top of v1.</p>
+<p>This is a <strong>schema guide</strong>, not a tutorial and not a routing reference.</p>
+<hr />
+<h2 id="1-the-kind-invariant-test-category">1) The <code>kind: invariant</code> Test Category</h2>
+<p>Cassian Gate v1.5 introduces a <code>kind:</code> discriminator on test records. The v1.x test types (<code>ping</code>, <code>tcp</code>, <code>bgp_neighbor</code>) continue to be addressed via the <code>type:</code> field; v1.5 adds a <code>kind: invariant</code> category that addresses control-plane truths beyond raw L3/L4 reachability.</p>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span>
+<span class="normal"><a href="#__codelineno-0-2">2</a></span>
+<span class="normal"><a href="#__codelineno-0-3">3</a></span>
+<span class="normal"><a href="#__codelineno-0-4">4</a></span>
+<span class="normal"><a href="#__codelineno-0-5">5</a></span>
+<span class="normal"><a href="#__codelineno-0-6">6</a></span>
+<span class="normal"><a href="#__codelineno-0-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="nt">tests</span><span class="p">:</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">leaf1_evpn_session_to_spine1</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">invariant</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">evpn_bgp_session_up</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="nt">node</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">leaf1</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="w">    </span><span class="nt">peer</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">spine1</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="w">    </span><span class="nt">expect</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pass</span>
+</code></pre></div></td></tr></table></div>
+<p>Rules:</p>
+<ul>
+<li>a test with <code>kind: invariant</code> MUST also declare <code>type:</code> set to one of the supported invariant types listed in §2</li>
+<li><code>kind: invariant</code> and the v1.x test types (<code>ping</code>, <code>tcp</code>, <code>bgp_neighbor</code>) are mutually exclusive on a given test record</li>
+<li>every invariant test MUST declare <code>expect:</code> (<code>pass</code> or <code>fail</code>); the engine's verdict for each test is computed from <code>observed</code> versus <code>expected</code>, exactly as for v1.x test types</li>
+<li>invariant tests run after the v1.x prerequisite phases (<code>Resolve</code> → <code>Generate</code> → <code>Deploy</code> → <code>Provision</code>); they execute during the <code>Test</code> phase</li>
+<li>the <code>kind:</code> discriminator is required because the <code>type:</code> namespace overlaps with v1.x test types only up to the ordinary disambiguation rule (<code>kind: invariant</code> selects the invariant evaluator dispatch path)</li>
+</ul>
+<h3 id="11-verdict-contract-four-quadrants">1.1) Verdict contract (four quadrants)</h3>
+<p>The verdict for every <code>kind: invariant</code> test is <code>pass</code> when <code>observed</code> equals <code>expected</code> and <code>fail</code> otherwise. Because <code>expect:</code> may be declared <code>pass</code> or <code>fail</code>, this yields four cases:</p>
+<table>
+<thead>
+<tr>
+<th><code>expect:</code></th>
+<th>predicate</th>
+<th><code>observed</code></th>
+<th><code>verdict:</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pass</code></td>
+<td>holds</td>
+<td><code>pass</code></td>
+<td><code>pass</code></td>
+</tr>
+<tr>
+<td><code>pass</code></td>
+<td>fails</td>
+<td><code>fail</code></td>
+<td><code>fail</code></td>
+</tr>
+<tr>
+<td><code>fail</code></td>
+<td>fails</td>
+<td><code>fail</code></td>
+<td><code>pass</code></td>
+</tr>
+<tr>
+<td><code>fail</code></td>
+<td>holds</td>
+<td><code>pass</code></td>
+<td><code>fail</code></td>
+</tr>
+</tbody>
+</table>
+<p>The two <code>verdict: fail</code> rows (<code>expect: pass</code> over a failing predicate, and <code>expect: fail</code> over a holding predicate) each carry the structured <code>observed_state</code> payload described in §3; the two <code>verdict: pass</code> rows do not.</p>
+<p>A structural evaluation error (missing field, probe failure, unparseable output, or unsupported type) forces <code>verdict: fail</code> regardless of <code>expect:</code> — including <code>expect: fail</code> — so an error path never satisfies a negative test; only a genuinely-failing predicate satisfies <code>expect: fail</code>.</p>
+<hr />
+<h2 id="2-supported-invariant-types">2) Supported Invariant Types</h2>
+<p>v1.5 supports the following invariant types. Each type maps to a single deterministic evaluator inside the Cassian Gate engine.</p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Category</th>
+<th>Required fields (in addition to <code>kind</code>, <code>type</code>, <code>name</code>, <code>expect</code>)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>bgp_session_up</code></td>
+<td>BGP session</td>
+<td><code>node</code>, <code>neighbor</code> (IPv4 literal of the BGP neighbor; canonical alias <code>dst</code> accepted)</td>
+</tr>
+<tr>
+<td><code>evpn_bgp_session_up</code></td>
+<td>BGP session</td>
+<td><code>node</code>, <code>peer</code> (a known node name)</td>
+</tr>
+<tr>
+<td><code>route_present</code></td>
+<td>Route</td>
+<td><code>node</code>, <code>prefix</code> (CIDR)</td>
+</tr>
+<tr>
+<td><code>route_absent</code></td>
+<td>Route</td>
+<td><code>node</code>, <code>prefix</code> (CIDR)</td>
+</tr>
+<tr>
+<td><code>route_advertised_to</code></td>
+<td>BGP policy</td>
+<td><code>node</code>, <code>peer</code> (a known node name), <code>prefix</code> (CIDR)</td>
+</tr>
+<tr>
+<td><code>route_not_advertised_to</code></td>
+<td>BGP policy</td>
+<td><code>node</code>, <code>peer</code> (a known node name), <code>prefix</code> (CIDR)</td>
+</tr>
+<tr>
+<td><code>bgp_med_equals</code></td>
+<td>BGP policy</td>
+<td><code>node</code>, <code>prefix</code> (CIDR), <code>expected</code> (integer)</td>
+</tr>
+<tr>
+<td><code>bgp_localpref_equals</code></td>
+<td>BGP policy</td>
+<td><code>node</code>, <code>prefix</code> (CIDR), <code>expected</code> (integer)</td>
+</tr>
+<tr>
+<td><code>bgp_community</code></td>
+<td>BGP policy</td>
+<td><code>node</code>, <code>prefix</code> (CIDR), <code>expected</code> (community specifier OR list of specifiers); <code>match</code> (<code>any</code> or <code>all</code>, list-only — required when <code>expected</code> is a list, rejected when scalar)</td>
+</tr>
+<tr>
+<td><code>bgp_as_path</code></td>
+<td>BGP policy</td>
+<td><code>node</code> (an FRR node), <code>prefix</code> (CIDR), <code>as_path</code> (a regular expression in the FRR-native AS-path idiom; matched against the route's space-separated, path-ordered AS-path; asplain notation)</td>
+</tr>
+<tr>
+<td><code>evpn_vni_route_present</code></td>
+<td>EVPN</td>
+<td><code>node</code>, <code>vni</code> (integer)</td>
+</tr>
+<tr>
+<td><code>evpn_mac_route_present</code></td>
+<td>EVPN</td>
+<td><code>node</code>, <code>mac</code> (canonical MAC literal), <code>vni</code> (integer)</td>
+</tr>
+<tr>
+<td><code>evpn_mac_route_absent</code></td>
+<td>EVPN</td>
+<td><code>node</code>, <code>mac</code> (canonical MAC literal), <code>vni</code> (integer)</td>
+</tr>
+<tr>
+<td><code>ospf_neighbor_up</code></td>
+<td>OSPF</td>
+<td><code>src</code>, <code>neighbor</code> (IPv4 literal of the peer's router-ID); optional <code>state</code> (one of the 8 declarable FSM literals; default <code>Full</code>)</td>
+</tr>
+<tr>
+<td><code>interface_state</code></td>
+<td>Linux interface</td>
+<td><code>node</code>, <code>interface</code> (interface name as seen inside the node namespace, e.g. <code>eth1</code>); optional <code>state</code> (one of <code>up</code>, <code>down</code>; default <code>up</code> materialised at Resolve)</td>
+</tr>
+</tbody>
+</table>
+<p>Rules:</p>
+<ul>
+<li><code>peer</code> fields MUST reference a node declared in <code>nodes:</code>; the engine's blast-radius validator rejects unknown node references with a hard-failure</li>
+<li>IPv4 literals (<code>dst</code> for <code>bgp_session_up</code>) bypass the node-name check and pass through verbatim</li>
+<li><code>ospf_neighbor_up</code>'s <code>neighbor</code> field MUST be an IPv4 literal of the peer's OSPF router-ID (NOT a node name); the resolver's IPv4-literal validator hard-fails on non-IPv4 input. The <code>src</code> field MUST reference a node of <code>type: frr</code> declared in <code>nodes:</code> (FRR-only NOS-tag enforcement; non-FRR <code>src</code> is rejected at validation with a deterministic error)</li>
+<li><code>interface_state</code>'s <code>interface</code> field MUST reference an interface present in the referenced node's resolved interface set (its link interfaces, <code>lo</code>, and any <code>interfaces:</code> declared on the node); a reference to an absent interface is rejected at validation time with a hard-failure (exit code <code>2</code>), parallel to the unknown-node reference rejection</li>
+<li><code>prefix</code> fields MUST be canonical IPv4 CIDR notation (e.g. <code>10.0.0.0/24</code>); non-canonical values are rejected at validation time</li>
+<li><code>bgp_community</code>'s <code>expected</code> communities MUST each be a literal <code>AS:VAL</code> token (e.g. <code>65001:100</code>) or a well-known token (<code>no-export</code>, <code>no-advertise</code>, <code>local-AS</code>, <code>internet</code>; <code>internet</code> normalises to community <code>0:0</code> in FRR JSON form); <code>match</code> (<code>any</code> or <code>all</code>) is REQUIRED when <code>expected</code> is a list and REJECTED when <code>expected</code> is a scalar</li>
+<li><code>bgp_as_path</code>'s <code>as_path</code> MUST be a valid regular expression (compiled after translating the FRR-native <code>_</code> word-boundary idiom to a delimiter alternation); it is matched with <code>re.search</code> against the canonical space-separated, path-ordered AS-path string (operator <code>^</code> / <code>$</code> anchors are honoured). The <code>node</code> MUST reference a node of <code>type: frr</code> (a non-FRR or unknown <code>node</code> is rejected at validation). AS numbers are read in asplain notation as FRR emits them; BGP AS-confederation handling and 4-byte AS distinctions beyond FRR's native parsing are out of scope</li>
+<li><code>mac</code> fields MUST be canonical lowercase colon-separated form (e.g. <code>00:11:22:33:44:55</code>)</li>
+<li><code>vni</code> MUST be a positive integer matching a VNI declared in the topology's <code>vlans:</code> map</li>
+<li><code>route_absent</code> and <code>route_not_advertised_to</code> and <code>evpn_mac_route_absent</code> are the negative complements of their <code>_present</code> / <code>_advertised_to</code> peers; the verdict semantics flip accordingly (<code>expect: pass</code> means the route IS NOT present / IS NOT advertised / IS NOT in the EVPN MAC table)</li>
+</ul>
+<hr />
+<h2 id="2a-the-kind-exec-test-category-user-defined-invariants">2a) The <code>kind: exec</code> Test Category — User-Defined Invariants</h2>
+<p>The built-in invariant catalog (§2) is fixed: an operator can only assert truths the engine already encodes an evaluator for. The <code>kind: exec</code> category lifts that ceiling. An <code>exec</code> test is a <strong>user-defined invariant</strong> — the operator names a target node, supplies a single <strong>read-only</strong> command, and attaches a <strong>typed assertion</strong> over that command's output. It is authoritative: it produces a four-quadrant verdict and records to <code>results.json</code> with the same record structure as a built-in invariant. It is not advisory, and it is not freeform grep.</p>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-1-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-1-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-1-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-1-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-1-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-1-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-1-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-1-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-1-10">10</a></span>
+<span class="normal"><a href="#__codelineno-1-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="nt">tests</span><span class="p">:</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">bgp_peer_established</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">exec</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="w">    </span><span class="nt">src</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">r1</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5"></a><span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">vtysh -c &quot;show bgp summary json&quot;</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6"></a><span class="w">    </span><span class="nt">assertion</span><span class="p">:</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="w">      </span><span class="nt">field</span><span class="p">:</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8"></a><span class="w">        </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">ipv4Unicast</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">peers</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;10.0.0.2&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">state</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9"></a><span class="w">        </span><span class="nt">op</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;==&quot;</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10"></a><span class="w">        </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Established</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11"></a><span class="w">    </span><span class="nt">expect</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pass</span>
+</code></pre></div></td></tr></table></div>
+<h3 id="2a1-closed-key-set">2a.1) Closed key set</h3>
+<p>An <code>exec</code> test declares exactly the keys below; any other key is a hard-failure at validation (exit code <code>2</code>), parallel to the unknown-key strictness elsewhere in this schema.</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>name</code></td>
+<td>unique test name</td>
+</tr>
+<tr>
+<td><code>kind</code></td>
+<td>literal <code>exec</code></td>
+</tr>
+<tr>
+<td><code>src</code></td>
+<td>target node to run on (aliases <code>node</code> / <code>on</code> / <code>from</code>, normalised to <code>src</code> at Resolve)</td>
+</tr>
+<tr>
+<td><code>command</code></td>
+<td>a single read-only command (see §2a.3)</td>
+</tr>
+<tr>
+<td><code>assertion</code></td>
+<td>exactly one typed predicate (see §2a.4)</td>
+</tr>
+<tr>
+<td><code>expect</code></td>
+<td><code>pass</code> or <code>fail</code> — same four-quadrant contract as §1.1</td>
+</tr>
+</tbody>
+</table>
+<p>Unlike <code>kind: invariant</code>, an <code>exec</code> test has no <code>type:</code> field, and there is no operator-facing timeout key — invocation is bounded by an internal default.</p>
+<h3 id="2a2-target-node-and-derived-type">2a.2) Target node and derived type</h3>
+<p><code>src</code> MUST reference a node declared in <code>nodes:</code>. The engine <strong>derives</strong> the node's type from the topology — the operator does not declare it. In v1 the derived type MUST be one of <code>frr</code> or <code>nft-fw</code>; a target whose derived type is anything else is rejected at validation. The derived type also selects the read-only allow-list.</p>
+<h3 id="2a3-read-only-allow-list">2a.3) Read-only allow-list</h3>
+<p>Commands are constrained to a node-type-aware read-only allow-list at a single validation site (default-deny). Raw shell (e.g. <code>sh -lc …</code>) is never an accepted command form.</p>
+<table>
+<thead>
+<tr>
+<th>Derived type</th>
+<th>Allowed command form</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>frr</code></td>
+<td><code>vtysh -c "show …"</code> (read-only <code>show</code> commands)</td>
+</tr>
+<tr>
+<td><code>nft-fw</code></td>
+<td><code>nft list …</code> (e.g. <code>nft list ruleset</code>; mutating verbs such as <code>add</code> / <code>delete</code> / <code>flush</code> / <code>insert</code> / <code>replace</code> are denied)</td>
+</tr>
+</tbody>
+</table>
+<p>A command outside the allow-list for the target's derived type is rejected at validation (exit code <code>2</code>) with a deterministic error; it never reaches runtime.</p>
+<h3 id="2a4-typed-assertions">2a.4) Typed assertions</h3>
+<p>The assertion is exactly one typed predicate over the command's captured stdout. Freeform grep is not expressible by construction.</p>
+<table>
+<thead>
+<tr>
+<th>Operator</th>
+<th>YAML shape</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>contains</code></td>
+<td><code>contains: &lt;substr&gt;</code></td>
+<td>case-sensitive substring present in stdout</td>
+</tr>
+<tr>
+<td><code>not_contains</code></td>
+<td><code>not_contains: &lt;substr&gt;</code></td>
+<td>substring absent</td>
+</tr>
+<tr>
+<td><code>equals</code></td>
+<td><code>equals: &lt;value&gt;</code></td>
+<td><code>stdout.strip() == value</code>, case-sensitive</td>
+</tr>
+<tr>
+<td><code>matches</code></td>
+<td><code>matches: &lt;regex&gt;</code></td>
+<td><code>re.search(pattern, stdout)</code>; the pattern MUST compile — an uncompilable pattern is a validation-time rejection</td>
+</tr>
+<tr>
+<td><code>count</code></td>
+<td><code>count: {pattern: &lt;regex&gt;, op: == \| &gt;= \| &lt;=, value: &lt;int&gt;}</code></td>
+<td><code>len(re.findall(pattern, stdout))</code> compared to <code>value</code></td>
+</tr>
+<tr>
+<td><code>field</code></td>
+<td><code>field: {path: [&lt;seg&gt;, …], op: == \| &gt;= \| &lt;=, value: &lt;value&gt;}</code></td>
+<td>parse stdout as JSON, walk the literal-key <code>path</code>, then compare</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>field</code> <code>path</code> is an <strong>explicit list of literal key segments</strong> — not a dotted string — so a key that itself contains dots (e.g. a peer address <code>"10.0.0.2"</code>) is unambiguous. Traversal descends the parsed JSON one literal key per segment, in order. <code>==</code> is <strong>typed</strong>: string↔string, number↔number, bool↔bool; a type mismatch is a deterministic non-match, never a silent coercion. <code>&gt;=</code> / <code>&lt;=</code> require both operands to be numeric.</p>
+<p>Any failure to evaluate — unparseable JSON, a missing path segment, descent into a non-dict, a value type the operator cannot compare, a command timeout, or an exec error — is a deterministic Cassian-owned <code>observed: fail</code>. It is never a crash and never a silent pass.</p>
+<h3 id="2a5-verdict-failure-rendering-and-blast-radius">2a.5) Verdict, failure rendering, and blast-radius</h3>
+<ul>
+<li><strong>Verdict</strong> uses the canonical four-quadrant contract in §1.1, unchanged: <code>verdict: pass</code> iff <code>observed == expected</code>. There is no exec-specific verdict path.</li>
+<li><strong><code>observed_state</code></strong> — an <code>exec</code> record whose <code>verdict</code> is <code>fail</code> carries an <code>observed_state</code> payload (<code>command</code>, <code>returncode</code>, <code>stdout_excerpt</code>) on the same terms as a failed invariant (§3); a passing <code>exec</code> record does not.</li>
+<li><strong>Blast-radius</strong> — in an opt-in <code>blast_radius.enabled</code> topology, an <code>exec</code> test participates in the coverage graph via its <code>src</code> node. It does not crash the coverage build, and it is not silently dropped.</li>
+</ul>
+<hr />
+<h2 id="2b-test-tags-and-selective-execution">2b) Test Tags and Selective Execution</h2>
+<p>Any test record — of any <code>kind</code> (<code>ping</code>, <code>tcp</code>, <code>bgp_neighbor</code>, <code>invariant</code>, <code>exec</code>) — MAY carry an optional <code>tags:</code> field: a list of short string labels used to select a subset of declared tests at run time. Tags are selection metadata only; they never change a test's verdict, the gate result, or the artifact schema of an executed test.</p>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span>
+<span class="normal"><a href="#__codelineno-2-2">2</a></span>
+<span class="normal"><a href="#__codelineno-2-3">3</a></span>
+<span class="normal"><a href="#__codelineno-2-4">4</a></span>
+<span class="normal"><a href="#__codelineno-2-5">5</a></span>
+<span class="normal"><a href="#__codelineno-2-6">6</a></span>
+<span class="normal"><a href="#__codelineno-2-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="nt">tests</span><span class="p">:</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">leaf1_evpn_session_to_spine1</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">invariant</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="w">    </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">evpn_bgp_session_up</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5"></a><span class="w">    </span><span class="nt">src</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">leaf1</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="w">    </span><span class="nt">neighbor</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10.0.0.1</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7"></a><span class="w">    </span><span class="nt">tags</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">evpn</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">fabric</span><span class="p p-Indicator">]</span>
+</code></pre></div></td></tr></table></div>
+<ul>
+<li><code>tags:</code> MUST be a list of strings; each label MUST match <code>[a-z0-9_-]+</code> (lowercase alphanumerics, hyphen, underscore). A non-list value, a non-string element, an empty-string element, or a charset violation is rejected at validation time with a deterministic hard-failure (exit code <code>2</code>).</li>
+<li><code>tags:</code> is optional and kind-agnostic; tag validation is applied uniformly across <code>kind: invariant</code> and <code>kind: exec</code> records.</li>
+<li>A test with no <code>tags:</code> is selectable only when no tag filter is supplied.</li>
+</ul>
+<h3 id="2b1-selecting-tests-with-tag">2b.1) Selecting tests with <code>--tag</code></h3>
+<p><code>cassian test &lt;topology.yaml&gt; --tag &lt;label&gt;</code> runs only the tests whose <code>tags:</code> include <code>&lt;label&gt;</code>. The flag is repeatable (<code>--tag a --tag b</code>) and the match is an <strong>OR-union</strong>: a test is selected if its tags intersect the requested set.</p>
+<ul>
+<li><strong>Explicit non-execution (silence is not pass — Doctrine §1.11).</strong> Every declared test that is <em>not</em> selected is recorded explicitly in <code>results.json</code> with <code>verdict: not_executed</code> and a <code>meta.not_executed_reason</code> of <code>filtered_by_tag</code> (or <code>filtered_by_name</code> / <code>filtered_by_kind</code> for those filters, or <code>fail_fast</code> when a halting failure drops the remainder). A non-executed test is never silently omitted and never counted as a pass. <code>not_executed</code> is a distinct verdict value — neither <code>pass</code>, <code>fail</code>, nor <code>skip</code> — and it never changes the gate result, which is computed from executed failures only.</li>
+<li><strong>Reconciliation.</strong> The run summary reconciles as <code>total == executed + not_executed (+ skipped)</code>, and the operator summary surfaces the non-executed tests and their reasons explicitly.</li>
+<li><strong>Zero-match is a hard failure.</strong> If <code>--tag</code> matches no declared test, the run hard-fails rather than passing with zero executed tests — identical to the existing <code>--name</code> / <code>--kind</code> zero-match behavior.</li>
+<li><strong>Mutually exclusive with scenarios.</strong> <code>--tag</code> (like <code>--name</code> / <code>--kind</code>) is rejected together with <code>--scenario</code> / <code>--all-scenarios</code>, because filtering would skip scenario run steps.</li>
+</ul>
+<hr />
+<h2 id="3-failure-verdicts-and-observed_state">3) Failure Verdicts and <code>observed_state</code></h2>
+<p>Every invariant test record that resolves to <code>verdict: fail</code> carries a structured <code>observed_state</code> payload alongside the existing <code>observed</code> string field. The <code>observed_state</code> payload is the <strong>deterministic</strong> structured failure-reason artifact.</p>
+<p>This payload is added in v1.5 and is the basis of <code>results.summary.txt</code>'s <code>observed:</code> block under each failed-invariant line.</p>
+<h3 id="31-where-observed_state-appears">3.1) Where <code>observed_state</code> appears</h3>
+<ul>
+<li>On records in <code>results["tests"]</code> whose <code>kind == "invariant"</code> AND <code>verdict == "fail"</code>.</li>
+<li>On records in <code>results["events"]</code> whose <code>type == "scenario_test_run"</code> AND <code>kind == "invariant"</code> AND <code>verdict == "fail"</code>.</li>
+<li>It does NOT appear on passing-invariant records, on non-invariant test kinds (<code>ping</code>, <code>tcp</code>, <code>bgp_neighbor</code>), on <code>prereq</code> failure paths, or on records whose <code>verdict</code> is anything other than <code>fail</code>.</li>
+</ul>
+<p>The presence and absence of <code>observed_state</code> is byte-stable across runs given identical input and identical control-plane state.</p>
+<h3 id="32-determinism-contract">3.2) Determinism contract</h3>
+<p>Every value in <code>observed_state</code> is derived from one of:</p>
+<ul>
+<li>a declared input field of the test (e.g. <code>prefix</code>, <code>peer</code>, <code>mac</code>, <code>vni</code>)</li>
+<li>a declared input field of the topology (e.g. host node MAC literals)</li>
+<li>a deterministically-computable scalar from parsed <code>vtysh</code> JSON (e.g. BGP session state strings)</li>
+<li>an engine-synthesized deterministic literal string from a closed, documented set (e.g. the <code>bgp_session_up</code> evaluator's <code>state</code> literals <code>NotConfigured</code> / <code>Unknown</code> and its <code>last_error</code> diagnostic literals; see §4.1)</li>
+</ul>
+<p>Environmental nondeterminism (host clock timestamps, container IDs, runtime PIDs, hostnames-of-the-runner, containerlab-allocated veth MAC addresses) MUST NOT enter <code>observed_state</code>. Such tokens MAY appear in the existing supporting <code>evidence</code> channel, which is explicit non-authoritative supporting evidence and tolerates non-determinism.</p>
+<p>In particular, EVPN MAC route lists in <code>observed_state.evpn_routes</code> are filtered to MAC literals declared in the topology's host nodes; any environmentally-allocated MAC entries are excluded from <code>observed_state</code> (they remain in the <code>evidence</code> channel).</p>
+<h3 id="33-truncation-discipline">3.3) Truncation discipline</h3>
+<p>A single invariant record's <code>observed_state</code> payload is bounded by an 8192-byte canonical-JSON ceiling. When a payload would exceed this ceiling, the engine deterministically suffix-drops trailing entries from the longest list field (alphabetical key tie-break) until the payload fits. When truncation occurs, the engine sets <code>observed_state_truncated: true</code> on the record. The summary renderer responds by emitting a literal trailing line (<code>(observed_state truncated; full payload in results.json)</code>) at 6-space indent in the <code>observed:</code> block. The full pre-truncation list remains derivable from the supporting <code>evidence</code> channel of the same record.</p>
+<p>The 8192-byte ceiling is per-record. Multiple failing invariants in one run each receive their own ceiling.</p>
+<hr />
+<h2 id="4-observed_state-schema-per-invariant-type">4) <code>observed_state</code> Schema Per Invariant Type</h2>
+<p>Every key listed below is REQUIRED on the failed-invariant record's <code>observed_state</code>. Keys are documented in canonical-sorted order matching the on-disk JSON.</p>
+<h3 id="41-bgp_session_up">4.1) <code>bgp_session_up</code></h3>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
+<span class="normal"><a href="#__codelineno-3-2">2</a></span>
+<span class="normal"><a href="#__codelineno-3-3">3</a></span>
+<span class="normal"><a href="#__codelineno-3-4">4</a></span>
+<span class="normal"><a href="#__codelineno-3-5">5</a></span>
+<span class="normal"><a href="#__codelineno-3-6">6</a></span>
+<span class="normal"><a href="#__codelineno-3-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="p">{</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="w">  </span><span class="nt">&quot;last_error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;string&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="w">  </span><span class="nt">&quot;peer&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;IPv4 literal of the configured neighbor&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="w">  </span><span class="nt">&quot;source_node&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;node where the test runs&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="w">  </span><span class="nt">&quot;state&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;BGP FSM state string, or &#39;Unknown&#39; when no neighbor entry exists&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;bgp_session_up&quot;</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="p">}</span>
+</code></pre></div></td></tr></table></div>
+<ul>
+<li><code>peer</code> is the test's <code>dst</code> field, which is required to be an IPv4 literal. Operators write the user-facing form <code>neighbor:</code> (the natural BGP vocabulary); the resolver aliases <code>neighbor:</code> to the canonical <code>dst:</code> at Resolve, hard-failing if both are declared with disagreeing values.</li>
+<li><code>state</code> reflects the FRR BGP FSM state for the configured neighbor (<code>Idle</code>, <code>Active</code>, <code>Connect</code>, <code>OpenSent</code>, <code>OpenConfirm</code>, <code>Established</code>); the literal <code>NotConfigured</code> when vtysh succeeds but the queried peer is not present in FRR's BGP summary; or the literal <code>Unknown</code> when vtysh fails, vtysh output cannot be parsed as JSON, or the test's <code>dst</code>/<code>src</code> input is missing or invalid.</li>
+<li><code>last_error</code> carries the neighbor's <code>lastResetReason</code> from FRR when present, or one of a closed set of engine-synthesized deterministic literal strings on the diagnostic paths: <code>"neighbor not present in summary"</code> when the queried peer is absent from FRR's BGP summary, <code>"peers not found in summary"</code> when FRR's BGP summary contains no peer dictionary at any expected key, <code>"vtysh command failed"</code> when the vtysh invocation returns a non-zero exit, <code>"vtysh output not parseable as JSON"</code> when vtysh succeeds but its output is not valid JSON, <code>"dst missing or invalid (expected non-empty IPv4 literal)"</code> when the test record's <code>dst</code> field is absent or not an IPv4 literal, or <code>"src missing or empty"</code> when the test record's source node is absent or empty. Empty string when none of these conditions applies.</li>
+</ul>
+<h3 id="42-evpn_bgp_session_up">4.2) <code>evpn_bgp_session_up</code></h3>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1">1</a></span>
+<span class="normal"><a href="#__codelineno-4-2">2</a></span>
+<span class="normal"><a href="#__codelineno-4-3">3</a></span>
+<span class="normal"><a href="#__codelineno-4-4">4</a></span>
+<span class="normal"><a href="#__codelineno-4-5">5</a></span>
+<span class="normal"><a href="#__codelineno-4-6">6</a></span>
+<span class="normal"><a href="#__codelineno-4-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="p">{</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;last_reset_reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;string&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;peer&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;node name&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="w">  </span><span class="nt">&quot;source_node&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;node where the test runs&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5"></a><span class="w">  </span><span class="nt">&quot;state&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;BGP EVPN FSM state string, or &#39;Unknown&#39;&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;evpn_bgp_session_up&quot;</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7"></a><span class="p">}</span>
+</code></pre></div></td></tr></table></div>
+<ul>
+<li><code>peer</code> is the test's <code>peer</code> field, a known node name.</li>
+<li><code>state</code> reflects the EVPN-AFI BGP session state.</li>
+<li><code>last_reset_reason</code> carries the most recent reset reason from FRR.</li>
+</ul>
+<h3 id="43-route_present-and-route_absent">4.3) <code>route_present</code> and <code>route_absent</code></h3>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-5-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-5-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-5-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-5-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-5-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-5-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-5-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-5-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-5-10">10</a></span>
+<span class="normal"><a href="#__codelineno-5-11">11</a></span>
+<span class="normal"><a href="#__codelineno-5-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;prefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;CIDR&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;routes&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="w">    </span><span class="p">{</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5"></a><span class="w">      </span><span class="nt">&quot;next_hop&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;IPv4&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6"></a><span class="w">      </span><span class="nt">&quot;prefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;CIDR&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7"></a><span class="w">      </span><span class="nt">&quot;protocol&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;bgp|connected|static|...&gt;&quot;</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9"></a><span class="w">  </span><span class="p">],</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10"></a><span class="w">  </span><span class="nt">&quot;source_node&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;node where the test runs&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;route_present&quot;</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12"></a><span class="p">}</span>
+</code></pre></div></td></tr></table></div>
+<ul>
+<li><code>routes</code> is the deterministic list of route entries observed in the source node's IPv4 routing table that match the queried <code>prefix</code>. Empty list <code>[]</code> is the explicit empty-set form (R22) when no matching route exists.</li>
+<li><code>route_absent</code> payloads use <code>"type": "route_absent"</code>; otherwise the schema is identical.</li>
+</ul>
+<h3 id="44-route_advertised_to-and-route_not_advertised_to">4.4) <code>route_advertised_to</code> and <code>route_not_advertised_to</code></h3>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-6-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-6-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-6-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-6-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-6-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-6-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-6-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-6-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-6-10">10</a></span>
+<span class="normal"><a href="#__codelineno-6-11">11</a></span>
+<span class="normal"><a href="#__codelineno-6-12">12</a></span>
+<span class="normal"><a href="#__codelineno-6-13">13</a></span>
+<span class="normal"><a href="#__codelineno-6-14">14</a></span>
+<span class="normal"><a href="#__codelineno-6-15">15</a></span>
+<span class="normal"><a href="#__codelineno-6-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="p">{</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;advertised_routes&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="w">    </span><span class="p">{</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4"></a><span class="w">      </span><span class="nt">&quot;as_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;string&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5"></a><span class="w">      </span><span class="nt">&quot;metric&quot;</span><span class="p">:</span><span class="w"> </span><span class="err">&lt;i</span><span class="kc">nt</span><span class="err">|</span><span class="kc">null</span><span class="err">&gt;</span><span class="p">,</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6"></a><span class="w">      </span><span class="nt">&quot;next_hop&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;IPv4&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7"></a><span class="w">      </span><span class="nt">&quot;prefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;CIDR&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8"></a><span class="w">      </span><span class="nt">&quot;protocol&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;string&gt;&quot;</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10"></a><span class="w">  </span><span class="p">],</span>
+<a id="__codelineno-6-11" name="__codelineno-6-11"></a><span class="w">  </span><span class="nt">&quot;none_advertised&quot;</span><span class="p">:</span><span class="w"> </span><span class="err">&lt;bool&gt;</span><span class="p">,</span>
+<a id="__codelineno-6-12" name="__codelineno-6-12"></a><span class="w">  </span><span class="nt">&quot;peer&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;node name&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-13" name="__codelineno-6-13"></a><span class="w">  </span><span class="nt">&quot;prefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;CIDR&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-14" name="__codelineno-6-14"></a><span class="w">  </span><span class="nt">&quot;source_node&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;node where the test runs&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-15" name="__codelineno-6-15"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;route_advertised_to&quot;</span>
+<a id="__codelineno-6-16" name="__codelineno-6-16"></a><span class="p">}</span>
+</code></pre></div></td></tr></table></div>
+<ul>
+<li><code>advertised_routes</code> is the full deterministic list of prefixes the source node advertises to the named peer. Each entry includes the queried prefix or any other prefix actually being advertised (the diagnostic intent is to show the operator the actual advertised set when the queried prefix is not in it).</li>
+<li><code>none_advertised</code> is <code>true</code> when the advertised list is empty, <code>false</code> otherwise. This is a redundant boolean for ergonomic summary reading.</li>
+<li><code>route_not_advertised_to</code> payloads use <code>"type": "route_not_advertised_to"</code>; otherwise the schema is identical.</li>
+</ul>
+<h3 id="45-bgp_med_equals-and-bgp_localpref_equals">4.5) <code>bgp_med_equals</code> and <code>bgp_localpref_equals</code></h3>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1">1</a></span>
+<span class="normal"><a href="#__codelineno-7-2">2</a></span>
+<span class="normal"><a href="#__codelineno-7-3">3</a></span>
+<span class="normal"><a href="#__codelineno-7-4">4</a></span>
+<span class="normal"><a href="#__codelineno-7-5">5</a></span>
+<span class="normal"><a href="#__codelineno-7-6">6</a></span>
+<span class="normal"><a href="#__codelineno-7-7">7</a></span>
+<span class="normal"><a href="#__codelineno-7-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="p">{</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="w">  </span><span class="nt">&quot;actual&quot;</span><span class="p">:</span><span class="w"> </span><span class="err">&lt;i</span><span class="kc">nt</span><span class="err">|</span><span class="kc">null</span><span class="err">&gt;</span><span class="p">,</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="w">  </span><span class="nt">&quot;expected&quot;</span><span class="p">:</span><span class="w"> </span><span class="err">&lt;i</span><span class="kc">nt</span><span class="err">&gt;</span><span class="p">,</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="w">  </span><span class="nt">&quot;peer&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;string, or empty when undeclared&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5"></a><span class="w">  </span><span class="nt">&quot;prefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;CIDR&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6"></a><span class="w">  </span><span class="nt">&quot;source_node&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;node where the test runs&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;bgp_med_equals&quot;</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8"></a><span class="p">}</span>
+</code></pre></div></td></tr></table></div>
+<ul>
+<li><code>actual</code> is the integer value observed in the BGP route entry, or <code>null</code> when the prefix is not in BGP.</li>
+<li><code>expected</code> is the test's declared <code>expected</code> field.</li>
+<li><code>peer</code> carries the test's <code>peer</code> if declared; empty string otherwise.</li>
+<li><code>bgp_localpref_equals</code> payloads use <code>"type": "bgp_localpref_equals"</code>; otherwise the schema is identical.</li>
+</ul>
+<h3 id="46-evpn_vni_route_present">4.6) <code>evpn_vni_route_present</code></h3>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-8-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-8-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-8-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-8-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-8-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-8-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-8-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-8-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-8-10">10</a></span>
+<span class="normal"><a href="#__codelineno-8-11">11</a></span>
+<span class="normal"><a href="#__codelineno-8-12">12</a></span>
+<span class="normal"><a href="#__codelineno-8-13">13</a></span>
+<span class="normal"><a href="#__codelineno-8-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="p">{</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2"></a><span class="w">  </span><span class="nt">&quot;evpn_routes&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3"></a><span class="w">    </span><span class="p">{</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4"></a><span class="w">      </span><span class="nt">&quot;mac&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;MAC literal&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5"></a><span class="w">      </span><span class="nt">&quot;prefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;string, often empty&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6"></a><span class="w">      </span><span class="nt">&quot;rd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;string, often empty&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7"></a><span class="w">      </span><span class="nt">&quot;route_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="err">&lt;i</span><span class="kc">nt</span><span class="err">|s</span><span class="kc">tr</span><span class="err">i</span><span class="kc">n</span><span class="err">g&gt;</span><span class="p">,</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8"></a><span class="w">      </span><span class="nt">&quot;vni&quot;</span><span class="p">:</span><span class="w"> </span><span class="err">&lt;i</span><span class="kc">nt</span><span class="err">&gt;</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10"></a><span class="w">  </span><span class="p">],</span>
+<a id="__codelineno-8-11" name="__codelineno-8-11"></a><span class="w">  </span><span class="nt">&quot;source_node&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;node where the test runs&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-12" name="__codelineno-8-12"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;evpn_vni_route_present&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-13" name="__codelineno-8-13"></a><span class="w">  </span><span class="nt">&quot;vni&quot;</span><span class="p">:</span><span class="w"> </span><span class="err">&lt;i</span><span class="kc">nt</span><span class="err">&gt;</span>
+<a id="__codelineno-8-14" name="__codelineno-8-14"></a><span class="p">}</span>
+</code></pre></div></td></tr></table></div>
+<ul>
+<li><code>evpn_routes</code> is the deterministic list of EVPN type-2 / type-5 routes observed for the queried <code>vni</code>, filtered to MAC literals declared in the topology's host nodes.</li>
+<li>The <code>route_type</code> field may appear as either integer <code>2</code> or string <code>"2"</code> due to FRR's vtysh JSON output normalization; both forms are deterministic and pre-existing in the engine's evidence dedup.</li>
+</ul>
+<h3 id="47-evpn_mac_route_present-and-evpn_mac_route_absent">4.7) <code>evpn_mac_route_present</code> and <code>evpn_mac_route_absent</code></h3>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-9-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-9-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-9-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-9-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-9-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-9-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-9-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-9-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-9-10">10</a></span>
+<span class="normal"><a href="#__codelineno-9-11">11</a></span>
+<span class="normal"><a href="#__codelineno-9-12">12</a></span>
+<span class="normal"><a href="#__codelineno-9-13">13</a></span>
+<span class="normal"><a href="#__codelineno-9-14">14</a></span>
+<span class="normal"><a href="#__codelineno-9-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="p">{</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2"></a><span class="w">  </span><span class="nt">&quot;evpn_routes&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3"></a><span class="w">    </span><span class="p">{</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4"></a><span class="w">      </span><span class="nt">&quot;mac&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;MAC literal&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5"></a><span class="w">      </span><span class="nt">&quot;prefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;string, often empty&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6"></a><span class="w">      </span><span class="nt">&quot;rd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;string, often empty&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7"></a><span class="w">      </span><span class="nt">&quot;route_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="err">&lt;i</span><span class="kc">nt</span><span class="err">|s</span><span class="kc">tr</span><span class="err">i</span><span class="kc">n</span><span class="err">g&gt;</span><span class="p">,</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8"></a><span class="w">      </span><span class="nt">&quot;vni&quot;</span><span class="p">:</span><span class="w"> </span><span class="err">&lt;i</span><span class="kc">nt</span><span class="err">&gt;</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-9-10" name="__codelineno-9-10"></a><span class="w">  </span><span class="p">],</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11"></a><span class="w">  </span><span class="nt">&quot;mac&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;queried MAC literal&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-12" name="__codelineno-9-12"></a><span class="w">  </span><span class="nt">&quot;source_node&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;node where the test runs&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-13" name="__codelineno-9-13"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;evpn_mac_route_present&quot;</span><span class="p">,</span>
+<a id="__codelineno-9-14" name="__codelineno-9-14"></a><span class="w">  </span><span class="nt">&quot;vni&quot;</span><span class="p">:</span><span class="w"> </span><span class="err">&lt;i</span><span class="kc">nt</span><span class="err">&gt;</span>
+<a id="__codelineno-9-15" name="__codelineno-9-15"></a><span class="p">}</span>
+</code></pre></div></td></tr></table></div>
+<ul>
+<li><code>mac</code> is the test's queried MAC literal (lowercased canonical form).</li>
+<li><code>vni</code> is the test's queried VNI.</li>
+<li><code>evpn_routes</code> is filtered identically to §4.6 (declared host MACs only).</li>
+<li><code>evpn_mac_route_absent</code> payloads use <code>"type": "evpn_mac_route_absent"</code>; otherwise the schema is identical.</li>
+</ul>
+<h3 id="48-ospf_neighbor_up">4.8) <code>ospf_neighbor_up</code></h3>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1">1</a></span>
+<span class="normal"><a href="#__codelineno-10-2">2</a></span>
+<span class="normal"><a href="#__codelineno-10-3">3</a></span>
+<span class="normal"><a href="#__codelineno-10-4">4</a></span>
+<span class="normal"><a href="#__codelineno-10-5">5</a></span>
+<span class="normal"><a href="#__codelineno-10-6">6</a></span>
+<span class="normal"><a href="#__codelineno-10-7">7</a></span>
+<span class="normal"><a href="#__codelineno-10-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1"></a><span class="p">{</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2"></a><span class="w">  </span><span class="nt">&quot;expected_state&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;one of the 8 declarable FSM literals&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3"></a><span class="w">  </span><span class="nt">&quot;last_error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;string&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4"></a><span class="w">  </span><span class="nt">&quot;neighbor&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;IPv4 literal of the peer&#39;s OSPF router-ID&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5"></a><span class="w">  </span><span class="nt">&quot;source_node&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;node where the test runs&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6"></a><span class="w">  </span><span class="nt">&quot;state&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;one of the 10 FSM-literal closed-set members&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ospf_neighbor_up&quot;</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8"></a><span class="p">}</span>
+</code></pre></div></td></tr></table></div>
+<ul>
+<li><code>neighbor</code> is the test's <code>neighbor</code> field, which is an IPv4 literal of the peer's OSPF router-ID. Unlike <code>bgp_session_up</code> (which aliases user-facing <code>neighbor</code> to the canonical <code>dst</code>), <code>ospf_neighbor_up</code> keeps <code>neighbor</code> as the canonical field name; there is no aliasing.</li>
+<li><code>expected_state</code> is the test's declared <code>state</code> field (one of the 8 declarable FSM literals; default <code>Full</code> materialised at Resolve when the test omits the field, visible in <code>topology.resolved.yaml</code>).</li>
+<li><code>state</code> reflects the OSPF neighbor FSM state for the configured peer, drawn from a closed set of 10 literal members. The 8 <strong>declarable</strong> literals (any of which may be supplied via the test record's <code>state</code> field) reflect FRR's standard OSPF FSM transitions:</li>
+<li><code>Down</code> — initial state; no Hellos seen yet, or the neighbor went unreachable.</li>
+<li><code>Attempt</code> — non-broadcast network (NBMA) only; sending Hellos to a configured neighbor that has not yet responded.</li>
+<li><code>Init</code> — Hellos received from the neighbor but two-way communication has not yet been confirmed (own router-id absent from neighbor's Hello neighbor list).</li>
+<li><code>2-Way</code> — bidirectional Hello exchange confirmed (own router-id present in neighbor's Hello neighbor list); on broadcast networks, only DR/BDR proceed beyond this state.</li>
+<li><code>ExStart</code> — beginning of database synchronization; routers negotiate master/slave roles and initial sequence number.</li>
+<li><code>Exchange</code> — exchanging database description (DBD) packets summarizing each router's link-state database contents.</li>
+<li><code>Loading</code> — sending link-state requests for any link-state advertisements (LSAs) the neighbor advertised but the local router does not yet have.</li>
+<li><code>Full</code> — full adjacency formed; link-state databases synchronized; the neighbor is included in the local SPF computation. This is the steady-state value for a healthy OSPF adjacency.
+  The 2 <strong>observed-only</strong> literals (engine-synthesized; never declared in test records) signal the diagnostic shape of the failure:</li>
+<li><code>NotConfigured</code> — vtysh succeeded but the queried neighbor is not present in FRR's <code>show ip ospf neighbor json</code> output (e.g. Hellos rejected upstream due to area mismatch, network mismatch, or no OSPF activation on the link interface).</li>
+<li><code>Unknown</code> — vtysh failed, vtysh output cannot be parsed as JSON, or FRR returned an <code>nbrState</code> literal outside the 8 declarable members.</li>
+<li><code>last_error</code> is empty string <code>""</code> on the predicate-mismatch path (vtysh succeeded, JSON parsed, neighbor present, but observed FSM state does not match the declared <code>expected_state</code>); otherwise one of a closed set of engine-synthesized deterministic literal strings on the diagnostic paths: <code>"neighbor not present in ospf neighbor table"</code> when the queried neighbor's router-ID is not a key in FRR's neighbor dictionary; <code>"ospf neighbor table empty"</code> when FRR returned a neighbors dictionary that is structurally empty; <code>"vtysh command failed"</code> when the vtysh invocation returns a non-zero exit; <code>"vtysh output not parseable as JSON"</code> when vtysh succeeds but its output is not valid JSON; <code>"neighbor missing or invalid (expected non-empty IPv4 router-id literal)"</code> when the test record's <code>neighbor</code> field is absent or not an IPv4 literal (defensive validation at dispatch); <code>"src missing or empty"</code> when the test record's source node is absent or empty (defensive validation at dispatch).</li>
+<li>The runtime evaluator strips role-qualifier suffixes from FRR's <code>nbrState</code> field before mapping to the closed set: literals like <code>Full/DR</code>, <code>Full/Backup</code>, <code>Full/DROther</code>, <code>2-Way/DROther</code> are split on <code>/</code> and the leading FSM literal is used.</li>
+</ul>
+<p>The retry loop driving <code>expect: pass</code> evaluation uses LD-4 defaults: <code>timeout_s=60</code>, <code>retry_interval_s=1.0</code> (seconds). Both values may be overridden per-test via the test record's <code>timeout_s</code> and <code>retry_interval_s</code> fields. For <code>expect: fail</code>, evaluation is single-attempt (no retry).</p>
+<p>The test record additionally carries a <code>meta</code> audit-trail dict on every record (PASS or FAIL), with eight keys: <code>type</code>, <code>neighbor</code>, <code>expected_state</code>, <code>state</code>, <code>attempts</code>, <code>timeout_s</code>, <code>retry_interval_s</code>, <code>last_rc</code>. The <code>meta</code> dict is a sibling field of <code>observed_state</code> and is NOT subject to the FAIL-only emission gate; it is present on PASS records as well.</p>
+<p>OSPF topology declaration (companion schema): each FRR node in the topology may declare an <code>ospf:</code> block carrying <code>area:</code> (integer ≥ 0, required) and <code>networks:</code> (non-empty list of canonical IPv4 CIDR strings, required); no other keys are accepted (Unknown-Key Strictness; timer customization keys such as <code>hello-interval</code>, <code>dead-interval</code>, <code>spf-delay</code> are out of scope and rejected). Declaring <code>ospf:</code> requires the node also declare a top-level <code>router_id</code> (single-area-per-node only — multi-area is out of scope).</p>
+<hr />
+<h3 id="49-interface_state">4.9) <code>interface_state</code></h3>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-11-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-11-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-11-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-11-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-11-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-11-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-11-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-11-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-11-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="p">{</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2"></a><span class="w">  </span><span class="nt">&quot;admin_state&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;one of: up, down, unknown&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3"></a><span class="w">  </span><span class="nt">&quot;carrier&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;one of: present, absent, unknown&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4"></a><span class="w">  </span><span class="nt">&quot;expected_state&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;one of: up, down&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5"></a><span class="w">  </span><span class="nt">&quot;interface&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;interface name, e.g. eth1&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6"></a><span class="w">  </span><span class="nt">&quot;last_error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;string&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7"></a><span class="w">  </span><span class="nt">&quot;operstate&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;one of the 7 RFC 2863 closed-set literals&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8"></a><span class="w">  </span><span class="nt">&quot;source_node&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;node where the test runs&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-11-9" name="__codelineno-11-9"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;interface_state&quot;</span>
+<a id="__codelineno-11-10" name="__codelineno-11-10"></a><span class="p">}</span>
+</code></pre></div></td></tr></table></div>
+<ul>
+<li><code>interface</code> is the test's <code>interface</code> field, which is the interface name as seen inside the node's network namespace (e.g. <code>eth1</code>). Unlike OSPF (<code>neighbor</code> is an IPv4 router-ID), this is an OS-level interface identifier.</li>
+<li><code>expected_state</code> is the test's declared <code>state</code> field (one of <code>up</code> or <code>down</code>; default <code>up</code> materialised at Resolve when the test omits the field, visible in <code>topology.resolved.yaml</code>).</li>
+<li><code>source_node</code> is the user-facing <code>node</code> field as declared in the test record; the resolver aliases user-facing <code>node</code> to the internal <code>src</code> field, and the rendered <code>source_node</code> reflects the user-facing value.</li>
+<li><code>admin_state</code> reflects the kernel's administrative interface flag (the presence of the <code>UP</code> flag in <code>ip -j link show &lt;iface&gt;</code> JSON output), drawn from the closed set <code>{up, down, unknown}</code>. <code>unknown</code> appears only on diagnostic paths where probe succeeded but flag extraction did not produce a definitive value.</li>
+<li><code>operstate</code> reflects the kernel's operational interface state, drawn from a closed set of 7 RFC 2863 literals: <code>UP</code>, <code>DOWN</code>, <code>UNKNOWN</code>, <code>LOWERLAYERDOWN</code>, <code>NOTPRESENT</code>, <code>TESTING</code>, <code>DORMANT</code>. Any value outside this set is mapped to <code>UNKNOWN</code> AND triggers <code>last_error: "ip output structurally unexpected"</code>.</li>
+<li><code>carrier</code> reflects the kernel's link-layer carrier signal (the presence of the <code>LOWER_UP</code> flag in <code>ip -j link show &lt;iface&gt;</code> JSON output), drawn from the closed set <code>{present, absent, unknown}</code>. <code>carrier</code> is reported in <code>observed_state</code> for operator diagnosis but does NOT participate in the verdict predicate (see asymmetry note below).</li>
+<li><code>last_error</code> is empty string <code>""</code> on the predicate-mismatch path (probe succeeded, JSON parsed, interface present, but observed <code>admin_state</code>/<code>operstate</code> did not match the declared <code>expected_state</code>); otherwise one of a closed set of engine-synthesized deterministic literal strings on the diagnostic paths: <code>"ip -j flag not supported by node's iproute2"</code> when the node's <code>ip</code> binary does not support the <code>-j</code> JSON flag (typically BusyBox <code>ip</code>; see iproute2 capability dependency below); <code>"interface not present"</code> when <code>ip</code> exits non-zero with stderr indicating the interface does not exist; <code>"ip command failed"</code> when <code>ip</code> exits non-zero for other reasons (permission, namespace error, etc.); <code>"ip output not parseable as JSON"</code> when <code>ip</code> exits zero but stdout is not valid JSON; <code>"ip output structurally unexpected"</code> when the parsed JSON shape is not a list of one dict OR <code>operstate</code> is outside the 7-literal closed set; <code>"interface field missing or empty"</code> and <code>"node field missing or empty"</code> when the dispatch-time defensive checks fire (Resolve enforces both fields; these defensive paths exist for future-regression resilience).</li>
+</ul>
+<p>The verdict predicate is <strong>asymmetric</strong> between the two declarable states:</p>
+<ul>
+<li><code>state: up</code> requires <code>admin_state == "up"</code> AND <code>operstate == "UP"</code> (conjunction; both must hold).</li>
+<li><code>state: down</code> requires <code>admin_state == "down"</code> OR <code>operstate != "UP"</code> (disjunction; either suffices).</li>
+</ul>
+<p>The asymmetry reflects an operator-correctness principle: a confidently-up interface requires both administrative and operational confirmation, while a confidently-down interface need only fail either confirmation. <code>carrier</code> is orthogonal to both predicates and is reported in <code>observed_state</code> for diagnostic clarity (an admin-up interface with <code>carrier: absent</code> is a meaningful operator signal even when the verdict resolves to <code>pass</code> via the <code>state: up</code> conjunction failing).</p>
+<p>The retry loop driving <code>expect: pass</code> evaluation uses LD-2 defaults: <code>timeout_s=10</code>, <code>retry_interval_s=0.5</code> (seconds). Both values may be overridden per-test via the test record's <code>timeout_s</code> and <code>retry_interval_s</code> fields. For <code>expect: fail</code>, evaluation is single-attempt (no retry).</p>
+<p>The test record additionally carries a <code>meta</code> audit-trail dict on every record (PASS or FAIL), with seven keys: <code>type</code>, <code>interface</code>, <code>expected_state</code>, <code>attempts</code>, <code>timeout_s</code>, <code>retry_interval_s</code>, <code>last_rc</code>. The <code>meta</code> dict is a sibling field of <code>observed_state</code> and is NOT subject to the FAIL-only emission gate; it is present on PASS records as well. Note that <code>meta</code> does NOT carry a <code>state</code> key — operators read the three orthogonal axes <code>admin_state</code>, <code>operstate</code>, <code>carrier</code> from the FAIL record's <code>observed_state</code> instead.</p>
+<p>iproute2 capability dependency (companion schema constraint): the runtime probe uses <code>ip -j link show &lt;iface&gt;</code> and requires an <code>ip</code> binary that supports the <code>-j</code> JSON flag. BusyBox <code>ip</code> (the default in <code>alpine:latest</code>, which is the engine's default image for <code>host</code> and <code>nft-fw</code> node types) does NOT support <code>-j</code> and produces non-JSON help-text output on the unrecognized flag. Topologies exercising <code>interface_state</code> on <code>host</code> or <code>nft-fw</code> nodes MUST pin an image with full iproute2 (e.g. <code>nicolaka/netshoot:v0.15</code>) explicitly in the node declaration. FRR's default image (<code>frrouting/frr:latest</code>) already includes full iproute2 and requires no override. The engine performs a per-(lab, node) capability probe at first use; on capability-probe failure, the per-test record fails with <code>last_error: "ip -j flag not supported by node's iproute2"</code> and the operator is directed to pin a compatible image.</p>
+<h3 id="410-bgp_community">4.10) <code>bgp_community</code></h3>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-12-1">1</a></span>
+<span class="normal"><a href="#__codelineno-12-2">2</a></span>
+<span class="normal"><a href="#__codelineno-12-3">3</a></span>
+<span class="normal"><a href="#__codelineno-12-4">4</a></span>
+<span class="normal"><a href="#__codelineno-12-5">5</a></span>
+<span class="normal"><a href="#__codelineno-12-6">6</a></span>
+<span class="normal"><a href="#__codelineno-12-7">7</a></span>
+<span class="normal"><a href="#__codelineno-12-8">8</a></span>
+<span class="normal"><a href="#__codelineno-12-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="p">{</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2"></a><span class="w">  </span><span class="nt">&quot;actual_communities&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="err">&lt;sor</span><span class="kc">te</span><span class="err">d</span><span class="w"> </span><span class="err">observed</span><span class="w"> </span><span class="err">commu</span><span class="kc">n</span><span class="err">i</span><span class="kc">t</span><span class="err">y</span><span class="w"> </span><span class="err">s</span><span class="kc">tr</span><span class="err">i</span><span class="kc">n</span><span class="err">gs&gt;</span><span class="p">],</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3"></a><span class="w">  </span><span class="nt">&quot;expected_communities&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="err">&lt;declared</span><span class="w"> </span><span class="err">commu</span><span class="kc">n</span><span class="err">i</span><span class="kc">t</span><span class="err">y</span><span class="w"> </span><span class="err">s</span><span class="kc">tr</span><span class="err">i</span><span class="kc">n</span><span class="err">gs&gt;</span><span class="p">],</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4"></a><span class="w">  </span><span class="nt">&quot;match&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;any|all, or empty string when `expected` is scalar&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5"></a><span class="w">  </span><span class="nt">&quot;prefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;CIDR&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6"></a><span class="w">  </span><span class="nt">&quot;route_present&quot;</span><span class="p">:</span><span class="w"> </span><span class="err">&lt;</span><span class="kc">true</span><span class="err">|</span><span class="kc">false</span><span class="err">&gt;</span><span class="p">,</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7"></a><span class="w">  </span><span class="nt">&quot;source_node&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;node where the test runs&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-12-8" name="__codelineno-12-8"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;bgp_community&quot;</span>
+<a id="__codelineno-12-9" name="__codelineno-12-9"></a><span class="p">}</span>
+</code></pre></div></td></tr></table></div>
+<ul>
+<li><code>actual_communities</code> is the community set observed on the BGP route, normalised and emitted <strong>sorted</strong> (the route community set is semantically unordered); it is empty when the route carries no communities or when the route is absent.</li>
+<li><code>expected_communities</code> is the test's declared <code>expected</code>, always rendered as a list (a scalar <code>expected</code> becomes a one-element list).</li>
+<li><code>match</code> carries the declared selector (<code>any</code> or <code>all</code>) for a list <code>expected</code>; it is an empty string for a scalar <code>expected</code>.</li>
+<li><code>route_present</code> is <code>false</code> when no BGP route exists for <code>prefix</code> at the node; a route-absent outcome is rendered as a graceful failure (present-half record), never a silent pass.</li>
+<li>A community specifier is a literal <code>AS:VAL</code> token or a well-known token (<code>no-export</code>, <code>no-advertise</code>, <code>local-AS</code>, <code>internet</code>); <code>internet</code> normalises to community <code>0:0</code> in FRR JSON form. Well-known tokens are normalised on both the declared and observed sides before comparison.</li>
+<li>Match semantics: a scalar <code>expected</code> passes iff the community is a member of the observed set; a list with <code>match: any</code> passes iff the declared and observed sets intersect; a list with <code>match: all</code> passes iff the declared set is a subset of the observed set.</li>
+</ul>
+<h3 id="411-bgp_as_path">4.11) <code>bgp_as_path</code></h3>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-13-1">1</a></span>
+<span class="normal"><a href="#__codelineno-13-2">2</a></span>
+<span class="normal"><a href="#__codelineno-13-3">3</a></span>
+<span class="normal"><a href="#__codelineno-13-4">4</a></span>
+<span class="normal"><a href="#__codelineno-13-5">5</a></span>
+<span class="normal"><a href="#__codelineno-13-6">6</a></span>
+<span class="normal"><a href="#__codelineno-13-7">7</a></span>
+<span class="normal"><a href="#__codelineno-13-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1"></a><span class="p">{</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2"></a><span class="w">  </span><span class="nt">&quot;actual_as_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;observed AS-path, space-separated in path order&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3"></a><span class="w">  </span><span class="nt">&quot;expected_pattern&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;declared as_path regular expression&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4"></a><span class="w">  </span><span class="nt">&quot;prefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;CIDR&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5"></a><span class="w">  </span><span class="nt">&quot;route_present&quot;</span><span class="p">:</span><span class="w"> </span><span class="err">&lt;</span><span class="kc">true</span><span class="err">|</span><span class="kc">false</span><span class="err">&gt;</span><span class="p">,</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6"></a><span class="w">  </span><span class="nt">&quot;source_node&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;node where the test runs&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-13-7" name="__codelineno-13-7"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;bgp_as_path&quot;</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8"></a><span class="p">}</span>
+</code></pre></div></td></tr></table></div>
+<ul>
+<li><code>actual_as_path</code> is the AS-path attribute observed on the BGP route, normalised to a space-separated string of AS numbers <strong>in path order</strong> (path order is semantically significant and is never sorted); it is empty when the route carries no AS-path or when the route is absent.</li>
+<li><code>expected_pattern</code> is the test's declared <code>as_path</code> regular expression, rendered verbatim.</li>
+<li><code>route_present</code> is <code>false</code> when no BGP route exists for <code>prefix</code> at the node; a route-absent outcome is rendered as a graceful failure (present-half record), never a silent pass.</li>
+<li>The <code>as_path</code> value is a regular expression matched with <code>re.search</code> against the canonical AS-path string; operator-supplied <code>^</code> / <code>$</code> anchors are honoured per the BGP-regex idiom. The FRR-native <code>_</code> idiom (a path delimiter: start, space, or end) is supported and translated deterministically to a delimiter alternation before compilation.</li>
+<li>AS numbers are read in <strong>asplain</strong> notation as FRR emits them; BGP AS-confederation handling and 4-byte AS distinctions beyond FRR's native parsing are out of scope (the regex matches whatever FRR JSON delivers).</li>
+<li><code>parse_error</code> is included in the payload only when the FRR JSON for the route could not be parsed; it is absent on the normal path.</li>
+</ul>
+<hr />
+<h2 id="5-summary-rendering">5) Summary Rendering</h2>
+<p>A failed-invariant record's <code>observed_state</code> is rendered by the summary renderer as a multi-line <code>observed:</code> block immediately under the failed-test line in <code>results.summary.txt</code>. The rendering is deterministic and indentation-fixed.</p>
+<p>Rendering rules:</p>
+<ul>
+<li>the block header (<code>observed:</code>) is at 4-space indent</li>
+<li>each <code>&lt;key&gt;: &lt;value&gt;</code> line is at 6-space indent in canonical-sorted key order</li>
+<li>list-bearing keys (<code>routes</code>, <code>advertised_routes</code>, <code>evpn_routes</code>) render multi-line at 8-space indent</li>
+<li>lists render up to 5 entries with a trailing <code>(+&lt;N&gt; more)</code> line at 8-space indent when the source list exceeds the cap</li>
+<li>empty lists render inline as <code>[]</code></li>
+<li>when <code>observed_state_truncated: true</code>, the renderer emits the trailing line <code>(observed_state truncated; full payload in results.json)</code> at 6-space indent (the post-truncation list cap and the truncation marker line can co-occur)</li>
+</ul>
+<p>When a failed-invariant record's <code>observed_state</code> is absent or non-dict, the present <code>observed:</code> block above cannot be rendered; the renderer then emits an explicit <strong>absence indicator</strong> in its place — never silence — so a failed invariant always surfaces an <code>observed:</code> block in one of two forms (present payload block, or absence indicator). The absence indicator uses the same <code>observed:</code> header at 4-space indent with 6-space <code>&lt;key&gt;: &lt;value&gt;</code> lines, carrying, in order: <code>type:</code> (the specific invariant type), <code>target:</code> (the invariant's source node plus its declaration-derived locator, e.g. <code>peer=</code> / <code>prefix=</code> / <code>neighbor=</code>), <code>expected:</code> (the declared expectation), and a literal <code>detail: (structured failure detail unavailable for this invariant type)</code> line. Per the §3.2 determinism contract, only declared and declaration-derived locator fields enter <code>target:</code>; runtime-variant tokens are excluded, so the indicator is byte-stable across runs.</p>
+<p><code>results.summary.txt</code> is human-only and non-authoritative. The structured <code>observed_state</code> in <code>results.json</code> is the authoritative artifact.</p>
+<hr />
+<h2 id="6-suppression-rules">6) Suppression Rules</h2>
+<p>The present <code>observed:</code> payload block is NEVER rendered on:</p>
+<ul>
+<li>passing-invariant records (<code>verdict == "pass"</code>)</li>
+<li>non-invariant test kinds (<code>ping</code>, <code>tcp</code>, <code>bgp_neighbor</code>)</li>
+<li><code>prereq</code> failure paths (those surface as <code>hard_failure:</code> in the summary, not as <code>failed_tests:</code> entries)</li>
+</ul>
+<p>The above rules guarantee that v1.x topologies exercising only <code>ping</code> / <code>tcp</code> / <code>bgp_neighbor</code> produce <code>results.summary.txt</code> byte-identical to pre-v1.5 output.</p>
+<p>A failed-invariant record with a missing or non-dict <code>observed_state</code> field (defensive — should not occur in normal runs) is NOT a suppression case: the present payload block is omitted, but the explicit absence indicator (§5) renders in its place, so a failed invariant never produces a silent <code>observed:</code>-less line.</p>
+<hr />
+<h2 id="7-cross-references">7) Cross-references</h2>
+<ul>
+<li>The supported invariant evaluator dispatch is implemented in <code>cassian_engine.py</code> <code>run_invariant_test</code>.</li>
+<li>
+<p>The <code>exec</code> user-defined-invariant evaluator dispatch is implemented in <code>cassian_engine.py</code> <code>run_exec_test</code> and the assertion evaluator <code>_eval_exec_assertion</code>; resolve-time validation (closed keys, derived-type allow-list, typed-assertion schema) is in <code>cassian_model.py</code>.</p>
+</li>
+<li>
+<p>The summary rendering is implemented in <code>cassian_tests.py</code> <code>_format_test_summary</code> and its <code>_format_observed_state_*</code> helpers.</p>
+</li>
+<li>The truncation discipline is implemented in <code>cassian_engine.py</code> <code>_observed_state_finalize_in_results</code> and <code>_observed_state_truncate</code>.</li>
+<li>The negative-case proof topology exercising one invariant per category lives at <code>topologies/neg/h2_invariant_observability_demo.yaml</code>.</li>
+<li>The synthetic large-payload truncation fixture lives at <code>topologies/neg/h2_truncation_proof.yaml</code>.</li>
+<li>The positive proof topology exercising <code>ospf_neighbor_up</code> end-to-end (area 0 mutual, expect: pass) lives at <code>topologies/ospf_neighbor_up.yaml</code>.</li>
+<li>The negative proof topology demonstrating the mismatched-area FAIL pathology and the deterministic six-key <code>observed_state</code> payload lives at <code>topologies/neg/ospf_neighbor_up_mismatched_area.yaml</code>.</li>
+</ul>
+<hr />
+<h2 id="8-what-this-schema-guide-does-not-do">8) What This Schema Guide Does NOT Do</h2>
+<p>This document does not:</p>
+<ul>
+<li>enumerate every BGP / EVPN protocol semantic — those are FRR's responsibility</li>
+<li>document scenario actions or fault choreography (see <code>docs/topology-schema-v1.md</code> §6)</li>
+<li>document the v1.x test types (<code>ping</code>, <code>tcp</code>, <code>bgp_neighbor</code>) — those remain in <code>docs/topology-schema-v1.md</code></li>
+<li>document Cassian Gate's CLI — see <code>cassian --help</code></li>
+</ul>
+<hr />
+<p><strong>End of Cassian Gate v1.5 Topology Schema Guide — Invariant Tests and observed_state</strong></p>
+<hr />
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.instant", "navigation.top", "search.highlight", "search.suggest", "content.code.copy", "content.code.annotate", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

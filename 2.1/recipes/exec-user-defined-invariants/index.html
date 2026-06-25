@@ -1,0 +1,1785 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Deterministic pre-production network change validation gate.">
+      
+      
+      
+        <link rel="canonical" href="https://docs.cassiangate.dev/latest/recipes/exec-user-defined-invariants/">
+      
+      
+        <link rel="prev" href="../../cheatsheet/">
+      
+      
+        <link rel="next" href="../ai-change-reference-case/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/favicon.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Writing a user-defined invariant - Cassian Gate</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  
+  
+  <meta property="og:image" content="https://docs.cassiangate.dev/latest/assets/og-image.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="https://docs.cassiangate.dev/latest/assets/og-image.png">
+
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#recipe-writing-a-user-defined-invariant-exec" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Cassian Gate" class="md-header__button md-logo" aria-label="Cassian Gate" data-md-component="logo">
+      
+  <img src="../../assets/favicon.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Cassian Gate
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Writing a user-defined invariant
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../topology-schema-v1.5/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Topology Schema Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../topology-schema-v1/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Legacy schema (v1)
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../cli-reference-v1/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  CLI Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../cheatsheet/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Cheatsheet
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="./" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Writing a user-defined invariant
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../ai-change-reference-case/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  The AI-change reference case
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../ci/github-actions/" class="md-tabs__link">
+          
+  
+  
+  CI Integration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../input-adapters/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Input Adapters
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../brownfield-importer/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Brownfield Importer
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../admin-guide-v1/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Admin Guide
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../vm-runtime-capabilities/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  VM Runtime Capabilities
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../proof-kit/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Proof Kit / Examples
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../audit-grade-evidence/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Audit-Grade Evidence
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../ai/" class="md-tabs__link">
+          
+  
+  
+  AI Advisory
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../extensions/extension-and-adoption/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Extension & Adoption
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../project-principles/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Project principles
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../scope-discipline/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Scope and scale discipline
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Cassian Gate" class="md-nav__button md-logo" aria-label="Cassian Gate" data-md-component="logo">
+      
+  <img src="../../assets/favicon.svg" alt="logo">
+
+    </a>
+    Cassian Gate
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../topology-schema-v1.5/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Topology Schema Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../topology-schema-v1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy schema (v1)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli-reference-v1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cheatsheet/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cheatsheet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Writing a user-defined invariant
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Writing a user-defined invariant
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-shape" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The shape
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-by-step" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step by step
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-worked-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A worked example
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-assertion-menu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The assertion menu
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#negative-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Negative invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-it-and-reading-the-result" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running it and reading the result
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ai-change-reference-case/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The AI-change reference case
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CI Integration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    CI Integration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ci/github-actions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitHub Actions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ci/gitlab-ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitLab CI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../input-adapters/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Input Adapters
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../brownfield-importer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Brownfield Importer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin-guide-v1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Admin Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../vm-runtime-capabilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VM Runtime Capabilities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../proof-kit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Proof Kit / Examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../audit-grade-evidence/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Audit-Grade Evidence
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_16" id="__nav_16_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI Advisory
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    AI Advisory
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ai/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ai/guardrails/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guardrails
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ai/cli-contract-ai/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ai/online_ai/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Online AI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../extensions/extension-and-adoption/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Extension & Adoption
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../project-principles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project principles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scope-discipline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scope and scale discipline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-shape" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The shape
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#step-by-step" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step by step
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-worked-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A worked example
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-assertion-menu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The assertion menu
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#negative-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Negative invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-it-and-reading-the-result" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running it and reading the result
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="recipe-writing-a-user-defined-invariant-exec">Recipe: Writing a user-defined invariant (<code>exec</code>)</h1>
+<p>Cassian Gate ships a fixed catalog of built-in invariants — BGP session up, route present, interface state, and so on (see the <a href="../../topology-schema-v1.5/">Topology Schema Reference</a>). When the truth you need to assert isn't in that catalog, a <strong>user-defined invariant</strong> lets you write it yourself: pick a node, run a read-only command on it, and assert something about the output. The result is authoritative — it passes or fails the gate exactly like a built-in check.</p>
+<p>This recipe shows you how to write one.</p>
+<h2 id="the-shape">The shape</h2>
+<p>A user-defined invariant is a test with <code>kind: exec</code>:</p>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span>
+<span class="normal"><a href="#__codelineno-0-2">2</a></span>
+<span class="normal"><a href="#__codelineno-0-3">3</a></span>
+<span class="normal"><a href="#__codelineno-0-4">4</a></span>
+<span class="normal"><a href="#__codelineno-0-5">5</a></span>
+<span class="normal"><a href="#__codelineno-0-6">6</a></span>
+<span class="normal"><a href="#__codelineno-0-7">7</a></span>
+<span class="normal"><a href="#__codelineno-0-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="nt">tests</span><span class="p">:</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my_check</span><span class="w">                     </span><span class="c1"># a name you choose</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">exec</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="nt">src</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">r1</span><span class="w">                            </span><span class="c1"># the node to run on</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">vtysh -c &quot;show version&quot;</span><span class="w">   </span><span class="c1"># a read-only command</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="w">    </span><span class="nt">assertion</span><span class="p">:</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="w">      </span><span class="nt">contains</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">FRRouting</span><span class="w">              </span><span class="c1"># what must be true about the output</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="nt">expect</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pass</span><span class="w">                       </span><span class="c1"># pass = the assertion should hold</span>
+</code></pre></div></td></tr></table></div>
+<p>That's the whole anatomy. The four moving parts are the <strong>node</strong>, the <strong>command</strong>, the <strong>assertion</strong>, and the <strong>expectation</strong>.</p>
+<h2 id="step-by-step">Step by step</h2>
+<p><strong>1. Name it and point it at a node.</strong> <code>src</code> is the node the command runs on — it must be a node in your <code>nodes:</code> list. Cassian works out the node's type itself; today that type has to be <code>frr</code> or <code>nft-fw</code>.</p>
+<p><strong>2. Give it a read-only command.</strong> Cassian only allows commands that <em>read</em> state, never change it:</p>
+<ul>
+<li>on an <code>frr</code> node: <code>vtysh -c "show …"</code> (any <code>show</code> command)</li>
+<li>on an <code>nft-fw</code> node: <code>nft list …</code> (e.g. <code>nft list ruleset</code>)</li>
+</ul>
+<p>Anything else — a config change, a raw shell — is rejected when you run <code>cassian validate</code>, before anything is deployed.</p>
+<p><strong>3. Assert something about the output.</strong> You attach exactly one typed check (no freeform grepping). The simplest is <code>contains</code>:</p>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span>
+<span class="normal"><a href="#__codelineno-1-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="nt">assertion</span><span class="p">:</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">  </span><span class="nt">contains</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">FRRouting</span>
+</code></pre></div></td></tr></table></div>
+<p>The full menu is below.</p>
+<p><strong>4. Say what you expect.</strong> <code>expect: pass</code> means "this assertion should hold." <code>expect: fail</code> flips it — "this assertion should <em>not</em> hold" — which is how you write a negative invariant (see <a href="#negative-invariants">Negative invariants</a>).</p>
+<h2 id="a-worked-example">A worked example</h2>
+<p>Say you want to assert <em>"on r1, the BGP session to 10.0.0.2 is established."</em> That state lives in <code>show bgp summary json</code>, so reach into that JSON:</p>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-2-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-2-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-2-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-2-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-2-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-2-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-2-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-2-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-2-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">bgp_peer_established</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">exec</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="nt">src</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">r1</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">vtysh -c &quot;show bgp summary json&quot;</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5"></a><span class="w">    </span><span class="nt">assertion</span><span class="p">:</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="w">      </span><span class="nt">field</span><span class="p">:</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7"></a><span class="w">        </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">ipv4Unicast</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">peers</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;10.0.0.2&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">state</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="w">        </span><span class="nt">op</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;==&quot;</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9"></a><span class="w">        </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Established</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10"></a><span class="w">    </span><span class="nt">expect</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pass</span>
+</code></pre></div></td></tr></table></div>
+<p>In plain English: run the command, parse the output as JSON, walk down into <code>ipv4Unicast</code> → <code>peers</code> → the entry for <code>10.0.0.2</code> → its <code>state</code>, and check that value equals <code>Established</code>. Each item in <code>path</code> is one step down. (<code>"10.0.0.2"</code> is quoted because it's a key that contains dots — quoting keeps it as one literal step rather than four.)</p>
+<h2 id="the-assertion-menu">The assertion menu</h2>
+<p>Pick exactly one:</p>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
+<span class="normal"><a href="#__codelineno-3-2">2</a></span>
+<span class="normal"><a href="#__codelineno-3-3">3</a></span>
+<span class="normal"><a href="#__codelineno-3-4">4</a></span>
+<span class="normal"><a href="#__codelineno-3-5">5</a></span>
+<span class="normal"><a href="#__codelineno-3-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="nt">assertion</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> contains</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;FRRouting&quot;</span><span class="w"> </span><span class="p p-Indicator">}</span><span class="w">                 </span><span class="c1"># text is present in the output</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="nt">assertion</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> not_contains</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Idle&quot;</span><span class="w"> </span><span class="p p-Indicator">}</span><span class="w">                  </span><span class="c1"># text is absent</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="nt">assertion</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> equals</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;exact</span><span class="nv"> </span><span class="s">whole</span><span class="nv"> </span><span class="s">output&quot;</span><span class="w"> </span><span class="p p-Indicator">}</span><span class="w">          </span><span class="c1"># trimmed output equals this exactly</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="nt">assertion</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> matches</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;neighbor</span><span class="nv"> </span><span class="s">.*</span><span class="nv"> </span><span class="s">Established&quot;</span><span class="w"> </span><span class="p p-Indicator">}</span><span class="w">    </span><span class="c1"># regex matches somewhere in the output</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="nt">assertion</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> count</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Established&quot;</span><span class="p p-Indicator">,</span><span class="nt"> op</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&gt;=&quot;</span><span class="p p-Indicator">,</span><span class="nt"> value</span><span class="p">:</span><span class="w"> </span><span class="nv">2</span><span class="w"> </span><span class="p p-Indicator">}</span><span class="w"> </span><span class="p p-Indicator">}</span><span class="w">   </span><span class="c1"># regex appears N times</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="nt">assertion</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> field</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> path</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">k1</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;k2&quot;</span><span class="p p-Indicator">],</span><span class="nt"> op</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;==&quot;</span><span class="p p-Indicator">,</span><span class="nt"> value</span><span class="p">:</span><span class="w"> </span><span class="nv">X</span><span class="w"> </span><span class="p p-Indicator">}</span><span class="w"> </span><span class="p p-Indicator">}</span><span class="w">        </span><span class="c1"># reach into JSON output</span>
+</code></pre></div></td></tr></table></div>
+<p>A few things worth knowing up front:</p>
+<ul>
+<li><strong>Quote the operators and any dotted keys</strong> — <code>op: "=="</code>, <code>op: "&gt;="</code>, and <code>path: [..., "10.0.0.2", ...]</code> — so YAML reads them as text rather than guessing.</li>
+<li><strong><code>field</code> needs JSON.</strong> Use a command whose output is JSON (e.g. <code>show bgp summary json</code>), and note it walks <em>dictionary</em> keys — it reads <code>{...: {...: value}}</code> shapes, not list positions.</li>
+<li><strong><code>==</code> is exact and type-aware.</strong> <code>"Established"</code> won't match <code>"established"</code> or a number. <code>&gt;=</code> and <code>&lt;=</code> only work on numbers.</li>
+<li><strong>A missing thing is a fail, not a crash.</strong> If the output can't be parsed, a key isn't there, or the command times out, the check simply records <code>observed: fail</code> — safely. It never errors out, and it never silently passes.</li>
+</ul>
+<h2 id="negative-invariants">Negative invariants</h2>
+<p><code>expect: fail</code> lets you assert that something must <em>not</em> be true. For example, "the BGP peer must not be stuck in Idle":</p>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-4-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-4-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-4-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-4-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-4-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-4-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-4-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-4-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-4-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">bgp_peer_not_idle</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">exec</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">    </span><span class="nt">src</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">r1</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">vtysh -c &quot;show bgp summary json&quot;</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5"></a><span class="w">    </span><span class="nt">assertion</span><span class="p">:</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6"></a><span class="w">      </span><span class="nt">field</span><span class="p">:</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7"></a><span class="w">        </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">ipv4Unicast</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">peers</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;10.0.0.2&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">state</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8"></a><span class="w">        </span><span class="nt">op</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;==&quot;</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9"></a><span class="w">        </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Idle</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10"></a><span class="w">    </span><span class="nt">expect</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fail</span>
+</code></pre></div></td></tr></table></div>
+<p>The assertion <em>looks for</em> <code>Idle</code>; <code>expect: fail</code> says you expect it not to match. So if the peer really is Idle, the assertion holds → the gate fails. If it's anything else, the assertion doesn't hold → the gate passes. (An evaluation error always counts as a fail, so a broken check can never accidentally satisfy a negative invariant.)</p>
+<h2 id="running-it-and-reading-the-result">Running it and reading the result</h2>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span>
+<span class="normal"><a href="#__codelineno-5-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1"></a>cassian<span class="w"> </span>validate<span class="w"> </span>&lt;topology.yaml&gt;<span class="w">    </span><span class="c1"># checks your exec test is well-formed (no deploy)</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2"></a>cassian<span class="w"> </span><span class="nb">test</span><span class="w"> </span>&lt;topology.yaml&gt;<span class="w">        </span><span class="c1"># deploys, runs it, writes the authoritative result</span>
+</code></pre></div></td></tr></table></div>
+<p>After a run, the authoritative result is <code>labs/clab-&lt;lab&gt;/results.json</code>; <code>results.summary.txt</code> is the human-readable view. A passing <code>exec</code> record carries the command, the assertion, and the captured output as evidence. A <em>failing</em> one additionally carries an <code>observed:</code> block showing exactly what was seen — so you can read why it didn't match.</p>
+<p>One tip while you're iterating: the gate stops at the first failing test by default. To run every test regardless (handy when you have several invariants in flight), add <code>--keep-going</code>:</p>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1"></a>cassian<span class="w"> </span><span class="nb">test</span><span class="w"> </span>&lt;topology.yaml&gt;<span class="w"> </span>--keep-going
+</code></pre></div></td></tr></table></div>
+<h2 id="see-also">See also</h2>
+<ul>
+<li><a href="../../topology-schema-v1.5/">Topology Schema Reference §2a</a> — the formal <code>exec</code> schema: the full key set, the read-only allow-list, and the typed-assertion contract.</li>
+<li><a href="../../cheatsheet/">Cheatsheet</a> — quick syntax reference and the four-quadrant verdict table.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.instant", "navigation.top", "search.highlight", "search.suggest", "content.code.copy", "content.code.annotate", "toc.follow"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
