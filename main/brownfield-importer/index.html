@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://docs.cassiangate.dev/latest/proof-kit/">
+        <link rel="canonical" href="https://docs.cassiangate.dev/latest/brownfield-importer/">
       
       
-        <link rel="prev" href="../vm-runtime-capabilities/">
+        <link rel="prev" href="../input-adapters/">
       
       
-        <link rel="next" href="../audit-grade-evidence/">
+        <link rel="next" href="../admin-guide-v1/">
       
       
         
@@ -27,7 +27,7 @@
     
     
       
-        <title>Proof Kit / Examples - Cassian Gate</title>
+        <title>Brownfield Importer - Cassian Gate</title>
       
     
     
@@ -88,7 +88,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#proof-kit-examples" class="md-skip">
+        <a href="#brownfield-importer" class="md-skip">
           Skip to content
         </a>
       
@@ -125,7 +125,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Proof Kit / Examples
+              Brownfield Importer
             
           </span>
         </div>
@@ -415,9 +415,11 @@
   
   
   
+    
   
-    <li class="md-tabs__item">
-      <a href="../brownfield-importer/" class="md-tabs__link">
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="./" class="md-tabs__link">
         
   
   
@@ -472,11 +474,9 @@
   
   
   
-    
   
-  
-    <li class="md-tabs__item md-tabs__item--active">
-      <a href="./" class="md-tabs__link">
+    <li class="md-tabs__item">
+      <a href="../proof-kit/" class="md-tabs__link">
         
   
   
@@ -977,10 +977,37 @@
       
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../brownfield-importer/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Brownfield Importer
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -996,6 +1023,81 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#source-directory-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Source directory layout
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#input-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Input contract
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-it-produces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What it produces
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#guarantees" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Guarantees
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#status-and-roadmap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Status and roadmap
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1058,37 +1160,10 @@
       
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Proof Kit / Examples
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../proof-kit/" class="md-nav__link">
         
   
   
@@ -1104,114 +1179,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#first-run-proof" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        First-Run Proof
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#recipe-can-host-a-reach-host-b" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Recipe — Can host A reach host B?
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#recipe-does-this-firewall-block-or-allow-a-port" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Recipe — Does this firewall block or allow a port?
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#recipe-does-validation-fail-when-a-link-drops" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Recipe — Does validation fail when a link drops?
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#recipe-what-changed-between-baseline-and-change" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Recipe — What changed between baseline and change?
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#recipe-how-do-i-validate-an-iac-change" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Recipe — How do I validate an IaC change?
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#recipe-what-does-my-gate-actually-cover" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Recipe — What does my gate actually cover?
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#recipe-what-coverage-gaps-do-i-have" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Recipe — What coverage gaps do I have?
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1520,10 +1487,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#first-run-proof" class="md-nav__link">
+  <a href="#source-directory-layout" class="md-nav__link">
     <span class="md-ellipsis">
       
-        First-Run Proof
+        Source directory layout
       
     </span>
   </a>
@@ -1531,10 +1498,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#recipe-can-host-a-reach-host-b" class="md-nav__link">
+  <a href="#input-contract" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Recipe — Can host A reach host B?
+        Input contract
       
     </span>
   </a>
@@ -1542,10 +1509,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#recipe-does-this-firewall-block-or-allow-a-port" class="md-nav__link">
+  <a href="#what-it-produces" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Recipe — Does this firewall block or allow a port?
+        What it produces
       
     </span>
   </a>
@@ -1553,10 +1520,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#recipe-does-validation-fail-when-a-link-drops" class="md-nav__link">
+  <a href="#guarantees" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Recipe — Does validation fail when a link drops?
+        Guarantees
       
     </span>
   </a>
@@ -1564,43 +1531,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#recipe-what-changed-between-baseline-and-change" class="md-nav__link">
+  <a href="#status-and-roadmap" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Recipe — What changed between baseline and change?
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#recipe-how-do-i-validate-an-iac-change" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Recipe — How do I validate an IaC change?
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#recipe-what-does-my-gate-actually-cover" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Recipe — What does my gate actually cover?
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#recipe-what-coverage-gaps-do-i-have" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Recipe — What coverage gaps do I have?
+        Status and roadmap
       
     </span>
   </a>
@@ -1624,47 +1558,153 @@
 
 
 
-<h1 id="proof-kit-examples">Proof Kit / Examples</h1>
-<p>Walkable examples that show Cassian Gate producing authoritative PASS and authoritative FAIL outcomes against real declared topologies. Each entry pairs a passing variant (the gate confirms the declared proof is satisfied) with a failing variant (the gate catches a real validation problem on the same bounded topology).</p>
-<h2 id="first-run-proof">First-Run Proof</h2>
-<p>The official first-run adoption proof family. Failure-first path: run the failing variant first to see Cassian Gate catch a real validation problem, then run the passing variant to see the same proof succeed when the policy is correct.</p>
+<h1 id="brownfield-importer">Brownfield Importer</h1>
+<p>The brownfield importer turns committed, offline source data about an existing
+network into an <strong>authoritative Cassian pair</strong> — a <code>topology.yaml</code> plus a set of
+starter invariants — that you can then validate, deploy, and gate like any other
+Cassian topology.</p>
+<p>It is invoked with <a href="../cli-reference-v1/"><code>cassian import</code></a>:</p>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1"></a>cassian<span class="w"> </span>import<span class="w"> </span>path/to/siteA<span class="w"> </span>--out<span class="w"> </span>path/to/out
+</code></pre></div></td></tr></table></div>
+<p>The importer is <strong>fully offline</strong>: it reads only files you provide, never a live
+NetBox instance or live devices. It is <strong>deterministic</strong>: identical inputs always
+produce byte-identical output.</p>
+<h2 id="source-directory-layout">Source directory layout</h2>
+<p><code>cassian import</code> reads a single source directory:</p>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span>
+<span class="normal"><a href="#__codelineno-1-2">2</a></span>
+<span class="normal"><a href="#__codelineno-1-3">3</a></span>
+<span class="normal"><a href="#__codelineno-1-4">4</a></span>
+<span class="normal"><a href="#__codelineno-1-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1"></a>siteA/
+<a id="__codelineno-1-2" name="__codelineno-1-2"></a>├── netbox_export.json        # the defined input contract (see below)
+<a id="__codelineno-1-3" name="__codelineno-1-3"></a>└── rendered/                 # optional: rendered FRR device configs
+<a id="__codelineno-1-4" name="__codelineno-1-4"></a>    ├── leaf1.conf
+<a id="__codelineno-1-5" name="__codelineno-1-5"></a>    └── spine1.conf
+</code></pre></div></td></tr></table></div>
 <ul>
-<li><a href="https://github.com/cassian-gate/cassian-gate/tree/main/contrib/topologies/first-run-proof">Source: <code>contrib/topologies/first-run-proof/</code></a></li>
+<li><code>netbox_export.json</code> (required) — a JSON document in the contract described
+  below.</li>
+<li><code>rendered/*.conf</code> (optional) — rendered <strong>FRR</strong> configs, one per device, named
+  for the device. When present they corroborate and supplement facts from the
+  export (for example <code>router_id</code> and <code>asn</code>). <code>frr</code> is the only platform
+  supported in this release; any other platform value is rejected.</li>
 </ul>
-<h2 id="recipe-can-host-a-reach-host-b">Recipe — Can host A reach host B?</h2>
-<p>A bounded service-reachability check: host A reaches host B on a declared allowed TCP port. The next-step bridge after the first-run proof.</p>
+<h2 id="input-contract">Input contract</h2>
+<div class="admonition important">
+<p class="admonition-title">This is a defined contract, not a raw NetBox API dump</p>
+<p><code>netbox_export.json</code> is <strong>Cassian's own input contract</strong> — a small, flat,
+documented shape. It is <strong>not</strong> the output of NetBox's REST API. A real
+NetBox export is paginated, split across per-object-type endpoints
+(<code>/api/dcim/devices/</code>, <code>/api/ipam/ip-addresses/</code>, …), and nested with numeric
+IDs. Moreover, <strong>BGP and static routes are not part of NetBox core</strong> — BGP is
+provided by the separate <code>netbox-bgp</code> plugin, and static routes likewise are
+not a native core model. To feed a real NetBox, you run a thin export/transform
+step that produces this contract from the relevant API objects. Building and
+validating that adapter against a real instance is tracked on the roadmap
+below.</p>
+</div>
+<p>The contract is a single JSON object:</p>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-2-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-2-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-2-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-2-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-2-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-2-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-2-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-2-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-2-10">10</a></span>
+<span class="normal"><a href="#__codelineno-2-11">11</a></span>
+<span class="normal"><a href="#__codelineno-2-12">12</a></span>
+<span class="normal"><a href="#__codelineno-2-13">13</a></span>
+<span class="normal"><a href="#__codelineno-2-14">14</a></span>
+<span class="normal"><a href="#__codelineno-2-15">15</a></span>
+<span class="normal"><a href="#__codelineno-2-16">16</a></span>
+<span class="normal"><a href="#__codelineno-2-17">17</a></span>
+<span class="normal"><a href="#__codelineno-2-18">18</a></span>
+<span class="normal"><a href="#__codelineno-2-19">19</a></span>
+<span class="normal"><a href="#__codelineno-2-20">20</a></span>
+<span class="normal"><a href="#__codelineno-2-21">21</a></span>
+<span class="normal"><a href="#__codelineno-2-22">22</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="p">{</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">  </span><span class="nt">&quot;site&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;siteA&quot;</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">  </span><span class="nt">&quot;devices&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;leaf1&quot;</span><span class="p">,</span><span class="w">  </span><span class="nt">&quot;platform&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;frr&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;asn&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">65001</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;router_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1.1.1.1&quot;</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;spine1&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;platform&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;frr&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;asn&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">65002</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;router_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2.2.2.2&quot;</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="w">  </span><span class="p">],</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7"></a><span class="w">  </span><span class="nt">&quot;cables&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="w">    </span><span class="p">{</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9"></a><span class="w">      </span><span class="nt">&quot;a&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;device&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;leaf1&quot;</span><span class="p">,</span><span class="w">  </span><span class="nt">&quot;interface&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;eth1&quot;</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10"></a><span class="w">      </span><span class="nt">&quot;b&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;device&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;spine1&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;interface&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;eth1&quot;</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11"></a><span class="w">      </span><span class="nt">&quot;a_ip&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;10.0.0.1/30&quot;</span><span class="p">,</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12"></a><span class="w">      </span><span class="nt">&quot;b_ip&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;10.0.0.2/30&quot;</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14"></a><span class="w">  </span><span class="p">],</span>
+<a id="__codelineno-2-15" name="__codelineno-2-15"></a><span class="w">  </span><span class="nt">&quot;bgp_sessions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-2-16" name="__codelineno-2-16"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;local_device&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;leaf1&quot;</span><span class="p">,</span><span class="w">  </span><span class="nt">&quot;peer_ip&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;10.0.0.2&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;remote_asn&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">65002</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-2-17" name="__codelineno-2-17"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;local_device&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;spine1&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;peer_ip&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;10.0.0.1&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;remote_asn&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">65001</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-2-18" name="__codelineno-2-18"></a><span class="w">  </span><span class="p">],</span>
+<a id="__codelineno-2-19" name="__codelineno-2-19"></a><span class="w">  </span><span class="nt">&quot;static_routes&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<a id="__codelineno-2-20" name="__codelineno-2-20"></a><span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;device&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;leaf1&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;prefix&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;192.0.2.0/24&quot;</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-2-21" name="__codelineno-2-21"></a><span class="w">  </span><span class="p">]</span>
+<a id="__codelineno-2-22" name="__codelineno-2-22"></a><span class="p">}</span>
+</code></pre></div></td></tr></table></div>
+<p>Field reference:</p>
 <ul>
-<li><a href="https://github.com/cassian-gate/cassian-gate/tree/main/contrib/topologies/recipes/reachability-can-host-a-reach-host-b">Source: <code>contrib/topologies/recipes/reachability-can-host-a-reach-host-b/</code></a></li>
+<li><code>site.name</code> — the site / topology name.</li>
+<li><code>devices[]</code> — <code>name</code> and <code>platform</code> (must be <code>frr</code>); <code>asn</code> and <code>router_id</code>
+  optional (may instead be read from the rendered config).</li>
+<li><code>cables[]</code> — each end is <code>{device, interface}</code> referencing a declared device;
+  <code>a_ip</code> / <code>b_ip</code> are optional interface addresses. A cable that references an
+  undeclared device is rejected.</li>
+<li><code>bgp_sessions[]</code> — <code>local_device</code> (a declared device), <code>peer_ip</code>, and optional
+  <code>remote_asn</code>.</li>
+<li><code>static_routes[]</code> — <code>device</code> (a declared device) and <code>prefix</code>.</li>
 </ul>
-<h2 id="recipe-does-this-firewall-block-or-allow-a-port">Recipe — Does this firewall block or allow a port?</h2>
-<p>Two bounded policy outcomes in one small example: TCP/8443 is allowed, TCP/2222 is blocked. The failing variant declares the wrong expectation for the actual policy.</p>
+<p>Only <code>devices</code> is structurally essential; the other lists may be empty or omitted
+and the importer will simply generate fewer starter invariants.</p>
+<h2 id="what-it-produces">What it produces</h2>
+<p>The output directory receives the authoritative pair:</p>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
+<span class="normal"><a href="#__codelineno-3-2">2</a></span>
+<span class="normal"><a href="#__codelineno-3-3">3</a></span>
+<span class="normal"><a href="#__codelineno-3-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1"></a>out/
+<a id="__codelineno-3-2" name="__codelineno-3-2"></a>├── topology.yaml                 # authoritative topology, with embedded tests
+<a id="__codelineno-3-3" name="__codelineno-3-3"></a>└── tests/
+<a id="__codelineno-3-4" name="__codelineno-3-4"></a>    └── starter_invariants.yaml   # the generated starter invariants
+</code></pre></div></td></tr></table></div>
+<p>Starter invariants are generated <strong>only from explicitly declared facts</strong>, using a
+fixed allowlist — never inferred or synthesized:</p>
 <ul>
-<li><a href="https://github.com/cassian-gate/cassian-gate/tree/main/contrib/topologies/recipes/policy-does-this-firewall-block-or-allow-a-port">Source: <code>contrib/topologies/recipes/policy-does-this-firewall-block-or-allow-a-port/</code></a></li>
+<li>a <code>bgp_session</code> invariant for each declared BGP session,</li>
+<li>an <code>interface_state</code> invariant for each declared cable endpoint,</li>
+<li>a <code>route_present</code> invariant for each declared static route.</li>
 </ul>
-<h2 id="recipe-does-validation-fail-when-a-link-drops">Recipe — Does validation fail when a link drops?</h2>
-<p>A bounded deterministic failure-choreography example. A directly connected reachability topology with a deliberate interface bounce scenario, run only through the normal authoritative gate path.</p>
+<p>Anything the importer does not understand is <strong>omitted</strong>, not guessed at.</p>
+<h2 id="guarantees">Guarantees</h2>
 <ul>
-<li><a href="https://github.com/cassian-gate/cassian-gate/tree/main/contrib/topologies/recipes/failover-does-validation-fail-when-a-link-drops">Source: <code>contrib/topologies/recipes/failover-does-validation-fail-when-a-link-drops/</code></a></li>
+<li><strong>Offline.</strong> No network or live-device access; only the files you provide.</li>
+<li><strong>Deterministic.</strong> Identical inputs produce byte-identical output; all source
+  iteration is sorted and serialization is canonical.</li>
+<li><strong>No synthesis.</strong> Invariants come only from declared facts via the allowlist.</li>
+<li><strong>Fail-closed.</strong> Unsupported or malformed input is rejected with <strong>exit 2</strong> and
+  an actionable message naming the offending field, the issue, and the corrective
+  action. The importer never emits a partial or invalid pair.</li>
 </ul>
-<h2 id="recipe-what-changed-between-baseline-and-change">Recipe — What changed between baseline and change?</h2>
-<p>Uses <code>cassian test --two-run</code> to validate a proposed change against a known-good baseline. Two clean-state authoritative gate executions plus an advisory <code>comparison.json</code> artifact recording what differs between the runs.</p>
+<h2 id="status-and-roadmap">Status and roadmap</h2>
+<p>This is a first, lab-free importer. It has been validated against hand-built
+fixtures, and the topologies it emits are checked against Cassian's real
+validators. It has <strong>not</strong> yet been validated against data from a real NetBox
+instance, and real-deployment validation (bringing the resulting topology up and
+confirming the invariants against running devices) is out of scope for this
+release.</p>
+<p>Tracked for future work:</p>
 <ul>
-<li><a href="https://github.com/cassian-gate/cassian-gate/tree/main/contrib/topologies/recipes/two-run-what-changed-between-baseline-and-change">Source: <code>contrib/topologies/recipes/two-run-what-changed-between-baseline-and-change/</code></a></li>
-</ul>
-<h2 id="recipe-how-do-i-validate-an-iac-change">Recipe — How do I validate an IaC change?</h2>
-<p>Uses <code>cassian adapt terraform</code> to convert a <code>terraform show -json</code> plan into an advisory <code>adapters.v1</code> JSON, then <code>cassian preflight --adapter &lt;adapter-output&gt;</code> to surface the IaC change context inside preflight findings. Both adapter output and preflight output are advisory and do not affect the gate verdict.</p>
-<ul>
-<li><a href="https://github.com/cassian-gate/cassian-gate/tree/main/contrib/topologies/recipes/terraform-adapter-how-do-i-validate-an-iac-change">Source: <code>contrib/topologies/recipes/terraform-adapter-how-do-i-validate-an-iac-change/</code></a></li>
-</ul>
-<h2 id="recipe-what-does-my-gate-actually-cover">Recipe — What does my gate actually cover?</h2>
-<p>Demonstrates the advisory <code>blast_radius.json</code> artifact produced during <code>cassian test</code>'s Collect phase. The recipe topology declares a scenario that touches only some of the available fault and wait classes, producing a meaningful <code>coverage.summary</code> block; blast radius does not affect the gate verdict.</p>
-<ul>
-<li><a href="https://github.com/cassian-gate/cassian-gate/tree/main/contrib/topologies/recipes/blast-radius-what-does-my-gate-actually-cover">Source: <code>contrib/topologies/recipes/blast-radius-what-does-my-gate-actually-cover/</code></a></li>
-</ul>
-<h2 id="recipe-what-coverage-gaps-do-i-have">Recipe — What coverage gaps do I have?</h2>
-<p>Demonstrates <code>cassian preflight</code> producing the advisory <code>preflight.json</code> artifact via declared-only static analysis (no deploy, no runtime). The recipe topology declares deliberate coverage gaps so the findings are meaningful; preflight does not affect the gate verdict.</p>
-<ul>
-<li><a href="https://github.com/cassian-gate/cassian-gate/tree/main/contrib/topologies/recipes/preflight-what-coverage-gaps-do-i-have">Source: <code>contrib/topologies/recipes/preflight-what-coverage-gaps-do-i-have/</code></a></li>
+<li><strong>Real-NetBox export adapter</strong> — a thin, documented step that produces this
+  contract from a real NetBox (including BGP via the <code>netbox-bgp</code> plugin and
+  static-route data), so the importer can consume real-world inventories.</li>
+<li><strong>Real-export validation</strong> — exercise the full path against a real NetBox export
+  and real rendered configs before any production reliance, to confirm the
+  contract and field mapping hold against live data.</li>
 </ul>
 
 

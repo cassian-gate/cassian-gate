@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://docs.cassiangate.dev/latest/ci/github-actions/">
+        <link rel="canonical" href="https://docs.cassiangate.dev/latest/recipes/exec-user-defined-invariants/">
       
       
-        <link rel="prev" href="../../recipes/ai-change-reference-case/">
+        <link rel="prev" href="../../cheatsheet/">
       
       
-        <link rel="next" href="../gitlab-ci/">
+        <link rel="next" href="../ai-change-reference-case/">
       
       
         
@@ -27,7 +27,7 @@
     
     
       
-        <title>GitHub Actions - Cassian Gate</title>
+        <title>Writing a user-defined invariant - Cassian Gate</title>
       
     
     
@@ -88,7 +88,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#github-actions-cassian-gate-gate-template" class="md-skip">
+        <a href="#recipe-writing-a-user-defined-invariant-exec" class="md-skip">
           Skip to content
         </a>
       
@@ -125,7 +125,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              GitHub Actions
+              Writing a user-defined invariant
             
           </span>
         </div>
@@ -338,9 +338,11 @@
   
   
   
+    
   
-    <li class="md-tabs__item">
-      <a href="../../recipes/exec-user-defined-invariants/" class="md-tabs__link">
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="./" class="md-tabs__link">
         
   
   
@@ -359,7 +361,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../recipes/ai-change-reference-case/" class="md-tabs__link">
+      <a href="../ai-change-reference-case/" class="md-tabs__link">
         
   
   
@@ -376,13 +378,11 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="./" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../ci/github-actions/" class="md-tabs__link">
           
   
   
@@ -783,115 +783,6 @@
       
   
   
-  
-  
-    <li class="md-nav__item">
-      <a href="../../recipes/exec-user-defined-invariants/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Writing a user-defined invariant
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../recipes/ai-change-reference-case/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    The AI-change reference case
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-    
-  
-  
-  
-    
-    
-    
-    
-      
-        
-        
-      
-      
-    
-    
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" checked>
-        
-          
-          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    CI Integration
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_9">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    CI Integration
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
     
   
   
@@ -911,7 +802,7 @@
   <span class="md-ellipsis">
     
   
-    GitHub Actions
+    Writing a user-defined invariant
   
 
     
@@ -929,7 +820,7 @@
   <span class="md-ellipsis">
     
   
-    GitHub Actions
+    Writing a user-defined invariant
   
 
     
@@ -955,10 +846,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#what-this-workflow-is-for" class="md-nav__link">
+  <a href="#the-shape" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What this workflow is for
+        The shape
       
     </span>
   </a>
@@ -966,10 +857,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#what-this-workflow-is-not" class="md-nav__link">
+  <a href="#step-by-step" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What this workflow is not
+        Step by step
       
     </span>
   </a>
@@ -977,10 +868,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#authority-rules" class="md-nav__link">
+  <a href="#a-worked-example" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Authority rules
+        A worked example
       
     </span>
   </a>
@@ -988,10 +879,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#runner-requirements" class="md-nav__link">
+  <a href="#the-assertion-menu" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Runner requirements
+        The assertion menu
       
     </span>
   </a>
@@ -999,10 +890,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#typical-ci-shape" class="md-nav__link">
+  <a href="#negative-invariants" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Typical CI shape
+        Negative invariants
       
     </span>
   </a>
@@ -1010,10 +901,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#determinism-replay-check-b-9" class="md-nav__link">
+  <a href="#running-it-and-reading-the-result" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Determinism replay check (B-9)
+        Running it and reading the result
       
     </span>
   </a>
@@ -1021,32 +912,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#example-local-reproduction" class="md-nav__link">
+  <a href="#see-also" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Example local reproduction
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#example-artifact-upload-set" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Example artifact upload set
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#important-boundary" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Important boundary
+        See also
       
     </span>
   </a>
@@ -1060,6 +929,110 @@
     </li>
   
 
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ai-change-reference-case/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The AI-change reference case
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CI Integration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    CI Integration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ci/github-actions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitHub Actions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
               
             
               
@@ -1069,7 +1042,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../gitlab-ci/" class="md-nav__link">
+      <a href="../../ci/gitlab-ci/" class="md-nav__link">
         
   
   
@@ -1536,10 +1509,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#what-this-workflow-is-for" class="md-nav__link">
+  <a href="#the-shape" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What this workflow is for
+        The shape
       
     </span>
   </a>
@@ -1547,10 +1520,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#what-this-workflow-is-not" class="md-nav__link">
+  <a href="#step-by-step" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What this workflow is not
+        Step by step
       
     </span>
   </a>
@@ -1558,10 +1531,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#authority-rules" class="md-nav__link">
+  <a href="#a-worked-example" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Authority rules
+        A worked example
       
     </span>
   </a>
@@ -1569,10 +1542,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#runner-requirements" class="md-nav__link">
+  <a href="#the-assertion-menu" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Runner requirements
+        The assertion menu
       
     </span>
   </a>
@@ -1580,10 +1553,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#typical-ci-shape" class="md-nav__link">
+  <a href="#negative-invariants" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Typical CI shape
+        Negative invariants
       
     </span>
   </a>
@@ -1591,10 +1564,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#determinism-replay-check-b-9" class="md-nav__link">
+  <a href="#running-it-and-reading-the-result" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Determinism replay check (B-9)
+        Running it and reading the result
       
     </span>
   </a>
@@ -1602,32 +1575,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#example-local-reproduction" class="md-nav__link">
+  <a href="#see-also" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Example local reproduction
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#example-artifact-upload-set" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Example artifact upload set
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#important-boundary" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Important boundary
+        See also
       
     </span>
   </a>
@@ -1651,90 +1602,123 @@
 
 
 
-<h1 id="github-actions-cassian-gate-gate-template">GitHub Actions — Cassian Gate gate template</h1>
-<p>This document describes a GitHub Actions pattern for running <strong>Cassian Gate</strong> as a
-<strong>deterministic, clean-state validation gate</strong>.</p>
-<p>It is a supporting CI guide. It does <strong>not</strong> replace deterministic execution,
-authoritative artifacts, or the project design contract.</p>
-<h2 id="what-this-workflow-is-for">What this workflow is for</h2>
-<p>Use this pattern when you want a CI job to:</p>
-<ul>
-<li>validate topology input before execution</li>
-<li>run the authoritative gate with <code>cassian test</code></li>
-<li>preserve generated artifacts for audit and debugging</li>
-<li>avoid treating exploratory workflows as deployment authority</li>
-</ul>
-<h2 id="what-this-workflow-is-not">What this workflow is not</h2>
-<p>This workflow is <strong>not</strong>:</p>
-<ul>
-<li>a broad CI automation framework</li>
-<li>a substitute for the Cassian Gate authority model</li>
-<li>a reason to treat <code>cassian run</code> as a gate</li>
-<li>a promise that every GitHub-hosted runner shape supports containerlab reliably</li>
-</ul>
-<h2 id="authority-rules">Authority rules</h2>
-<p>Keep these boundaries explicit:</p>
-<ul>
-<li>authoritative gate execution runs through <code>cassian test &lt;topology.yaml&gt;</code></li>
-<li><code>cassian run</code> remains exploratory and non-authoritative</li>
-<li><code>results.json</code> remains the authoritative verdict artifact</li>
-<li><code>results.summary.txt</code> remains explanatory only</li>
-<li><code>labs/</code> remains generated evidence only</li>
-</ul>
-<h2 id="runner-requirements">Runner requirements</h2>
-<p>This pattern is generally intended for a Linux environment with the privileges needed by the
-current Cassian Gate runtime.</p>
-<p>Typical requirements include:</p>
-<ul>
-<li>Linux host or runner</li>
-<li>Docker available to the runner</li>
-<li><code>containerlab</code> installed ahead of time</li>
-<li>sufficient privileges for containerlab networking</li>
-</ul>
-<p>Self-hosted runners are typically the most practical choice.</p>
-<h2 id="typical-ci-shape">Typical CI shape</h2>
-<p>A narrow, truthful CI flow usually looks like this:</p>
-<ol>
-<li>install pinned Python dependencies</li>
-<li>run repository verification or syntax checks as needed</li>
-<li>validate the topology</li>
-<li>run the authoritative gate with <code>cassian test</code></li>
-<li>assert render determinism with a clean-state replay byte-identity check</li>
-<li>upload generated artifacts for review</li>
-</ol>
-<h2 id="determinism-replay-check-b-9">Determinism replay check (B-9)</h2>
-<p>The gate job includes a replay determinism check. It runs a by-design failing-invariant topology through two independent clean-state <code>up → test → down</code> cycles and fails the step on any byte-difference in the rendered <code>results.summary.txt</code> across the two runs.</p>
-<p>The verdict is FAIL by design and is <strong>not</strong> what this step asserts — it asserts byte-identity of the rendered failure surface (the <code>observed:</code> blocks), not the verdict. Per the determinism contract in <code>docs/topology-schema-v1.5.md</code> §3.2, environmental tokens never enter that surface, so two clean runs render identically; any difference fails the gate.</p>
-<h2 id="example-local-reproduction">Example local reproduction</h2>
-<p>From repo root:</p>
+<h1 id="recipe-writing-a-user-defined-invariant-exec">Recipe: Writing a user-defined invariant (<code>exec</code>)</h1>
+<p>Cassian Gate ships a fixed catalog of built-in invariants — BGP session up, route present, interface state, and so on (see the <a href="../../topology-schema-v1.5/">Topology Schema Reference</a>). When the truth you need to assert isn't in that catalog, a <strong>user-defined invariant</strong> lets you write it yourself: pick a node, run a read-only command on it, and assert something about the output. The result is authoritative — it passes or fails the gate exactly like a built-in check.</p>
+<p>This recipe shows you how to write one.</p>
+<h2 id="the-shape">The shape</h2>
+<p>A user-defined invariant is a test with <code>kind: exec</code>:</p>
 <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span>
 <span class="normal"><a href="#__codelineno-0-2">2</a></span>
 <span class="normal"><a href="#__codelineno-0-3">3</a></span>
 <span class="normal"><a href="#__codelineno-0-4">4</a></span>
-<span class="normal"><a href="#__codelineno-0-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1"></a>python<span class="w"> </span>-m<span class="w"> </span>py_compile<span class="w"> </span>src/*.py
-<a id="__codelineno-0-2" name="__codelineno-0-2"></a>bash<span class="w"> </span>scripts/verify_phase1.sh
-<a id="__codelineno-0-3" name="__codelineno-0-3"></a>
-<a id="__codelineno-0-4" name="__codelineno-0-4"></a>cassian<span class="w"> </span>validate<span class="w"> </span>topologies/three-frr-two-hosts-fw-routed.yaml
-<a id="__codelineno-0-5" name="__codelineno-0-5"></a>cassian<span class="w"> </span><span class="nb">test</span><span class="w"> </span>topologies/three-frr-two-hosts-fw-routed.yaml<span class="w"> </span>--scenario<span class="w"> </span>quick_all
+<span class="normal"><a href="#__codelineno-0-5">5</a></span>
+<span class="normal"><a href="#__codelineno-0-6">6</a></span>
+<span class="normal"><a href="#__codelineno-0-7">7</a></span>
+<span class="normal"><a href="#__codelineno-0-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="nt">tests</span><span class="p">:</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my_check</span><span class="w">                     </span><span class="c1"># a name you choose</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">exec</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="nt">src</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">r1</span><span class="w">                            </span><span class="c1"># the node to run on</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">vtysh -c &quot;show version&quot;</span><span class="w">   </span><span class="c1"># a read-only command</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="w">    </span><span class="nt">assertion</span><span class="p">:</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="w">      </span><span class="nt">contains</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">FRRouting</span><span class="w">              </span><span class="c1"># what must be true about the output</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="nt">expect</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pass</span><span class="w">                       </span><span class="c1"># pass = the assertion should hold</span>
 </code></pre></div></td></tr></table></div>
-<p>This keeps CI aligned to the authoritative gate surface.</p>
-<h2 id="example-artifact-upload-set">Example artifact upload set</h2>
-<p>Typical artifact upload choices include:</p>
+<p>That's the whole anatomy. The four moving parts are the <strong>node</strong>, the <strong>command</strong>, the <strong>assertion</strong>, and the <strong>expectation</strong>.</p>
+<h2 id="step-by-step">Step by step</h2>
+<p><strong>1. Name it and point it at a node.</strong> <code>src</code> is the node the command runs on — it must be a node in your <code>nodes:</code> list. Cassian works out the node's type itself; today that type has to be <code>frr</code> or <code>nft-fw</code>.</p>
+<p><strong>2. Give it a read-only command.</strong> Cassian only allows commands that <em>read</em> state, never change it:</p>
 <ul>
-<li><code>labs/**/results.json</code></li>
-<li><code>labs/**/results.summary.txt</code></li>
-<li><code>labs/**/topology.resolved.yaml</code></li>
-<li><code>labs/**/artifacts/**</code></li>
+<li>on an <code>frr</code> node: <code>vtysh -c "show …"</code> (any <code>show</code> command)</li>
+<li>on an <code>nft-fw</code> node: <code>nft list …</code> (e.g. <code>nft list ruleset</code>)</li>
 </ul>
-<p>If your storage policy allows it, you may also retain the broader <code>labs/**</code> directory on failure
-for debugging.</p>
-<h2 id="important-boundary">Important boundary</h2>
-<p>This page is supporting guidance only.</p>
-<p>Deploy/no-deploy meaning still comes from:</p>
+<p>Anything else — a config change, a raw shell — is rejected when you run <code>cassian validate</code>, before anything is deployed.</p>
+<p><strong>3. Assert something about the output.</strong> You attach exactly one typed check (no freeform grepping). The simplest is <code>contains</code>:</p>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span>
+<span class="normal"><a href="#__codelineno-1-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="nt">assertion</span><span class="p">:</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">  </span><span class="nt">contains</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">FRRouting</span>
+</code></pre></div></td></tr></table></div>
+<p>The full menu is below.</p>
+<p><strong>4. Say what you expect.</strong> <code>expect: pass</code> means "this assertion should hold." <code>expect: fail</code> flips it — "this assertion should <em>not</em> hold" — which is how you write a negative invariant (see <a href="#negative-invariants">Negative invariants</a>).</p>
+<h2 id="a-worked-example">A worked example</h2>
+<p>Say you want to assert <em>"on r1, the BGP session to 10.0.0.2 is established."</em> That state lives in <code>show bgp summary json</code>, so reach into that JSON:</p>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-2-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-2-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-2-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-2-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-2-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-2-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-2-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-2-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-2-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">bgp_peer_established</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">exec</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="nt">src</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">r1</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">vtysh -c &quot;show bgp summary json&quot;</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5"></a><span class="w">    </span><span class="nt">assertion</span><span class="p">:</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="w">      </span><span class="nt">field</span><span class="p">:</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7"></a><span class="w">        </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">ipv4Unicast</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">peers</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;10.0.0.2&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">state</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="w">        </span><span class="nt">op</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;==&quot;</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9"></a><span class="w">        </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Established</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10"></a><span class="w">    </span><span class="nt">expect</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pass</span>
+</code></pre></div></td></tr></table></div>
+<p>In plain English: run the command, parse the output as JSON, walk down into <code>ipv4Unicast</code> → <code>peers</code> → the entry for <code>10.0.0.2</code> → its <code>state</code>, and check that value equals <code>Established</code>. Each item in <code>path</code> is one step down. (<code>"10.0.0.2"</code> is quoted because it's a key that contains dots — quoting keeps it as one literal step rather than four.)</p>
+<h2 id="the-assertion-menu">The assertion menu</h2>
+<p>Pick exactly one:</p>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
+<span class="normal"><a href="#__codelineno-3-2">2</a></span>
+<span class="normal"><a href="#__codelineno-3-3">3</a></span>
+<span class="normal"><a href="#__codelineno-3-4">4</a></span>
+<span class="normal"><a href="#__codelineno-3-5">5</a></span>
+<span class="normal"><a href="#__codelineno-3-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="nt">assertion</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> contains</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;FRRouting&quot;</span><span class="w"> </span><span class="p p-Indicator">}</span><span class="w">                 </span><span class="c1"># text is present in the output</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="nt">assertion</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> not_contains</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Idle&quot;</span><span class="w"> </span><span class="p p-Indicator">}</span><span class="w">                  </span><span class="c1"># text is absent</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="nt">assertion</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> equals</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;exact</span><span class="nv"> </span><span class="s">whole</span><span class="nv"> </span><span class="s">output&quot;</span><span class="w"> </span><span class="p p-Indicator">}</span><span class="w">          </span><span class="c1"># trimmed output equals this exactly</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="nt">assertion</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> matches</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;neighbor</span><span class="nv"> </span><span class="s">.*</span><span class="nv"> </span><span class="s">Established&quot;</span><span class="w"> </span><span class="p p-Indicator">}</span><span class="w">    </span><span class="c1"># regex matches somewhere in the output</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="nt">assertion</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> count</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Established&quot;</span><span class="p p-Indicator">,</span><span class="nt"> op</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&gt;=&quot;</span><span class="p p-Indicator">,</span><span class="nt"> value</span><span class="p">:</span><span class="w"> </span><span class="nv">2</span><span class="w"> </span><span class="p p-Indicator">}</span><span class="w"> </span><span class="p p-Indicator">}</span><span class="w">   </span><span class="c1"># regex appears N times</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="nt">assertion</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> field</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> path</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">k1</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;k2&quot;</span><span class="p p-Indicator">],</span><span class="nt"> op</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;==&quot;</span><span class="p p-Indicator">,</span><span class="nt"> value</span><span class="p">:</span><span class="w"> </span><span class="nv">X</span><span class="w"> </span><span class="p p-Indicator">}</span><span class="w"> </span><span class="p p-Indicator">}</span><span class="w">        </span><span class="c1"># reach into JSON output</span>
+</code></pre></div></td></tr></table></div>
+<p>A few things worth knowing up front:</p>
 <ul>
-<li>deterministic execution</li>
-<li><code>cassian test</code></li>
-<li>authoritative generated artifacts, especially <code>results.json</code></li>
+<li><strong>Quote the operators and any dotted keys</strong> — <code>op: "=="</code>, <code>op: "&gt;="</code>, and <code>path: [..., "10.0.0.2", ...]</code> — so YAML reads them as text rather than guessing.</li>
+<li><strong><code>field</code> needs JSON.</strong> Use a command whose output is JSON (e.g. <code>show bgp summary json</code>), and note it walks <em>dictionary</em> keys — it reads <code>{...: {...: value}}</code> shapes, not list positions.</li>
+<li><strong><code>==</code> is exact and type-aware.</strong> <code>"Established"</code> won't match <code>"established"</code> or a number. <code>&gt;=</code> and <code>&lt;=</code> only work on numbers.</li>
+<li><strong>A missing thing is a fail, not a crash.</strong> If the output can't be parsed, a key isn't there, or the command times out, the check simply records <code>observed: fail</code> — safely. It never errors out, and it never silently passes.</li>
+</ul>
+<h2 id="negative-invariants">Negative invariants</h2>
+<p><code>expect: fail</code> lets you assert that something must <em>not</em> be true. For example, "the BGP peer must not be stuck in Idle":</p>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-4-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-4-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-4-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-4-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-4-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-4-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-4-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-4-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-4-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">bgp_peer_not_idle</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">exec</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">    </span><span class="nt">src</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">r1</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">vtysh -c &quot;show bgp summary json&quot;</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5"></a><span class="w">    </span><span class="nt">assertion</span><span class="p">:</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6"></a><span class="w">      </span><span class="nt">field</span><span class="p">:</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7"></a><span class="w">        </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">ipv4Unicast</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">peers</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;10.0.0.2&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">state</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8"></a><span class="w">        </span><span class="nt">op</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;==&quot;</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9"></a><span class="w">        </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Idle</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10"></a><span class="w">    </span><span class="nt">expect</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fail</span>
+</code></pre></div></td></tr></table></div>
+<p>The assertion <em>looks for</em> <code>Idle</code>; <code>expect: fail</code> says you expect it not to match. So if the peer really is Idle, the assertion holds → the gate fails. If it's anything else, the assertion doesn't hold → the gate passes. (An evaluation error always counts as a fail, so a broken check can never accidentally satisfy a negative invariant.)</p>
+<h2 id="running-it-and-reading-the-result">Running it and reading the result</h2>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span>
+<span class="normal"><a href="#__codelineno-5-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1"></a>cassian<span class="w"> </span>validate<span class="w"> </span>&lt;topology.yaml&gt;<span class="w">    </span><span class="c1"># checks your exec test is well-formed (no deploy)</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2"></a>cassian<span class="w"> </span><span class="nb">test</span><span class="w"> </span>&lt;topology.yaml&gt;<span class="w">        </span><span class="c1"># deploys, runs it, writes the authoritative result</span>
+</code></pre></div></td></tr></table></div>
+<p>After a run, the authoritative result is <code>labs/clab-&lt;lab&gt;/results.json</code>; <code>results.summary.txt</code> is the human-readable view. A passing <code>exec</code> record carries the command, the assertion, and the captured output as evidence. A <em>failing</em> one additionally carries an <code>observed:</code> block showing exactly what was seen — so you can read why it didn't match.</p>
+<p>One tip while you're iterating: the gate stops at the first failing test by default. To run every test regardless (handy when you have several invariants in flight), add <code>--keep-going</code>:</p>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1"></a>cassian<span class="w"> </span><span class="nb">test</span><span class="w"> </span>&lt;topology.yaml&gt;<span class="w"> </span>--keep-going
+</code></pre></div></td></tr></table></div>
+<h2 id="see-also">See also</h2>
+<ul>
+<li><a href="../../topology-schema-v1.5/">Topology Schema Reference §2a</a> — the formal <code>exec</code> schema: the full key set, the read-only allow-list, and the typed-assertion contract.</li>
+<li><a href="../../cheatsheet/">Cheatsheet</a> — quick syntax reference and the four-quadrant verdict table.</li>
 </ul>
 
 
