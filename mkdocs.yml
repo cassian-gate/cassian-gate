@@ -101,14 +101,18 @@ nav:
   - Legacy schema (v1): topology-schema-v1.md
   - CLI Reference: cli-reference-v1.md
   - Cheatsheet: cheatsheet.md
+  - Writing a user-defined invariant: recipes/exec-user-defined-invariants.md
+  - The AI-change reference case: recipes/ai-change-reference-case.md
+
   - CI Integration:
     - GitHub Actions: ci/github-actions.md
     - GitLab CI: ci/gitlab-ci.md
   - Input Adapters: input-adapters.md
+  - Brownfield Importer: brownfield-importer.md
   - Admin Guide: admin-guide-v1.md
   - VM Runtime Capabilities: vm-runtime-capabilities.md
   - Proof Kit / Examples: proof-kit.md
-  - First-run failure narrative: examples/first-run-proof-failure-narrative.md
+  - Audit-Grade Evidence: audit-grade-evidence.md
   - AI Advisory:
     - Overview: ai/README.md
     - Guardrails: ai/guardrails.md
@@ -116,3 +120,4 @@ nav:
     - Online AI: ai/online_ai.md
   - Extension & Adoption: extensions/extension-and-adoption.md
   - Project principles: project-principles.md
+  - Scope and scale discipline: scope-discipline.md

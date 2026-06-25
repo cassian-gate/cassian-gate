@@ -1,0 +1,56 @@
+# =============================================================================
+# AI-Change Reference Case — UDI (exec) variant — FAILING (detection story)
+#
+# Same two regions as passing/topology.yaml.
+#   [AI-GENERATED IMPLEMENTATION]  the AI configured the peering correctly (the
+#                                  session DOES come up) but FORGOT to advertise
+#                                  r1's loopback — there is no `networks:` block
+#                                  on r1. r2 therefore never learns 1.1.1.1/32.
+#   [HUMAN-AUTHORED INTENT]        the `tests:` block — BYTE-IDENTICAL to
+#                                  passing/topology.yaml.
+#
+# Because the session converges, the control-plane precheck PASSES and the
+# invariant EXECUTES: the gate inspects r2's BGP table, finds the route absent,
+# and records a FAIL with the observed (empty) state rendered. This is the
+# §13(c) PRESENT-half — the gate observed the bad state and reported it.
+# Same gate, same check, no privileged path (Doctrine §1.12). Evidence is
+# lab-generated; commit it.
+# =============================================================================
+
+name: ai-change-udi-route-failing
+
+# ----- [AI-GENERATED IMPLEMENTATION]  peering OK, advertisement MISSING -------
+nodes:
+  - name: r1
+    type: frr
+    asn: 65001
+    router_id: 1.1.1.1
+    bgp:
+      neighbors:
+        - peer: r2
+          remote_as: 65002          # correct -> session still converges
+    # AI ERROR: no `networks:` block -> r1 never advertises 1.1.1.1/32,
+    #           so r2 never learns the route. (Compare passing/topology.yaml.)
+
+  - name: r2
+    type: frr
+    asn: 65002
+    router_id: 2.2.2.2
+    bgp:
+      neighbors:
+        - peer: r1
+          remote_as: 65001
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["10.0.0.1/30", "10.0.0.2/30"]
+
+# ----- [HUMAN-AUTHORED INTENT]  route-present exec check; identical in both ---
+tests:
+  - name: r2_learns_route_1_1_1_1_32
+    kind: exec
+    src: r2
+    command: vtysh -c "show bgp ipv4 unicast 1.1.1.1/32 json"
+    assertion:
+      contains: "1.1.1.1/32"
+    expect: pass

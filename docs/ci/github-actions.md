@@ -56,7 +56,14 @@ A narrow, truthful CI flow usually looks like this:
 2. run repository verification or syntax checks as needed
 3. validate the topology
 4. run the authoritative gate with `cassian test`
-5. upload generated artifacts for review
+5. assert render determinism with a clean-state replay byte-identity check
+6. upload generated artifacts for review
+
+## Determinism replay check (B-9)
+
+The gate job includes a replay determinism check. It runs a by-design failing-invariant topology through two independent clean-state `up → test → down` cycles and fails the step on any byte-difference in the rendered `results.summary.txt` across the two runs.
+
+The verdict is FAIL by design and is **not** what this step asserts — it asserts byte-identity of the rendered failure surface (the `observed:` blocks), not the verdict. Per the determinism contract in `docs/topology-schema-v1.5.md` §3.2, environmental tokens never enter that surface, so two clean runs render identically; any difference fails the gate.
 
 ## Example local reproduction
 

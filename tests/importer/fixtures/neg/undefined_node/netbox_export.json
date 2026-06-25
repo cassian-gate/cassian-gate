@@ -1,0 +1,8 @@
+{
+  "site": {"name": "siteBad"},
+  "devices": [{"name": "leaf1", "platform": "frr"}],
+  "cables": [
+    {"a": {"device": "leaf1", "interface": "eth1"},
+     "b": {"device": "ghost", "interface": "eth1"}}
+  ]
+}

@@ -1,0 +1,39 @@
+name: bgp-community-set-malformed
+# §4.10 negative misuse fixture (Amendment A1, REQ-BGPCOM-GEN-2 / P21).
+# Well-formed everywhere EXCEPT the route-map `set.community`, which carries a
+# malformed specifier ("bogus"). `cassian validate` must hard-fail at the
+# route-map set.community syntax check with a §13(a)-sufficient message.
+nodes:
+  - name: r1
+    type: frr
+    asn: 65001
+    router_id: 1.1.1.1
+    networks:
+      - 1.1.1.1/32
+    bgp:
+      neighbors:
+        - peer: r2
+          remote_as: 65002
+  - name: r2
+    type: frr
+    asn: 65002
+    router_id: 2.2.2.2
+    bgp:
+      neighbors:
+        - peer: r1
+          remote_as: 65001
+          ipv4_unicast:
+            route_map_in: SET-COMM
+      route_maps:
+        - name: SET-COMM
+          entries:
+            - seq: 10
+              action: permit
+              set:
+                community:
+                  - "65000:100"
+                  - bogus
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["10.0.0.0/31", "10.0.0.1/31"]
+tests: []

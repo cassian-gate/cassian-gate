@@ -20,4 +20,5 @@ For CI gate reviews, vendor questionnaires, and security teams: this tool does n
 - [Topology Schema Reference](topology-schema-v1.5.md) — declared shape of topologies, tests, scenarios, and invariants.
 - [CLI Reference](cli-reference-v1.md) — every `cassian` subcommand and its exit codes.
 - [CI Integration](ci/github-actions.md) — gate-on-merge templates for GitHub Actions and GitLab CI.
+- [Scope and scale discipline](scope-discipline.md) — named, tool-by-tool disambiguation and the blast-radius scale boundary.
 - [Project README](https://github.com/cassian-gate/cassian-gate/blob/main/README.md) — full v2 capability list and v2.0 ship status.

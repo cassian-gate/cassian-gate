@@ -211,7 +211,7 @@ They are the **only authority** for pass/fail outcomes.
 * `tcp`
 * `bgp_neighbor`
 
-No other test types are permitted.
+No other **v1 test types** are permitted. (v1.5+ adds a separate top-level `kind: invariant` test category, whose supported invariant types are enumerated in `docs/topology-schema-v1.5.md` §2 — it is a distinct v1.5+ surface, not a v1 test type, and is **not** prohibited by the line above.)
 
 ---
 
@@ -309,6 +309,8 @@ Important:
 
 * asserts session state only
 * does **not** validate routing correctness, policies, or prefixes
+* `node:` is the source node; `neighbor:` is the peer and is normalized internally to the `dst:` alias (see the alias note at `cassian_model.py:2029`)
+* this **v1.x `bgp_neighbor` test type** (authored as `type: bgp_neighbor`, above) is distinct from the **v1.5 `bgp_session_up` invariant** (authored as `kind: invariant` with `type: bgp_session_up`, documented in `docs/topology-schema-v1.5.md`); they are separate surfaces that coexist and must not be conflated — a `bgp_neighbor` test is not a `bgp_session_up` invariant
 
 ---
 
@@ -461,7 +463,7 @@ They do **not** change v1 authority.
 The topology schema does not support:
 
 * routing protocol configuration
-* EVPN semantics
+* EVPN semantics — not a v1 feature; EVPN validation **is** available in v1.5+ through the `kind: invariant` category (four EVPN invariant types). See `docs/topology-schema-v1.5.md` §2.
 * performance modeling
 * VM execution
 * vendor NOS features

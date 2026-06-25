@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shlex
 
 import ipaddress
 import yaml
@@ -820,6 +821,7 @@ def ensure_valid_topology(topo: dict) -> None:
         "fabric",
         "candidate_changes",
         "vlans",
+        "intent",
     }
     unknown_top_level_keys = sorted(k for k in topo.keys() if k not in allowed_top_level_keys)
     if unknown_top_level_keys:
@@ -841,6 +843,26 @@ def ensure_valid_topology(topo: dict) -> None:
     # v1.5 EVPN Awareness (presence-only): validate canonical fabric.evpn shape (fail-fast).
     # This MUST NOT change execution semantics; it only validates declared intent.
     _validate_fabric_evpn_presence_only(topo)
+
+    # §4.13 REQ-413-4-VAL: validate operator-declared intent input under §13(a).
+    # Intent is a single declarative string (echoed verbatim into the evidence
+    # bundle); a malformed (non-string) intent is hard-failed, never silently accepted.
+    _intent = topo.get("intent")
+    if _intent is not None and not isinstance(_intent, str):
+        if isinstance(_intent, dict) and _intent:
+            _bad = sorted(repr(k) for k in _intent.keys())[0]
+            die(
+                f"Invalid 'intent' declaration: unknown key {_bad} "
+                "(allowed: a single declarative string). "
+                "Remove or correct the field and re-run.",
+                code=2,
+            )
+        die(
+            "Topology invalid: 'intent' must be a single declarative string "
+            "(the operator's stated purpose for the run). "
+            "Remove or correct the field and re-run.",
+            code=2,
+        )
 
     if not isinstance(topo["nodes"], list) or not topo["nodes"]:
         die("'nodes' must be a non-empty list.")
@@ -1169,6 +1191,31 @@ def ensure_valid_topology(topo: dict) -> None:
             kind = (t.get("kind") or t.get("type") or "").strip().lower()
             nm = t.get("name")
             label = nm.strip() if isinstance(nm, str) and nm.strip() else f"tests[{idx}]"
+
+            # §4.8 WI-1: optional declarative 'tags' (kind-agnostic; REQ-TAG-SCHEMA-1/2,
+            # REQ-TAG-VALIDATE-1). Declarative metadata only; never an authority axis
+            # (REQ-TAG-SCHEMA-3). Validated structurally here; admission for exec tests is
+            # via allowed_exec_keys in resolve_topology (REQ-TAG-SCHEMA-2).
+            if "tags" in t and t.get("tags") is not None:
+                _tags_loc = (
+                    f"tests[{idx}] {nm.strip()!r}"
+                    if isinstance(nm, str) and nm.strip()
+                    else f"tests[{idx}]"
+                )
+                _tags_val = t.get("tags")
+                if not isinstance(_tags_val, list):
+                    die(
+                        f"Topology invalid: {_tags_loc}: 'tags' must be a list of strings "
+                        f"matching [a-z0-9_-] (got {_tags_val!r})",
+                        code=2,
+                    )
+                for _tag in _tags_val:
+                    if not isinstance(_tag, str) or not re.match(r"^[a-z0-9_-]+$", _tag):
+                        die(
+                            f"Topology invalid: {_tags_loc}: 'tags' must be a list of strings "
+                            f"matching [a-z0-9_-] (got {_tag!r})",
+                            code=2,
+                        )
 
             exp = t.get("expect") or "pass"
             exp = exp.strip().lower() if isinstance(exp, str) else exp
@@ -1549,6 +1596,16 @@ def gen_frr_conf(node: dict, topo: dict) -> str:
                         cfg.append(f" set local-preference {int(set_block.get('localpref'))}")
                     except Exception:
                         pass
+                if "community" in set_block:
+                    community_raw = set_block.get("community")
+                    if isinstance(community_raw, str):
+                        community_tokens = [community_raw.strip()] if community_raw.strip() else []
+                    elif isinstance(community_raw, (list, tuple)):
+                        community_tokens = [str(tok).strip() for tok in community_raw if str(tok).strip()]
+                    else:
+                        community_tokens = []
+                    if community_tokens:
+                        cfg.append(f" set community {' '.join(community_tokens)}")
         if route_maps:
             cfg.append("!")
 
@@ -1683,6 +1740,127 @@ def topo_to_containerlab(topo: dict) -> dict:
 
     return clab
 
+def _exec_command_allowed(command: str, derived_type: str) -> tuple[bool, str]:
+    """Single canonical read-only allow-list decision site for exec commands
+    (LD-B; DOCTRINE-1). Default-deny; raw shell closed. Returns (allowed, reason)."""
+    cmd = str(command or "").strip()
+    if not cmd:
+        return (False, "command is empty")
+    for _ch in (";", "|", "&", "$", "`", "<", ">", "(", ")", "{", "}", "\n", "\\"):
+        if _ch in cmd:
+            return (False, "raw shell / shell metacharacters are not an accepted exec command form")
+    try:
+        argv = shlex.split(cmd)
+    except ValueError:
+        return (False, "command is not a well-formed single command")
+    if not argv:
+        return (False, "command is empty")
+    if derived_type == "frr":
+        if argv[0] != "vtysh" or "-c" not in argv:
+            return (False, "frr exec commands must be read-only 'vtysh -c \"show \u2026\"'")
+        _ci = argv.index("-c")
+        if _ci + 1 >= len(argv):
+            return (False, "frr exec commands must be read-only 'vtysh -c \"show \u2026\"'")
+        _vc = argv[_ci + 1].strip().lower()
+        if _vc != "show" and not _vc.startswith("show "):
+            return (False, "frr exec commands must be read-only 'vtysh -c \"show \u2026\"'")
+        return (True, "")
+    if derived_type == "nft-fw":
+        if argv[0] != "nft" or len(argv) < 2 or argv[1] != "list":
+            return (False, "nft-fw exec commands must be read-only 'nft list \u2026' (mutation subcommands denied)")
+        return (True, "")
+    return (False, f"no read-only allow-list for node type {derived_type!r}")
+
+
+def _validate_exec_assertion(assertion, ctx: str) -> None:
+    """Validate a typed-predicate exec assertion (LD-C; VALIDATE-2/DOCTRINE-2).
+    Freeform grep impossible by construction; raises via die() on any non-typed/malformed form."""
+    _ops = ("contains", "not_contains", "equals", "matches", "count", "field")
+    if assertion is None:
+        die(f"{ctx}: exec test requires an 'assertion' (a typed predicate, e.g. {{contains: \"...\"}}); allowed operators: {', '.join(_ops)}")
+    if not isinstance(assertion, dict):
+        die(f"{ctx}: exec 'assertion' must be a typed predicate ({{<op>: ...}}), not freeform text; allowed operators: {', '.join(_ops)}")
+    _keys = list(assertion.keys())
+    if len(_keys) != 1 or _keys[0] not in _ops:
+        die(f"{ctx}: exec 'assertion' must declare exactly one typed operator from {{{', '.join(_ops)}}} (got {_keys!r})")
+    _op = _keys[0]
+    _val = assertion[_op]
+    if _op in ("contains", "not_contains", "equals", "matches"):
+        if not isinstance(_val, str) or not _val.strip():
+            die(f"{ctx}: exec assertion {_op!r} requires a non-empty string value")
+        if _op == "matches":
+            try:
+                re.compile(_val)
+            except re.error as _e:
+                die(f"{ctx}: exec assertion 'matches' is not a valid regex: {_e}")
+        return
+    if not isinstance(_val, dict):
+        die(f"{ctx}: exec assertion {_op!r} requires a typed mapping with 'op' in {{==,>=,<=}} and 'value'")
+    if _val.get("op") not in ("==", ">=", "<="):
+        die(f"{ctx}: exec assertion {_op!r} requires 'op' in {{==, >=, <=}} (got {_val.get('op')!r})")
+    if "value" not in _val:
+        die(f"{ctx}: exec assertion {_op!r} requires a 'value'")
+    if _op == "count":
+        if not isinstance(_val.get("pattern"), str) or not _val["pattern"].strip():
+            die(f"{ctx}: exec assertion 'count' requires a non-empty string 'pattern'")
+        try:
+            re.compile(_val["pattern"])
+        except re.error as _e:
+            die(f"{ctx}: exec assertion 'count' 'pattern' is not a valid regex: {_e}")
+        if not isinstance(_val.get("value"), int) or isinstance(_val.get("value"), bool):
+            die(f"{ctx}: exec assertion 'count' requires an integer 'value'")
+        _extra = set(_val.keys()) - {"pattern", "op", "value"}
+        if _extra:
+            die(f"{ctx}: exec assertion 'count' has unknown key(s) {sorted(_extra)!r} (allowed: pattern, op, value)")
+    else:
+        _path = _val.get("path")
+        if not isinstance(_path, list) or not _path:
+            die(f"{ctx}: exec assertion 'field' requires a non-empty list 'path' of literal key segments (e.g. [peers, '10.0.0.1', state])")
+        for _seg in _path:
+            if not isinstance(_seg, str) or not _seg.strip():
+                die(f"{ctx}: exec assertion 'field' 'path' segments must be non-empty strings")
+        if isinstance(_val.get("value"), (dict, list)):
+            die(f"{ctx}: exec assertion 'field' requires a scalar 'value'")
+        _extra = set(_val.keys()) - {"path", "op", "value"}
+        if _extra:
+            die(f"{ctx}: exec assertion 'field' has unknown key(s) {sorted(_extra)!r} (allowed: path, op, value)")
+
+
+def _is_valid_community_specifier(value):
+    """True iff value is a valid BGP community specifier: a literal AS:VAL
+    (two colon-separated integer parts) or a well-known token
+    (no-export, no-advertise, local-AS, internet; case-insensitive).
+
+    Shared by the bgp_community invariant validation (REQ-BGPCOM-SCHEMA-1 /
+    VALIDATE) and the route-map set.community validation
+    (REQ-BGPCOM-GEN-2, Amendment A1) -- single source of community grammar.
+    """
+    if not isinstance(value, str):
+        return False
+    _s = value.strip()
+    if _s.lower() in {"no-export", "no-advertise", "local-as", "internet"}:
+        return True
+    _parts = _s.split(":")
+    return len(_parts) == 2 and all(_p.isdigit() for _p in _parts)
+
+
+def _compile_frr_as_path_regex(pattern):
+    """Translate an FRR-native AS-path regex to a Python regex and compile it.
+
+    LD-C (§4.11): the FRR ``_`` idiom denotes an AS-path delimiter -- the start
+    of the path, a space between AS numbers, or the end of the path. Cassian's
+    canonical AS-path string is space-separated AS numbers in path order
+    (AS-confederation / AS-SET notation is out of scope, §4.11), so ``_``
+    translates deterministically to the non-capturing alternation ``(?:^| |$)``;
+    all other characters (including operator-supplied ``^``/``$`` anchors) are
+    preserved verbatim. Returns the compiled pattern; raises ``re.error`` if the
+    translated pattern does not compile. Single canonical transform shared by
+    validate-time (this module) and gate-time (cassian_engine).
+    """
+    translated = str(pattern).replace("_", "(?:^| |$)")
+    return re.compile(translated)
+
+
 def resolve_topology(topo: dict) -> dict:
     """
     Return a copy of topo with missing link IPv4 addresses allocated.
@@ -1719,6 +1897,46 @@ def resolve_topology(topo: dict) -> dict:
 
         n["runtime"] = rt
         n["_runtime"] = rt
+
+    # ----------------------------
+    # 0c) §4.10 GEN-2 (Amendment A1): route-map set.community syntax validation.
+    # First validation on the route-map `set` block; community-key only
+    # (set.med / set.localpref retrofit is out of scope -- BL-1b10-2).
+    # Reuses the shared community-specifier validator (single source of grammar).
+    # ----------------------------
+    for _n in (resolved.get("nodes") or []):
+        if not isinstance(_n, dict):
+            continue
+        _bgp = _n.get("bgp") if isinstance(_n.get("bgp"), dict) else {}
+        _rmaps = _bgp.get("route_maps") if isinstance(_bgp.get("route_maps"), list) else []
+        for _rm in _rmaps:
+            if not isinstance(_rm, dict):
+                continue
+            _rm_name = str(_rm.get("name") or "").strip()
+            _entries = _rm.get("entries") if isinstance(_rm.get("entries"), list) else []
+            for _entry in _entries:
+                if not isinstance(_entry, dict):
+                    continue
+                _setblk = _entry.get("set") if isinstance(_entry.get("set"), dict) else {}
+                if "community" not in _setblk:
+                    continue
+                _comm = _setblk.get("community")
+                if isinstance(_comm, str):
+                    _comm_items = [_comm]
+                elif isinstance(_comm, list):
+                    _comm_items = list(_comm)
+                else:
+                    die(
+                        f"Topology invalid: node {_n.get('name')!r} route-map {_rm_name!r}: "
+                        f"set.community must be a community string or a list of community strings"
+                    )
+                for _c in _comm_items:
+                    if not _is_valid_community_specifier(_c):
+                        die(
+                            f"Topology invalid: node {_n.get('name')!r} route-map {_rm_name!r}: "
+                            f"set.community value {_c!r} is malformed "
+                            f"(expected AS:VAL or one of no-export, no-advertise, local-AS, internet)"
+                        )
 
     # ----------------------------
     # 0) v1.5 EVPN Awareness (presence-only): normalize fabric.evpn into resolved output
@@ -1994,6 +2212,8 @@ def resolve_topology(topo: dict) -> dict:
                 "route_absent",
                 "bgp_med_equals",
                 "bgp_localpref_equals",
+                "bgp_community",
+                "bgp_as_path",
                 "route_advertised_to",
                 "route_not_advertised_to",
                 "evpn_mac_route_present",
@@ -2006,11 +2226,60 @@ def resolve_topology(topo: dict) -> dict:
                 die(
                     f"tests[{i}]: invariant.type unsupported ({inv_type!r}) "
                     f"(supported: bgp_session_up, route_present, route_absent, "
-                    f"bgp_med_equals, bgp_localpref_equals, route_advertised_to, route_not_advertised_to, "
+                    f"bgp_med_equals, bgp_localpref_equals, bgp_community, bgp_as_path, route_advertised_to, route_not_advertised_to, "
                     f"evpn_mac_route_present, evpn_mac_route_absent, "
                     f"evpn_vni_route_present, evpn_bgp_session_up, ospf_neighbor_up, interface_state)"
                 )
             t["type"] = inv_type
+        elif kind_norm == "exec":
+            ctx = f"tests[{i}] ({t.get('name', '<unnamed>')})"
+            for _alias in ("node", "on", "from"):
+                if _alias in t:
+                    _av = str(t.get(_alias) or "").strip()
+                    if "src" in t:
+                        _sv = str(t.get("src") or "").strip()
+                        if _av and _sv and _av != _sv:
+                            die(f"{ctx}: exec target {_alias!r} and 'src' disagree ({_av!r} vs {_sv!r})")
+                    elif _av:
+                        t["src"] = _av
+                    t.pop(_alias, None)
+            allowed_exec_keys = {"name", "kind", "src", "command", "assertion", "expect", "tags"}
+            for _k in list(t.keys()):
+                if _k not in allowed_exec_keys:
+                    die(
+                        f"{ctx}: exec test declares unknown key {_k!r} "
+                        f"(allowed: name, kind, src, command, assertion, expect, tags)"
+                    )
+            src_val = t.get("src")
+            if not isinstance(src_val, str) or not src_val.strip():
+                die(f"{ctx}: exec test requires a target node ('src', or alias 'node'/'on'/'from')")
+            src_node = src_val.strip()
+            _exec_node_types = {
+                str(_n.get("name") or "").strip(): str(_n.get("type") or "").strip().lower()
+                for _n in (resolved.get("nodes") or [])
+                if isinstance(_n, dict) and str(_n.get("name") or "").strip()
+            }
+            if src_node not in _exec_node_types:
+                die(f"{ctx}: exec test target node {src_node!r} is not declared in topology 'nodes:'")
+            derived_type = _exec_node_types[src_node]
+            if derived_type not in ("frr", "nft-fw"):
+                die(
+                    f"{ctx}: exec test target node {src_node!r} has node type "
+                    f"{derived_type!r}; exec supports only node types 'frr', 'nft-fw'"
+                )
+            t["src"] = src_node
+            cmd_raw = t.get("command")
+            if not isinstance(cmd_raw, str) or not cmd_raw.strip():
+                die(f"{ctx}: exec test requires a 'command' (a read-only command for node type {derived_type!r})")
+            _allowed, _why = _exec_command_allowed(cmd_raw, derived_type)
+            if not _allowed:
+                die(
+                    f"{ctx}: exec command rejected \u2014 {cmd_raw.strip()!r} is not read-only "
+                    f"for node {src_node!r} (type {derived_type!r}): {_why}. "
+                    f"Allowed: frr -> vtysh -c \"show \u2026\"; nft-fw -> nft list \u2026"
+                )
+            t["command"] = cmd_raw.strip()
+            _validate_exec_assertion(t.get("assertion"), ctx)
         else:
             if "kind" in t and "type" in t:
                 die(f"tests[{i}]: has both 'kind' and 'type' (use only 'kind')")
@@ -2087,6 +2356,100 @@ def resolve_topology(topo: dict) -> dict:
                         t["expected"] = int(expv)
                     except Exception:
                         die(f"{ctx}: {inv_type}.expected must be an integer")
+
+            elif inv_type == "bgp_community":
+                # §4.10 bgp_community resolve-time schema + field validation
+                # (SCHEMA-1 / VALIDATE-1..6); each rejection is §13(a)-sufficient
+                # (names field / offending value / corrective action).
+                pfx = t.get("prefix")
+                if not isinstance(pfx, str) or not pfx.strip():
+                    die(f"{ctx}: bgp_community requires 'prefix' as CIDR (e.g. 10.0.0.0/24)")
+                try:
+                    _ = ipaddress.ip_network(pfx.strip(), strict=False)
+                except Exception:
+                    die(f"{ctx}: bgp_community.prefix must be a valid CIDR (e.g. 10.0.0.0/24)")
+
+                expv = t.get("expected")
+                mt = t.get("match")
+                if isinstance(expv, list):
+                    if mt is None or str(mt).strip().lower() not in ("any", "all"):
+                        die(f"{ctx}: bgp_community.match must be one of {{any, all}} and is required when 'expected' is a list")
+                    if not expv:
+                        die(f"{ctx}: bgp_community requires a non-empty 'expected' (a community or a list of communities)")
+                    _exp_items = list(expv)
+                    t["match"] = str(mt).strip().lower()
+                elif isinstance(expv, str) and expv.strip():
+                    if mt is not None:
+                        die(f"{ctx}: bgp_community.match is not permitted when 'expected' is a single community")
+                    _exp_items = [expv]
+                else:
+                    die(f"{ctx}: bgp_community requires 'expected' (a community string or a list of community strings)")
+
+                for _c in _exp_items:
+                    if not _is_valid_community_specifier(_c):
+                        die(f"{ctx}: bgp_community.expected community {_c!r} is malformed (expected AS:VAL or one of no-export, no-advertise, local-AS, internet)")
+
+                _nodes_for_lookup = {
+                    str(_n.get("name") or "").strip(): _n
+                    for _n in (resolved.get("nodes") or [])
+                    if isinstance(_n, dict)
+                    and isinstance(_n.get("name"), str)
+                    and str(_n.get("name") or "").strip()
+                }
+                _src_node = _nodes_for_lookup.get(src.strip())
+                if _src_node is None:
+                    die(
+                        f"{ctx}: invariant 'bgp_community' references src "
+                        f"{src!r} but no node by that name exists in the topology"
+                    )
+                _src_kind = str(_src_node.get("type") or "").strip().lower()
+                if _src_kind != "frr":
+                    die(
+                        f"{ctx}: invariant 'bgp_community' references src "
+                        f"{src!r} of type {_src_kind!r}; this invariant requires "
+                        f"src to be a node of type 'frr'"
+                    )
+
+            elif inv_type == "bgp_as_path":
+                # §4.11 bgp_as_path resolve-time schema + field validation
+                # (SCHEMA-1 / VALIDATE-1..5); each rejection is §13(a)-sufficient
+                # (names field / offending value / corrective action).
+                pfx = t.get("prefix")
+                if not isinstance(pfx, str) or not pfx.strip():
+                    die(f"{ctx}: bgp_as_path requires 'prefix' as CIDR (e.g. 10.0.0.0/24)")
+                try:
+                    _ = ipaddress.ip_network(pfx.strip(), strict=False)
+                except Exception:
+                    die(f"{ctx}: bgp_as_path.prefix must be a valid CIDR (e.g. 10.0.0.0/24)")
+
+                ap = t.get("as_path")
+                if not isinstance(ap, str) or not ap.strip():
+                    die(f"{ctx}: bgp_as_path requires 'as_path' as a non-empty AS-path regex")
+                try:
+                    _compile_frr_as_path_regex(ap)
+                except re.error as _e:
+                    die(f"{ctx}: bgp_as_path.as_path {ap!r} is not a valid AS-path regex: {_e}")
+
+                _nodes_for_lookup = {
+                    str(_n.get("name") or "").strip(): _n
+                    for _n in (resolved.get("nodes") or [])
+                    if isinstance(_n, dict)
+                    and isinstance(_n.get("name"), str)
+                    and str(_n.get("name") or "").strip()
+                }
+                _src_node = _nodes_for_lookup.get(src.strip())
+                if _src_node is None:
+                    die(
+                        f"{ctx}: invariant 'bgp_as_path' references src "
+                        f"{src!r} but no node by that name exists in the topology"
+                    )
+                _src_kind = str(_src_node.get("type") or "").strip().lower()
+                if _src_kind != "frr":
+                    die(
+                        f"{ctx}: invariant 'bgp_as_path' references src "
+                        f"{src!r} of type {_src_kind!r}; this invariant requires "
+                        f"src to be a node of type 'frr'"
+                    )
 
             elif inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent"):
                 mac = t.get("mac")
@@ -2330,6 +2693,33 @@ def resolve_topology(topo: dict) -> dict:
                     die(
                         f"{ctx}: invariant 'interface_state' references unknown 'node' value "
                         f"{node_s!r} (node not declared in topology 'nodes:' section)"
+                    )
+
+                # REQ-ENGVAL-H53-1/-2/-3 / B04-B06 (§4.4 BL-H5-3): the
+                # referenced interface must exist in node_s's resolved
+                # interface set, parallel to the node-existence check above.
+                # Resolved interface set (LD-2): link interfaces + 'lo' +
+                # fw/host interfaces. Assembled here (no pre-existing per-node
+                # interface structure exists). Link node:iface endpoints
+                # (~L1085-1086) and fw.interfaces (~L1781-1795) are the source
+                # of names, not re-validated here (B06 "Not").
+                _declared_ifaces = {"lo"}
+                for _link in (resolved.get("links") or []):
+                    for _ep in (_link.get("endpoints") or []):
+                        if isinstance(_ep, str) and ":" in _ep:
+                            _ep_node, _ep_iface = _ep.split(":", 1)
+                            if _ep_node.strip() == node_s and _ep_iface.strip():
+                                _declared_ifaces.add(_ep_iface.strip())
+                _node_intfs = _nodes_for_lookup[node_s].get("interfaces")
+                if isinstance(_node_intfs, dict):
+                    for _ifname in _node_intfs.keys():
+                        if isinstance(_ifname, str) and _ifname.strip():
+                            _declared_ifaces.add(_ifname.strip())
+                if t["interface"] not in _declared_ifaces:
+                    die(
+                        f"{ctx}: invariant 'interface_state' references unknown 'interface' "
+                        f"value {t['interface']!r} on node {node_s!r} "
+                        f"(declared interfaces: {', '.join(sorted(_declared_ifaces))})"
                     )
 
                 # REQ-H5-7 / B-V05: state default 'up' materialised at Resolve

@@ -1,0 +1,53 @@
+=== CI SUMMARY ===
+verdict: FAIL
+failed_tests: ["r2_learns_route_1_1_1_1_32"]
+failed_scenarios: []
+artifact_root: labs/clab-ai-change-udi-route-failing/
+
+=== AUTHORITATIVE TEST VERDICT ===
+verdict: FAIL
+scope: topology=ai-change-udi-route-failing tests=all scenarios=none
+
+lab: ai-change-udi-route-failing
+result: fail
+tests: total=1 passed=0 failed=1
+failed_tests:
+ - r2_learns_route_1_1_1_1_32 (exec) r2-> : exec assertion not satisfied (observed fail, expected pass)
+    exec:
+      command: vtysh -c "show bgp ipv4 unicast 1.1.1.1/32 json"
+      assertion: {"contains": "1.1.1.1/32"}
+      expected: pass
+    observed:
+      command: vtysh -c "show bgp ipv4 unicast 1.1.1.1/32 json"
+      returncode: 0
+      stdout_excerpt: {
+}
+
+
+Result:
+  RESULT: FAIL
+
+Authority:
+  results.json is the authoritative verdict artifact
+
+Summary:
+  results.summary.txt is explanatory only and does not determine verdicts
+
+Scope:
+  Validated: declared tests
+  Not validated: scenario behavior
+
+FAIL means:
+  One or more declared checks did not match expected outcomes
+  This is a validation failure, not a system/runtime failure
+
+Validation summary:
+  Lab: ai-change-udi-route-failing
+  Artifacts: labs/clab-ai-change-udi-route-failing/
+  Tests executed: 1
+  Scenarios executed: 0
+  Failures: 1
+  FAIL: test=r2_learns_route_1_1_1_1_32 expected=pass observed=fail
+
+Share this:
+  labs/clab-ai-change-udi-route-failing//results.json

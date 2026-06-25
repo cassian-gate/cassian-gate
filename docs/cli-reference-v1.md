@@ -73,6 +73,31 @@ Default behavior:
 
 ---
 
+### `cassian import <source> --out <dir> [--backend <name>]`
+
+**Purpose:** Bootstrap an authoritative pair — a topology plus starter invariants — from committed brownfield sources, fully offline.
+
+Arguments:
+
+* `<source>`  
+  Brownfield source directory containing a committed NetBox-derived export (`netbox_export.json`) and rendered device configs under `rendered/`. This is Cassian Gate's **defined input contract**, not a raw NetBox API dump; see the [Brownfield Importer](brownfield-importer.md) guide.
+
+Flags:
+
+* `-o`, `--out <dir>` (required)  
+  Output directory for the emitted pair: an authoritative `topology.yaml` (with embedded scenario tests) and `tests/starter_invariants.yaml`.
+
+* `--backend <name>`  
+  Importer backend (default: `netbox`). The backend seam is open for future sources; additional backends are planned but not yet available.
+
+Behavior:
+
+* **Offline and deterministic.** No network or live-device access; identical inputs always produce byte-identical output.
+* **No synthesis.** Starter invariants are generated only from explicitly declared facts, never inferred or guessed.
+* **Fail-closed.** Unsupported or malformed input is rejected with **exit 2** (input/artifact error; see §6) and an actionable message — the importer never emits a partial or invalid pair.
+
+---
+
 ## 2) Exec and Inspection Helpers
 
 ### `cassian exec <lab> <node> [command...]`
@@ -151,15 +176,18 @@ Notes:
 
 ## 3) Gate Command
 
-### `cassian test <lab> [flags]`
+### `cassian test <lab | topology.yaml> [flags]`
 
-**Purpose:** Run declared tests and scenarios for a lab.
+**Purpose:** Run declared tests and scenarios. The single positional argument accepts **two forms** with distinct semantics, selected by whether the value is a topology file path:
 
-**Authority:** This is the gate path (clean-state semantics are enforced by your operational workflow; the contract remains binding).
+* **`cassian test <topology.yaml>` (gate mode)** — when the positional ends in `.yaml`/`.yml`, runs an **authoritative clean-state gate** (`up → test → down`) using the topology name (or filename stem). This is the authoritative gate path.
+* **`cassian test <lab>` (lab-test mode)** — when the positional is a lab name, runs the declared tests and scenarios against an **existing** `labs/clab-<lab>/` artifact set (no deploy/teardown). This does not perform the clean-state gate cycle.
+
+**Authority:** Gate mode (`<topology.yaml>`) is the authoritative clean-state gate (`up → test → down`); lab-test mode (`<lab>`) runs tests against pre-existing lab artifacts. The contract remains binding in both.
 
 Arguments:
 
-* `<lab>`: lab name (e.g. `three-frr-two-hosts-fw-routed`)
+* `<lab | topology.yaml>`: **either** a lab name (e.g. `three-frr-two-hosts-fw-routed`, → lab-test mode) **or** a topology file path ending in `.yaml`/`.yml` (e.g. `topologies/three-frr.yaml`, → authoritative clean-state gate mode). Optional when using `--two-run` (then provide `--two-run-topology`).
 
 Test selection flags:
 
@@ -169,6 +197,10 @@ Test selection flags:
 * `--kind ping|tcp`  
   Run only tests of this kind.  
   **Note:** this filter is limited to `ping|tcp` even though v1.x supports `bgp_neighbor` as an atomic test type.
+
+* `--tag <tag>` (repeatable)  
+  Run only tests carrying at least one of the supplied tags (OR-union across repeats). Kind-agnostic.  
+  Non-matching declared tests are recorded explicitly as `not_executed` (never silently dropped); the gate verdict is computed from executed tests only. A `--tag` selection matching nothing hard-fails, like `--name`/`--kind` zero-match.
 
 * `--keep-going`  
   Run all tests even if one fails (still exits non-zero if any fail).

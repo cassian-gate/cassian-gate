@@ -1,0 +1,41 @@
+name: bgp-session-up-expect-fail
+
+nodes:
+  - name: r1
+    type: frr
+    asn: 65001
+    router_id: 1.1.1.1
+    bgp:
+      neighbors:
+        - peer: r2
+          remote_as: 65002
+  - name: r2
+    type: frr
+    asn: 65002
+    router_id: 2.2.2.2
+    bgp:
+      neighbors:
+        - peer: r1
+          remote_as: 65001
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["10.0.0.1/30", "10.0.0.2/30"]
+
+tests:
+  # Q4 (expect: fail over a holding predicate -> verdict: fail): the session to the
+  # configured neighbor comes up (observed: pass); expect: fail -> the expected failure did not occur.
+  - name: q4_bgp_session_up_r1_to_10_0_0_2_holds_but_expect_fail
+    kind: invariant
+    type: bgp_session_up
+    node: r1
+    neighbor: 10.0.0.2
+    expect: fail
+  # Q3 (expect: fail over a failing predicate -> verdict: pass): the session to an
+  # unconfigured peer is not up (observed: fail); expect: fail -> the expected failure occurred.
+  - name: q3_bgp_session_up_r1_to_unconfigured_peer_fails_expect_fail
+    kind: invariant
+    type: bgp_session_up
+    node: r1
+    dst: 10.0.0.99
+    expect: fail

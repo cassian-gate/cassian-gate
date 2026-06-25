@@ -1,0 +1,54 @@
+name: route-not-advertised-to-expect-fail
+
+nodes:
+  - name: r1
+    type: frr
+    asn: 65001
+    router_id: 1.1.1.1
+    networks:
+      - 10.10.10.0/24
+    bgp:
+      neighbors:
+        - peer: r2
+          remote_as: 65002
+
+  - name: r2
+    type: frr
+    asn: 65002
+    router_id: 2.2.2.2
+    bgp:
+      neighbors:
+        - peer: r1
+          remote_as: 65001
+
+  - name: h1
+    type: host
+    ip: 10.10.10.10/24
+    gw: 10.10.10.1
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["192.0.2.1/31", "192.0.2.0/31"]
+
+  - endpoints: ["h1:eth1", "r1:eth2"]
+    ipv4: ["10.10.10.10/24", "10.10.10.1/24"]
+
+tests:
+  # Q3 (failing predicate -> verdict: pass): r1 IS advertising 10.10.10.0/24 to r2, so
+  # "not advertised" does not hold (observed: fail); expect: fail -> the expected failure occurred.
+  - name: q3_route_not_advertised_to_10_10_10_0_24_is_advertised_expect_fail
+    kind: invariant
+    type: route_not_advertised_to
+    node: r1
+    peer: r2
+    prefix: 10.10.10.0/24
+    expect: fail
+  # Q4 (holding predicate -> verdict: fail): r1 does not advertise 10.99.99.0/24 (not in networks),
+  # so "not advertised" holds (observed: pass); expect: fail -> the expected failure did not occur.
+  - name: q4_route_not_advertised_to_10_99_99_0_24_not_advertised_but_expect_fail
+    kind: invariant
+    type: route_not_advertised_to
+    node: r1
+    peer: r2
+    prefix: 10.99.99.0/24
+    expect: fail

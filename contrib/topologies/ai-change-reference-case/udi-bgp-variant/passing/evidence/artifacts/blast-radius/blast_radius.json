@@ -1,0 +1,36 @@
+{
+  "authority": "supporting_evidence",
+  "counts": {
+    "directly_covered_links": 0,
+    "directly_covered_nodes": 1,
+    "potentially_affected_links": 1,
+    "potentially_affected_nodes": 1
+  },
+  "coverage_basis": [
+    "test:r2_learns_route_1_1_1_1_32"
+  ],
+  "directly_covered": {
+    "links": [],
+    "nodes": [
+      "r2"
+    ]
+  },
+  "potentially_affected": {
+    "links": [
+      {
+        "id": "r1:eth1 -- r2:eth1",
+        "reason": "component_touching_covered_scope"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "r1",
+        "reason": "graph_connected_to_covered_scope"
+      }
+    ]
+  },
+  "schema": "blast_radius.v1",
+  "topology": {
+    "name": "ai-change-udi-route-passing"
+  }
+}

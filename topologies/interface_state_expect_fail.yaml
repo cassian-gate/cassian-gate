@@ -1,0 +1,29 @@
+# Q3 + Q4 expect: fail fixture for interface_state on a minimal 2-node link.
+# r1:eth1 comes up at deploy/provision (admin==up, operstate==UP).
+name: interface-state-expect-fail
+nodes:
+  - name: r1
+    type: frr
+  - name: r2
+    type: frr
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+tests:
+  # Q4 (holding predicate -> verdict: fail): asserted state up matches the running interface
+  # (observed: pass); expect: fail -> the expected failure did not occur.
+  - name: q4_interface_state_r1_eth1_up_holds_but_expect_fail
+    kind: invariant
+    type: interface_state
+    node: r1
+    interface: eth1
+    state: up
+    expect: fail
+  # Q3 (failing predicate -> verdict: pass): asserted state down does not match the running
+  # (up) interface (observed: fail); expect: fail -> the expected failure occurred.
+  - name: q3_interface_state_r1_eth1_down_mismatch_fails_expect_fail
+    kind: invariant
+    type: interface_state
+    node: r1
+    interface: eth1
+    state: down
+    expect: fail

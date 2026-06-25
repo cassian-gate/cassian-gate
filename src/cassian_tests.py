@@ -3227,6 +3227,50 @@ def _render_scenarios_summary(results: dict) -> str:
                         if isinstance(os_last_error, str) and os_last_error.strip():
                             line_parts.append(f"last_error=\"{os_last_error.strip()}\"")
 
+                # BL-H3-8: existing wait_for types (ping, tcp, route_prefix) read
+                # their type label and type-specific identifiers from the
+                # F6-stabilized scenario step schema (st.wait_type / st.meta),
+                # mirroring the new-type block above. The legacy st.wait_for path
+                # is None on the normal path, so without this the existing types
+                # render a bare line with no type label or endpoint/selector
+                # identifiers. Scoped to the three existing types only; no
+                # state=/last_error= diagnostics (those remain new-type behavior).
+                elif isinstance(wait_type, str) and wait_type.strip() in (
+                    "ping",
+                    "tcp",
+                    "route_prefix",
+                ):
+                    wt = wait_type.strip()
+                    # type
+                    line_parts.append(f"type={wt}")
+                    # source node (all existing types)
+                    frm = meta.get("from")
+                    if isinstance(frm, str) and frm.strip():
+                        line_parts.append(f"from={frm.strip()}")
+                    # type-specific endpoint / selector identifiers
+                    if wt in ("ping", "tcp"):
+                        m_to = meta.get("to")
+                        if isinstance(m_to, str) and m_to.strip():
+                            line_parts.append(f"to={m_to.strip()}")
+                        m_src_if = meta.get("src_if")
+                        if isinstance(m_src_if, str) and m_src_if.strip():
+                            line_parts.append(f"src_if={m_src_if.strip()}")
+                        if wt == "ping":
+                            m_count = meta.get("count")
+                            if m_count is not None:
+                                line_parts.append(f"count={m_count}")
+                        if wt == "tcp":
+                            m_port = meta.get("port")
+                            if m_port is not None:
+                                line_parts.append(f"port={m_port}")
+                    elif wt == "route_prefix":
+                        m_src = meta.get("src")
+                        if isinstance(m_src, str) and m_src.strip():
+                            line_parts.append(f"src={m_src.strip()}")
+                        m_pfx = meta.get("prefix")
+                        if isinstance(m_pfx, str) and m_pfx.strip():
+                            line_parts.append(f"prefix={m_pfx.strip()}")
+
             elif stype == "wait_for_bgp":
                 node = st.get("node")
                 if isinstance(node, str) and node.strip():
@@ -3352,6 +3396,64 @@ def _format_observed_state_block(observed_state: dict, truncated: bool) -> list[
     return out
 
 
+def _format_observed_state_absence_block(
+    meta: dict,
+    src: str,
+    dst: str,
+    expected: str,
+) -> list[str]:
+    """
+    Deterministic absence indicator for a genuine failed-invariant record whose
+    observed_state is non-dict (BL-6 B02 / REQ-BL6-2/3/4/12).
+
+    Parallel to the present `observed:` block, surfaces:
+      - header 'observed:' at 4-space indent
+      - 'type:'     <invariant type>              (a)
+      - 'target:'   <declaration-derived target>  (a)
+      - 'expected:' <declared expectation>        (b)
+      - 'detail:'   explicit structured-detail-unavailable statement (c)
+
+    All values are deterministic and declaration-derived (no host / path /
+    run-id / timestamp / PID; only an allowlist of declaration-derived meta
+    target keys is read, so runtime-variant meta keys such as
+    observed_neighbor_count never enter the rendered surface). This preserves
+    the H2 D06 environmental-drift filter and byte-identity across replay
+    (REQ-BL6-8 / REQ-BL6-10).
+
+    Returns the block as a list of lines (no trailing newline).
+    """
+    if not isinstance(meta, dict):
+        meta = {}
+
+    inv_type = str(meta.get("type") or "").strip() or "<unknown>"
+
+    # Declaration-derived target locator keys only. Runtime / observed_* keys
+    # are deliberately excluded to preserve byte-identity (D06).
+    target_keys = ("peer", "prefix", "neighbor", "target", "network")
+    target_parts: list[str] = []
+    src_s = str(src or "").strip()
+    if src_s:
+        target_parts.append(src_s)
+    for key in target_keys:
+        if key in meta:
+            val = str(meta.get(key) or "").strip()
+            if val:
+                target_parts.append(f"{key}={val}")
+    dst_s = str(dst or "").strip()
+    if not target_parts and dst_s:
+        target_parts.append(dst_s)
+    target = " ".join(target_parts) if target_parts else "<unspecified>"
+
+    expected_s = str(expected or "").strip() or "<unspecified>"
+
+    return [
+        "    observed:",
+        f"      type: {inv_type}",
+        f"      target: {target}",
+        f"      expected: {expected_s}",
+        "      detail: (structured failure detail unavailable for this invariant type)",
+    ]
+
 def _format_test_summary(results: dict) -> str:
     lab = results.get("lab", "")
     summ = results.get("summary", {}) or {}
@@ -3371,7 +3473,12 @@ def _format_test_summary(results: dict) -> str:
     # Authoritative duration remains in results.json; do not duplicate nondeterminism here.
 
     # Keep tests as declared tests summary (Option A)
-    lines.append(f"tests: total={total} passed={passed} failed={failed}")
+    # §4.8 WI-4 (REQ-TAG-RENDER-1): surface not_executed when present so the summary line
+    # reconciles (total == passed + failed + not_executed + skipped); silence != pass
+    # (Doctrine §1.11). Additive: suffix omitted when zero (byte-unchanged for prior runs).
+    not_executed = int(summ.get("not_executed") or 0)
+    _ne_suffix = f" not_executed={not_executed}" if not_executed else ""
+    lines.append(f"tests: total={total} passed={passed} failed={failed}{_ne_suffix}")
 
     # -------------------------------------------------------------------------
     # Hard failure (runtime fault) summary
@@ -3458,14 +3565,22 @@ def _format_test_summary(results: dict) -> str:
                 else:
                     err = err
 
-            # WI-2: capture observed_state and observed_state_truncated for
-            # per-failed-invariant `observed:` block rendering. None / False
-            # for non-invariant or unpopulated records (R27).
+            # WI-1 (BL-6): capture observed_state + truncation for the present
+            # `observed:` block (R24-R28 / B01), and the invariant meta + declared
+            # expectation for the genuine-absence indicator (REQ-BL6-2/3/4). Empty
+            # defaults ({} / "") for non-invariant or unpopulated records; R27
+            # suppression on non-invariant kinds is preserved at the render branch.
             observed_state = t.get("observed_state")
             observed_state_truncated = bool(t.get("observed_state_truncated"))
+            inv_meta = t.get("meta") or {}
+            inv_expected = t.get("expected", "")
 
             failed_tests.append(
-                (name, kind, src, dst, err, observed_state, observed_state_truncated)
+                (
+                    name, kind, src, dst, err,
+                    observed_state, observed_state_truncated,
+                    inv_meta, inv_expected,
+                )
             )
 
     # WI-2: sort by name only because tuple positions 5-6 may carry dict /
@@ -3476,25 +3591,86 @@ def _format_test_summary(results: dict) -> str:
     if failed_tests:
         lines.append("failed_tests:")
         cap = 10
-        for (name, kind, src, dst, err, observed_state, observed_state_truncated) in failed_tests[:cap]:
+        for (
+            name, kind, src, dst, err,
+            observed_state, observed_state_truncated,
+            inv_meta, inv_expected,
+        ) in failed_tests[:cap]:
             line = f" - {name} ({kind}) {src}->{dst}"
             if err:
                 line += f" : {err}"
             lines.append(line)
 
-            # WI-2: per-failed-invariant `observed:` block (R24-R28).
-            # Suppressed for non-invariant kinds (ping/tcp/bgp_neighbor/prereq)
-            # and when observed_state is missing or not a dict (R27).
-            if kind == "invariant" and isinstance(observed_state, dict):
-                lines.extend(
-                    _format_observed_state_block(
-                        observed_state, observed_state_truncated
+            # WI-1 (BL-6): per-failed-invariant observed_state surface.
+            # Present path (dict) -> explicit `observed:` block (R24-R28 / B01,
+            # unchanged). Genuine-absence path (non-dict) -> explicit absence
+            # indicator surfacing (a) type+target, (b) expectation, and an
+            # explicit (c)-unavailable statement (REQ-BL6-2/3/4/12). Both are
+            # suppressed for non-invariant kinds (ping/tcp/bgp_neighbor/prereq):
+            # R27 preserved by the outer kind == "invariant" guard.
+            if kind == "invariant":
+                if isinstance(observed_state, dict):
+                    lines.extend(
+                        _format_observed_state_block(
+                            observed_state, observed_state_truncated
+                        )
                     )
-                )
+                else:
+                    lines.extend(
+                        _format_observed_state_absence_block(
+                            inv_meta, src, dst, inv_expected
+                        )
+                    )
+            elif kind == "exec":
+                # RENDER-1/2: failed exec renders identity (meta.exec) + expectation +
+                # observed_state via _format_observed_state_block. Additive; the
+                # kind == "invariant" path above stays byte-unchanged (RENDER-3 / PRES-2).
+                _x = inv_meta.get("exec") if isinstance(inv_meta.get("exec"), dict) else {}
+                lines.append("    exec:")
+                lines.append(f"      command: {_x.get('command', '<unknown>')}")
+                lines.append(f"      assertion: {json.dumps(_x.get('assertion'), sort_keys=True)}")
+                lines.append(f"      expected: {str(inv_expected or '').strip() or '<unspecified>'}")
+                if isinstance(observed_state, dict):
+                    lines.extend(
+                        _format_observed_state_block(
+                            observed_state, observed_state_truncated
+                        )
+                    )
+                else:
+                    # F-1 (Fix-B): §13(c) absence-clause symmetry with the invariant
+                    # path. A failed exec record with no structured observed_state is the
+                    # observed:pass x expect:fail quadrant -- the command ran and the
+                    # assertion was satisfied, so there is no failure-state payload. Emit
+                    # an explicit unavailable indicator rather than an implicitly-absent
+                    # (c); silence != pass (DC §1.11) stays doubly guarded by the err line
+                    # and the rendered expected: above.
+                    lines.append("    observed:")
+                    lines.append(
+                        "      detail: (structured failure detail unavailable: assertion satisfied, declared expectation was fail)"
+                    )
         if len(failed_tests) > cap:
             lines.append(f" - (+{len(failed_tests) - cap} more)")
     else:
         lines.append("failed_tests: (none)")
+
+    # -------------------------------------------------------------------------
+    # §4.8 WI-4 (REQ-TAG-RENDER-1/2): explicitly-recorded non-executed tests.
+    # Doctrine §1.11 (silence != pass): every declared test excluded by a selector
+    # (--tag/--name/--kind) or dropped by fail-fast is rendered with an explicit
+    # indicator (name + kind + reason) in declared order. Additive; the failed_tests
+    # collection and its invariant/exec detail branches above stay byte-unchanged.
+    not_executed_tests = []
+    for t in results.get("tests", []) or []:
+        if isinstance(t, dict) and t.get("verdict") == "not_executed":
+            ne_name = t.get("name", "<unnamed>")
+            ne_kind = t.get("kind", "")
+            ne_meta = t.get("meta") or {}
+            ne_reason = str(ne_meta.get("not_executed_reason") or "unspecified")
+            not_executed_tests.append((ne_name, ne_kind, ne_reason))
+    if not_executed_tests:
+        lines.append("not_executed_tests:")
+        for ne_name, ne_kind, ne_reason in not_executed_tests:
+            lines.append(f" - {ne_name} ({ne_kind}) not_executed: {ne_reason}")
 
     # -------------------------------------------------------------------------
     # Failed scenarios list (optional)
@@ -3585,14 +3761,18 @@ def render_gate_result_block(results: dict, *, authority_kind: str | None = None
     tests = results.get("tests", []) or []
     prereqs_executed = 0
     declared_executed = 0
+    declared_not_executed = 0  # §4.8 repair (F2): non-executed records are not "executed"
     if isinstance(tests, list):
         for t in tests:
             if not isinstance(t, dict):
                 continue
             nm = str(t.get("name") or "").strip().lower()
             kd = str(t.get("kind") or "").strip().lower()
+            vd = str(t.get("verdict") or "").strip().lower()
             if kd == "prereq" or nm.startswith("prereq:"):
                 prereqs_executed += 1
+            elif vd == "not_executed":
+                declared_not_executed += 1
             else:
                 declared_executed += 1
 
@@ -3613,6 +3793,8 @@ def render_gate_result_block(results: dict, *, authority_kind: str | None = None
     out.append(mode_line)
     out.append(f"Prereqs executed: {prereqs_executed}")
     out.append(f"Declared tests executed: {declared_executed}")
+    if declared_not_executed:
+        out.append(f"Declared tests not executed: {declared_not_executed}")
     out.append(f"Scenarios executed: {scen_total}")
     out.append("")
 
@@ -3695,16 +3877,29 @@ def render_gate_result_block(results: dict, *, authority_kind: str | None = None
     # WI-1: On PASS, show which tests ran (bounded; deterministic; derived from results["tests"]).
     # Presentation-only: must not affect verdicts, exit codes, or artifacts.
     if verdict_s == "PASS" and (not is_smoke) and isinstance(tests, list) and tests:
+        # §4.8 repair (F2): non-executed records surfaced separately, never as PASS
+        # (Doctrine §1.11 silence != pass). Executed-record PASS rendering is byte-stable.
+        executed = [t for t in tests if isinstance(t, dict) and str(t.get("verdict") or "").strip().lower() != "not_executed"]
         out.append("")
         out.append("Tests:")
         cap = 10
-        for t in tests[:cap]:
+        for t in executed[:cap]:
             if not isinstance(t, dict):
                 continue
             name = str(t.get("name") or "<unnamed>").strip() or "<unnamed>"
             out.append(f" - PASS {name}")
-        if len(tests) > cap:
-            out.append(f" - (+{len(tests) - cap} more)")
+        if len(executed) > cap:
+            out.append(f" - (+{len(executed) - cap} more)")
+        not_exec = [t for t in tests if isinstance(t, dict) and str(t.get("verdict") or "").strip().lower() == "not_executed"]
+        if not_exec:
+            out.append("")
+            out.append("Not executed:")
+            for t in not_exec[:cap]:
+                name = str(t.get("name") or "<unnamed>").strip() or "<unnamed>"
+                reason = str((t.get("meta") or {}).get("not_executed_reason") or "unspecified")
+                out.append(f" - {name} (not_executed: {reason})")
+            if len(not_exec) > cap:
+                out.append(f" - (+{len(not_exec) - cap} more)")
 
     if verdict_s == "FAIL":
         out.append("")
@@ -3996,6 +4191,7 @@ def write_test_summary_artifact(lab: str, results: dict) -> Path:
             "\n"
             "PASS does not mean:\n"
             "  Validation of behaviors not declared in this topology\n"
+            "  Validation of items shown under \"Not validated\" above\n"
             "  Coverage of all possible failure modes\n"
         )
         fail_meaning_block = ""

@@ -1,0 +1,55 @@
+# Phase 1b / §4.4 (BL-H5-7) — positive proof topology for scenario-path
+# invariant dispatch (REQ-ENGVAL-H57-1/-2; proof P-H57-POS).
+#
+# Same OSPF adjacency as topologies/ospf_neighbor_up.yaml (the standalone
+# positive proof), but the ospf_neighbor_up invariant is invoked from a
+# scenario `run:` step rather than as a standalone test. This is the gap
+# driver for BL-H5-7: before the dispatch generalization the scenario
+# `run:` path routed only interface_state to run_invariant_test, and every
+# other invariant type -- ospf_neighbor_up included -- fell through to the
+# `dst`-demanding branch and emitted "missing src/dst" before any dispatch
+# fired. After the fix the scenario step dispatches via run_invariant_test
+# and records a genuine evaluated verdict.
+#
+# Contract: cassian test topologies/h57_ospf_neighbor_up_scenario.yaml
+#   --scenario check_ospf_via_scenario MUST dispatch the ospf_neighbor_up
+#   step (a genuine verdict is recorded; NO "missing src/dst" pre-dispatch
+#   line). A genuine FAIL (no lab/adjacency) still proves dispatch per the
+#   §19.1 silence-equals-pass counter-scenario; PASS under a deployed lab.
+#
+# Two FRR nodes (r1, r2) form a single-area OSPF adjacency on a
+# point-to-point link; both declare area 0 and OSPF networks covering the
+# auto-allocated /31 link subnet (via the 10.0.0.0/16 supernet) and the
+# per-node loopback /32. r1 observes r2's router-id (2.2.2.2) at "Full".
+name: h57-ospf-neighbor-up-scenario
+nodes:
+  - name: r1
+    type: frr
+    router_id: 1.1.1.1
+    ospf:
+      area: 0
+      networks:
+        - 10.0.0.0/16
+        - 1.1.1.1/32
+  - name: r2
+    type: frr
+    router_id: 2.2.2.2
+    ospf:
+      area: 0
+      networks:
+        - 10.0.0.0/16
+        - 2.2.2.2/32
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+tests:
+  - name: ospf_up_r1_to_r2
+    kind: invariant
+    type: ospf_neighbor_up
+    src: r1
+    neighbor: 2.2.2.2
+    expect: pass
+scenarios:
+  - id: check_ospf_via_scenario
+    description: "Invoke the ospf_neighbor_up invariant via a scenario run: step (BL-H5-7 dispatch-generalization positive proof)."
+    steps:
+      - run: ospf_up_r1_to_r2

@@ -37,6 +37,21 @@ Rules:
 * invariant tests run after the v1.x prerequisite phases (`Resolve` → `Generate` → `Deploy` → `Provision`); they execute during the `Test` phase
 * the `kind:` discriminator is required because the `type:` namespace overlaps with v1.x test types only up to the ordinary disambiguation rule (`kind: invariant` selects the invariant evaluator dispatch path)
 
+### 1.1) Verdict contract (four quadrants)
+
+The verdict for every `kind: invariant` test is `pass` when `observed` equals `expected` and `fail` otherwise. Because `expect:` may be declared `pass` or `fail`, this yields four cases:
+
+| `expect:` | predicate | `observed` | `verdict:` |
+| --------- | --------- | ---------- | ---------- |
+| `pass`    | holds     | `pass`     | `pass`     |
+| `pass`    | fails     | `fail`     | `fail`     |
+| `fail`    | fails     | `fail`     | `pass`     |
+| `fail`    | holds     | `pass`     | `fail`     |
+
+The two `verdict: fail` rows (`expect: pass` over a failing predicate, and `expect: fail` over a holding predicate) each carry the structured `observed_state` payload described in §3; the two `verdict: pass` rows do not.
+
+A structural evaluation error (missing field, probe failure, unparseable output, or unsupported type) forces `verdict: fail` regardless of `expect:` — including `expect: fail` — so an error path never satisfies a negative test; only a genuinely-failing predicate satisfies `expect: fail`.
+
 ---
 
 ## 2) Supported Invariant Types
@@ -53,6 +68,8 @@ v1.5 supports the following invariant types. Each type maps to a single determin
 | `route_not_advertised_to` | BGP policy | `node`, `peer` (a known node name), `prefix` (CIDR) |
 | `bgp_med_equals` | BGP policy | `node`, `prefix` (CIDR), `expected` (integer) |
 | `bgp_localpref_equals` | BGP policy | `node`, `prefix` (CIDR), `expected` (integer) |
+| `bgp_community` | BGP policy | `node`, `prefix` (CIDR), `expected` (community specifier OR list of specifiers); `match` (`any` or `all`, list-only — required when `expected` is a list, rejected when scalar) |
+| `bgp_as_path` | BGP policy | `node` (an FRR node), `prefix` (CIDR), `as_path` (a regular expression in the FRR-native AS-path idiom; matched against the route's space-separated, path-ordered AS-path; asplain notation) |
 | `evpn_vni_route_present` | EVPN | `node`, `vni` (integer) |
 | `evpn_mac_route_present` | EVPN | `node`, `mac` (canonical MAC literal), `vni` (integer) |
 | `evpn_mac_route_absent` | EVPN | `node`, `mac` (canonical MAC literal), `vni` (integer) |
@@ -64,10 +81,115 @@ Rules:
 * `peer` fields MUST reference a node declared in `nodes:`; the engine's blast-radius validator rejects unknown node references with a hard-failure
 * IPv4 literals (`dst` for `bgp_session_up`) bypass the node-name check and pass through verbatim
 * `ospf_neighbor_up`'s `neighbor` field MUST be an IPv4 literal of the peer's OSPF router-ID (NOT a node name); the resolver's IPv4-literal validator hard-fails on non-IPv4 input. The `src` field MUST reference a node of `type: frr` declared in `nodes:` (FRR-only NOS-tag enforcement; non-FRR `src` is rejected at validation with a deterministic error)
+* `interface_state`'s `interface` field MUST reference an interface present in the referenced node's resolved interface set (its link interfaces, `lo`, and any `interfaces:` declared on the node); a reference to an absent interface is rejected at validation time with a hard-failure (exit code `2`), parallel to the unknown-node reference rejection
 * `prefix` fields MUST be canonical IPv4 CIDR notation (e.g. `10.0.0.0/24`); non-canonical values are rejected at validation time
+* `bgp_community`'s `expected` communities MUST each be a literal `AS:VAL` token (e.g. `65001:100`) or a well-known token (`no-export`, `no-advertise`, `local-AS`, `internet`; `internet` normalises to community `0:0` in FRR JSON form); `match` (`any` or `all`) is REQUIRED when `expected` is a list and REJECTED when `expected` is a scalar
+* `bgp_as_path`'s `as_path` MUST be a valid regular expression (compiled after translating the FRR-native `_` word-boundary idiom to a delimiter alternation); it is matched with `re.search` against the canonical space-separated, path-ordered AS-path string (operator `^` / `$` anchors are honoured). The `node` MUST reference a node of `type: frr` (a non-FRR or unknown `node` is rejected at validation). AS numbers are read in asplain notation as FRR emits them; BGP AS-confederation handling and 4-byte AS distinctions beyond FRR's native parsing are out of scope
 * `mac` fields MUST be canonical lowercase colon-separated form (e.g. `00:11:22:33:44:55`)
 * `vni` MUST be a positive integer matching a VNI declared in the topology's `vlans:` map
 * `route_absent` and `route_not_advertised_to` and `evpn_mac_route_absent` are the negative complements of their `_present` / `_advertised_to` peers; the verdict semantics flip accordingly (`expect: pass` means the route IS NOT present / IS NOT advertised / IS NOT in the EVPN MAC table)
+
+---
+
+## 2a) The `kind: exec` Test Category — User-Defined Invariants
+
+The built-in invariant catalog (§2) is fixed: an operator can only assert truths the engine already encodes an evaluator for. The `kind: exec` category lifts that ceiling. An `exec` test is a **user-defined invariant** — the operator names a target node, supplies a single **read-only** command, and attaches a **typed assertion** over that command's output. It is authoritative: it produces a four-quadrant verdict and records to `results.json` with the same record structure as a built-in invariant. It is not advisory, and it is not freeform grep.
+
+```yaml
+tests:
+  - name: bgp_peer_established
+    kind: exec
+    src: r1
+    command: vtysh -c "show bgp summary json"
+    assertion:
+      field:
+        path: [ipv4Unicast, peers, "10.0.0.2", state]
+        op: "=="
+        value: Established
+    expect: pass
+```
+
+### 2a.1) Closed key set
+
+An `exec` test declares exactly the keys below; any other key is a hard-failure at validation (exit code `2`), parallel to the unknown-key strictness elsewhere in this schema.
+
+| Key | Meaning |
+|---|---|
+| `name` | unique test name |
+| `kind` | literal `exec` |
+| `src` | target node to run on (aliases `node` / `on` / `from`, normalised to `src` at Resolve) |
+| `command` | a single read-only command (see §2a.3) |
+| `assertion` | exactly one typed predicate (see §2a.4) |
+| `expect` | `pass` or `fail` — same four-quadrant contract as §1.1 |
+
+Unlike `kind: invariant`, an `exec` test has no `type:` field, and there is no operator-facing timeout key — invocation is bounded by an internal default.
+
+### 2a.2) Target node and derived type
+
+`src` MUST reference a node declared in `nodes:`. The engine **derives** the node's type from the topology — the operator does not declare it. In v1 the derived type MUST be one of `frr` or `nft-fw`; a target whose derived type is anything else is rejected at validation. The derived type also selects the read-only allow-list.
+
+### 2a.3) Read-only allow-list
+
+Commands are constrained to a node-type-aware read-only allow-list at a single validation site (default-deny). Raw shell (e.g. `sh -lc …`) is never an accepted command form.
+
+| Derived type | Allowed command form |
+|---|---|
+| `frr` | `vtysh -c "show …"` (read-only `show` commands) |
+| `nft-fw` | `nft list …` (e.g. `nft list ruleset`; mutating verbs such as `add` / `delete` / `flush` / `insert` / `replace` are denied) |
+
+A command outside the allow-list for the target's derived type is rejected at validation (exit code `2`) with a deterministic error; it never reaches runtime.
+
+### 2a.4) Typed assertions
+
+The assertion is exactly one typed predicate over the command's captured stdout. Freeform grep is not expressible by construction.
+
+| Operator | YAML shape | Meaning |
+|---|---|---|
+| `contains` | `contains: <substr>` | case-sensitive substring present in stdout |
+| `not_contains` | `not_contains: <substr>` | substring absent |
+| `equals` | `equals: <value>` | `stdout.strip() == value`, case-sensitive |
+| `matches` | `matches: <regex>` | `re.search(pattern, stdout)`; the pattern MUST compile — an uncompilable pattern is a validation-time rejection |
+| `count` | `count: {pattern: <regex>, op: == \| >= \| <=, value: <int>}` | `len(re.findall(pattern, stdout))` compared to `value` |
+| `field` | `field: {path: [<seg>, …], op: == \| >= \| <=, value: <value>}` | parse stdout as JSON, walk the literal-key `path`, then compare |
+
+The `field` `path` is an **explicit list of literal key segments** — not a dotted string — so a key that itself contains dots (e.g. a peer address `"10.0.0.2"`) is unambiguous. Traversal descends the parsed JSON one literal key per segment, in order. `==` is **typed**: string↔string, number↔number, bool↔bool; a type mismatch is a deterministic non-match, never a silent coercion. `>=` / `<=` require both operands to be numeric.
+
+Any failure to evaluate — unparseable JSON, a missing path segment, descent into a non-dict, a value type the operator cannot compare, a command timeout, or an exec error — is a deterministic Cassian-owned `observed: fail`. It is never a crash and never a silent pass.
+
+### 2a.5) Verdict, failure rendering, and blast-radius
+
+* **Verdict** uses the canonical four-quadrant contract in §1.1, unchanged: `verdict: pass` iff `observed == expected`. There is no exec-specific verdict path.
+* **`observed_state`** — an `exec` record whose `verdict` is `fail` carries an `observed_state` payload (`command`, `returncode`, `stdout_excerpt`) on the same terms as a failed invariant (§3); a passing `exec` record does not.
+* **Blast-radius** — in an opt-in `blast_radius.enabled` topology, an `exec` test participates in the coverage graph via its `src` node. It does not crash the coverage build, and it is not silently dropped.
+
+---
+
+## 2b) Test Tags and Selective Execution
+
+Any test record — of any `kind` (`ping`, `tcp`, `bgp_neighbor`, `invariant`, `exec`) — MAY carry an optional `tags:` field: a list of short string labels used to select a subset of declared tests at run time. Tags are selection metadata only; they never change a test's verdict, the gate result, or the artifact schema of an executed test.
+
+```yaml
+tests:
+  - name: leaf1_evpn_session_to_spine1
+    kind: invariant
+    type: evpn_bgp_session_up
+    src: leaf1
+    neighbor: 10.0.0.1
+    tags: [evpn, fabric]
+```
+
+* `tags:` MUST be a list of strings; each label MUST match `[a-z0-9_-]+` (lowercase alphanumerics, hyphen, underscore). A non-list value, a non-string element, an empty-string element, or a charset violation is rejected at validation time with a deterministic hard-failure (exit code `2`).
+* `tags:` is optional and kind-agnostic; tag validation is applied uniformly across `kind: invariant` and `kind: exec` records.
+* A test with no `tags:` is selectable only when no tag filter is supplied.
+
+### 2b.1) Selecting tests with `--tag`
+
+`cassian test <topology.yaml> --tag <label>` runs only the tests whose `tags:` include `<label>`. The flag is repeatable (`--tag a --tag b`) and the match is an **OR-union**: a test is selected if its tags intersect the requested set.
+
+* **Explicit non-execution (silence is not pass — Doctrine §1.11).** Every declared test that is *not* selected is recorded explicitly in `results.json` with `verdict: not_executed` and a `meta.not_executed_reason` of `filtered_by_tag` (or `filtered_by_name` / `filtered_by_kind` for those filters, or `fail_fast` when a halting failure drops the remainder). A non-executed test is never silently omitted and never counted as a pass. `not_executed` is a distinct verdict value — neither `pass`, `fail`, nor `skip` — and it never changes the gate result, which is computed from executed failures only.
+* **Reconciliation.** The run summary reconciles as `total == executed + not_executed (+ skipped)`, and the operator summary surfaces the non-executed tests and their reasons explicitly.
+* **Zero-match is a hard failure.** If `--tag` matches no declared test, the run hard-fails rather than passing with zero executed tests — identical to the existing `--name` / `--kind` zero-match behavior.
+* **Mutually exclusive with scenarios.** `--tag` (like `--name` / `--kind`) is rejected together with `--scenario` / `--all-scenarios`, because filtering would skip scenario run steps.
 
 ---
 
@@ -326,6 +448,47 @@ The test record additionally carries a `meta` audit-trail dict on every record (
 
 iproute2 capability dependency (companion schema constraint): the runtime probe uses `ip -j link show <iface>` and requires an `ip` binary that supports the `-j` JSON flag. BusyBox `ip` (the default in `alpine:latest`, which is the engine's default image for `host` and `nft-fw` node types) does NOT support `-j` and produces non-JSON help-text output on the unrecognized flag. Topologies exercising `interface_state` on `host` or `nft-fw` nodes MUST pin an image with full iproute2 (e.g. `nicolaka/netshoot:v0.15`) explicitly in the node declaration. FRR's default image (`frrouting/frr:latest`) already includes full iproute2 and requires no override. The engine performs a per-(lab, node) capability probe at first use; on capability-probe failure, the per-test record fails with `last_error: "ip -j flag not supported by node's iproute2"` and the operator is directed to pin a compatible image.
 
+### 4.10) `bgp_community`
+
+```json
+{
+  "actual_communities": [<sorted observed community strings>],
+  "expected_communities": [<declared community strings>],
+  "match": "<any|all, or empty string when `expected` is scalar>",
+  "prefix": "<CIDR>",
+  "route_present": <true|false>,
+  "source_node": "<node where the test runs>",
+  "type": "bgp_community"
+}
+```
+
+* `actual_communities` is the community set observed on the BGP route, normalised and emitted **sorted** (the route community set is semantically unordered); it is empty when the route carries no communities or when the route is absent.
+* `expected_communities` is the test's declared `expected`, always rendered as a list (a scalar `expected` becomes a one-element list).
+* `match` carries the declared selector (`any` or `all`) for a list `expected`; it is an empty string for a scalar `expected`.
+* `route_present` is `false` when no BGP route exists for `prefix` at the node; a route-absent outcome is rendered as a graceful failure (present-half record), never a silent pass.
+* A community specifier is a literal `AS:VAL` token or a well-known token (`no-export`, `no-advertise`, `local-AS`, `internet`); `internet` normalises to community `0:0` in FRR JSON form. Well-known tokens are normalised on both the declared and observed sides before comparison.
+* Match semantics: a scalar `expected` passes iff the community is a member of the observed set; a list with `match: any` passes iff the declared and observed sets intersect; a list with `match: all` passes iff the declared set is a subset of the observed set.
+
+### 4.11) `bgp_as_path`
+
+```json
+{
+  "actual_as_path": "<observed AS-path, space-separated in path order>",
+  "expected_pattern": "<declared as_path regular expression>",
+  "prefix": "<CIDR>",
+  "route_present": <true|false>,
+  "source_node": "<node where the test runs>",
+  "type": "bgp_as_path"
+}
+```
+
+* `actual_as_path` is the AS-path attribute observed on the BGP route, normalised to a space-separated string of AS numbers **in path order** (path order is semantically significant and is never sorted); it is empty when the route carries no AS-path or when the route is absent.
+* `expected_pattern` is the test's declared `as_path` regular expression, rendered verbatim.
+* `route_present` is `false` when no BGP route exists for `prefix` at the node; a route-absent outcome is rendered as a graceful failure (present-half record), never a silent pass.
+* The `as_path` value is a regular expression matched with `re.search` against the canonical AS-path string; operator-supplied `^` / `$` anchors are honoured per the BGP-regex idiom. The FRR-native `_` idiom (a path delimiter: start, space, or end) is supported and translated deterministically to a delimiter alternation before compilation.
+* AS numbers are read in **asplain** notation as FRR emits them; BGP AS-confederation handling and 4-byte AS distinctions beyond FRR's native parsing are out of scope (the regex matches whatever FRR JSON delivers).
+* `parse_error` is included in the payload only when the FRR JSON for the route could not be parsed; it is absent on the normal path.
+
 ---
 
 ## 5) Summary Rendering
@@ -341,26 +504,31 @@ Rendering rules:
 * empty lists render inline as `[]`
 * when `observed_state_truncated: true`, the renderer emits the trailing line `(observed_state truncated; full payload in results.json)` at 6-space indent (the post-truncation list cap and the truncation marker line can co-occur)
 
+When a failed-invariant record's `observed_state` is absent or non-dict, the present `observed:` block above cannot be rendered; the renderer then emits an explicit **absence indicator** in its place — never silence — so a failed invariant always surfaces an `observed:` block in one of two forms (present payload block, or absence indicator). The absence indicator uses the same `observed:` header at 4-space indent with 6-space `<key>: <value>` lines, carrying, in order: `type:` (the specific invariant type), `target:` (the invariant's source node plus its declaration-derived locator, e.g. `peer=` / `prefix=` / `neighbor=`), `expected:` (the declared expectation), and a literal `detail: (structured failure detail unavailable for this invariant type)` line. Per the §3.2 determinism contract, only declared and declaration-derived locator fields enter `target:`; runtime-variant tokens are excluded, so the indicator is byte-stable across runs.
+
 `results.summary.txt` is human-only and non-authoritative. The structured `observed_state` in `results.json` is the authoritative artifact.
 
 ---
 
 ## 6) Suppression Rules
 
-The `observed:` block is NEVER rendered on:
+The present `observed:` payload block is NEVER rendered on:
 
 * passing-invariant records (`verdict == "pass"`)
 * non-invariant test kinds (`ping`, `tcp`, `bgp_neighbor`)
 * `prereq` failure paths (those surface as `hard_failure:` in the summary, not as `failed_tests:` entries)
-* records with a missing or non-dict `observed_state` field (defensive — should not occur in normal runs)
 
 The above rules guarantee that v1.x topologies exercising only `ping` / `tcp` / `bgp_neighbor` produce `results.summary.txt` byte-identical to pre-v1.5 output.
+
+A failed-invariant record with a missing or non-dict `observed_state` field (defensive — should not occur in normal runs) is NOT a suppression case: the present payload block is omitted, but the explicit absence indicator (§5) renders in its place, so a failed invariant never produces a silent `observed:`-less line.
 
 ---
 
 ## 7) Cross-references
 
 * The supported invariant evaluator dispatch is implemented in `cassian_engine.py` `run_invariant_test`.
+* The `exec` user-defined-invariant evaluator dispatch is implemented in `cassian_engine.py` `run_exec_test` and the assertion evaluator `_eval_exec_assertion`; resolve-time validation (closed keys, derived-type allow-list, typed-assertion schema) is in `cassian_model.py`.
+
 * The summary rendering is implemented in `cassian_tests.py` `_format_test_summary` and its `_format_observed_state_*` helpers.
 * The truncation discipline is implemented in `cassian_engine.py` `_observed_state_finalize_in_results` and `_observed_state_truncate`.
 * The negative-case proof topology exercising one invariant per category lives at `topologies/neg/h2_invariant_observability_demo.yaml`.

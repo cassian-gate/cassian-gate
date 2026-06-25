@@ -15,6 +15,8 @@ Cassian Gate is an execution-backed validation gate for network changes. Enginee
 
 Cassian Gate is not a general-purpose lab platform, not a chaos engine, not a controller, not a heuristic validator, not an AI decision system, and not a feature-parity NOS platform. AI surfaces remain advisory only — never authoritative. Exploratory workflows do not count as deployment authority.
 
+For named, tool-by-tool disambiguation of the categories above and the blast-radius scale boundary, see [Scope and scale discipline](scope-discipline.md).
+
 ## Who it's for
 
 Cassian Gate is built for network engineers who need proof before production, platform engineers who want a CI-safe gate around network changes, and teams that need machine-consumable artifacts instead of "probably safe" judgment. v2 ships the deterministic gate engine, FRR-based validation, named routing and policy invariants, scenario-based failure choreography, replay, blast radius, preflight, two-run comparison, candidate-config workflows, state capture, PCAP capture, and Terraform / Ansible adapters.

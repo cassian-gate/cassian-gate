@@ -65,6 +65,99 @@ jobs:
           set -euo pipefail
           python -m py_compile src/*.py
 
+      - name: User-defined invariant (exec) proof harnesses (§4.7)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/udi_validate_rejection_proof.py
+          python tests/udi_guardrail_uniformity_proof.py
+          python tests/udi_dispatch_parity_proof.py
+          python tests/udi_assertion_eval_proof.py
+          python tests/udi_four_quadrant_proof.py
+          python tests/udi_replay_determinism_proof.py
+          python tests/udi_render_boundary_proof.py
+          python tests/udi_blast_radius_coverage_proof.py
+          python tests/udi_preservation_proof.py
+
+      - name: Test tags + selective execution proof harnesses (§4.8)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/tag_validate_rejection_proof.py
+          python tests/tag_selector_proof.py
+          python tests/tag_nonexec_schema_proof.py
+          python tests/tag_authority_parity_proof.py
+          python tests/tag_schema_invariance_proof.py
+          python tests/tag_replay_determinism_proof.py
+          python tests/tag_nonexec_render_boundary_proof.py
+          python tests/tag_preservation_proof.py
+
+      - name: AI-change canonical reference case proof harness (§4.9)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/ai_change_reference_case_proof.py
+
+      - name: BGP community matching proof harnesses (§4.10)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/bgp_community_validate_rejection_proof.py
+          python tests/bgp_community_catalog_coherence_proof.py
+          python tests/bgp_community_set_gen_proof.py
+          python tests/bgp_community_eval_match_proof.py
+          python tests/bgp_community_four_quadrant_proof.py
+          python tests/bgp_community_authority_parity_proof.py
+          python tests/bgp_community_replay_determinism_proof.py
+          python tests/bgp_community_render_boundary_proof.py
+          python tests/bgp_community_preservation_proof.py
+          python tests/expf_four_quadrant_catalog_proof.py
+
+      - name: BGP AS-path validation proof harnesses (§4.11)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/bgp_as_path_validate_rejection_proof.py
+          python tests/bgp_as_path_catalog_coherence_proof.py
+          python tests/bgp_as_path_eval_match_proof.py
+          python tests/bgp_as_path_four_quadrant_proof.py
+          python tests/bgp_as_path_authority_parity_proof.py
+          python tests/bgp_as_path_replay_determinism_proof.py
+          python tests/bgp_as_path_render_boundary_proof.py
+          python tests/bgp_as_path_preservation_proof.py
+
+      - name: P3 hardening cluster proof harnesses (§4.12)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/b6_pass_scope_render_proof.py
+          python tests/b6_13bc_seam_preservation_proof.py
+          python tests/h54_doctor_ip_j_probe_proof.py
+          python tests/wf_12_13_replay_proof.py
+
+      - name: Audit-grade evidence artifact format proof harnesses (§4.13)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/audit_evidence_schema_format_proof.py
+          python tests/audit_tamper_check_replay_proof.py
+          python tests/audit_release_version_determinism_proof.py
+          python tests/audit_baseline_diff_determinism_proof.py
+          python tests/audit_intent_input_sufficiency_proof.py
+          python tests/audit_intent_verdict_invariance_proof.py
+          python tests/audit_self_contained_interpretation_proof.py
+          python tests/audit_unverifiable_render_boundary_proof.py
+          python tests/audit_seam_preservation_proof.py
+          python tests/audit_nonscoped_preservation_proof.py
+
+      - name: Brownfield importer proof harnesses (§4.14)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/importer/importer_behavior_proof.py
+          python tests/importer/backend_seam_proof.py
+          python tests/importer/preservation_proof.py
+
       - name: Project gate (up -> test -> down)
         shell: bash
         run: |
@@ -72,6 +165,31 @@ jobs:
           ./src/cassian.py up topologies/three-frr-two-hosts-fw-routed.yaml --reconfigure
           ./src/cassian.py test three-frr-two-hosts-fw-routed --scenario quick_all
           ./src/cassian.py down three-frr-two-hosts-fw-routed
+
+      - name: B-9 observed_state render determinism (replay byte-identity)
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOPO=topologies/neg/h2_invariant_observability_demo.yaml
+          LAB=h2-invariant-observability-demo
+          SUM="labs/clab-${LAB}/results.summary.txt"
+          # By-design failing-invariant topology, run twice from clean state.
+          # Verdict is FAIL by design (|| true); B-9 asserts byte-identity of the
+          # rendered observed_state surface (results.summary.txt) across replay,
+          # not the verdict. The H2 D06 filter keeps env-variant tokens out.
+          ./src/cassian.py up "$TOPO" --reconfigure
+          ./src/cassian.py test "$LAB" || true
+          cp "$SUM" /tmp/bl6_b9_run1.summary.txt
+          ./src/cassian.py down "$LAB"
+          ./src/cassian.py up "$TOPO" --reconfigure
+          ./src/cassian.py test "$LAB" || true
+          cp "$SUM" /tmp/bl6_b9_run2.summary.txt
+          ./src/cassian.py down "$LAB"
+          if ! diff -u /tmp/bl6_b9_run1.summary.txt /tmp/bl6_b9_run2.summary.txt; then
+            echo "ERROR: B-9 observed_state render differs across replay (non-deterministic)."
+            exit 1
+          fi
+          echo "B-9 OK: observed_state render byte-identical across replay."
 
       - name: Upload artifacts (always; bounded on success)
         if: always()

@@ -1,0 +1,45 @@
+=== CI SUMMARY ===
+verdict: PASS
+failed_tests: []
+failed_scenarios: []
+artifact_root: labs/clab-ai-change-udi-route-passing/
+
+=== AUTHORITATIVE TEST VERDICT ===
+verdict: PASS
+scope: topology=ai-change-udi-route-passing tests=all scenarios=none
+
+lab: ai-change-udi-route-passing
+result: pass
+tests: total=1 passed=1 failed=0
+failed_tests: (none)
+
+Result:
+  RESULT: PASS
+
+Authority:
+  results.json is the authoritative verdict artifact
+
+Summary:
+  results.summary.txt is explanatory only and does not determine verdicts
+
+Scope:
+  Validated: declared tests
+  Not validated: scenario behavior
+
+PASS means:
+  All declared tests passed against real execution behavior
+  All declared scenarios completed as expected within the executed scope
+
+PASS does not mean:
+  Validation of behaviors not declared in this topology
+  Coverage of all possible failure modes
+
+Validation summary:
+  Lab: ai-change-udi-route-passing
+  Artifacts: labs/clab-ai-change-udi-route-passing/
+  Tests executed: 1
+  Scenarios executed: 0
+  Failures: 0
+
+Share this:
+  labs/clab-ai-change-udi-route-passing//results.json

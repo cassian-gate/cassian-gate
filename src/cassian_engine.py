@@ -22,6 +22,7 @@ from cassian_model import (
     validate_contrib_path,
     adapt_terraform_plan_json,
     adapt_ansible_rendered_dir,
+    _compile_frr_as_path_regex,
 )
 from cassian_tests import (
     validate_scenarios,
@@ -651,6 +652,25 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     clab = _which("containerlab")
     checks.append(("containerlab detected", clab, "critical"))
 
+    # Advisory: ip(8) JSON capability — read-only, capture + parse (not returncode-only)
+    def _ip_json_capable() -> bool:
+        if shutil.which("ip") is None:
+            return False
+        try:
+            p = subprocess.run(
+                ["ip", "-j", "addr"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+            if p.returncode != 0:
+                return False
+            return isinstance(json.loads(p.stdout.decode("utf-8", errors="replace")), list)
+        except Exception:
+            return False
+
+    checks.append(("ip -j JSON capability", _ip_json_capable(), "advisory"))
+
     # Non-critical: image presence (report only; do not pull)
     # These are resolve-time hard defaults in netsim_model.py.
     image_defaults = [
@@ -965,8 +985,8 @@ def _observed_state_finalize_in_results(results: dict) -> None:
         kind = str(rec.get("kind") or "").strip().lower()
         verdict = str(rec.get("verdict") or "").strip().lower()
 
-        if kind != "invariant" or verdict != "fail":
-            # observed_state belongs only on failed invariant records.
+        if kind not in ("invariant", "exec") or verdict != "fail":
+            # observed_state belongs on failed invariant and exec records.
             for k in (
                 "observed_state",
                 "observed_state_truncated",
@@ -1016,6 +1036,87 @@ def _observed_state_finalize_in_results(results: dict) -> None:
             _stabilize_record(ev)
 
 
+# ===== §4.13 WI-1 PP1 audit helpers (additive; inert until wired by PP2) =====
+# Audit-grade evidence artifact format properties (REQ-413-2, REQ-413-3).
+# Field names, Option-A baseline disposition, and the by-name exclusion set are
+# founder-ratified (MS-DISP-§4.13). Exclusion is BY NAME (D02/B-A04 / BR-2),
+# never by value; the set is enumerated against the live v9 bundles (PO-2).
+
+_AUDIT_TAMPER_EXCLUDE_KEYS = frozenset({
+    "duration_ms",            # every duration_ms (summary, tests[*])
+    "started_at",
+    "finished_at",
+    "resolved_topology_mtime",
+    "resolved_topology_path",
+    "tamper_check",           # self-exclusion: the token never hashes itself
+})
+
+_AUDIT_TAMPER_EXCLUDE_PATHS = frozenset({
+    "timing",                               # whole timing.* subtree
+    "blast_radius.path",
+    "authority.supporting_evidence.path",
+})
+
+
+def _audit_filtered_domain(obj, _keypath=""):
+    """REQ-413-3 / D-413-1 / BR-2: remove runtime-variant fields BY NAME (recursive).
+    Deterministic; no value heuristics."""
+    if isinstance(obj, dict):
+        out = {}
+        for _k, _v in obj.items():
+            _kp = (_keypath + "." + _k) if _keypath else _k
+            if _k in _AUDIT_TAMPER_EXCLUDE_KEYS:
+                continue
+            if _kp in _AUDIT_TAMPER_EXCLUDE_PATHS:
+                continue
+            out[_k] = _audit_filtered_domain(_v, _kp)
+        return out
+    if isinstance(obj, list):
+        return [_audit_filtered_domain(_v, _keypath) for _v in obj]
+    return obj
+
+
+def _audit_release_version():
+    """REQ-413-2: Cassian Gate release version from package metadata.
+    Deterministic, never runtime-derived; pyproject fallback for source checkouts."""
+    try:
+        from importlib.metadata import version as _pkg_version
+        return str(_pkg_version("cassian-gate"))
+    except Exception:
+        pass
+    try:
+        import re as _re
+        from pathlib import Path as _Path
+        _pp = _Path(__file__).resolve().parent.parent / "pyproject.toml"
+        _m = _re.search(r'(?m)^\s*version\s*=\s*"([^"]+)"', _pp.read_text(encoding="utf-8"))
+        if _m:
+            return str(_m.group(1))
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _audit_compute_tamper_check(results):
+    """REQ-413-3 / B02 / B08: SHA-256 over the canonical filtered domain.
+    Explicit 'unverifiable' state on failure (never readable as 'verified').
+    Canonical form matches write_json_canonical (cassian_artifacts.py:93)."""
+    try:
+        import hashlib as _hashlib
+        import json as _json
+        _domain = _audit_filtered_domain(results)
+        _s = _json.dumps(_domain, indent=2, sort_keys=True, ensure_ascii=False)
+        _s = _s.replace("\r\n", "\n").replace("\r", "\n")
+        _s = _s.rstrip("\n") + "\n"
+        _digest = _hashlib.sha256(_s.encode("utf-8")).hexdigest()
+        return {"algo": "sha256", "digest": _digest,
+                "domain": "canonical-filtered", "state": "verified"}
+    except Exception:
+        return {"algo": "sha256", "digest": None,
+                "domain": "canonical-filtered", "state": "unverifiable"}
+
+
+# ===== end §4.13 WI-1 PP1 audit helpers =====
+
 def _finalize_results_schema(
     *,
     results: dict,
@@ -1023,6 +1124,8 @@ def _finalize_results_schema(
     topo_name: str,
     lab_name: str,
     phase: str,
+    intent=None,
+    baseline_diff=None,
 ) -> None:
     """
     Additive-only schema stabilization for results.json.
@@ -1091,6 +1194,15 @@ def _finalize_results_schema(
 
     # 6) Hard failure block (additive; keep null when not used)
     results.setdefault("hard_failure", None)
+
+    # §4.13 Audit-grade evidence artifact format properties (additive; tamper_check LAST).
+    # Field names + Option-A baseline disposition founder-ratified (MS-DISP-§4.13).
+    results.setdefault("release_version", _audit_release_version())
+    if intent is not None:
+        results.setdefault("intent", intent)
+    if baseline_diff is not None:
+        results.setdefault("baseline_diff", baseline_diff)
+    results.setdefault("tamper_check", _audit_compute_tamper_check(results))
 
 
 def cmd_up(args: argparse.Namespace) -> None:
@@ -3087,6 +3199,219 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     return
 
+_EXEC_TIMEOUT_S = 30
+_EXEC_EVIDENCE_CAP = 4096
+
+
+def _eval_exec_assertion(assertion: dict, stdout: str) -> tuple[str, str]:
+    """Evaluate a pre-validated typed exec assertion against captured stdout
+    (Amendment A7). Returns (observed, error); observed in {"pass", "fail"}.
+    Schema is validated at resolve time (_validate_exec_assertion); any
+    failure-to-evaluate here is a deterministic Cassian-owned "fail" (never raises)."""
+    if not isinstance(assertion, dict) or len(assertion) != 1:
+        return ("fail", "exec assertion malformed at evaluation")
+    out = stdout if isinstance(stdout, str) else str(stdout)
+    op = next(iter(assertion))
+    val = assertion[op]
+    try:
+        if op == "contains":
+            return ("pass" if val in out else "fail", "")
+        if op == "not_contains":
+            return ("pass" if val not in out else "fail", "")
+        if op == "equals":
+            return ("pass" if out.strip() == val else "fail", "")
+        if op == "matches":
+            return ("pass" if re.search(val, out) is not None else "fail", "")
+        if op == "count":
+            n = len(re.findall(val["pattern"], out))
+            want = val["value"]
+            cop = val["op"]
+            if cop == "==":
+                return ("pass" if n == want else "fail", "")
+            if cop == ">=":
+                return ("pass" if n >= want else "fail", "")
+            if cop == "<=":
+                return ("pass" if n <= want else "fail", "")
+            return ("fail", f"count: unknown op {cop!r}")
+        if op == "field":
+            try:
+                doc = json.loads(out)
+            except Exception:
+                return ("fail", "field: stdout is not valid JSON")
+            cur = doc
+            for seg in val["path"]:
+                if not isinstance(cur, dict) or seg not in cur:
+                    return ("fail", f"field: path segment {seg!r} missing or parent not a dict")
+                cur = cur[seg]
+            want = val["value"]
+            fop = val["op"]
+            if fop == "==":
+                if isinstance(cur, bool) or isinstance(want, bool):
+                    return ("pass" if (isinstance(cur, bool) and isinstance(want, bool) and cur == want) else "fail", "")
+                if isinstance(cur, (int, float)) and isinstance(want, (int, float)):
+                    return ("pass" if cur == want else "fail", "")
+                if isinstance(cur, str) and isinstance(want, str):
+                    return ("pass" if cur == want else "fail", "")
+                return ("fail", "")
+            if not (isinstance(cur, (int, float)) and not isinstance(cur, bool)) or not (isinstance(want, (int, float)) and not isinstance(want, bool)):
+                return ("fail", "field: ordering comparison requires numeric operands")
+            if fop == ">=":
+                return ("pass" if cur >= want else "fail", "")
+            if fop == "<=":
+                return ("pass" if cur <= want else "fail", "")
+            return ("fail", f"field: unknown op {fop!r}")
+    except Exception as _e:
+        return ("fail", f"exec assertion evaluation error: {_e}")
+    return ("fail", f"exec assertion unknown operator {op!r} at evaluation")
+
+
+def _tag_selected(test, filter_tags):
+    """§4.8 WI-3 (REQ-TAG-CLI-1/B03): OR-union tag membership. None/[] filter => selected."""
+    if not filter_tags:
+        return True
+    have = test.get("tags") if isinstance(test, dict) else None
+    if not isinstance(have, list):
+        return False
+    return bool(set(filter_tags).intersection(have))
+
+
+def _summarize_test_counts(tests):
+    """§4.8 WI-3 (REQ-TAG-NONEXEC-2/B09): reconcile total == executed + not_executed (+ skipped)."""
+    total = len(tests)
+    failed = sum(1 for r in tests if isinstance(r, dict) and r.get("verdict") == "fail")
+    not_executed = sum(1 for r in tests if isinstance(r, dict) and r.get("verdict") == "not_executed")
+    skipped = sum(1 for r in tests if isinstance(r, dict) and r.get("verdict") == "skip")
+    passed = total - failed - not_executed - skipped
+    return {"total": total, "passed": passed, "failed": failed,
+            "skipped": skipped, "not_executed": not_executed}
+
+
+def _fail_fast_drops(declared_tests, from_idx):
+    """§4.8 WI-3 (REQ-TAG-NONEXEC-3/B08): not_executed records for tests dropped by fail-fast."""
+    out = []
+    for j in range(from_idx + 1, len(declared_tests)):
+        dt = declared_tests[j]
+        nm = (dt.get("name") if isinstance(dt, dict) else None) or f"tests[{j + 1}]"
+        dk = (dt.get("kind") or dt.get("type") or "unknown") if isinstance(dt, dict) else "unknown"
+        out.append({
+            "name": nm, "kind": str(dk), "from": "", "to": "",
+            "expected": "pass", "observed": "not_executed", "verdict": "not_executed",
+            "duration_ms": 0, "error": "", "evidence": None,
+            "meta": {"not_executed_reason": "fail_fast"},
+        })
+    return out
+
+
+_BGP_COMMUNITY_CANON = {
+    "no-export": "no-export", "noexport": "no-export",
+    "no-advertise": "no-advertise", "noadvertise": "no-advertise",
+    "local-as": "local-as", "localas": "local-as",
+    "internet": "internet", "0:0": "internet",
+}
+
+
+def _canonical_community_token(token):
+    """Canonicalize one BGP community token for form- and order-insensitive
+    comparison. Maps operator-declared well-known forms (no-export, no-advertise,
+    local-AS, internet) and FRR JSON forms (.list camelCase noExport/noAdvertise/
+    localAs/internet; .string hyphenated; numeric 0:0 for internet) to a single
+    canonical token. AS:VAL literals pass through (lowercased)."""
+    k = str(token).strip().lower()
+    return _BGP_COMMUNITY_CANON.get(k, k)
+
+
+def _route_communities(route_obj):
+    """Extract raw BGP community tokens from a vtysh route object:
+    route_obj['community'] {'list'|'string'} (preferred), else the per-path
+    paths[].community (the FRR per-path location). Returns a list of raw token
+    strings (possibly empty)."""
+    def _from_comm(comm):
+        if isinstance(comm, dict):
+            lst = comm.get("list")
+            if isinstance(lst, list) and lst:
+                return [str(x) for x in lst]
+            s = comm.get("string")
+            if isinstance(s, str) and s.strip():
+                return [tok for tok in s.split() if tok]
+        elif isinstance(comm, str) and comm.strip():
+            return [tok for tok in comm.split() if tok]
+        return []
+
+    if not isinstance(route_obj, dict):
+        return []
+    toks = _from_comm(route_obj.get("community"))
+    if toks:
+        return toks
+    paths = route_obj.get("paths")
+    if isinstance(paths, list):
+        for path in paths:
+            if isinstance(path, dict):
+                toks = _from_comm(path.get("community"))
+                if toks:
+                    return toks
+    return []
+
+
+def _bgp_community_observed(expected, match, observed_canon):
+    """Match-level outcome ('pass'/'fail') for bgp_community. `expected` is a
+    scalar specifier or a list; `match` is 'any'|'all' (list only); `observed_canon`
+    is an iterable of already-canonical observed tokens. Comparison is canonical:
+    scalar -> membership; list+any -> intersection non-empty; list+all -> subset."""
+    obs = set(observed_canon)
+    if isinstance(expected, list):
+        decl = {_canonical_community_token(t) for t in expected}
+        ok = decl.issubset(obs) if str(match).strip().lower() == "all" else bool(decl & obs)
+    else:
+        ok = _canonical_community_token(expected) in obs
+    return "pass" if ok else "fail"
+
+
+def _route_as_path(route_obj):
+    """Extract the AS_PATH from a vtysh route object (`show ip bgp <prefix>
+    json`) as a canonical asplain, path-ordered, space-joined string. Read from
+    route_obj['aspath']['string'] (defensive top-level mirror) else the per-path
+    paths[].aspath.string (the FRR per-path location, real-capture confirmed).
+    Returns '' if absent. Order is preserved verbatim -- never sorted (AS_PATH is
+    order-significant)."""
+    def _from_aspath(asp):
+        if isinstance(asp, dict):
+            s = asp.get("string")
+            if isinstance(s, str) and s.strip():
+                return " ".join(tok for tok in s.split() if tok)
+        elif isinstance(asp, str) and asp.strip():
+            return " ".join(tok for tok in asp.split() if tok)
+        return ""
+
+    if not isinstance(route_obj, dict):
+        return ""
+    s = _from_aspath(route_obj.get("aspath"))
+    if s:
+        return s
+    paths = route_obj.get("paths")
+    if isinstance(paths, list):
+        for path in paths:
+            if isinstance(path, dict):
+                s = _from_aspath(path.get("aspath"))
+                if s:
+                    return s
+    return ""
+
+
+def _bgp_as_path_observed(pattern, observed_path):
+    """Match-level outcome ('pass'/'fail') for bgp_as_path. `pattern` is the
+    operator-declared FRR AS-path regex (`_`-delimited); `observed_path` is the
+    canonical asplain space-joined AS_PATH string. Compiles via the model-homed
+    _compile_frr_as_path_regex (LD-C: `_` -> (?:^| |$); operator `^`/`$`
+    preserved) and uses re.search -- the operator anchors explicitly when
+    intended. A regex that fails to compile yields 'fail' (defensive; resolve-time
+    validation already rejects malformed patterns)."""
+    try:
+        rx = _compile_frr_as_path_regex(pattern)
+    except Exception:
+        return "fail"
+    return "pass" if rx.search(observed_path or "") else "fail"
+
+
 def cmd_test(args: argparse.Namespace) -> None:
     """
     v1 update (Section C): Scenarios wired into cmd_test (minimal invasive).
@@ -3300,6 +3625,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     results=results,
                     command="test",
                     topo_name=str(lab_name),
+                    intent=(resolved_preview or {}).get("intent"),
                     lab_name=str(lab_name),
                     phase="collect",
                 )
@@ -3656,6 +3982,8 @@ def cmd_test(args: argparse.Namespace) -> None:
             )
     filter_name: str | None = getattr(args, "name", None)
     filter_kind: str | None = getattr(args, "kind", None)
+    filter_tags: list[str] | None = getattr(args, "tag", None)
+    _ff_state = {"idx": -1}  # §4.8 WI-3: current test-loop index for fail-fast drop recording
     keep_going: bool = bool(getattr(args, "keep_going", False))
     print_json: bool = bool(getattr(args, "json", False))
 
@@ -3703,9 +4031,9 @@ def cmd_test(args: argparse.Namespace) -> None:
         validate_scenario_run_refs_or_die(topo, scenario_ids=scenario_ids)
 
     # Disallow filters when running scenarios: avoids silent "pass" with 0 executed runs
-    if want_scenarios and (filter_name or filter_kind):
+    if want_scenarios and (filter_name or filter_kind or filter_tags):
         die(
-            "ERROR: --name/--kind filters are not supported with --scenario/--all-scenarios "
+            "ERROR: --name/--kind/--tag filters are not supported with --scenario/--all-scenarios "
             "(would skip scenario run steps).",
             code=2,
         )
@@ -4001,7 +4329,17 @@ def cmd_test(args: argparse.Namespace) -> None:
                         _add_node(str(test_obj.get(fld) or ""), f"{basis_label}.{fld}")
                 return
 
-            die(f"blast-radius: unsupported test kind '{kind}' in {basis_label}", code=2)
+            if kind in ("exec", "bgp_neighbor", "route_prefix"):
+                # A6 BLAST-1/2 (LD-C1): running-node coverage via src only; non-node
+                # fields (bgp_neighbor peer-IP dst, route_prefix prefix) are never
+                # coverage nodes and are not looked up (no unknown-node die).
+                if test_obj.get("src") is not None:
+                    _add_node(str(test_obj.get("src") or ""), f"{basis_label}.src")
+                return
+
+            # A6 BLAST-3 (LD-C2/C3): unrecognized/future kind -> skip with an explicit
+            # notation in the surfaced coverage_basis; never die, never silently drop.
+            coverage_basis.append(f"uncovered_kind:{kind}:{basis_label}")
 
         tests_decl = topo_obj.get("tests") or []
         tests_by_name: dict[str, dict[str, Any]] = {}
@@ -4251,6 +4589,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 results=results,
                 command="test",
                 topo_name=str(topo.get("name") or lab),
+                intent=topo.get("intent"),
                 lab_name=str(lab),
                 phase="collect",
             )
@@ -4404,6 +4743,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 passed = int(summ.get("passed") or 0)
                 failed = int(summ.get("failed") or 0)
                 skipped = int(summ.get("skipped") or 0)
+                not_executed = int(summ.get("not_executed") or 0)
 
                 # Exit is presentation-only: mirrors gate exit bands (0/1/2).
                 r = str(results.get("result") or "").strip().lower()
@@ -4416,6 +4756,8 @@ def cmd_test(args: argparse.Namespace) -> None:
                 print(f"PASS: {passed}")
                 print(f"FAIL: {failed}")
                 print(f"SKIP: {skipped}")
+                if not_executed:
+                    print(f"NOT_EXECUTED: {not_executed}")
                 print(f"EXIT: {exit_code}")
             except Exception:
                 pass
@@ -4470,33 +4812,26 @@ def cmd_test(args: argparse.Namespace) -> None:
             print(f"{msg}")
             return
 
+        # §4.8 WI-3 (REQ-TAG-NONEXEC-3/B08): record fail-fast-dropped remaining tests as
+        # not_executed before finalizing (closes BL-1b7-1). Guarded to the test loop only.
+        if _ff_state["idx"] >= 0:
+            results["tests"].extend(_fail_fast_drops(declared_tests, _ff_state["idx"]))
+            _ff_state["idx"] = -1
+
         # WI-2: Fail-fast test failures must still finalize + write authoritative artifacts
         # so the Gate Result block reflects executed tests (no "Declared tests executed: 0"
         # when a declared test actually ran).
         try:
             tests_list = results.get("tests", []) or []
             if isinstance(tests_list, list):
-                total = len(tests_list)
-                passed = 0
-                failed = 0
-                skipped = 0
-                for tr in tests_list:
-                    if not isinstance(tr, dict):
-                        continue
-                    v = str(tr.get("verdict") or "").strip().lower()
-                    if v == "pass":
-                        passed += 1
-                    elif v == "fail":
-                        failed += 1
-                    elif v == "skip":
-                        skipped += 1
-
+                _tc_ff = _summarize_test_counts(tests_list)
                 results.setdefault("summary", {})
                 if isinstance(results.get("summary"), dict):
-                    results["summary"]["total"] = total
-                    results["summary"]["passed"] = passed
-                    results["summary"]["failed"] = failed
-                    results["summary"]["skipped"] = skipped
+                    results["summary"]["total"] = _tc_ff["total"]
+                    results["summary"]["passed"] = _tc_ff["passed"]
+                    results["summary"]["failed"] = _tc_ff["failed"]
+                    results["summary"]["skipped"] = _tc_ff["skipped"]
+                    results["summary"]["not_executed"] = _tc_ff["not_executed"]
 
             results["result"] = "fail"
             write_results()
@@ -5795,6 +6130,186 @@ def cmd_test(args: argparse.Namespace) -> None:
             }
             return vtysh_ok, predicate_ok, observed_state, evidence
 
+        if inv_type == "bgp_community":
+            node = str(t.get("node") or "")
+            prefix = str(t.get("_norm_prefix") or "").strip()
+
+            cp = rt.exec(lab, node, ["vtysh", "-c", f"show ip bgp {prefix} json"], check=False)
+            out = cp.stdout or ""
+            rc = cp.returncode
+            if isinstance(out, (bytes, bytearray)):
+                try:
+                    out = out.decode("utf-8", errors="replace")
+                except Exception:
+                    out = str(out)
+
+            vtysh_ok = (rc == 0)
+
+            parse_error = ""
+            route_present = False
+            observed_tokens = []
+            empty_first_doc = False
+            try:
+                _s = str(out or "").strip()
+                doc = json.loads(_s) if _s else {}
+                if isinstance(doc, dict) and not doc:
+                    empty_first_doc = True
+                route_obj = None
+                if isinstance(doc, dict):
+                    cand = doc.get(prefix)
+                    if isinstance(cand, list) and cand:
+                        route_obj = cand[0]
+                    elif isinstance(cand, dict):
+                        route_obj = cand
+                    elif (
+                        doc.get("prefix") is not None
+                        and (_normalize_prefix(str(doc.get("prefix"))) or str(doc.get("prefix"))) == prefix
+                    ):
+                        route_obj = doc
+                    else:
+                        routes = doc.get("routes")
+                        if isinstance(routes, dict):
+                            cand = routes.get(prefix)
+                            if isinstance(cand, list) and cand:
+                                route_obj = cand[0]
+                            elif isinstance(cand, dict):
+                                route_obj = cand
+                            else:
+                                for k, v in routes.items():
+                                    nk = _normalize_prefix(str(k)) or str(k)
+                                    if nk != prefix:
+                                        continue
+                                    if isinstance(v, list) and v:
+                                        route_obj = v[0]
+                                        break
+                                    if isinstance(v, dict):
+                                        route_obj = v
+                                        break
+                        if route_obj is None:
+                            for k, v in doc.items():
+                                nk = _normalize_prefix(str(k)) or str(k)
+                                if nk != prefix:
+                                    continue
+                                if isinstance(v, list) and v:
+                                    route_obj = v[0]
+                                    break
+                                if isinstance(v, dict):
+                                    route_obj = v
+                                    break
+                else:
+                    raise ValueError("unexpected_bgp_prefix_json_shape")
+
+                if isinstance(route_obj, dict):
+                    route_present = True
+                    observed_tokens = _route_communities(route_obj)
+            except Exception as e:
+                parse_error = str(e)
+
+            predicate_ok = route_present
+
+            observed_state = {
+                "norm_prefix": prefix,
+                "route_present": route_present,
+                "observed_communities": sorted({_canonical_community_token(t) for t in observed_tokens}),
+            }
+            evidence = {
+                "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                "rc": rc,
+                "parse_error": parse_error,
+                "empty_first_doc": empty_first_doc,
+            }
+            return vtysh_ok, predicate_ok, observed_state, evidence
+
+        if inv_type == "bgp_as_path":
+            node = str(t.get("node") or "")
+            prefix = str(t.get("_norm_prefix") or "").strip()
+
+            cp = rt.exec(lab, node, ["vtysh", "-c", f"show ip bgp {prefix} json"], check=False)
+            out = cp.stdout or ""
+            rc = cp.returncode
+            if isinstance(out, (bytes, bytearray)):
+                try:
+                    out = out.decode("utf-8", errors="replace")
+                except Exception:
+                    out = str(out)
+
+            vtysh_ok = (rc == 0)
+
+            parse_error = ""
+            route_present = False
+            observed_path = ""
+            empty_first_doc = False
+            try:
+                _s = str(out or "").strip()
+                doc = json.loads(_s) if _s else {}
+                if isinstance(doc, dict) and not doc:
+                    empty_first_doc = True
+                route_obj = None
+                if isinstance(doc, dict):
+                    cand = doc.get(prefix)
+                    if isinstance(cand, list) and cand:
+                        route_obj = cand[0]
+                    elif isinstance(cand, dict):
+                        route_obj = cand
+                    elif (
+                        doc.get("prefix") is not None
+                        and (_normalize_prefix(str(doc.get("prefix"))) or str(doc.get("prefix"))) == prefix
+                    ):
+                        route_obj = doc
+                    else:
+                        routes = doc.get("routes")
+                        if isinstance(routes, dict):
+                            cand = routes.get(prefix)
+                            if isinstance(cand, list) and cand:
+                                route_obj = cand[0]
+                            elif isinstance(cand, dict):
+                                route_obj = cand
+                            else:
+                                for k, v in routes.items():
+                                    nk = _normalize_prefix(str(k)) or str(k)
+                                    if nk != prefix:
+                                        continue
+                                    if isinstance(v, list) and v:
+                                        route_obj = v[0]
+                                        break
+                                    if isinstance(v, dict):
+                                        route_obj = v
+                                        break
+                        if route_obj is None:
+                            for k, v in doc.items():
+                                nk = _normalize_prefix(str(k)) or str(k)
+                                if nk != prefix:
+                                    continue
+                                if isinstance(v, list) and v:
+                                    route_obj = v[0]
+                                    break
+                                if isinstance(v, dict):
+                                    route_obj = v
+                                    break
+                else:
+                    raise ValueError("unexpected_bgp_prefix_json_shape")
+
+                if isinstance(route_obj, dict):
+                    route_present = True
+                    observed_path = _route_as_path(route_obj)
+            except Exception as e:
+                parse_error = str(e)
+
+            predicate_ok = route_present
+
+            observed_state = {
+                "norm_prefix": prefix,
+                "route_present": route_present,
+                "observed_as_path": observed_path,
+            }
+            evidence = {
+                "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                "rc": rc,
+                "parse_error": parse_error,
+                "empty_first_doc": empty_first_doc,
+            }
+            return vtysh_ok, predicate_ok, observed_state, evidence
+
         if inv_type == "ospf_neighbor_up":
             # H4: OSPF neighbor-state evaluator (REQ-H4-7 / B07).
             # FRR JSON shape: {"neighbors": {"<router-id>": [{"nbrState": ...}]}}.
@@ -7023,6 +7538,195 @@ def cmd_test(args: argparse.Namespace) -> None:
             )
             return verdict
 
+        if inv_type == "bgp_community":
+            node = str(t.get("node") or "")
+            prefix = _normalize_prefix(str(t.get("prefix") or ""))
+            exp_comm = t.get("expected")
+            match = t.get("match")
+
+            t["_norm_prefix"] = prefix
+            _vtysh_ok, _pred_ok, last_state, last_evidence = (
+                _evaluate_invariant_attempt(inv_type="bgp_community", t=t, src=node)
+            )
+            rc = last_evidence.get("rc")
+            parse_error = str(last_evidence.get("parse_error") or "")
+            route_present = bool(last_state.get("route_present"))
+            observed_communities = list(last_state.get("observed_communities") or [])
+            empty_first_doc = bool(last_evidence.get("empty_first_doc"))
+
+            if rc not in (0, None):
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=node,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported BGP community evidence provider capability",
+                    evidence={
+                        "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                        "rc": rc,
+                    },
+                    meta={
+                        "type": inv_type,
+                        "prefix": prefix,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
+            if not route_present and empty_first_doc:
+                time.sleep(2)
+                _vtysh_ok2, _pred_ok2, last_state2, last_evidence2 = (
+                    _evaluate_invariant_attempt(inv_type="bgp_community", t=t, src=node)
+                )
+                if bool(last_state2.get("route_present")):
+                    last_state = last_state2
+                    last_evidence = last_evidence2
+                    rc = last_evidence.get("rc")
+                    parse_error = str(last_evidence.get("parse_error") or "")
+                    route_present = bool(last_state.get("route_present"))
+                    observed_communities = list(last_state.get("observed_communities") or [])
+
+            observed = _bgp_community_observed(exp_comm, match, observed_communities)
+            verdict = "pass" if observed == expected else "fail"
+
+            observed_state_payload = None
+            if verdict == "fail":
+                _expected_list = exp_comm if isinstance(exp_comm, list) else [exp_comm]
+                observed_state_payload = {
+                    "type": "bgp_community",
+                    "prefix": prefix,
+                    "expected_communities": [str(_c) for _c in _expected_list],
+                    "actual_communities": sorted(observed_communities),
+                    "match": str(match).strip().lower() if isinstance(exp_comm, list) else "",
+                    "route_present": bool(route_present),
+                    "source_node": node,
+                }
+                if parse_error:
+                    observed_state_payload["parse_error"] = str(parse_error)
+
+            record_fn(
+                name=test_name,
+                kind="invariant",
+                src=node,
+                dst="",
+                expected=expected,
+                observed=observed,
+                verdict=verdict,
+                duration_ms=int((time.time() - start) * 1000),
+                error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
+                evidence={
+                    "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                    "rc": rc,
+                    "prefix": prefix,
+                    "communities": sorted(observed_communities),
+                },
+                meta={
+                    "type": inv_type,
+                    "prefix": prefix,
+                    "route_present": bool(route_present),
+                    "observed_community_count": len(observed_communities),
+                },
+                observed_state=observed_state_payload,
+            )
+            return verdict
+
+        if inv_type == "bgp_as_path":
+            node = str(t.get("node") or "")
+            prefix = _normalize_prefix(str(t.get("prefix") or ""))
+            as_path_pat = str(t.get("as_path") or "")
+
+            t["_norm_prefix"] = prefix
+            _vtysh_ok, _pred_ok, last_state, last_evidence = (
+                _evaluate_invariant_attempt(inv_type="bgp_as_path", t=t, src=node)
+            )
+            rc = last_evidence.get("rc")
+            parse_error = str(last_evidence.get("parse_error") or "")
+            route_present = bool(last_state.get("route_present"))
+            observed_as_path = str(last_state.get("observed_as_path") or "")
+            empty_first_doc = bool(last_evidence.get("empty_first_doc"))
+
+            if rc not in (0, None):
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=node,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported BGP AS-path evidence provider capability",
+                    evidence={
+                        "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                        "rc": rc,
+                    },
+                    meta={
+                        "type": inv_type,
+                        "prefix": prefix,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
+            if not route_present and empty_first_doc:
+                time.sleep(2)
+                _vtysh_ok2, _pred_ok2, last_state2, last_evidence2 = (
+                    _evaluate_invariant_attempt(inv_type="bgp_as_path", t=t, src=node)
+                )
+                if bool(last_state2.get("route_present")):
+                    last_state = last_state2
+                    last_evidence = last_evidence2
+                    rc = last_evidence.get("rc")
+                    parse_error = str(last_evidence.get("parse_error") or "")
+                    route_present = bool(last_state.get("route_present"))
+                    observed_as_path = str(last_state.get("observed_as_path") or "")
+
+            observed = _bgp_as_path_observed(as_path_pat, observed_as_path) if route_present else "fail"
+            verdict = "pass" if observed == expected else "fail"
+
+            observed_state_payload = None
+            if verdict == "fail":
+                observed_state_payload = {
+                    "type": "bgp_as_path",
+                    "prefix": prefix,
+                    "expected_as_path": str(as_path_pat),
+                    "actual_as_path": observed_as_path,
+                    "route_present": bool(route_present),
+                    "source_node": node,
+                }
+                if parse_error:
+                    observed_state_payload["parse_error"] = str(parse_error)
+
+            record_fn(
+                name=test_name,
+                kind="invariant",
+                src=node,
+                dst="",
+                expected=expected,
+                observed=observed,
+                verdict=verdict,
+                duration_ms=int((time.time() - start) * 1000),
+                error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
+                evidence={
+                    "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                    "rc": rc,
+                    "prefix": prefix,
+                    "as_path": observed_as_path,
+                },
+                meta={
+                    "type": inv_type,
+                    "prefix": prefix,
+                    "route_present": bool(route_present),
+                    "observed_as_path": observed_as_path,
+                },
+                observed_state=observed_state_payload,
+            )
+            return verdict
+
         if inv_type == "bgp_session_up":
             neighbor = str(t.get("dst") or "").strip()
             try:
@@ -7539,6 +8243,82 @@ def cmd_test(args: argparse.Namespace) -> None:
         )
         return "fail"
 
+    def run_exec_test(*, test_name: str, src: str, t: dict, record_fn=record_test) -> str:
+        # §4.7 exec evaluator (WI-2 dispatch shell). Parallel to run_invariant_test,
+        # a DISTINCT evaluator -- exec never routes through the 13-type invariant
+        # catalog (REQ-UDI-DISPATCH-2). Execution (rt.exec, bounded timeout_s),
+        # assertion evaluation, four-quadrant verdict, and meta.exec are wired in
+        # WI-3 (EXEC-1/2/3, VERDICT-1/2, AUTH-1/2). For now this records a
+        # deterministic dispatch-reached marker so standalone/scenario routing
+        # parity is provable (REQ-UDI-DISPATCH-3).
+        expected = str(t.get("expect") or "pass").strip().lower()
+        if expected not in ("pass", "fail"):
+            expected = "pass"
+        command = str(t.get("command") or "")
+        assertion = t.get("assertion") if isinstance(t.get("assertion"), dict) else {}
+
+        _start = time.time()
+        exec_error = ""
+        stdout = ""
+        stderr = ""
+        returncode = None
+        try:
+            cp = rt.exec(lab, src, shlex.split(command), check=False,
+                         capture_output=True, timeout_s=_EXEC_TIMEOUT_S)
+            if isinstance(cp, str):
+                stdout = cp
+            else:
+                stdout = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
+                stderr = getattr(cp, "stderr", "") or ""
+                returncode = getattr(cp, "returncode", None)
+            if isinstance(stdout, (bytes, bytearray)):
+                stdout = stdout.decode("utf-8", errors="replace")
+            if isinstance(stderr, (bytes, bytearray)):
+                stderr = stderr.decode("utf-8", errors="replace")
+        except Exception as _exc:
+            exec_error = f"exec failed: {_exc}"
+
+        if exec_error:
+            observed, eval_error = "fail", exec_error
+        else:
+            observed, eval_error = _eval_exec_assertion(assertion, stdout)
+
+        verdict = "pass" if observed == expected else "fail"
+
+        _truncated = len(stdout) > _EXEC_EVIDENCE_CAP or len(stderr) > _EXEC_EVIDENCE_CAP
+        evidence = {
+            "stdout": stdout[:_EXEC_EVIDENCE_CAP],
+            "stderr": stderr[:_EXEC_EVIDENCE_CAP],
+            "returncode": returncode,
+            "truncated": _truncated,
+        }
+
+        observed_state_payload = None
+        if observed == "fail":
+            observed_state_payload = {
+                "command": command,
+                "returncode": returncode,
+                "stdout_excerpt": stdout[:_EXEC_EVIDENCE_CAP],
+            }
+            if eval_error:
+                observed_state_payload["eval_error"] = eval_error
+
+        record_fn(
+            name=test_name,
+            kind="exec",
+            src=src or "",
+            dst="",
+            expected=expected,
+            observed=observed,
+            verdict=verdict,
+            duration_ms=int((time.time() - _start) * 1000),
+            error="" if verdict == "pass" else (eval_error or f"exec assertion not satisfied (observed {observed}, expected {expected})"),
+            meta={"exec": {"command": command, "assertion": assertion}},
+            evidence=evidence,
+            observed_state=observed_state_payload,
+        )
+        return verdict
+
     def run_named_test(ref: str, *, scenario_ctx: tuple[str, int] | None = None) -> str:
         """
         Execute a declared atomic test by name (used by scenarios).
@@ -7661,26 +8441,20 @@ def cmd_test(args: argparse.Namespace) -> None:
                         )
                         return "fail"
 
-        # H5 WI-3 fix (Debug Window Mode): interface_state dispatch for the
-        # scenario `run: <test_name>` path. run_named_test's existing
-        # invariant pre-validation (above) handles bgp_session_up /
-        # route_present / route_absent / bgp_med_equals / bgp_localpref_equals
-        # / route_advertised_to / route_not_advertised_to. For
-        # interface_state, route to run_invariant_test (where WI-3's primary
-        # dispatch lives at L7263) so the per-attempt evaluator + meta /
-        # observed_state emission contract is honored identically for both
-        # standalone and scenario invocations.
+        # BL-H5-7 (scenario invariant-dispatch generalization): on the
+        # scenario `run: <test_name>` path, all catalog invariant types
+        # delegate to run_invariant_test so the per-attempt evaluator +
+        # meta / observed_state emission contract is honored identically
+        # for standalone and scenario invocations. Generalizes the prior
+        # H5 WI-3 interface_state-only routing.
         #
-        # H5 LD-eta (closure-report finding): run_named_test's L7464 `else`
-        # branch demands `dst`, which works for bgp_session_up only because
-        # Resolve aliases neighbor -> dst at cassian_model.py L2050-2053.
-        # For interface_state (and latently for ospf_neighbor_up which has
-        # no such alias), the L7464 fallback emits "missing src/dst" before
-        # any dispatch fires. The narrow fix here covers interface_state;
-        # generalizing run_named_test to dispatch all invariant types via
-        # run_invariant_test is BL-H5-7 (latent OSPF-via-scenario issue,
-        # not in H5 scope).
-        if kind == "invariant" and inv_type == "interface_state":
+        # Before this, only interface_state was routed here; other invariant
+        # types fell through to the `else` below, which demands `dst`. That
+        # surfaced as "missing src/dst" for ospf_neighbor_up (no Resolve
+        # neighbor->dst alias), or "unsupported kind 'invariant'" further
+        # down for types that passed the src/dst check. Routing every
+        # invariant kind to run_invariant_test closes that gap.
+        if kind == "invariant":
             record_fn_local = (
                 (lambda **kw: record_event_test_run(
                     scenario_id=scenario_ctx[0], step_index=scenario_ctx[1], **kw
@@ -7688,6 +8462,17 @@ def cmd_test(args: argparse.Namespace) -> None:
                 if scenario_ctx else record_test
             )
             return run_invariant_test(
+                test_name=ref, src=src, t=t, record_fn=record_fn_local
+            )
+
+        if kind == "exec":
+            record_fn_local = (
+                (lambda **kw: record_event_test_run(
+                    scenario_id=scenario_ctx[0], step_index=scenario_ctx[1], **kw
+                ))
+                if scenario_ctx else record_test
+            )
+            return run_exec_test(
                 test_name=ref, src=src, t=t, record_fn=record_fn_local
             )
 
@@ -9895,12 +10680,20 @@ def cmd_test(args: argparse.Namespace) -> None:
             exec_idx = 0
 
             for idx, t in enumerate(declared_tests):
+                _ff_state["idx"] = idx  # §4.8 WI-3: fail-fast drop anchor
                 i = idx + 1
                 test_name = t.get("name") if isinstance(t, dict) else None
                 if not test_name:
                     test_name = f"tests[{i}]"
 
                 if filter_name and test_name != filter_name:
+                    record_test(
+                        name=test_name,
+                        kind=str((t.get("kind") or t.get("type") or "unknown") if isinstance(t, dict) else "unknown"),
+                        src="", dst="", expected="pass", observed="not_executed",
+                        verdict="not_executed", duration_ms=0,
+                        meta={"not_executed_reason": "filtered_by_name"},
+                    )
                     continue
 
                 if not isinstance(t, dict):
@@ -9968,7 +10761,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 src = t.get("src")
                 dst = t.get("dst")
 
-                if kind not in ("ping", "tcp", "bgp_neighbor", "route_prefix", "invariant"):
+                if kind not in ("ping", "tcp", "bgp_neighbor", "route_prefix", "invariant", "exec"):
                     record_test(
                         name=test_name,
                         kind=str(kind),
@@ -9989,7 +10782,22 @@ def cmd_test(args: argparse.Namespace) -> None:
                     )
                     continue
 
+                if not _tag_selected(t, filter_tags):
+                    record_test(
+                        name=test_name, kind=str(kind), src="", dst="",
+                        expected="pass", observed="not_executed",
+                        verdict="not_executed", duration_ms=0,
+                        meta={"not_executed_reason": "filtered_by_tag"},
+                    )
+                    continue
+
                 if filter_kind and kind != filter_kind:
+                    record_test(
+                        name=test_name, kind=str(kind), src="", dst="",
+                        expected="pass", observed="not_executed",
+                        verdict="not_executed", duration_ms=0,
+                        meta={"not_executed_reason": "filtered_by_kind"},
+                    )
                     continue
 
                 matched += 1
@@ -10126,6 +10934,16 @@ def cmd_test(args: argparse.Namespace) -> None:
                         )
                     continue
 
+                if kind == "exec":
+                    verdict = run_exec_test(test_name=test_name, src=src, t=t)
+                    verdict_txt = (verdict or "fail").upper()
+                    _tv(f"[TEST END]   {exec_idx:03d} {test_name} verdict={verdict_txt}")
+                    if verdict != "pass":
+                        fail_or_continue(
+                            f"tests[{i}] exec mismatch: on {src} expected {t.get('expect','pass')}"
+                        )
+                    continue
+
                 if kind == "invariant":
                     verdict = run_invariant_test(test_name=test_name, src=src, t=t)
                     verdict_txt = (verdict or "fail").upper()
@@ -10159,12 +10977,14 @@ def cmd_test(args: argparse.Namespace) -> None:
                     port = t.get("port")
                     fail_or_continue(f"tests[{i}] tcp mismatch: {src} -> {dst}:{port} expected {t.get('expect','pass')}")
 
-            if (filter_name or filter_kind) and matched == 0:
+            if (filter_name or filter_kind or filter_tags) and matched == 0:
                 label_parts = []
                 if filter_name:
                     label_parts.append(f"--name {filter_name!r}")
                 if filter_kind:
                     label_parts.append(f"--kind {filter_kind!r}")
+                if filter_tags:
+                    label_parts.append(f"--tag {filter_tags!r}")
                 label = " ".join(label_parts) if label_parts else "(none)"
                 record_test(
                     name="filter:no-match",
@@ -10184,18 +11004,19 @@ def cmd_test(args: argparse.Namespace) -> None:
                     if isinstance(results.get("summary"), dict):
                         results["summary"]["filtered_by_name"] = filter_name or ""
                         results["summary"]["filtered_by_kind"] = filter_kind or ""
+                        results["summary"]["filtered_by_tag"] = ",".join(filter_tags) if filter_tags else ""
                     else:
-                        results["summary"] = {"filtered_by_name": (filter_name or ""), "filtered_by_kind": (filter_kind or "")}
+                        results["summary"] = {"filtered_by_name": (filter_name or ""), "filtered_by_kind": (filter_kind or ""), "filtered_by_tag": (",".join(filter_tags) if filter_tags else "")}
                 except Exception:
                     pass
 
-                total = len(results.get("tests") or [])
-                failed_count = sum(1 for r in (results.get("tests") or []) if isinstance(r, dict) and r.get("verdict") == "fail")
+                _tc_zm = _summarize_test_counts(results.get("tests") or [])
                 results.setdefault("summary", {})
                 if isinstance(results["summary"], dict):
-                    results["summary"]["total"] = total
-                    results["summary"]["failed"] = failed_count
-                    results["summary"]["passed"] = total - failed_count
+                    results["summary"]["total"] = _tc_zm["total"]
+                    results["summary"]["failed"] = _tc_zm["failed"]
+                    results["summary"]["passed"] = _tc_zm["passed"]
+                    results["summary"]["not_executed"] = _tc_zm["not_executed"]
 
                 results["result"] = "fail"
                 write_results()
@@ -10437,9 +11258,11 @@ def cmd_test(args: argparse.Namespace) -> None:
         results["summary"]["finished_at"] = finished_at
         results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
 
-        test_total = len(results["tests"])
-        test_failed = sum(1 for r in results["tests"] if r.get("verdict") == "fail")
-        test_passed = test_total - test_failed
+        _tc = _summarize_test_counts(results["tests"])
+        test_total = _tc["total"]
+        test_failed = _tc["failed"]
+        test_not_executed = _tc["not_executed"]
+        test_passed = _tc["passed"]
 
         scenario_results = results.get("scenarios") or []
         if not isinstance(scenario_results, list):
@@ -10456,6 +11279,8 @@ def cmd_test(args: argparse.Namespace) -> None:
         results["summary"]["total"] = total
         results["summary"]["passed"] = passed_count
         results["summary"]["failed"] = failed_count
+        results["summary"]["not_executed"] = test_not_executed
+        results["summary"]["filtered_by_tag"] = ",".join(filter_tags) if filter_tags else ""
 
         results["result"] = "fail" if failed_count > 0 else "pass"
         write_results()

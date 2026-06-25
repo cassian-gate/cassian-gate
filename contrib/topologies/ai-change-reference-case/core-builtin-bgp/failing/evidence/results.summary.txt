@@ -1,0 +1,48 @@
+=== CI SUMMARY ===
+verdict: FAIL
+failed_tests: ["r1_bgp_session_to_r2_up"]
+failed_scenarios: []
+artifact_root: labs/clab-ai-change-core-bgp-failing/
+
+=== AUTHORITATIVE TEST VERDICT ===
+verdict: FAIL
+scope: topology=ai-change-core-bgp-failing tests=all scenarios=none
+
+lab: ai-change-core-bgp-failing
+result: fail
+tests: total=1 passed=0 failed=1
+failed_tests:
+ - r1_bgp_session_to_r2_up (invariant) -> : blocked before execution
+    observed:
+      type: <unknown>
+      target: <unspecified>
+      expected: pass
+      detail: (structured failure detail unavailable for this invariant type)
+
+Result:
+  RESULT: FAIL
+
+Authority:
+  results.json is the authoritative verdict artifact
+
+Summary:
+  results.summary.txt is explanatory only and does not determine verdicts
+
+Scope:
+  Validated: declared tests
+  Not validated: scenario behavior
+
+FAIL means:
+  One or more declared checks did not match expected outcomes
+  This is a validation failure, not a system/runtime failure
+
+Validation summary:
+  Lab: ai-change-core-bgp-failing
+  Artifacts: labs/clab-ai-change-core-bgp-failing/
+  Tests executed: 1
+  Scenarios executed: 0
+  Failures: 1
+  FAIL: test=r1_bgp_session_to_r2_up expected=pass observed=blocked
+
+Share this:
+  labs/clab-ai-change-core-bgp-failing//results.json

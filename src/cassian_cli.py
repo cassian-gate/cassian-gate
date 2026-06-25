@@ -32,6 +32,13 @@ from cassian_engine import (
 )
 from cassian_ai import cmd_ai_review
 
+def cmd_import(args) -> None:
+    # §4.14 brownfield importer entry point (authoritative input-producer).
+    # Thin adapter over the cassian_import library; reuse-by-import only.
+    from cassian_import import run_import
+    run_import(args.source, args.out, backend=args.backend)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="cassian",
@@ -237,6 +244,7 @@ def main() -> None:
     )
     p_test.add_argument("--name", help="Run only the test with this name (e.g. tests[4] or a named test)")
     p_test.add_argument("--kind", choices=["ping", "tcp"], help="Run only tests of this kind")
+    p_test.add_argument("--tag", action="append", dest="tag", metavar="TAG", help="Run only tests carrying this tag (repeatable; OR-union). Mutually exclusive with --scenario.")
     p_test.add_argument(
         "--keep-going",
         action="store_true",
@@ -355,6 +363,12 @@ def main() -> None:
     p_ai.add_argument("--artifacts", help="Explicit artifacts directory (context priority 1)")
     p_ai.add_argument("--format", choices=["json", "text"], default="text", help="Output format")
     p_ai.set_defaults(func=cmd_ai_review)
+
+    p_import = sub.add_parser("import", help="Import brownfield sources into an authoritative (topology, starter_invariants) pair")
+    p_import.add_argument("source", help="Brownfield source directory (e.g. a committed NetBox export + rendered configs)")
+    p_import.add_argument("-o", "--out", required=True, help="Output directory for the emitted authoritative pair")
+    p_import.add_argument("--backend", default="netbox", help="Importer backend (default: netbox)")
+    p_import.set_defaults(func=cmd_import)
 
     args = parser.parse_args()
 

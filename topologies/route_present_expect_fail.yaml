@@ -1,0 +1,29 @@
+name: route-present-expect-fail
+
+nodes:
+  - name: r1
+    type: frr
+  - name: r2
+    type: frr
+
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["10.10.10.1/24", "10.10.10.2/24"]
+
+tests:
+  # Q4 (holding predicate -> verdict: fail): the connected route 10.10.10.0/24 is present
+  # (observed: pass); expect: fail -> the expected failure did not occur.
+  - name: q4_route_present_10_10_10_0_24_holds_but_expect_fail
+    kind: invariant
+    type: route_present
+    node: r1
+    prefix: 10.10.10.0/24
+    expect: fail
+  # Q3 (failing predicate -> verdict: pass): 10.20.20.0/24 is not present (observed: fail);
+  # expect: fail -> the expected failure occurred.
+  - name: q3_route_present_10_20_20_0_24_missing_expect_fail
+    kind: invariant
+    type: route_present
+    node: r1
+    prefix: 10.20.20.0/24
+    expect: fail

@@ -1,0 +1,47 @@
+name: bgp-as-path-expect-fail
+# §4.11 deployable expect-fail fixture (bgp_as_path deployable catalog; §4.5
+# expect-fail coverage). r1 (AS 65001) originates 1.1.1.1/32; r2 (AS 65002)
+# receives it over eBGP, so the AS_PATH observed on r2 for 1.1.1.1/32 is "65001".
+# Two expect: fail tests cover the two expect-fail quadrants (Q3 / Q4) for
+# bgp_as_path.
+nodes:
+  - name: r1
+    type: frr
+    asn: 65001
+    router_id: 1.1.1.1
+    networks:
+      - 1.1.1.1/32
+    bgp:
+      neighbors:
+        - peer: r2
+          remote_as: 65002
+  - name: r2
+    type: frr
+    asn: 65002
+    router_id: 2.2.2.2
+    bgp:
+      neighbors:
+        - peer: r1
+          remote_as: 65001
+links:
+  - endpoints: ["r1:eth1", "r2:eth1"]
+    ipv4: ["10.0.0.0/31", "10.0.0.1/31"]
+tests:
+  # Q4 (holding predicate -> verdict: fail): observed AS_PATH contains 65001
+  # (observed: pass); expect: fail -> the expected failure did not occur.
+  - name: q4_as_path_present_but_expect_fail
+    kind: invariant
+    type: bgp_as_path
+    node: r2
+    prefix: 1.1.1.1/32
+    as_path: "_65001_"
+    expect: fail
+  # Q3 (failing predicate -> verdict: pass): observed AS_PATH does NOT contain
+  # 65999 (observed: fail); expect: fail -> the expected failure occurred.
+  - name: q3_as_path_absent_mismatch_expect_fail
+    kind: invariant
+    type: bgp_as_path
+    node: r2
+    prefix: 1.1.1.1/32
+    as_path: "_65999_"
+    expect: fail

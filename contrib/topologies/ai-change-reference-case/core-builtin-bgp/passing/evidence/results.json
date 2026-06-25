@@ -1,0 +1,132 @@
+{
+  "authority": {
+    "supporting_evidence": [
+      {
+        "authority": "supporting_evidence",
+        "counts": {
+          "directly_covered_links": 0,
+          "directly_covered_nodes": 1,
+          "potentially_affected_links": 1,
+          "potentially_affected_nodes": 1
+        },
+        "path": "/home/auser/projects/cassian-gate/labs/clab-ai-change-core-bgp-passing/artifacts/blast-radius/blast_radius.json",
+        "type": "blast_radius"
+      }
+    ],
+    "verdict_source": "tests"
+  },
+  "blast_radius": {
+    "authority": "supporting_evidence",
+    "directly_covered": {
+      "links": 0,
+      "nodes": 1
+    },
+    "enabled": true,
+    "path": "/home/auser/projects/cassian-gate/labs/clab-ai-change-core-bgp-passing/artifacts/blast-radius/blast_radius.json",
+    "potentially_affected": {
+      "links": 1,
+      "nodes": 1
+    }
+  },
+  "command": "test",
+  "events": [],
+  "hard_failure": {
+    "error": "",
+    "occurred": false,
+    "phase": ""
+  },
+  "lab": "ai-change-core-bgp-passing",
+  "lab_obj": {
+    "name": "ai-change-core-bgp-passing"
+  },
+  "overall": {
+    "exit_code": 0,
+    "expected": "pass",
+    "observed": "pass",
+    "phase": "collect",
+    "verdict": "pass"
+  },
+  "result": "pass",
+  "results_schema": "results.v1",
+  "results_schema_version": "1.0.0",
+  "scenarios": [],
+  "schema_version": "1",
+  "state_capture": {
+    "enabled": false,
+    "mode": "none",
+    "plan_path": "",
+    "post": {
+      "error": 0,
+      "ok": 0,
+      "ran": 0,
+      "timeout": 0
+    },
+    "pre": {
+      "error": 0,
+      "ok": 0,
+      "ran": 0,
+      "timeout": 0
+    },
+    "profiles": [],
+    "state_diff": {
+      "added": 0,
+      "authority": "supporting_evidence",
+      "changed": 0,
+      "compared": 0,
+      "enabled": false,
+      "path": "",
+      "removed": 0
+    }
+  },
+  "summary": {
+    "all_scenarios": false,
+    "duration_ms": 6477,
+    "failed": 0,
+    "filtered_by_kind": "",
+    "filtered_by_name": "",
+    "filtered_by_tag": "",
+    "finished_at": 1781588579.8153586,
+    "keep_going": false,
+    "not_executed": 0,
+    "passed": 1,
+    "precheck_controlplane": true,
+    "resolved_topology_mtime": 1781588572.3162818,
+    "resolved_topology_path": "/home/auser/projects/cassian-gate/labs/clab-ai-change-core-bgp-passing/topology.resolved.yaml",
+    "scenario": "",
+    "started_at": 1781588573.3376093,
+    "total": 1
+  },
+  "tests": [
+    {
+      "duration_ms": 70,
+      "error": "",
+      "evidence": {
+        "cmd": "vtysh -c 'show bgp summary json'",
+        "parse_error": ""
+      },
+      "expected": "pass",
+      "from": "r1",
+      "kind": "invariant",
+      "meta": {
+        "attempts": 1,
+        "last_rc": 0,
+        "neighbor": "10.0.0.2",
+        "retry_interval_s": 1.0,
+        "state": "Established",
+        "timeout_s": 15,
+        "type": "bgp_session_up"
+      },
+      "name": "r1_bgp_session_to_r2_up",
+      "observed": "pass",
+      "to": "10.0.0.2",
+      "verdict": "pass"
+    }
+  ],
+  "timing": {
+    "duration_ms": 6477
+  },
+  "tool": "cassian-gate",
+  "topology": {
+    "name": "ai-change-core-bgp-passing"
+  }
+}

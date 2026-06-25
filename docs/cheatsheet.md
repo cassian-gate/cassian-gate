@@ -62,16 +62,28 @@ cassian validate-contrib <path>
 cassian preflight <topology.yaml>
 ```
 
+### Brownfield Onboarding
+
+```bash
+cassian import <source> --out <dir>                  # NetBox-derived export + rendered FRR configs -> topology + starter invariants
+cassian import <source> --out <dir> --backend netbox # --backend defaults to netbox
+```
+
+Input is Cassian's **defined contract**, not a raw NetBox API dump (BGP/static-routes are plugin-only). See [Brownfield Importer](brownfield-importer.md).
+
 ### Execution (Validation)
 
 ```bash
 cassian test <topology.yaml>
+cassian test <topology.yaml> --tag <label>   # run only tests tagged <label> (repeatable; OR-union)
 cassian replay <artifacts-dir>
 cassian run <topology.yaml>
 cassian up <topology.yaml>
 cassian down <lab>
 cassian cleanup --all
 ```
+
+**Selective execution (`--tag`).** Selects declared tests whose `tags:` include the label (repeatable; OR-union). Tests not selected are recorded explicitly as `verdict: not_executed` (`meta.not_executed_reason: filtered_by_tag`) and surfaced in the summary — never silently dropped, never counted as pass. A `--tag` that matches **no** test hard-fails (it does not pass with zero tests). `--tag` cannot be combined with `--scenario` / `--all-scenarios`. See `docs/topology-schema-v1.5.md` §2b.
 
 ### Inspection
 
@@ -467,6 +479,7 @@ Optional:
 - `fabric`
 - `candidate_changes`
 - `vlans`
+- `intent` (operator-declared run purpose; single string, echoed verbatim into `results.json`)
 
 ---
 
@@ -976,6 +989,8 @@ Supported kinds:
 - `ping`
 - `tcp`
 - `invariant` — see "Invariant tests" below for the supported invariant `type` values
+- `exec` — user-defined invariant: a read-only command on a node plus a typed assertion; see "Exec tests" below
+
 
 ---
 
@@ -1030,6 +1045,22 @@ kind: invariant
 
 They validate declared truth conditions and return authoritative pass/fail results like any other test.
 
+### Expect / verdict (four quadrants)
+
+`expect:` declares whether the predicate should hold. The verdict is `pass` when `observed` matches `expected`, otherwise `fail`:
+
+| `expect:` | predicate | `verdict:` |
+| --------- | --------- | ---------- |
+| `pass`    | holds     | `pass`     |
+| `pass`    | fails     | `fail`     |
+| `fail`    | fails     | `pass`     |
+| `fail`    | holds     | `fail`     |
+
+Use `expect: fail` to assert a condition must NOT hold (a negative test). A `fail` verdict carries the `observed:` block (see the v1.5 schema guide §3); a structural error forces `fail` regardless of `expect:`.
+
+This same four-quadrant contract governs `exec` user-defined invariants (see "Exec tests"); there is no separate verdict path per kind.
+
+
 ### Blocked declared validation items
 
 If a declared test or selected scenario reaches authoritative execution scope but cannot execute normally because execution is blocked later in the gate path, Cassian Gate records that item explicitly in `results.json`.
@@ -1048,6 +1079,39 @@ Example meaning:
 - it was in authoritative scope
 - it did not run normally
 - the result was recorded explicitly rather than omitted
+
+---
+
+## Exec tests (user-defined invariants)
+
+When the built-in invariant catalog can't express the check you need, an `exec` test lets you define your own: a read-only command on a node plus a typed assertion. It is authoritative — same verdict and record structure as a built-in invariant.
+
+```yaml
+- name: bgp_peer_established
+  kind: exec
+  src: r1                                    # target node; type derived (frr | nft-fw)
+  command: vtysh -c "show bgp summary json"  # read-only: frr -> vtysh -c "show …"; nft-fw -> nft list …
+  assertion:
+    field:
+      path: [ipv4Unicast, peers, "10.0.0.2", state]
+      op: "=="
+      value: Established
+  expect: pass
+```
+
+Closed key set: `name`, `kind`, `src`, `command`, `assertion`, `expect` — any other key is rejected at `cassian validate`.
+
+Typed assertions (pick exactly one):
+
+| Operator | Shape |
+| --- | --- |
+| `contains` / `not_contains` | `contains: "<substr>"` |
+| `equals` | `equals: "<value>"` |
+| `matches` | `matches: "<regex>"` |
+| `count` | `count: { pattern: "<regex>", op: ">=", value: 2 }` |
+| `field` | `field: { path: [k1, "k2"], op: "==", value: X }` — JSON output; walks literal dict keys |
+
+Verdict uses the four-quadrant table above (same contract as invariants). Full reference: [schema guide §2a](topology-schema-v1.5.md) and the [recipe](recipes/exec-user-defined-invariants.md).
 
 ---
 
@@ -1556,6 +1620,155 @@ labs/<lab>/results.summary.txt
 
 When `verdict: fail`, the test record carries a structured `observed_state` payload (`type`, `prefix`, `peer`, `actual`, `expected`, `source_node`). See `docs/topology-schema-v1.5.md` §4.5 for the full per-type schema.
 
+### BGP Community Invariant
+
+Invariant type:
+
+```
+bgp_community
+```
+
+Purpose:
+
+Verify that a BGP route installed on a node carries the expected **community** attribute(s), matched against operator expectations with standard community-list semantics.
+
+This is useful for validating routing policy behavior such as:
+
+- inbound community-tagging route-maps
+- expected community preservation across boundaries
+- ANY-of / ALL-of community-set membership checks
+- companion to `bgp_med_equals` / `bgp_localpref_equals` for full attribute coverage
+
+Required fields:
+
+| Field    | Description                                                               |
+| -------- | ------------------------------------------------------------------------- |
+| node     | Node where the route must be observed                                     |
+| prefix   | Prefix being validated                                                    |
+| expected | A single community specifier, or a list of specifiers                     |
+| match    | `any` or `all` -- REQUIRED for a list `expected`, REJECTED for a scalar   |
+
+A community specifier is a literal `AS:VAL` token (e.g. `65001:100`) or a well-known token (`no-export`, `no-advertise`, `local-AS`, `internet`).
+
+Example (single community):
+
+```yaml
+tests:
+  - name: r2_sees_1_1_1_1_32_with_community
+    kind: invariant
+    type: bgp_community
+    node: r2
+    prefix: 1.1.1.1/32
+    expected: "65001:100"
+    expect: pass
+```
+
+Example (community list, match all):
+
+```yaml
+tests:
+  - name: r2_sees_1_1_1_1_32_with_all_communities
+    kind: invariant
+    type: bgp_community
+    node: r2
+    prefix: 1.1.1.1/32
+    expected:
+      - "65001:100"
+      - no-export
+    match: all
+    expect: pass
+```
+
+Behavior:
+
+- The invariant inspects the BGP route entry on the specified node and extracts its community set.
+- A scalar `expected` passes when that community is present; `match: any` passes when the declared and observed sets intersect; `match: all` passes when every declared community is present.
+- Well-known tokens are normalised on both sides before comparison (`internet` = community `0:0`).
+- If the route is absent, the invariant fails gracefully (`route_present: false` in the failure record), never a silent pass.
+- Malformed declarations (bad community syntax, a scalar `expected` with `match`, or a list `expected` without a valid `match`) are rejected at `cassian validate` time with a corrective error.
+
+Artifacts produced:
+
+```
+labs/<lab>/results.json
+labs/<lab>/results.summary.txt
+```
+
+When `verdict: fail`, the test record carries a structured `observed_state` payload (`type`, `prefix`, `expected_communities`, `actual_communities`, `match`, `route_present`, `source_node`). See `docs/topology-schema-v1.5.md` §4.10 for the full per-type schema.
+
+### BGP AS-Path Invariant
+
+Invariant type:
+
+```
+bgp_as_path
+```
+
+Purpose:
+
+Verify that a BGP route installed on a node carries an **AS-path** matching a declared regular expression.
+
+This is useful for validating routing policy behavior such as:
+
+- expected upstream / transit AS sequences
+- prepending or other path-manipulation route-maps
+- presence (or absence) of a specific AS anywhere in the path
+- companion to `bgp_community` / `bgp_med_equals` / `bgp_localpref_equals` for full attribute coverage
+
+Required fields:
+
+| Field   | Description                                                       |
+| ------- | ----------------------------------------------------------------- |
+| node    | FRR node (`type: frr`) where the route must be observed           |
+| prefix  | Prefix being validated (CIDR)                                     |
+| as_path | A regular expression matched against the route's AS-path          |
+
+The `as_path` value is a regular expression in the FRR-native AS-path idiom: the `_` token matches a path delimiter (start, space, or end), and operator `^` / `$` anchors are honoured. AS numbers are read in **asplain** notation as FRR emits them.
+
+Example (exact sequence):
+
+```yaml
+tests:
+  - name: r2_sees_10_0_0_0_24_via_65001_65002
+    kind: invariant
+    type: bgp_as_path
+    node: r2
+    prefix: 10.0.0.0/24
+    as_path: '^65001 65002$'
+    expect: pass
+```
+
+Example (AS present anywhere in the path):
+
+```yaml
+tests:
+  - name: r2_path_transits_65002
+    kind: invariant
+    type: bgp_as_path
+    node: r2
+    prefix: 10.0.0.0/24
+    as_path: '_65002_'
+    expect: pass
+```
+
+Behavior:
+
+- The invariant inspects the BGP route entry on the specified node and extracts its AS-path, normalised to a space-separated string of AS numbers **in path order** (never sorted -- path order is significant).
+- The declared `as_path` regex is matched against that string with `re.search`; the FRR-native `_` idiom is translated to a delimiter alternation before compilation.
+- If the route is absent, the invariant fails gracefully (`route_present: false` in the failure record), never a silent pass.
+- Malformed declarations (an empty / non-string `as_path`, a pattern that does not compile, an invalid `prefix`, or a non-`frr` / unknown `node`) are rejected at `cassian validate` time with a corrective error.
+- BGP AS-confederation handling and 4-byte AS distinctions beyond FRR's native parsing are out of scope.
+
+Artifacts produced:
+
+```
+labs/<lab>/results.json
+labs/<lab>/results.summary.txt
+```
+
+When `verdict: fail`, the test record carries a structured `observed_state` payload (`type`, `prefix`, `expected_pattern`, `actual_as_path`, `route_present`, `source_node`). See `docs/topology-schema-v1.5.md` §4.11 for the full per-type schema.
+
+
 ### OSPF Neighbor Up Invariant
 
 Invariant type:
@@ -1752,7 +1965,7 @@ Behavior:
 - It passes when the kernel-reported `admin_state` and `operstate` together satisfy the asymmetric predicate above.
 - It fails when the predicate does not hold OR when the probe itself fails (closed-set `last_error` literal indicates which path: capability-probe failure, interface-not-present, ip-command-failure, JSON parse failure, structural surprise, missing field).
 - A per-(lab, node) capability probe runs at most once per gate run on first use of `interface_state` against that node; capability-probe failures short-circuit with `last_error: "ip -j flag not supported by node's iproute2"`.
-- If the invariant definition is invalid (missing `node`, missing `interface`, unknown `node` reference, invalid `state` literal, unknown key), the run fails with misuse exit code `2`.
+- If the invariant definition is invalid (missing `node`, missing `interface`, unknown `node` reference, unknown `interface` reference, invalid `state` literal, unknown key), the run fails with misuse exit code `2`.
 - Retry policy: bounded by the test's `timeout_s` (default `10` seconds) and `retry_interval_s` (default `0.5` seconds) when `expect: pass`. Single attempt for `expect: fail`.
 
 Artifacts produced:
@@ -2001,7 +2214,7 @@ Example failed-invariant record shape in `results.json`:
 
 Summary rendering in `results.summary.txt`:
 
-Each failed-invariant line in the `failed_tests:` block is followed by an indented `observed:` block. Indentation is fixed: header at 4-space, key/value lines at 6-space, list entries at 8-space. List values are capped at 5 entries with a trailing `(+<N> more)` over-cap line. When the record carries `observed_state_truncated: true`, the renderer emits a literal trailing line `(observed_state truncated; full payload in results.json)` at 6-space indent.
+Each failed-invariant line in the `failed_tests:` block is always followed by an indented `observed:` block — never a silent line — in one of two forms: the present payload block (illustrated below), or, when the record's `observed_state` is absent or non-dict, an explicit **absence indicator** carrying `type:`, `target:`, `expected:`, and a literal `detail: (structured failure detail unavailable for this invariant type)` line. Indentation is fixed: header at 4-space, key/value lines at 6-space, list entries at 8-space. List values are capped at 5 entries with a trailing `(+<N> more)` over-cap line. When the record carries `observed_state_truncated: true`, the renderer emits a literal trailing line `(observed_state truncated; full payload in results.json)` at 6-space indent. See `docs/topology-schema-v1.5.md` §5–§6 for the absence-indicator render rule and the suppression boundary.
 
 Example summary block:
 
@@ -2066,6 +2279,12 @@ Currently implemented scenario step types:
 - `wait_for_bgp`
 - `pcap_start`
 - `pcap_stop`
+
+### `run` (dispatch a declared test item)
+
+A `run:` step dispatches a declared item from `tests:` by name as part of the scenario sequence.
+
+A scenario `run:` step may invoke **any of the 13 catalog invariant types** — the same set available to standalone `cassian test` — not only `interface_state`. In particular, an `ospf_neighbor_up` invariant referenced by a scenario `run:` step now dispatches and evaluates correctly (it does not emit a spurious pre-dispatch failure).
 
 ### `wait` (explicit elapsed-time pause)
 
@@ -2857,6 +3076,7 @@ Important boundary:
 
 - omission does not mean success
 - a blocked declared item should appear explicitly in `results.json`
+- every gate run additionally stamps four additive, verdict-invariant audit-grade evidence fields (`release_version`, `tamper_check`, `intent`, `baseline_diff`) making `results.json` self-contained and tamper-evident; see `docs/audit-grade-evidence.md`
 - failed-invariant records carry a structured `observed_state` payload — see §9 "Failed-Invariant Observed State" and `docs/topology-schema-v1.5.md` §4 for the schema
 
 ---
