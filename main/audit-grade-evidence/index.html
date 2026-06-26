@@ -1598,7 +1598,7 @@
 <h2 id="what-gets-written">What gets written</h2>
 <p>A finalized <code>results.json</code> carries four audit fields in addition to the usual verdict content:</p>
 <ul>
-<li><strong><code>release_version</code></strong> — the Cassian Gate version that produced the bundle, as an inline string (for example, <code>"2.0.2"</code>). It records <em>which</em> gate generated the evidence, so a stored <code>results.json</code> remains interpretable as tooling evolves.</li>
+<li><strong><code>release_version</code></strong> — the Cassian Gate version that produced the bundle, as an inline string (for example, <code>"2.1.0"</code>). It records <em>which</em> gate generated the evidence, so a stored <code>results.json</code> remains interpretable as tooling evolves.</li>
 <li><strong><code>tamper_check</code></strong> — a self-describing integrity stamp over the authoritative content of the bundle (see below).</li>
 <li><strong><code>intent</code></strong> — the operator's declared purpose for the run, echoed verbatim when supplied (see <a href="#declaring-intent">Declaring intent</a>).</li>
 <li><strong><code>baseline_diff</code></strong> — reserved supporting evidence describing how this run compares to a baseline. It is written only when a baseline comparison is in scope and is absent on ordinary single runs.</li>
