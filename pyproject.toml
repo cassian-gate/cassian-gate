@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cassian-gate"
-version = "2.0.2"
+version = "2.1.0"
 description = "Deterministic pre-production proof layer for network changes"
 license = "Apache-2.0"
 requires-python = ">=3.10"
