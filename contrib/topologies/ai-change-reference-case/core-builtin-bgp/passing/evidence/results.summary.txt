@@ -32,6 +32,7 @@ PASS means:
 
 PASS does not mean:
   Validation of behaviors not declared in this topology
+  Validation of items shown under "Not validated" above
   Coverage of all possible failure modes
 
 Validation summary:

@@ -34,6 +34,7 @@
     "phase": "collect",
     "verdict": "fail"
   },
+  "release_version": "2.1.0",
   "result": "fail",
   "results_schema": "results.v1",
   "results_schema_version": "1.0.0",
@@ -77,16 +78,22 @@
     "not_executed": 0,
     "passed": 0,
     "precheck_controlplane": true,
-    "resolved_topology_mtime": 1781588621.8356829,
+    "resolved_topology_mtime": 1782478426.9445457,
     "resolved_topology_path": "/home/auser/projects/cassian-gate/labs/clab-ai-change-udi-route-failing/topology.resolved.yaml",
     "scenario": "",
     "skipped": 0,
-    "started_at": 1781588622.6729343,
+    "started_at": 1782478427.9645722,
     "total": 1
+  },
+  "tamper_check": {
+    "algo": "sha256",
+    "digest": "6e14a6459f7138e34446e6a5d3724aa36bf916be0bac1388d383c444588dcced",
+    "domain": "canonical-filtered",
+    "state": "verified"
   },
   "tests": [
     {
-      "duration_ms": 84,
+      "duration_ms": 85,
       "error": "exec assertion not satisfied (observed fail, expected pass)",
       "evidence": {
         "returncode": 0,

@@ -46,6 +46,7 @@
     "phase": "collect",
     "verdict": "pass"
   },
+  "release_version": "2.1.0",
   "result": "pass",
   "results_schema": "results.v1",
   "results_schema_version": "1.0.0",
@@ -80,25 +81,31 @@
   },
   "summary": {
     "all_scenarios": false,
-    "duration_ms": 6477,
+    "duration_ms": 6509,
     "failed": 0,
     "filtered_by_kind": "",
     "filtered_by_name": "",
     "filtered_by_tag": "",
-    "finished_at": 1781588579.8153586,
+    "finished_at": 1782478385.8388867,
     "keep_going": false,
     "not_executed": 0,
     "passed": 1,
     "precheck_controlplane": true,
-    "resolved_topology_mtime": 1781588572.3162818,
+    "resolved_topology_mtime": 1782478377.9122443,
     "resolved_topology_path": "/home/auser/projects/cassian-gate/labs/clab-ai-change-core-bgp-passing/topology.resolved.yaml",
     "scenario": "",
-    "started_at": 1781588573.3376093,
+    "started_at": 1782478379.3296108,
     "total": 1
+  },
+  "tamper_check": {
+    "algo": "sha256",
+    "digest": "55f3d77739d08c8aff7c264f7aa6ba34dd1c77ddf9caaa9e2077f6040888b98d",
+    "domain": "canonical-filtered",
+    "state": "verified"
   },
   "tests": [
     {
-      "duration_ms": 70,
+      "duration_ms": 69,
       "error": "",
       "evidence": {
         "cmd": "vtysh -c 'show bgp summary json'",
@@ -123,7 +130,7 @@
     }
   ],
   "timing": {
-    "duration_ms": 6477
+    "duration_ms": 6509
   },
   "tool": "cassian-gate",
   "topology": {
