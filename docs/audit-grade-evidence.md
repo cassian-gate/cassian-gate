@@ -8,7 +8,7 @@ These fields are **additive and advisory**: they describe and attest to the run,
 
 A finalized `results.json` carries four audit fields in addition to the usual verdict content:
 
-- **`release_version`** — the Cassian Gate version that produced the bundle, as an inline string (for example, `"2.0.2"`). It records *which* gate generated the evidence, so a stored `results.json` remains interpretable as tooling evolves.
+- **`release_version`** — the Cassian Gate version that produced the bundle, as an inline string (for example, `"2.1.0"`). It records *which* gate generated the evidence, so a stored `results.json` remains interpretable as tooling evolves.
 - **`tamper_check`** — a self-describing integrity stamp over the authoritative content of the bundle (see below).
 - **`intent`** — the operator's declared purpose for the run, echoed verbatim when supplied (see [Declaring intent](#declaring-intent)).
 - **`baseline_diff`** — reserved supporting evidence describing how this run compares to a baseline. It is written only when a baseline comparison is in scope and is absent on ordinary single runs.
