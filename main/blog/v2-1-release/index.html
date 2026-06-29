@@ -1,0 +1,1761 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Deterministic pre-production network change validation gate.">
+      
+      
+      
+        <link rel="canonical" href="https://docs.cassiangate.dev/latest/blog/v2-1-release/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/favicon.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Your CI passed. The change still broke production. Here's the gap. - Cassian Gate</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  
+  
+  <meta property="og:image" content="https://docs.cassiangate.dev/latest/assets/og-image.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="https://docs.cassiangate.dev/latest/assets/og-image.png">
+
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#your-ci-passed-the-change-still-broke-production-heres-the-gap" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Cassian Gate" class="md-header__button md-logo" aria-label="Cassian Gate" data-md-component="logo">
+      
+  <img src="../../assets/favicon.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Cassian Gate
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Your CI passed. The change still broke production. Here's the gap.
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../quickstart/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Quickstart
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../topology-schema-v1.5/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Topology Schema Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../topology-schema-v1/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Legacy schema (v1)
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../cli-reference-v1/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  CLI Reference
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../cheatsheet/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Cheatsheet
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../recipes/exec-user-defined-invariants/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Writing a user-defined invariant
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../recipes/ai-change-reference-case/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  The AI-change reference case
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../ci/github-actions/" class="md-tabs__link">
+          
+  
+  
+  CI Integration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../input-adapters/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Input Adapters
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../brownfield-importer/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Brownfield Importer
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../admin-guide-v1/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Admin Guide
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../vm-runtime-capabilities/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  VM Runtime Capabilities
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../proof-kit/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Proof Kit / Examples
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../audit-grade-evidence/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Audit-Grade Evidence
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../ai/" class="md-tabs__link">
+          
+  
+  
+  AI Advisory
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../extensions/extension-and-adoption/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Extension & Adoption
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../project-principles/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Project principles
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../scope-discipline/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Scope and scale discipline
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Cassian Gate" class="md-nav__button md-logo" aria-label="Cassian Gate" data-md-component="logo">
+      
+  <img src="../../assets/favicon.svg" alt="logo">
+
+    </a>
+    Cassian Gate
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../topology-schema-v1.5/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Topology Schema Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../topology-schema-v1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy schema (v1)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli-reference-v1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cheatsheet/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cheatsheet
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../recipes/exec-user-defined-invariants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Writing a user-defined invariant
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../recipes/ai-change-reference-case/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The AI-change reference case
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CI Integration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_9">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    CI Integration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ci/github-actions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitHub Actions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ci/gitlab-ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GitLab CI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../input-adapters/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Input Adapters
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../brownfield-importer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Brownfield Importer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../admin-guide-v1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Admin Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../vm-runtime-capabilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VM Runtime Capabilities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../proof-kit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Proof Kit / Examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../audit-grade-evidence/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Audit-Grade Evidence
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_16" id="__nav_16_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AI Advisory
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    AI Advisory
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ai/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ai/guardrails/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guardrails
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ai/cli-contract-ai/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ai/online_ai/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Online AI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../extensions/extension-and-adoption/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Extension & Adoption
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../project-principles/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project principles
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scope-discipline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Scope and scale discipline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#why-network-ci-is-structurally-different-from-application-ci" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why network CI is structurally different from application CI
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-cassian-gate-is-and-the-one-scale-commitment-everything-follows-from" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What Cassian Gate is — and the one scale commitment everything follows from
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-v21-ships" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What v2.1 ships
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-declaring-a-change-actually-looks-like" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What declaring a change actually looks like
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-running-the-gate-looks-like" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What running the gate looks like
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-cassian-gate-sits-next-to-the-tools-youve-probably-already-evaluated" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where Cassian Gate sits next to the tools you've probably already evaluated
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-ai-change-angle-demonstrated-rather-than-asserted" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The AI-change angle, demonstrated rather than asserted
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#on-the-audit-evidence-properties" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        On the audit-evidence properties
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#whats-next" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What's next
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#on-how-this-gets-built-and-an-invitation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        On how this gets built, and an invitation
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="your-ci-passed-the-change-still-broke-production-heres-the-gap">Your CI passed. The change still broke production. Here's the gap.</h1>
+<p>A network engineer kicks off a config change that touches a dozen nodes. They've run it through CI: the YAML lints, the templates render, the diff looks clean, the pipeline is green. They deploy. Three minutes later a BGP session flaps and they're rolling back.</p>
+<p>Nothing in that pipeline was wrong. Lint checked syntax. The renderer checked that the templates produce output. The diff showed what the text changed. What none of them did was <em>run the change and watch what the network actually does</em> — observe the session come up, the route get advertised, the failover converge. The pipeline validated the artifact. It never validated the behavior.</p>
+<p>That gap is what Cassian Gate exists to close, and v2.1 is the release where the gate gets meaningfully harder to fool. This post walks what's new, shows you real input and real output, and is honest about where the boundary sits.</p>
+<h2 id="why-network-ci-is-structurally-different-from-application-ci">Why network CI is structurally different from application CI</h2>
+<p>For application code, CI is a solved shape: run the tests, and the tests execute the code. A passing suite means the code did the thing under conditions close enough to production that you trust it.</p>
+<p>Network changes don't get that for free. A configuration can be internally consistent and still be operationally wrong. A route policy can read correctly and still leak or suppress a prefix under real protocol interaction. A failover path can look fine on paper and converge incorrectly under load. The tools that look like "network CI" — linters, template renderers, config diffs, static analyzers — are genuinely useful, but they reason <em>about</em> the configuration. They don't stand up the change and execute it.</p>
+<p>Cassian Gate's whole premise is that for the changes that can actually hurt you, you want the execution, not the inference. You declare what the change is allowed to affect and what must remain true, and the gate runs it on clean-state runtime and returns a binary verdict bound to that declaration.</p>
+<h2 id="what-cassian-gate-is-and-the-one-scale-commitment-everything-follows-from">What Cassian Gate is — and the one scale commitment everything follows from</h2>
+<p>Cassian Gate is a deterministic, execution-backed network change-validation gate. It sits between <em>change proposed</em> and <em>change deployed</em>. You declare a topology and the invariants you care about; the gate provisions clean-state runtime, executes, and returns an explicit PASS or FAIL with reproducible artifacts. The verdict lives in execution and its artifacts — never in a heuristic, a score, or an AI's opinion.</p>
+<p>The architectural commitment that everything else follows from is a scale boundary:</p>
+<blockquote>
+<p>Cassian Gate is a per-change clean-state lab on the <strong>blast-radius scope</strong> of your change — not a whole-network model.</p>
+</blockquote>
+<p>For each change you declare the segment that change can actually affect: a fabric segment, a DCI path, a routing domain, a cloud interconnect, a failure domain. The gate stands up clean-state runtime for <em>just that segment</em>, validates your declared invariants against it, and returns a verdict for that one change. There is no continuous model of your entire network and no claim of whole-network coverage. The question the gate is built to answer is "can it deterministically validate the part of the network where this high-risk change can cause damage?" — not "can it model the whole enterprise?"</p>
+<p>That boundary is deliberate, and it's the reason the gate can be deterministic and CI-safe at all. It also draws a clean line against several adjacent tools, which I'll come back to below.</p>
+<h2 id="what-v21-ships">What v2.1 ships</h2>
+<p>v2.1 is the second significant release on the v2 line. Most of the work hardens the engine so that what the gate proves, it proves the same way every time — and what it rejects, it rejects with enough detail for you to act. Concretely:</p>
+<p><strong>A standing engineer-experience guarantee on authoritative output.</strong> From this release line forward, every new invariant ships with the §13-mandated actionable output, and §13 is preserved on every change (DC §14): when the gate rejects authoritative input, the rejection tells you <em>what</em> was wrong, <em>where</em> in the input, and <em>what would be valid</em>; when an invariant fails, the human-readable summary shows the invariant identity, the declared expectation, and the <strong>observed state</strong> — the actual data that made it fail — without re-running the gate or reaching for a second tool. Crucially, an engineer who never invokes any AI surface gets all of this directly from the deterministic engine. (You'll see this in the output snippet below.)</p>
+<p><strong>User-defined invariants (<code>kind: exec</code>).</strong> The highest-leverage capability in the release. Alongside the built-in invariant types, you can now declare your own check as a read-only command plus a typed assertion (<code>contains</code>, <code>field</code>, <code>count</code>, and more). It runs through the same verdict machinery, with the same pass/fail/expect semantics and the same failed-invariant rendering — so a custom check is a first-class gate citizen, not a bolt-on script.</p>
+<p><strong>Two new built-in BGP invariants.</strong> <code>bgp_community</code> matches communities on a received prefix; <code>bgp_as_path</code> validates AS-path properties. These bring the built-in invariant catalog to fifteen types, on top of the user-defined <code>exec</code> kind.</p>
+<p><strong>Selective execution with <code>cassian test --tag</code>.</strong> Tag tests and run a subset. Every test that <em>isn't</em> selected is recorded as an explicit <code>not_executed</code> verdict — because in a gate, silence must never read as success.</p>
+<p><strong>Audit-grade evidence properties in <code>results.json</code>.</strong> Four additive, advisory, verdict-invariant fields: a <code>release_version</code> stamp, a <code>tamper_check</code> SHA-256 over the canonical artifact domain (reports <code>verified</code> / <code>unverifiable</code>, with nothing spoofable to fake), an operator-declared <code>intent</code> echoed back verbatim, and a reserved <code>baseline_diff</code>. These make the artifact more auditable; none of them change a PASS/FAIL. The verdict is still reached the only way it's ever reached — by execution.</p>
+<p><strong>Brownfield first-importer initiation (<code>cassian import</code>).</strong> A new command that converts a NetBox-derived JSON description (in Cassian Gate's own declared contract shape) plus optional rendered FRR configs into a <code>topology.yaml</code> and a starter-invariants file. It is fully offline, deterministic, and non-synthesizing — it never invents state, and it fails closed on anything ambiguous. This is the <em>initiation</em> of brownfield onboarding, not the finished story: a direct real-NetBox export adapter is Phase 2 work, named and deferred rather than half-shipped.</p>
+<p><strong>The AI-change canonical reference case, and the public scope-discipline page.</strong> Two pieces of evidence shipped as docs, covered next.</p>
+<p>Alongside these: engine validation hardening, expect-fail invariant semantics tightened across the catalog, a renderer-regression fix, and a documentation grooming pass to bring every page back in line with product reality.</p>
+<h2 id="what-declaring-a-change-actually-looks-like">What declaring a change actually looks like</h2>
+<p>Here's real input that ships in the repository. The topology declares an eBGP peering, and the <code>tests:</code> block declares the human-authored intent — a built-in invariant asserting the session establishes:</p>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-0-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-0-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-0-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-0-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-0-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-0-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-0-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-0-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-0-10">10</a></span>
+<span class="normal"><a href="#__codelineno-0-11">11</a></span>
+<span class="normal"><a href="#__codelineno-0-12">12</a></span>
+<span class="normal"><a href="#__codelineno-0-13">13</a></span>
+<span class="normal"><a href="#__codelineno-0-14">14</a></span>
+<span class="normal"><a href="#__codelineno-0-15">15</a></span>
+<span class="normal"><a href="#__codelineno-0-16">16</a></span>
+<span class="normal"><a href="#__codelineno-0-17">17</a></span>
+<span class="normal"><a href="#__codelineno-0-18">18</a></span>
+<span class="normal"><a href="#__codelineno-0-19">19</a></span>
+<span class="normal"><a href="#__codelineno-0-20">20</a></span>
+<span class="normal"><a href="#__codelineno-0-21">21</a></span>
+<span class="normal"><a href="#__codelineno-0-22">22</a></span>
+<span class="normal"><a href="#__codelineno-0-23">23</a></span>
+<span class="normal"><a href="#__codelineno-0-24">24</a></span>
+<span class="normal"><a href="#__codelineno-0-25">25</a></span>
+<span class="normal"><a href="#__codelineno-0-26">26</a></span>
+<span class="normal"><a href="#__codelineno-0-27">27</a></span>
+<span class="normal"><a href="#__codelineno-0-28">28</a></span>
+<span class="normal"><a href="#__codelineno-0-29">29</a></span>
+<span class="normal"><a href="#__codelineno-0-30">30</a></span>
+<span class="normal"><a href="#__codelineno-0-31">31</a></span>
+<span class="normal"><a href="#__codelineno-0-32">32</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ai-change-core-bgp-passing</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2"></a>
+<a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="nt">nodes</span><span class="p">:</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">r1</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">frr</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="w">    </span><span class="nt">asn</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">65001</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="w">    </span><span class="nt">router_id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1.1.1.1</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="nt">bgp</span><span class="p">:</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">      </span><span class="nt">neighbors</span><span class="p">:</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">peer</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">r2</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="w">          </span><span class="nt">remote_as</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">65002</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12"></a>
+<a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">r2</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="w">    </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">frr</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">    </span><span class="nt">asn</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">65002</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="w">    </span><span class="nt">router_id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2.2.2.2</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="w">    </span><span class="nt">bgp</span><span class="p">:</span>
+<a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="w">      </span><span class="nt">neighbors</span><span class="p">:</span>
+<a id="__codelineno-0-19" name="__codelineno-0-19"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">peer</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">r1</span>
+<a id="__codelineno-0-20" name="__codelineno-0-20"></a><span class="w">          </span><span class="nt">remote_as</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">65001</span>
+<a id="__codelineno-0-21" name="__codelineno-0-21"></a>
+<a id="__codelineno-0-22" name="__codelineno-0-22"></a><span class="nt">links</span><span class="p">:</span>
+<a id="__codelineno-0-23" name="__codelineno-0-23"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">endpoints</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;r1:eth1&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;r2:eth1&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-0-24" name="__codelineno-0-24"></a><span class="w">    </span><span class="nt">ipv4</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;10.0.0.1/30&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;10.0.0.2/30&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-0-25" name="__codelineno-0-25"></a>
+<a id="__codelineno-0-26" name="__codelineno-0-26"></a><span class="nt">tests</span><span class="p">:</span>
+<a id="__codelineno-0-27" name="__codelineno-0-27"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">r1_bgp_session_to_r2_up</span>
+<a id="__codelineno-0-28" name="__codelineno-0-28"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">invariant</span>
+<a id="__codelineno-0-29" name="__codelineno-0-29"></a><span class="w">    </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">bgp_session_up</span>
+<a id="__codelineno-0-30" name="__codelineno-0-30"></a><span class="w">    </span><span class="nt">node</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">r1</span>
+<a id="__codelineno-0-31" name="__codelineno-0-31"></a><span class="w">    </span><span class="nt">dst</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10.0.0.2</span>
+<a id="__codelineno-0-32" name="__codelineno-0-32"></a><span class="w">    </span><span class="nt">expect</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pass</span>
+</code></pre></div></td></tr></table></div>
+<p>A user-defined invariant is just as short — a read-only command and a typed assertion:</p>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span>
+<span class="normal"><a href="#__codelineno-1-2">2</a></span>
+<span class="normal"><a href="#__codelineno-1-3">3</a></span>
+<span class="normal"><a href="#__codelineno-1-4">4</a></span>
+<span class="normal"><a href="#__codelineno-1-5">5</a></span>
+<span class="normal"><a href="#__codelineno-1-6">6</a></span>
+<span class="normal"><a href="#__codelineno-1-7">7</a></span>
+<span class="normal"><a href="#__codelineno-1-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="nt">tests</span><span class="p">:</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">r2_learns_route_1_1_1_1_32</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">exec</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="w">    </span><span class="nt">src</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">r2</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5"></a><span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">vtysh -c &quot;show bgp ipv4 unicast 1.1.1.1/32 json&quot;</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6"></a><span class="w">    </span><span class="nt">assertion</span><span class="p">:</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="w">      </span><span class="nt">contains</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;1.1.1.1/32&quot;</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8"></a><span class="w">    </span><span class="nt">expect</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pass</span>
+</code></pre></div></td></tr></table></div>
+<h2 id="what-running-the-gate-looks-like">What running the gate looks like</h2>
+<p>You run any topology the same way:</p>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1"></a>cassian<span class="w"> </span><span class="nb">test</span><span class="w"> </span>contrib/topologies/ai-change-reference-case/core-builtin-bgp/passing/topology.yaml
+</code></pre></div></td></tr></table></div>
+<p>A clean pass is unambiguous — <code>RESULT: PASS</code>, exit code <code>0</code>, artifacts on disk, and a summary that's explicit about what it did and did <em>not</em> validate:</p>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-3-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-3-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-3-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-3-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-3-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-3-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-3-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-3-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-3-10">10</a></span>
+<span class="normal"><a href="#__codelineno-3-11">11</a></span>
+<span class="normal"><a href="#__codelineno-3-12">12</a></span>
+<span class="normal"><a href="#__codelineno-3-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1"></a>=== AUTHORITATIVE TEST VERDICT ===
+<a id="__codelineno-3-2" name="__codelineno-3-2"></a>verdict: PASS
+<a id="__codelineno-3-3" name="__codelineno-3-3"></a>scope: topology=ai-change-core-bgp-passing tests=all scenarios=none
+<a id="__codelineno-3-4" name="__codelineno-3-4"></a>
+<a id="__codelineno-3-5" name="__codelineno-3-5"></a>lab: ai-change-core-bgp-passing
+<a id="__codelineno-3-6" name="__codelineno-3-6"></a>result: pass
+<a id="__codelineno-3-7" name="__codelineno-3-7"></a>tests: total=1 passed=1 failed=0
+<a id="__codelineno-3-8" name="__codelineno-3-8"></a>
+<a id="__codelineno-3-9" name="__codelineno-3-9"></a>PASS means:
+<a id="__codelineno-3-10" name="__codelineno-3-10"></a>  All declared tests passed against real execution behavior
+<a id="__codelineno-3-11" name="__codelineno-3-11"></a>PASS does not mean:
+<a id="__codelineno-3-12" name="__codelineno-3-12"></a>  Validation of behaviors not declared in this topology
+<a id="__codelineno-3-13" name="__codelineno-3-13"></a>  Coverage of all possible failure modes
+</code></pre></div></td></tr></table></div>
+<p>The more interesting output is a failure. Run the failing form of the user-defined-invariant variant — where the session is healthy but the router never advertises the prefix it should — and the gate fails with the observed state rendered:</p>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1"></a>cassian<span class="w"> </span><span class="nb">test</span><span class="w"> </span>contrib/topologies/ai-change-reference-case/udi-bgp-variant/failing/topology.yaml
+</code></pre></div></td></tr></table></div>
+<div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-5-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-5-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-5-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-5-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-5-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-5-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-5-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-5-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-5-10">10</a></span>
+<span class="normal"><a href="#__codelineno-5-11">11</a></span>
+<span class="normal"><a href="#__codelineno-5-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1"></a>verdict: FAIL
+<a id="__codelineno-5-2" name="__codelineno-5-2"></a>failed_tests:
+<a id="__codelineno-5-3" name="__codelineno-5-3"></a> - r2_learns_route_1_1_1_1_32 (exec) r2-&gt; : exec assertion not satisfied (observed fail, expected pass)
+<a id="__codelineno-5-4" name="__codelineno-5-4"></a>    exec:
+<a id="__codelineno-5-5" name="__codelineno-5-5"></a>      command: vtysh -c &quot;show bgp ipv4 unicast 1.1.1.1/32 json&quot;
+<a id="__codelineno-5-6" name="__codelineno-5-6"></a>      assertion: {&quot;contains&quot;: &quot;1.1.1.1/32&quot;}
+<a id="__codelineno-5-7" name="__codelineno-5-7"></a>      expected: pass
+<a id="__codelineno-5-8" name="__codelineno-5-8"></a>    observed:
+<a id="__codelineno-5-9" name="__codelineno-5-9"></a>      command: vtysh -c &quot;show bgp ipv4 unicast 1.1.1.1/32 json&quot;
+<a id="__codelineno-5-10" name="__codelineno-5-10"></a>      returncode: 0
+<a id="__codelineno-5-11" name="__codelineno-5-11"></a>      stdout_excerpt: {
+<a id="__codelineno-5-12" name="__codelineno-5-12"></a>}
+</code></pre></div></td></tr></table></div>
+<p>That <code>observed</code> block is the same observed-state rendering the §13 guarantee mandates for built-in invariants, applied here to a user-defined check: the command that ran, its return code, and the empty BGP table that proves the route is absent — enough to diagnose without re-running anything. And note what <em>didn't</em> happen: the command exited <code>0</code>, but an empty table against a <code>contains</code> assertion is still a FAIL. Silence is not a pass.</p>
+<h2 id="where-cassian-gate-sits-next-to-the-tools-youve-probably-already-evaluated">Where Cassian Gate sits next to the tools you've probably already evaluated</h2>
+<p>If you're researching this space in 2026 you've likely encountered several adjacent tools. The distinctions are architectural, not competitive — in most cases the other tool and Cassian Gate answer different questions and sit well together. The full treatment lives on the <a href="https://docs.cassiangate.dev/latest/scope-discipline/">scope-and-scale discipline page</a>; the short version:</p>
+<p><strong>Whole-network digital twins</strong> (Forward Networks' Forward Predict territory) maintain a continuous, queryable model of the entire network and are powerful for asking questions across all of it. Cassian Gate doesn't model the network; it executes a per-change clean-state lab on the declared blast-radius scope and returns a verdict for that one change. Different shape, different commitments — complementary where a team runs both.</p>
+<p><strong>AI-agent operations platforms</strong> (Cisco AgenticOps, Arista AVA territory) drive operational workflows with AI agents and are built for exactly that. In Cassian Gate, AI never holds verdict authority — it can advise or annotate, but PASS/FAIL comes from executing the declared scenario. An agentic-ops platform could gate its own actions on a deterministic verdict like the one Cassian Gate produces.</p>
+<p><strong>Configuration analyzers</strong> (Batfish territory) reason rigorously about safety from configuration text and modelled state, and catch a real class of problems early. Cassian Gate reaches its verdict by executing on clean-state runtime and observing what the network actually does. Static analysis and execution-backed validation catch different classes of problem and complement each other.</p>
+<p>The pattern is consistent: Cassian Gate is the execution-backed proof step for a single change, scoped to its blast radius. It is not a chaos tool, not a generic scripting surface, not a SaaS gate, and not autonomous network operations. It produces a verdict and artifacts; a person or a pipeline decides what to do with them.</p>
+<h2 id="the-ai-change-angle-demonstrated-rather-than-asserted">The AI-change angle, demonstrated rather than asserted</h2>
+<p>"AI safety for network changes" invites overclaiming, so v2.1 ships the claim as a runnable <a href="https://docs.cassiangate.dev/latest/recipes/ai-change-reference-case/">reference case</a> instead of a paragraph. An AI assistant can propose a change and open a PR faster than a human can read it — and the gate's answer is deliberately unremarkable: an AI-authored change is validated by exactly the same gate as a human-authored one. No provenance score, no trust dial, no special path. The reference case is a matched PASS/FAIL pair where the <em>only</em> thing that differs is whether the change is correct, and a committed proof harness checks the engine source to keep it that way. AI can draft the change and even draft the invariants; the verdict still comes from running the declared scenario.</p>
+<h2 id="on-the-audit-evidence-properties">On the audit-evidence properties</h2>
+<p>A note on framing, because it's easy to read more into this than is there. The artifact-format work in v2.1 — the tamper check, the version stamp, the echoed intent — is <em>engineering</em>. It makes <code>results.json</code> something you can reasonably attach to a change ticket or a PR and trust as a record. What it is <em>not</em>, yet, is a commercial reporting surface. Enterprise artifact rendering and hosted aggregation are deliberately deferred to a much later phase, gated on real buyer pull rather than built ahead of it. Today the value is local and concrete: a more auditable verdict artifact for the engineer running the gate.</p>
+<h2 id="whats-next">What's next</h2>
+<p>The next phase is <strong>SONiC</strong> support — the most important open NOS after FRR, and a locked commitment. Bringing up a NOS in Cassian Gate isn't a checkbox; it means working through every NOS-specific and mixed item in the feature inventory until lifecycle, provisioning, and invariant validation all genuinely work on SONiC containers. Completing the brownfield importer — the real-NetBox export path the v2.1 initiation sets up — is also Phase 2 work. A strategic reassessment governs how that phase is scoped before it starts.</p>
+<h2 id="on-how-this-gets-built-and-an-invitation">On how this gets built, and an invitation</h2>
+<p>I built Cassian Gate over roughly the past year and a half, part-time alongside a day job in network engineering. A solo, part-time project staying coherent across that span isn't an accident of discipline-by-vibes; it's the result of a governance spine that's boring on purpose — a locked doctrine that says what the gate <em>is</em>, a design contract that binds the output surfaces, an atomic-completion rule that forbids shipping a capability half-finished, and a four-stage review cycle that separates authoring a change from ratifying it. That structure is why "every new invariant ships with actionable failure output" is a guarantee and not an aspiration.</p>
+<p>It's all open source under Apache 2.0, and the governance is designed to be transferable — the project can't be locked away. If you work on network changes and any of this resonates, the most useful thing you can do is run it on something real and tell me where it breaks. Honest friction is worth more than stars.</p>
+<ul>
+<li>Install: <code>pipx install cassian-gate</code>, then <code>cassian doctor</code></li>
+<li>Repository and issues: <a href="https://github.com/cassian-gate/cassian-gate">https://github.com/cassian-gate/cassian-gate</a></li>
+<li>Discussions (questions, use cases, feedback): <a href="https://github.com/cassian-gate/cassian-gate/discussions">https://github.com/cassian-gate/cassian-gate/discussions</a></li>
+<li>Scope-and-scale discipline: <a href="https://docs.cassiangate.dev/latest/scope-discipline/">https://docs.cassiangate.dev/latest/scope-discipline/</a></li>
+<li>AI-change reference case: <a href="https://docs.cassiangate.dev/latest/recipes/ai-change-reference-case/">https://docs.cassiangate.dev/latest/recipes/ai-change-reference-case/</a></li>
+</ul>
+<p>— the Cassian Gate project (<a href="https://github.com/cassian-gate/cassian-gate">github.com/cassian-gate</a>)</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.instant", "navigation.top", "search.highlight", "search.suggest", "content.code.copy", "content.code.annotate", "toc.follow"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
