@@ -22,6 +22,7 @@ exclude_docs: |
 
 not_in_nav: |
   /404.md
+  /blog/v2-1-release.md
 
 strict: true
 
