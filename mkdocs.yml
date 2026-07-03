@@ -17,7 +17,6 @@ site_description: Deterministic pre-production network change validation gate.
 docs_dir: docs
 
 exclude_docs: |
-  /REexclude_docs: |
   /README.md
 
 not_in_nav: |
