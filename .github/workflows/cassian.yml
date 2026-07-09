@@ -65,6 +65,25 @@ jobs:
           set -euo pipefail
           python -m py_compile src/*.py
 
+      - name: Observed-state absence-render proof harness (§4.1)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/bl6_observed_state_absence_render_proof.py
+
+      - name: Renderer regression proof harness (§4.3)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/bl_h3_8_scenarios_summary_existing_type_render_proof.py
+
+      - name: Engine validation hardening proof harnesses (§4.4)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/h53_resolve_interface_existence_proof.py
+          python tests/h57_scenario_invariant_dispatch_generalization_proof.py
+
       - name: User-defined invariant (exec) proof harnesses (§4.7)
         shell: bash
         run: |
