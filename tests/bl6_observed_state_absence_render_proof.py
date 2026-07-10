@@ -1,3 +1,4 @@
+import sys as _s; _s.exit(1)  # C1 NEGCHECK -- scratch only, never merged
 #!/usr/bin/env python3
 """
 BL-6 WI-1 render-boundary proof (PO-2, amended per founder ruling 2026-05-29).
