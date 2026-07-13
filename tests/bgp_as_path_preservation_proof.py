@@ -40,6 +40,8 @@ _SRC = os.path.join(_ROOT, "src")
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
+from preservation_manifest import MODULE_ROSTER
+
 # Post-s4.10-merge per-module SHA-256 baseline. Authoritative source:
 #   git show $(git merge-base HEAD develop/phase1b):src/<module>
 # Generated at apply-time by the s4.11 WI-5 apply-script from the live
@@ -54,8 +56,6 @@ FORK_BASELINE = {
     "src/cassian_cli.py": "9234f3fdb76b5432bac8bf22a9807f234da9dff3a72d7c334ed9e2508183898a",
     "src/cassian_import.py": "604c8d8ff2bc461f8b43d7e5be6f63bd00f653ce6f83b64ffff9cf90450cf71c",  # §4.14 new module, enforced (LD-8/LD-9)
     "src/cassian_common.py": "a0469a2a1b3cdcc5a1fffc7cd02198447cf1e0cb1ee8657469c3fb2c57139a10",
-    "src/cassian_engine.py": "34b74fa4d90462626cefd16900f16c6071075d835c1607fcb243593f84009f04",
-    "src/cassian_model.py": "f2421e9c5c8c18f847431d45274efe85298372d5b882b80fc84e2a733f7910f1",
     "src/cassian_runtime_container.py": "b2a493f947c121416c992b8b9788a60acead190d305d58654c3c457def116ba3",
     "src/cassian_state.py": "aec4d412ee53555156cb5275c5d7a1329f54aaef298d4409feebcad2c198a9d6",
     "src/cassian_tests.py": "ba0a1f36245de1ac01853fca4e8a3100ff5aad28525e91ef26ebaf24f404b0af",
@@ -65,6 +65,7 @@ FORK_BASELINE = {
 
 # s4.11 scoped set -- modifiable; excluded from byte-identity enforcement.
 SCOPED = {"src/cassian_model.py", "src/cassian_engine.py"}
+ALLOWED_NEW = set()  # #2 bgp_as_path: no allowed-new; cassian_import is enforced
 
 # P17 -- one representative positive fixture per pre-s4.11 invariant family
 # (incl. s4.10 bgp_community via its set-gen positive fixture).
@@ -96,21 +97,29 @@ def _p16(checks):
         checks.append(("P16 src/ present", False))
         return
     head = set("src/" + n for n in os.listdir(src) if n.endswith(".py"))
-    known = set(FORK_BASELINE)
-    added, removed = head - known, known - head
+    # module-set drift read from the roster (bidirectional; LD-9 leg).
+    added, removed = head - MODULE_ROSTER, MODULE_ROSTER - head
     set_ok = True
     if added:
-        print("FAIL: src/ modules absent from the s4.11 baseline: " + str(sorted(added)))
+        print("FAIL: src/ modules absent from the module roster (unregistered): " + str(sorted(added)))
         set_ok = False
     if removed:
-        print("FAIL: baseline modules missing at HEAD: " + str(sorted(removed)))
+        print("FAIL: rostered src/ modules missing at HEAD: " + str(sorted(removed)))
         set_ok = False
-    checks.append(("P16 module-set matches post-s4.10-merge baseline (denom 14)", set_ok))
+    checks.append(("P16 module-set matches roster (denom " + str(len(MODULE_ROSTER)) + ")", set_ok))
+
+    # enforced set derived FROM THE ROSTER (not baseline keys); a rostered-enforced
+    # module absent from the baseline fails loud, never skipped, never auto-baselined.
+    enforced_set = MODULE_ROSTER - SCOPED - ALLOWED_NEW
+    unbaselined = sorted(m for m in enforced_set if m not in FORK_BASELINE)
+    if unbaselined:
+        print("FAIL: re-baseline required (rostered + enforced, absent from baseline): " + str(unbaselined))
+    checks.append(("P16 all enforced modules baselined (F-1 re-baseline guard)", not unbaselined))
 
     enforced = 0
     drift_ok = True
-    for mod in sorted(head):
-        if mod in SCOPED:
+    for mod in sorted(enforced_set):
+        if mod not in FORK_BASELINE:
             continue
         enforced += 1
         actual, expected = _sha256(os.path.join(_ROOT, mod)), FORK_BASELINE[mod]
