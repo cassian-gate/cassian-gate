@@ -29,6 +29,9 @@ import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
+sys.path.insert(0, os.path.join(_ROOT, "tests"))  # locate preservation_manifest (script-dir is tests/importer/)
+
+from preservation_manifest import MODULE_ROSTER
 
 # === FORK_BASELINE BEGIN (generated at apply-time from the live merge-base) ===
 BASELINE = {
@@ -37,7 +40,6 @@ BASELINE = {
     "src/cassian_ai.py": "6900c52ea52f2a4a588b99478f10e967603b7a1a5f87b3b257878d4fde569361",
     "src/cassian_artifacts.py": "ae8a54302e4fa8fe2f89e3af0e1e16dcda0ff2ae7bc4a805b671f69029fbb04c",
     "src/cassian_candidate.py": "93db9b61e9fd22c74156fc0492119fc4e170a7a192684354c8a31c70876ff52d",
-    "src/cassian_cli.py": "bcf460f7be2d2ec4280569bdfe3f30ab9d0784d6677a98a8db64579bf32ebf75",
     "src/cassian_common.py": "a0469a2a1b3cdcc5a1fffc7cd02198447cf1e0cb1ee8657469c3fb2c57139a10",
     "src/cassian_engine.py": "f3831817f66e62840deae7153270e8c627b09ba4131c965cf80e623f0f4db85e",
     "src/cassian_model.py": "4b9f01aaa95e9c67e5bddc6e30752e60627103c1588a529db88cc0703732fa01",
@@ -49,7 +51,7 @@ BASELINE = {
 # === FORK_BASELINE END ===
 
 SCOPED = {"src/cassian_cli.py"}
-NEW_ALLOWED = {"src/cassian_import.py"}
+ALLOWED_NEW = {"src/cassian_import.py"}
 PRES_CRITICAL = {
     "src/cassian_model.py",      # LD-4 reuse-by-import; never edited
     "src/cassian_tests.py",      # §13(b)(c) render seam + invariant evaluation
@@ -79,15 +81,23 @@ def main():
         sys.exit(1)
     head = set("src/" + n for n in os.listdir(src_dir) if n.endswith(".py"))
 
-    added, removed = head - set(BASELINE) - NEW_ALLOWED, set(BASELINE) - head
-    record("PO-6 module-set drift = {cassian_import.py} added, none removed",
-           (not added) and (not removed) and (NEW_ALLOWED <= head),
+    # module-set drift read from the roster (bidirectional; LD-9 leg).
+    added, removed = head - MODULE_ROSTER, MODULE_ROSTER - head
+    record("PO-6 module-set matches roster (denom " + str(len(MODULE_ROSTER)) + ", bidirectional)",
+           (not added) and (not removed),
            "added=" + str(sorted(added)) + " removed=" + str(sorted(removed)))
+
+    # enforced set derived FROM THE ROSTER (not baseline keys); a rostered-enforced
+    # module absent from the baseline fails loud, never skipped, never auto-baselined.
+    enforced_set = MODULE_ROSTER - SCOPED - ALLOWED_NEW
+    unbaselined = sorted(m for m in enforced_set if m not in BASELINE)
+    record("PO-6 all enforced modules baselined (F-1 re-baseline guard)",
+           not unbaselined, "re-baseline required: " + str(unbaselined))
 
     enforced = 0
     drift = []
-    for mod in sorted(BASELINE):
-        if mod in SCOPED:
+    for mod in sorted(enforced_set):
+        if mod not in BASELINE:
             continue
         enforced += 1
         actual = _sha_file(mod)
@@ -99,8 +109,8 @@ def main():
            "; ".join(drift))
 
     record("PO-6 §13(b)(c) seam + advisory + results-writer + model in enforced set",
-           PRES_CRITICAL.issubset(set(BASELINE) - SCOPED),
-           "missing=" + str(sorted(PRES_CRITICAL - (set(BASELINE) - SCOPED))))
+           PRES_CRITICAL.issubset(enforced_set),
+           "missing=" + str(sorted(PRES_CRITICAL - enforced_set)))
 
     failed = [n for n, ok, _ in checks if not ok]
     for n, ok, detail in checks:
