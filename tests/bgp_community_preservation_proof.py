@@ -41,6 +41,8 @@ _SRC = os.path.join(_ROOT, "src")
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
+from preservation_manifest import MODULE_ROSTER
+
 # d37a75f per-module SHA-256 baseline (authoritative: git show d37a75f:src/*).
 D37A75F_BASELINE = {
     "src/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -51,8 +53,6 @@ D37A75F_BASELINE = {
     "src/cassian_cli.py": "9234f3fdb76b5432bac8bf22a9807f234da9dff3a72d7c334ed9e2508183898a",
     "src/cassian_import.py": "604c8d8ff2bc461f8b43d7e5be6f63bd00f653ce6f83b64ffff9cf90450cf71c",  # §4.14 new module, enforced (LD-8/LD-9)
     "src/cassian_common.py": "a0469a2a1b3cdcc5a1fffc7cd02198447cf1e0cb1ee8657469c3fb2c57139a10",
-    "src/cassian_engine.py": "76edf21eadee1445a67b33248184a819c874a8f69940c15231f1e1453603b5a9",
-    "src/cassian_model.py": "3e2b702ff3a62c55d4d24a7fd1b632cb400121e55107f3a6c9fccc78f08c89f6",
     "src/cassian_runtime_container.py": "b2a493f947c121416c992b8b9788a60acead190d305d58654c3c457def116ba3",
     "src/cassian_state.py": "aec4d412ee53555156cb5275c5d7a1329f54aaef298d4409feebcad2c198a9d6",
     "src/cassian_tests.py": "ba0a1f36245de1ac01853fca4e8a3100ff5aad28525e91ef26ebaf24f404b0af",
@@ -61,6 +61,7 @@ D37A75F_BASELINE = {
 
 # s4.10 scoped set -- modifiable; excluded from byte-identity enforcement.
 SCOPED = {"src/cassian_model.py", "src/cassian_engine.py"}
+ALLOWED_NEW = set()  # #3 bgp_community: no allowed-new; cassian_import is enforced
 
 # P19 -- one representative positive fixture per pre-s4.10 invariant family.
 PREDECESSOR_FIXTURES = [
@@ -90,21 +91,29 @@ def _p17(checks):
         checks.append(("P17 src/ present", False))
         return
     head = set("src/" + n for n in os.listdir(src) if n.endswith(".py"))
-    known = set(D37A75F_BASELINE)
-    added, removed = head - known, known - head
+    # module-set drift read from the roster (bidirectional; LD-9 leg).
+    added, removed = head - MODULE_ROSTER, MODULE_ROSTER - head
     set_ok = True
     if added:
-        print("FAIL: src/ modules absent from the d37a75f baseline: " + str(sorted(added)))
+        print("FAIL: src/ modules absent from the module roster (unregistered): " + str(sorted(added)))
         set_ok = False
     if removed:
-        print("FAIL: d37a75f baseline modules missing at HEAD: " + str(sorted(removed)))
+        print("FAIL: rostered src/ modules missing at HEAD: " + str(sorted(removed)))
         set_ok = False
-    checks.append(("P17 module-set matches d37a75f baseline", set_ok))
+    checks.append(("P17 module-set matches roster (denom " + str(len(MODULE_ROSTER)) + ")", set_ok))
+
+    # enforced set derived FROM THE ROSTER (not baseline keys); a rostered-enforced
+    # module absent from the baseline fails loud, never skipped, never auto-baselined.
+    enforced_set = MODULE_ROSTER - SCOPED - ALLOWED_NEW
+    unbaselined = sorted(m for m in enforced_set if m not in D37A75F_BASELINE)
+    if unbaselined:
+        print("FAIL: re-baseline required (rostered + enforced, absent from baseline): " + str(unbaselined))
+    checks.append(("P17 all enforced modules baselined (F-1 re-baseline guard)", not unbaselined))
 
     enforced = 0
     drift_ok = True
-    for mod in sorted(head):
-        if mod in SCOPED:
+    for mod in sorted(enforced_set):
+        if mod not in D37A75F_BASELINE:
             continue
         enforced += 1
         actual, expected = _sha256(os.path.join(_ROOT, mod)), D37A75F_BASELINE[mod]
