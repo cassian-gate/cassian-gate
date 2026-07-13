@@ -7,6 +7,8 @@ import hashlib
 import os
 import sys
 
+from preservation_manifest import MODULE_ROSTER
+
 _SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
 
 # Post-§4.7 baseline (branch-cut state). The 4 scoped modules (cassian_engine, cassian_model,
@@ -33,6 +35,12 @@ def sha256(path):
 
 def main():
     drift = []
+    # REQ-43-5: subset consistency -- the curated subset may not reference a non-rostered module.
+    non_rostered = sorted(k for k in BASELINE
+                          if (k if k.startswith("src/") else "src/" + k) not in MODULE_ROSTER)
+    if non_rostered:
+        print("FAIL: curated subset references non-rostered module(s): %s" % ", ".join(non_rostered))
+        sys.exit(1)
     for mod, expected in sorted(BASELINE.items()):
         path = os.path.join(_SRC, mod)
         if not os.path.isfile(path):

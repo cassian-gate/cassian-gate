@@ -4,6 +4,7 @@ Per-module SHA-256 byte-identity vs the v9 baseline for EVERY non-scoped src/ mo
 Scoped set {cassian_engine.py, cassian_model.py} is excluded (free to modify per LD-5);
 every other module must be byte-identical to v9."""
 import sys, os, hashlib
+from preservation_manifest import MODULE_ROSTER
 SRCDIR = os.path.join(os.path.dirname(__file__), "..", "src")
 
 SCOPED = {"cassian_engine.py", "cassian_model.py"}
@@ -27,6 +28,9 @@ def ck(c, msg):
     if not c: fails.append(msg)
 
 ck(not (SCOPED & set(V9)), "scoped modules excluded from preservation set (engine/model free)")
+# REQ-43-5: subset consistency -- the curated subset may not reference a non-rostered module.
+ck({(k if k.startswith("src/") else "src/" + k) for k in V9} <= MODULE_ROSTER,
+   "curated subset registered in module roster (no non-rostered key)")
 for mod, baseline in V9.items():
     p = os.path.join(SRCDIR, mod)
     if not os.path.isfile(p):
