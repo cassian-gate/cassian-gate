@@ -184,6 +184,7 @@ jobs:
           python tests/two_run_injected_difference_proof.py
           python tests/two_run_verdict_substitution_proof.py
           python tests/two_run_config_vs_behaviour_proof.py
+          python tests/two_run_canonical_serialization_proof.py
 
       - name: Project gate (up -> test -> down)
         shell: bash
