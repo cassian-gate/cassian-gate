@@ -10,7 +10,7 @@ from typing import Any
 import yaml
 
 from cassian_common import LABS_DIR, TOPO_DIR, die
-from cassian_artifacts import load_yaml
+from cassian_artifacts import load_yaml, write_json_canonical
 
 def _two_run_load_yaml_path(arg: str) -> Path:
     p = (TOPO_DIR / arg) if not Path(arg).is_file() else Path(arg)
@@ -285,9 +285,10 @@ def _two_run_populate_baseline_diff(results_path: Path, summary: dict[str, Any])
     # tamper_check recomputed LAST so it covers baseline_diff; the audit helper
     # self-excludes the prior tamper_check token from its hash domain.
     results["tamper_check"] = _audit_compute_tamper_check(results)
-    results_path.write_text(
-        json.dumps(results, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    # F-1: write through the frozen canonical serializer (ensure_ascii=False + newline
+    # policy) so the authoritative results.json is not written non-canonically for
+    # non-ASCII content. Matches the engine's own results.json writer.
+    write_json_canonical(results_path, results)
 
 
 def _cmd_test_two_run(args: argparse.Namespace) -> None:
