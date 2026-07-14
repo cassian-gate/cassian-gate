@@ -10,7 +10,7 @@ from typing import Any
 import yaml
 
 from cassian_common import LABS_DIR, TOPO_DIR, die
-from cassian_artifacts import load_yaml
+from cassian_artifacts import load_yaml, write_json_canonical
 
 def _two_run_load_yaml_path(arg: str) -> Path:
     p = (TOPO_DIR / arg) if not Path(arg).is_file() else Path(arg)
@@ -220,6 +220,77 @@ def _two_run_compare(*, baseline_dir: Path, change_dir: Path, base_name: str) ->
 
     return summary, "\n".join(lines) + "\n"
 
+
+def _two_run_determinism_safe_subset(summary: dict[str, Any]) -> dict[str, Any]:
+    """§4.4 (LD-A(ii)): determinism-safe subset of the two-run diff, for the
+    authoritative results.json.baseline_diff field. Evidence-only.
+
+    Strips timing/host-noise (duration_ms) so the STORED field is byte-identical on
+    replay over identical evidence (REQ-44-9 / BR-4 / D02). A diff entry whose only
+    change was timing has no behavioural difference and is dropped (REQ-44-8 semantics).
+    Single shared source: this function is the one definition of the subset field-set,
+    consumed by both the population path and the determinism proof (BR-10).
+    """
+    _NOISE = ("duration_ms",)  # D02 timing noise; D03 run-ids/host-paths absent from summary shape
+
+    def _clean(changes: dict[str, Any] | None) -> dict[str, Any]:
+        return {k: v for k, v in (changes or {}).items() if k not in _NOISE}
+
+    diffs = summary.get("diffs") or {}
+
+    test_diffs: list[dict[str, Any]] = []
+    for d in diffs.get("tests", []) or []:
+        ch = _clean(d.get("changes"))
+        if ch:
+            test_diffs.append({"name": d.get("name"), "changes": ch})
+
+    scen_diffs: list[dict[str, Any]] = []
+    for d in diffs.get("scenarios", []) or []:
+        raw = d.get("changes") or {}
+        step_changes: list[dict[str, Any]] = []
+        for st in raw.get("steps", []) or []:
+            sc = _clean(st.get("changes"))
+            if sc:
+                step_changes.append({"step": st.get("step"), "changes": sc})
+        ch = _clean({k: v for k, v in raw.items() if k != "steps"})
+        if step_changes:
+            ch["steps"] = step_changes
+        if ch:
+            scen_diffs.append({"id": d.get("id"), "changes": ch})
+
+    return {
+        "schema_version": summary.get("schema_version"),
+        "authority": summary.get("authority"),
+        "statement": summary.get("statement"),
+        "two_run": summary.get("two_run"),
+        "comparability": summary.get("comparability"),
+        "diffs": {"tests": test_diffs, "scenarios": scen_diffs},
+    }
+
+
+def _two_run_populate_baseline_diff(results_path: Path, summary: dict[str, Any]) -> None:
+    """§4.4 Option A (LD-A(i) patch-after-diff): inject the determinism-safe subset into
+    the change run's authoritative results.json as `baseline_diff` (additions-only), then
+    recompute tamper_check LAST over the full object including baseline_diff (BR-5, DC §14
+    item 8). Reuses the engine's existing audit helper via a function-level import to avoid
+    a module-load cycle (engine imports this module at top).
+    """
+    from cassian_engine import _audit_compute_tamper_check  # deferred: avoids import cycle
+
+    results = _two_run_load_json(results_path)
+    if "baseline_diff" in results:
+        # additions-only: never overwrite an existing field (idempotent).
+        return
+    results["baseline_diff"] = _two_run_determinism_safe_subset(summary)
+    # tamper_check recomputed LAST so it covers baseline_diff; the audit helper
+    # self-excludes the prior tamper_check token from its hash domain.
+    results["tamper_check"] = _audit_compute_tamper_check(results)
+    # F-1: write through the frozen canonical serializer (ensure_ascii=False + newline
+    # policy) so the authoritative results.json is not written non-canonically for
+    # non-ASCII content. Matches the engine's own results.json writer.
+    write_json_canonical(results_path, results)
+
+
 def _cmd_test_two_run(args: argparse.Namespace) -> None:
     from cassian import cmd_up, cmd_test, cmd_collect, cmd_down, _candidate_parse_dir_or_die, ensure_valid_topology
     base_topo_path = _two_run_load_yaml_path(str(getattr(args, "two_run_topology")))
@@ -375,6 +446,11 @@ def _cmd_test_two_run(args: argparse.Namespace) -> None:
     # Candidate apply failure => hard failure
     if apply_failed:
         die("change: candidate apply failed (tests/scenarios did not run)")
+
+    # §4.4 Option A (LD-A(i) patch-after-diff): the comparison is valid (comparability ok,
+    # candidate applied) — land its determinism-safe subset in the change run's authoritative
+    # bundle results.json as baseline_diff, tamper_check recomputed last (REQ-44-3/-4; BR-5/6).
+    _two_run_populate_baseline_diff(cdst / "results.json", summary)
 
     # Exit code reflects change verdict only
     if str(cjson.get("result") or "") != "pass":

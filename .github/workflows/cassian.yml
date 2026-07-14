@@ -177,6 +177,15 @@ jobs:
           python tests/importer/backend_seam_proof.py
           python tests/importer/preservation_proof.py
 
+      - name: Two-run behavioural-equivalence proof harnesses (Phase 2 4.4)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/two_run_injected_difference_proof.py
+          python tests/two_run_verdict_substitution_proof.py
+          python tests/two_run_config_vs_behaviour_proof.py
+          python tests/two_run_canonical_serialization_proof.py
+
       - name: Project gate (up -> test -> down)
         shell: bash
         run: |
@@ -209,6 +218,21 @@ jobs:
             exit 1
           fi
           echo "B-9 OK: observed_state render byte-identical across replay."
+
+      - name: Two-run baseline_diff real-run positive + replay (Phase 2 4.4, REQ-44-5)
+        shell: bash
+        run: |
+          set -euo pipefail
+          T=topologies/rw-bgp-tenant30-change.yaml
+          C=tests/fixtures/rw-bgp-tenant30-change/
+          B=topologies/rw-bgp-tenant30-baseline.yaml
+          BUNDLE=labs/clab-rw-bgp-tenant30-change/two_run
+          # two-run's own exit reflects the CHANGE verdict; baseline_diff is written regardless (|| true).
+          # Replay leg mirrors B-9: run twice, assert byte-identical baseline_diff across real runs.
+          ./src/cassian.py test --two-run --two-run-topology "$T" --candidate-config "$C" "$B" || true
+          cp -r "$BUNDLE" /tmp/two_run_gate_run1
+          ./src/cassian.py test --two-run --two-run-topology "$T" --candidate-config "$C" "$B" || true
+          python tests/two_run_real_run_positive_proof.py /tmp/two_run_gate_run1 "$BUNDLE"
 
       - name: Upload artifacts (always; bounded on success)
         if: always()
