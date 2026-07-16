@@ -1373,7 +1373,26 @@ def cmd_up(args: argparse.Namespace) -> None:
         print("Next:")
         print(f"  cassian status {lab_name}")
         print(f"  cassian test {lab_name}")
-        print(f"  cassian exec {lab_name} <node>")
+        # UX-1 (R-O1 remediation: d9850b4 + the H-1..H-5 carry-forward note).
+        # For a vm-runtime node `cassian exec` reaches the vrnetlab launcher container
+        # -- a bare Debian shell with no NOS on PATH -- not the guest NOS. Suggesting it
+        # is a first-run trap, so point at the door that actually works. Print
+        # conditionality only: no lifecycle, runtime, or exec behaviour changes here.
+        _vm_nodes = [
+            str(n.get("name") or "").strip()
+            for n in (topo.get("nodes", []) or [])
+            if isinstance(n, dict)
+            and str(n.get("name") or "").strip()
+            and str(n.get("runtime") or "").strip().lower() == "vm"
+        ]
+        if [n for n in node_names if n not in _vm_nodes]:
+            print(f"  cassian exec {lab_name} <node>")
+        for _vm_node in _vm_nodes:
+            print(
+                f"  # {_vm_node} is a VM-runtime node; container exec reaches the "
+                f"launcher, not the NOS."
+            )
+            print(f"  ssh admin@{rt.node_id(lab_name, _vm_node)}")
         print(f"  cassian down {lab_name}")
 
 def cmd_replay(args: argparse.Namespace) -> None:
