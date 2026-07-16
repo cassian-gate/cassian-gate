@@ -660,6 +660,57 @@ Supported node types:
 | nft-fw   | nftables firewall |
 | sonic-vm | SONiC VM runtime  |
 
+Important current boundary for vendor NOS VM nodes:
+
+- tests and `exec` against supported `sonic-vm` / NOS VM nodes are **not currently a supported test surface**
+- unsupported NOS VM test/exec input is rejected explicitly at validation time
+- current truthful behavior for unsupported NOS VM test/exec input is:
+  - misuse / unsupported test surface
+  - exit code `2`
+
+Example of current unsupported behavior:
+
+```yaml
+nodes:
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    image: <vrnetlab-built image>
+
+tests:
+  - name: reach
+    kind: ping
+    src: s1
+    dst: r1
+```
+
+Expected outcome (message abridged):
+
+```text
+ERROR: tests[1] (reach): ping test references src node 's1', whose resolved runtime
+is 'vm'; running a ping test against a vm-runtime node is NOT SUPPORTED in this
+release. ... Valid: give src a node whose resolved runtime is 'container'.
+exit code: 2
+```
+
+Meaning: container exec reaches the vrnetlab launcher container, not the guest NOS, so a verdict from it would describe the wrong entity.
+
+Which references are rejected:
+
+- rejected: `src` (or `from`) on `ping`, `tcp`, `bgp_neighbor`, and every invariant type, and `dst` (or `to`) on `tcp`
+- not rejected: `dst` / `to` / `to_ip` on `ping` — addressing only, not a node the framework execs into
+- not rejected: IP literals — only node names resolve to a runtime
+
+Support boundary:
+
+- supported current surfaces for `sonic-vm`: lifecycle (`up` / `status` / `down`) and node readiness only
+- unsupported current surfaces: tests, `exec`, and candidate-config input against `sonic-vm` / NOS VM nodes
+
+Scope boundary:
+
+- this does not currently establish test or `exec` support for `sonic-vm` or other vendor NOS VM node types
+- any future NOS VM test/exec support requires an explicit contract surface and proof
+
 ---
 
 # 7️⃣ Links
