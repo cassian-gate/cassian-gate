@@ -2808,6 +2808,77 @@ def resolve_topology(topo: dict) -> dict:
                 t["dst"] = t.get("to")
 
         # ----------------------------
+        # R-O1 exec-into gate: validate-time explicit-UNSUP for vm-runtime nodes.
+        #
+        # Authority: sonic-vm-open-questions-ruling-record (d9850b4), as extended by
+        # the H-1..H-5 carry-forward note (the exec-into principle, Rev-3).
+        #
+        # WHAT: any node reference the framework EXECS INTO -- 'src' on ping / tcp /
+        # bgp_neighbor / all invariant types, and tcp 'dst' (the listener) -- that
+        # resolves to a node with runtime == "vm" is rejected here. Container exec
+        # against a vm-runtime node reaches the vrnetlab launcher, not the guest NOS,
+        # so any verdict produced would describe the wrong entity. Refusing at
+        # validate time is the honest disposition until the VM runtime backend lands
+        # (§4.5). This is an UNSUPPORTED-capability gate, not a defect report.
+        #
+        # NOT gated (deliberate): ping 'dst' / 'to' / 'to_ip' -- address-only, no exec
+        # into the target; dataplane ICMP via the vrnetlab bridge legitimately
+        # interrogates the guest. IP-literal 'dst' values are never gated.
+        #
+        # Map-resolved references only: a name absent from the topology keeps its
+        # existing behaviour. No new declaration hard-fail is introduced here.
+        #
+        # PLACEMENT (binding -- anchored by structure, not line number): this pass must
+        # stay AFTER the generic test-reference normalization above ('on'->'src',
+        # 'from'->'src', non-ping 'to'->'dst', and their disagree-checks) and
+        # immediately BEFORE the ping validation block.
+        #
+        # INVARIANT-COVERAGE DEPENDENCY (do not break): 'node:'-declared invariants are
+        # visible here ONLY because the invariant block's own 'node'->'src' backfill
+        # runs earlier in this same loop iteration; invariant tests fall through (no
+        # 'continue') and arrive with 'src' already populated. The alias read below
+        # does NOT include 'node'. Any reorganisation that moves this pass ahead of
+        # that backfill, or the backfill after this pass, SILENTLY loses invariant
+        # coverage. tests/vm_runtime_validate_rejection_proof.py case (a) exists to
+        # catch exactly that.
+        #
+        # ORDERING (accepted): for bgp_community / bgp_as_path / ospf_neighbor_up the
+        # existing 'frr' src type gate fires earlier and its message stands; for kind
+        # 'exec' the existing type gate likewise pre-empts. Those gates are loud, so
+        # no silent path survives; this gate is their backstop, not their first line.
+        # ----------------------------
+        _eig_kind = str(t.get("kind") or "").strip().lower()
+        if _eig_kind in ("ping", "tcp", "bgp_neighbor", "invariant"):
+            _eig_runtimes = {
+                str(_n.get("name") or "").strip(): str(_n.get("runtime") or "").strip().lower()
+                for _n in (resolved.get("nodes") or [])
+                if isinstance(_n, dict) and str(_n.get("name") or "").strip()
+            }
+            _eig_ctx = f"tests[{i}] ({t.get('name', '<unnamed>')})"
+            _eig_refs = [("src", t.get("src") or t.get("from"))]
+            if _eig_kind == "tcp":
+                _eig_refs.append(("dst", t.get("dst") or t.get("to")))
+            for _eig_field, _eig_val in _eig_refs:
+                if not isinstance(_eig_val, str) or not _eig_val.strip():
+                    continue
+                _eig_name = _eig_val.strip()
+                if is_ip_literal(_eig_name):
+                    continue
+                if _eig_runtimes.get(_eig_name) != "vm":
+                    continue
+                die(
+                    f"{_eig_ctx}: {_eig_kind} test references {_eig_field} node "
+                    f"{_eig_name!r}, whose resolved runtime is 'vm'; running a "
+                    f"{_eig_kind} test against a vm-runtime node is NOT SUPPORTED in "
+                    f"this release. Container exec reaches the vrnetlab launcher "
+                    f"container, not the guest NOS, so the verdict would describe the "
+                    f"wrong entity. Valid: give {_eig_field} a node whose resolved "
+                    f"runtime is 'container'. vm-runtime nodes currently support "
+                    f"lifecycle (up/status/down) and node readiness only "
+                    f"(DC v2.1 §10, 'Model vs runtime backend')."
+                )
+
+        # ----------------------------
         # v1 ping destination normalization
         # ----------------------------
         # ----------------------------

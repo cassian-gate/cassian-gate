@@ -186,6 +186,12 @@ jobs:
           python tests/two_run_config_vs_behaviour_proof.py
           python tests/two_run_canonical_serialization_proof.py
 
+      - name: VM-runtime exec-into gate proof harness (R-O1 remediation)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/vm_runtime_validate_rejection_proof.py
+
       - name: Project gate (up -> test -> down)
         shell: bash
         run: |
