@@ -33,6 +33,10 @@ Ruled cases (carry-forward note §5):
   (c) ping `src` on a vm node   -> RUNTIME-gate message.
   (d) tcp `src` on a vm node    -> RUNTIME-gate message.
   (e) tcp `dst` on a vm node    -> RUNTIME-gate message (the listener; C-4 leg).
+  (f) route_prefix via `on:`    -> RUNTIME-gate message. Addendum #2. Pins the
+      on->src backfill dependency, as (a) pins node->src. route_prefix is the
+      sixth exec-into kind; the closed set is enumerated against the engine's own
+      universe check, so no seventh can sit outside the form.
 
 Additional obligations:
   P-13     each runtime-gate rejection carries DC §13 (a) what / (b) where /
@@ -156,6 +160,19 @@ def main():
     check("(e) rejection is the RUNTIME gate", _is_runtime_gate(e_m))
     check("(e) message names dst", "references dst node 's1'" in e_m)
 
+    # ---------------------------------------------------------------- ruled case (f)
+    # route_prefix declared via `on:` -- the alias the shipped gate's (src|from) read
+    # would not see without the generic on->src backfill running earlier in the same
+    # loop iteration. Same shape as case (a), different backfill. Addendum #2.
+    f_o, f_m = _validate({
+        "name": "rp-vm", "kind": "route_prefix", "on": "s1", "prefix": "10.0.0.0/24",
+    })
+    check("(f) route_prefix via on: on vm node rejected", f_o == "die")
+    check("(f) rejection is the RUNTIME gate (proves on->src backfill dependency)",
+          _is_runtime_gate(f_m))
+    check("(f) message names the kind", "route_prefix test references" in f_m)
+    check("(f) message names the node", "'s1'" in f_m)
+
     # ---------------------------------------------------------------- P-13
     # DC v2.1 §13 (a)/(b)/(c) are non-negotiable for hard-fail rejection of
     # authoritative input. Asserted on the ping case; the message is one template.
@@ -214,6 +231,9 @@ def main():
     nr3_o, _ = _validate({"name": "ifs-ok", "kind": "invariant", "type": "interface_state",
                           "node": "r1", "interface": "eth1"})
     check("P-NR container interface_state still validates", nr3_o == "ok")
+    nr4_o, _ = _validate({"name": "rp-ok", "kind": "route_prefix", "on": "r1",
+                          "prefix": "10.0.0.0/24"})
+    check("P-NR container route_prefix via on: still validates", nr4_o == "ok")
 
     # ---------------------------------------------------------------- P-DET
     d1_o, d1_m = _validate({"name": "ping-vm-src", "kind": "ping", "src": "s1", "dst": "r1"})

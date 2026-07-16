@@ -42,7 +42,7 @@ BASELINE = {
     "src/cassian_candidate.py": "93db9b61e9fd22c74156fc0492119fc4e170a7a192684354c8a31c70876ff52d",
     "src/cassian_common.py": "a0469a2a1b3cdcc5a1fffc7cd02198447cf1e0cb1ee8657469c3fb2c57139a10",
     "src/cassian_engine.py": "ea27795ae7b41642cc995eb87b2986737ec23c2333f5cbd061cbcf8b3ce9505b",  # re-baselined for the R-O1/R-O6 remediation (UX-1 Next:-block print conditionality); authority d9850b4 + H-1..H-5 carry-forward note; orig f3831817
-    "src/cassian_model.py": "e71f0e1ce632ecead498380b05ddcea88b49fa79e40d7437696bfe2210e39240",  # re-baselined for the R-O1/R-O6 remediation (UX-2 exec-into gate); authority d9850b4 + H-1..H-5 carry-forward note; orig 4b9f01aa
+    "src/cassian_model.py": "663b244c1a775cfdda942311cbff2716b0605fe6749ba6fb1b2d40435756765e",  # re-baselined from e71f0e1c (R-O1 Addendum #2: route_prefix exec-into extension; d9850b4 + H-1..H-5 carry-forward + Addendum #2); orig 4b9f01aa
     "src/cassian_runtime_container.py": "b2a493f947c121416c992b8b9788a60acead190d305d58654c3c457def116ba3",
     "src/cassian_state.py": "aec4d412ee53555156cb5275c5d7a1329f54aaef298d4409feebcad2c198a9d6",
     "src/cassian_tests.py": "ba0a1f36245de1ac01853fca4e8a3100ff5aad28525e91ef26ebaf24f404b0af",

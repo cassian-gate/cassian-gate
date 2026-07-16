@@ -2813,17 +2813,34 @@ def resolve_topology(topo: dict) -> dict:
         # Authority: sonic-vm-open-questions-ruling-record (d9850b4), as extended by
         # the H-1..H-5 carry-forward note (the exec-into principle, Rev-3).
         #
-        # WHAT: any node reference the framework EXECS INTO -- 'src' on ping / tcp /
-        # bgp_neighbor / all invariant types, and tcp 'dst' (the listener) -- that
-        # resolves to a node with runtime == "vm" is rejected here. Container exec
-        # against a vm-runtime node reaches the vrnetlab launcher, not the guest NOS,
-        # so any verdict produced would describe the wrong entity. Refusing at
-        # validate time is the honest disposition until the VM runtime backend lands
-        # (§4.5). This is an UNSUPPORTED-capability gate, not a defect report.
+        # WHAT: every test kind whose evaluation EXECS INTO a referenced node is gated
+        # on runtime == "vm" at validate time, under that kind's own alias vocabulary.
+        # The kind set below is the CLOSED SET of exec-into kinds, enumerated against
+        # the engine's own universe check --
+        #   if kind not in ("ping","tcp","bgp_neighbor","route_prefix","invariant","exec")
+        # -- not a hand-maintained list. Gated references:
+        #   ping          src (or from)
+        #   tcp           src (or from) + dst (or to)  -- dst is the listener
+        #   bgp_neighbor  src (or from)
+        #   invariant     src (or from), all types, via the node->src backfill
+        #   route_prefix  src (or on)  -- the vantage node
+        # 'exec' is the sixth exec-into kind and is deliberately absent: its own type
+        # gate (frr / nft-fw only) pre-empts loudly for sonic-vm, so a gate here would
+        # be dead code. Adding a seventh kind to the engine's universe check without
+        # adding it here re-opens R-O1; the proof carries a case per kind.
+        # Container exec against a vm-runtime node reaches the vrnetlab launcher, not
+        # the guest NOS, so any verdict produced would describe the wrong entity.
+        # Refusing at validate time is the honest disposition until the VM runtime
+        # backend lands (§4.5). This is an UNSUPPORTED-capability gate, not a defect
+        # report.
         #
-        # NOT gated (deliberate): ping 'dst' / 'to' / 'to_ip' -- address-only, no exec
-        # into the target; dataplane ICMP via the vrnetlab bridge legitimately
-        # interrogates the guest. IP-literal 'dst' values are never gated.
+        # NOT gated (deliberate): references resolving to an address without exec --
+        # ping 'dst' / 'to' / 'to_ip' (dataplane ICMP via the vrnetlab bridge
+        # legitimately interrogates the guest), bgp_neighbor peer-IP, route_prefix
+        # 'prefix', and any IP-literal 'dst'. Scenario fault actions are stimulus, not
+        # verdict, and reach a vm node's dataplane for real via the vrnetlab bridge;
+        # they are out of the form by ruling, and verify_phase1.sh 4d proves them
+        # working against a live SONiC guest.
         #
         # Map-resolved references only: a name absent from the topology keeps its
         # existing behaviour. No new declaration hard-fail is introduced here.
@@ -2833,22 +2850,27 @@ def resolve_topology(topo: dict) -> dict:
         # 'from'->'src', non-ping 'to'->'dst', and their disagree-checks) and
         # immediately BEFORE the ping validation block.
         #
-        # INVARIANT-COVERAGE DEPENDENCY (do not break): 'node:'-declared invariants are
-        # visible here ONLY because the invariant block's own 'node'->'src' backfill
-        # runs earlier in this same loop iteration; invariant tests fall through (no
-        # 'continue') and arrive with 'src' already populated. The alias read below
-        # does NOT include 'node'. Any reorganisation that moves this pass ahead of
-        # that backfill, or the backfill after this pass, SILENTLY loses invariant
-        # coverage. tests/vm_runtime_validate_rejection_proof.py case (a) exists to
+        # ALIAS-COVERAGE DEPENDENCY (do not break): 'node:'-declared invariants and
+        # 'on:'-declared route_prefix tests are visible here ONLY because their
+        # backfills run earlier in this same loop iteration -- 'node'->'src' inside the
+        # invariant block, 'on'->'src' in the generic normalization above. Both fall
+        # through (no 'continue') and arrive with 'src' populated. The alias read below
+        # does NOT include 'node' or 'on'. Any reorganisation that moves this pass
+        # ahead of either backfill SILENTLY loses that kind's coverage.
+        # tests/vm_runtime_validate_rejection_proof.py cases (a) and (f) exist to
         # catch exactly that.
         #
         # ORDERING (accepted): for bgp_community / bgp_as_path / ospf_neighbor_up the
         # existing 'frr' src type gate fires earlier and its message stands; for kind
         # 'exec' the existing type gate likewise pre-empts. Those gates are loud, so
         # no silent path survives; this gate is their backstop, not their first line.
+        #
+        # Authority: sonic-vm-open-questions-ruling-record (d9850b4), the H-1..H-5
+        # carry-forward note (exec-into principle, Rev-3), and Addendum #2 (form
+        # re-derived to the principle's own boundary; closure by enumeration).
         # ----------------------------
         _eig_kind = str(t.get("kind") or "").strip().lower()
-        if _eig_kind in ("ping", "tcp", "bgp_neighbor", "invariant"):
+        if _eig_kind in ("ping", "tcp", "bgp_neighbor", "invariant", "route_prefix"):
             _eig_runtimes = {
                 str(_n.get("name") or "").strip(): str(_n.get("runtime") or "").strip().lower()
                 for _n in (resolved.get("nodes") or [])
