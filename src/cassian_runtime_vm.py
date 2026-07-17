@@ -8,13 +8,18 @@ from typing import Any
 from cassian_common import die
 from cassian_runtime_container import ContainerRuntime, Runtime
 
-# LD-45a-2 (RULED 2026-07-16): vrnetlab-image default credentials, carried as module
-# constants. NOT a topology/schema key (REQ-45a-P6; DC v2.1 §10 -- the runtime axis
-# must not add model surface). Provenance: ghcr.io/cassian-gate/sonic-vm:202405
-# (image cb884fb5fc9d) -- the launcher's own constants. Valid for an image built via
-# contrib/sonic-image-build/, or any image whose credentials match.
+# LD-45a-2 (RULED 2026-07-16), AMENDED (SP #1 inline, founder-ruled 2026-07-17):
+# vrnetlab-image credentials, carried as module constants. NOT a topology/schema key
+# (REQ-45a-P6; DC v2.1 §10 -- the runtime axis must not add model surface).
+#
+# The LD sourced these from the launcher's CONSTANTS (--username default, PASSWORD
+# constant) -- read, not run. Runtime evidence falsifies the password: launch.py
+# OVERWRITES it over the serial console at every boot ('passwd -q admin' -> 'admin',
+# observed on ghcr.io/cassian-gate/sonic-vm:202405 across two labs; the guest logs
+# 'BAD PASSWORD: shorter than 8 characters' and accepts it). Confirmed by a green
+# login returning 'SONiC Software Version: SONiC.202405.1033627-fecd4ec81'.
 VM_SSH_USERNAME = "admin"
-VM_SSH_PASSWORD = "YourPaSsWoRd"
+VM_SSH_PASSWORD = "admin"
 
 # D02/D05: pinned transport timings; explicit constants, no wall-clock content.
 VM_SSH_CONNECT_TIMEOUT_S = 10
@@ -23,13 +28,22 @@ VM_SSH_CONNECT_TIMEOUT_S = 10
 _VM_LOCALE_PIN = "LC_ALL=C "
 
 
-def _vm_ssh_argv(remote_cmd: str) -> list[str]:
+def _vm_ssh_argv(host: str, remote_cmd: str) -> list[str]:
     """
     B02: the wrapper-chain transport, composed exactly.
 
-    Run INSIDE the vrnetlab wrapper (via ContainerRuntime.exec), sshpass+ssh to
-    localhost:22, which the launcher host-forwards to the guest NOS
-    (d9850b4 R-O2: only TCP 22 is hostfwd'd). Same route as the shipped up-path hint.
+    Run INSIDE the vrnetlab wrapper (via ContainerRuntime.exec), sshpass+ssh to the
+    node's management address -- the wrapper's own clab name, i.e. rt.node_id() --
+    which qemu host-forwards to the guest NOS (d9850b4 R-O2: only TCP 22 is
+    hostfwd'd; the listener is 0.0.0.0:22 inside the wrapper).
+
+    AMENDED (SP #1 inline, founder-ruled 2026-07-17): B02/§5 specified
+    'admin@localhost'. Runtime evidence: from inside the wrapper, localhost:22 times
+    out during banner exchange, while admin@clab-<lab>-<node> returns rc=0 and real
+    SONiC output -- same guest, same qemu listener, only the source address differs.
+    §5's claim that the ruled route was the "same route as the shipped up-path hint"
+    is now true rather than aspirational: the hint is engine:1395,
+    f"  ssh admin@{rt.node_id(lab_name, _vm_node)}" -- this is that route.
 
     D03: UserKnownHostsFile=/dev/null + StrictHostKeyChecking=no -- zero persisted
     state accrues in the wrapper across runs.
@@ -45,7 +59,7 @@ def _vm_ssh_argv(remote_cmd: str) -> list[str]:
         "UserKnownHostsFile=/dev/null",
         "-o",
         "ConnectTimeout=" + str(VM_SSH_CONNECT_TIMEOUT_S),
-        VM_SSH_USERNAME + "@localhost",
+        VM_SSH_USERNAME + "@" + host,
         remote_cmd,
     ]
 
@@ -63,11 +77,12 @@ VM_SSH_RC_CONNECT_FAIL = 255
 VM_GUEST_READY_TIMEOUT_S = 300
 VM_GUEST_READY_INTERVAL_S = 5.0
 
-# LD-45a-2: the auth-fail leg names the assumed-credentials provenance verbatim.
+# LD-45a-2 (as amended): the auth-fail leg names the credentials' real provenance --
+# the launcher's boot-time bootstrap, not a build-time property of the image.
 _VM_CRED_PROVENANCE = (
-    "Valid: an image built via contrib/sonic-image-build/ (default credentials), "
-    "or an image whose credentials match the built-in constants. "
-    "See docs/vm-runtime-capabilities.md."
+    "Valid: an image whose vrnetlab launcher bootstraps the guest with these "
+    "credentials at boot (ghcr.io/cassian-gate/sonic-vm:202405 sets them over the "
+    "serial console). See docs/vm-runtime-capabilities.md."
 )
 
 
@@ -113,7 +128,7 @@ def guest_probe_deadline_error(node: str, rc: int | None, timeout_s: float) -> s
             f"{node}: VM guest not reachable over SSH: connection failed "
             f"(ssh rc=255) for {timeout_s:.0f}s. The wrapper is running and QEMU is "
             f"up, but nothing is answering on the guest's forwarded SSH port "
-            f"(localhost:22 inside the wrapper). Valid: a booted guest whose SSH "
+            f"(port 22 on the node's management address, host-forwarded by qemu). "
             f"service is listening. See docs/vm-runtime-capabilities.md."
         )
     return (
@@ -162,7 +177,7 @@ class VmRuntime(Runtime):
         return self._wrapped.exec(
             lab,
             node,
-            _vm_ssh_argv(remote_cmd),
+            _vm_ssh_argv(self._wrapped.node_id(lab, node), remote_cmd),
             check=check,
             capture_output=capture_output,
             interactive=False,
