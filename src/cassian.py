@@ -154,7 +154,6 @@ from cassian_runtime_container import (
     _container_is_running,
     Runtime,
     ContainerRuntime,
-    VmRuntimeStub,
     get_runtime,
     list_owned_labs_from_artifacts,
 )

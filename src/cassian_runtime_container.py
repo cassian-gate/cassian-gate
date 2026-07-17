@@ -1219,24 +1219,42 @@ def verify_frr_ready(rt: Runtime, lab: str, rtr: str, require_evpn_bgp: bool = F
 
 def verify_sonic_vm_ready(rt: Runtime, lab: str, node: str) -> None:
     """
-    VM substrate readiness gate (v1.5).
+    VM readiness gate: substrate, then guest-exec reachability (REQ-45a-4a/-4b).
 
-    This is intentionally minimal and deterministic:
-      - verifies the containerlab node instance is running
-      - verifies a QEMU process exists inside the wrapper container (vrnetlab-style)
-    No NOS CLI parsing. No semantic interpretation.
+    Two legs, in order:
+
+      1. SUBSTRATE (wrapper-level). The containerlab node instance is running and a
+         QEMU process exists inside the vrnetlab wrapper. Probed through a
+         ContainerRuntime constructed HERE, deliberately: this leg must reach the
+         WRAPPER, and the passed `rt` routes vm-node exec to the GUEST, where no
+         qemu process exists (the guest IS the VM). Founder ruling, 2026-07-16.
+
+      2. GUEST (via `rt`). A trivial command returns rc=0 over the ruled transport.
+         Bounded poll, explicit deadline; transport results classified per B07.
+
+    Doctrine 1.7: readiness NEVER influences a verdict. Doctrine 1.9: polling exists
+    only here. No NOS CLI parsing. No semantic interpretation.
     """
+    from cassian_runtime_vm import (
+        VM_GUEST_READY_INTERVAL_S,
+        VM_GUEST_READY_TIMEOUT_S,
+        classify_guest_probe_rc,
+        guest_probe_deadline_error,
+    )
+
     if not rt.is_running(lab, node):
         die(f"{node}: VM substrate container is not running")
 
+    # --- leg 1: substrate (wrapper) ---------------------------------------
     # vrnetlab-style containers run QEMU inside the container.
     # Deterministic bounded wait (explicit timeout + interval; no jitter).
+    wrapper = ContainerRuntime()
     boot_timeout_s = 60
     interval_s = 1.0
     deadline = time.time() + boot_timeout_s
 
     while True:
-        cp = rt.exec(
+        cp = wrapper.exec(
             lab,
             node,
             ["sh", "-lc", "ps -eo comm,args | grep -E '[q]emu-system|[q]emu-kvm' >/dev/null"],
@@ -1250,6 +1268,25 @@ def verify_sonic_vm_ready(rt: Runtime, lab: str, node: str) -> None:
             die(f"{node}: VM substrate not ready within {boot_timeout_s}s (qemu process not detected)")
 
         time.sleep(interval_s)
+
+    # --- leg 2: guest-exec reachability (D01: boot variance absorbed here) --
+    guest_deadline = time.time() + VM_GUEST_READY_TIMEOUT_S
+    last_rc = None
+
+    while True:
+        cp = rt.exec(lab, node, ["true"], check=False, capture_output=True)
+        last_rc = cp.returncode
+        if last_rc == 0:
+            return
+
+        fatal = classify_guest_probe_rc(node, last_rc)
+        if fatal is not None:
+            die(fatal)
+
+        if time.time() >= guest_deadline:
+            die(guest_probe_deadline_error(node, last_rc, VM_GUEST_READY_TIMEOUT_S))
+
+        time.sleep(VM_GUEST_READY_INTERVAL_S)
 
 def verify_lab_ready(rt: Runtime, topo: dict, lab: str) -> None:
     nodes = topo.get("nodes", []) or []
@@ -1620,46 +1657,24 @@ class ContainerRuntime(Runtime):
         return (out or "").strip() == "true"
 
 
-class VmRuntimeStub(Runtime):
-    def __init__(self) -> None:
-        self._msg = "VM runtime not implemented yet (Phase-1 stub). Use container runtime."
-
-    def node_id(self, lab: str, node: str) -> str:
-        die(self._msg)
-        raise RuntimeError(self._msg)
-
-    def exec(
-        self,
-        lab: str,
-        node: str,
-        cmd: list[str],
-        *,
-        check: bool = False,
-        capture_output: bool = True,
-        interactive: bool = False,
-    ) -> subprocess.CompletedProcess:
-        die(self._msg)
-        raise RuntimeError(self._msg)
-
-    def is_running(self, lab: str, node: str) -> bool:
-        die(self._msg)
-        return False
-
-    def is_running_id(self, node_id: str) -> bool:
-        die(self._msg)
-        return False
-    
-    def exists_id(self, node_id: str) -> bool:
-        die(self._msg)
-        return False
-
 def get_runtime(topo: dict[str, Any] | None = None) -> Runtime:
     """
-    Decide runtime. For now:
-      - default: container
-      - allow future extension: topo['runtime'] or node['runtime'] (not required yet)
+    Decide runtime (REQ-45a-2 / B01).
+
+    Returns the node-dispatching runtime iff any resolved node has runtime == "vm";
+    otherwise ContainerRuntime -- including topo=None, so bare call sites keep their
+    existing container semantics (wrapper-level lifecycle is the ruled behaviour for
+    vm labs at bare sites).
+
+    DC v2.1 §10 / cassian_model.py:881: dispatch keys solely on the resolved
+    `runtime` value, never on node.type (D07; P4 Arista-clean).
+
+    Imported at function scope deliberately: cassian_runtime_vm imports this module,
+    so a module-scope import here would close an import cycle.
     """
-    return ContainerRuntime()
+    from cassian_runtime_vm import build_runtime
+
+    return build_runtime(topo)
 
 def list_owned_labs_from_artifacts() -> list[tuple[str, Path]]:
     """
