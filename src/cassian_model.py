@@ -2819,11 +2819,16 @@ def resolve_topology(topo: dict) -> dict:
         # the engine's own universe check --
         #   if kind not in ("ping","tcp","bgp_neighbor","route_prefix","invariant","exec")
         # -- not a hand-maintained list. Gated references:
-        #   ping          src (or from)
         #   tcp           src (or from) + dst (or to)  -- dst is the listener
         #   bgp_neighbor  src (or from)
         #   invariant     src (or from), all types, via the node->src backfill
         #   route_prefix  src (or on)  -- the vantage node
+        # HANDOFF (REQ-45a-6a): 'ping' WAS gated here. The VM runtime backend
+        # (§4.5-a) now executes ping against the guest over the delivered
+        # dispatch, so ping-on-vm validate-accepts. ping remains an exec-into
+        # kind in the engine's universe; it is simply no longer in THIS gate's
+        # set. Removing any further kind requires the same discharge -- a
+        # working guest path -- never a silent deletion (v8 §15).
         # 'exec' is the sixth exec-into kind and is deliberately absent: its own type
         # gate (frr / nft-fw only) pre-empts loudly for sonic-vm, so a gate here would
         # be dead code. Adding a seventh kind to the engine's universe check without
@@ -2870,7 +2875,7 @@ def resolve_topology(topo: dict) -> dict:
         # re-derived to the principle's own boundary; closure by enumeration).
         # ----------------------------
         _eig_kind = str(t.get("kind") or "").strip().lower()
-        if _eig_kind in ("ping", "tcp", "bgp_neighbor", "invariant", "route_prefix"):
+        if _eig_kind in ("tcp", "bgp_neighbor", "invariant", "route_prefix"):
             _eig_runtimes = {
                 str(_n.get("name") or "").strip(): str(_n.get("runtime") or "").strip().lower()
                 for _n in (resolved.get("nodes") or [])
@@ -2896,7 +2901,8 @@ def resolve_topology(topo: dict) -> dict:
                     f"container, not the guest NOS, so the verdict would describe the "
                     f"wrong entity. Valid: give {_eig_field} a node whose resolved "
                     f"runtime is 'container'. vm-runtime nodes currently support "
-                    f"lifecycle (up/status/down) and node readiness only "
+                    f"lifecycle (up/status/down), node readiness, and ping tests "
+                    f"(executed against the guest); other test kinds are deferred "
                     f"(DC v2.1 §10, 'Model vs runtime backend')."
                 )
 
