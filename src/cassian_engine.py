@@ -686,6 +686,16 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         for label, image in image_defaults:
             checks.append((f"{label} ({image})", False, "advisory"))
 
+    # Advisory: VM-runtime (sonic-vm) environment -- additive, lab-free (REQ-45a-12).
+    # Appear on every host; all ADVISORY (⚠ if absent), never gate-critical: the
+    # image is pullable, and KVM / a recent containerlab matter only for vm-runtime
+    # labs. No new critical check -> exit semantics unchanged. Fixed order.
+    _sonic_vm_image = "ghcr.io/cassian-gate/sonic-vm:202405"
+    _sonic_vm_present = _run_ok(["docker", "image", "inspect", _sonic_vm_image]) if docker_cli else False
+    checks.append((f"sonic-vm image present-or-pullable ({_sonic_vm_image})", _sonic_vm_present, "advisory"))
+    checks.append(("KVM available (/dev/kvm)", _run_ok(["test", "-e", "/dev/kvm"]), "advisory"))
+    checks.append(("containerlab version reports", _run_ok(["containerlab", "version"]) if clab else False, "advisory"))
+
     # Output (deterministic)
     print("Environment readiness:")
     any_critical_fail = False
