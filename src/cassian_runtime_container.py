@@ -273,7 +273,7 @@ def _scenario_resolve_link_or_interface_targets(
 
 
 def _scenario_tc_replace(rt: "Runtime", lab: str, node: str, iface: str, qdisc_args: str) -> None:
-    cp = rt.sh(
+    cp = rt.substrate_sh(
         lab,
         node,
         f"tc qdisc replace dev {iface} root {qdisc_args}",
@@ -285,7 +285,7 @@ def _scenario_tc_replace(rt: "Runtime", lab: str, node: str, iface: str, qdisc_a
 
 
 def _scenario_tc_clear(rt: "Runtime", lab: str, node: str, iface: str) -> None:
-    cp = rt.sh(
+    cp = rt.substrate_sh(
         lab,
         node,
         f"tc qdisc del dev {iface} root",
@@ -307,7 +307,7 @@ def scenario_apply_fault(
         targets, target_label = _scenario_resolve_link_or_interface_targets(topo, action, spec)
         desired = "down" if action == "link_down" else "up"
         for node, iface in targets:
-            cp = rt.sh(
+            cp = rt.substrate_sh(
                 lab,
                 node,
                 f"ip link set dev {iface} {desired}",
@@ -326,7 +326,7 @@ def scenario_apply_fault(
         targets, target_label = _scenario_resolve_link_or_interface_targets(topo, action, spec)
         node, iface = targets[0]
         desired = "down" if action == "interface_down" else "up"
-        cp = rt.sh(
+        cp = rt.substrate_sh(
             lab,
             node,
             f"ip link set dev {iface} {desired}",
@@ -1248,13 +1248,12 @@ def verify_sonic_vm_ready(rt: Runtime, lab: str, node: str) -> None:
     # --- leg 1: substrate (wrapper) ---------------------------------------
     # vrnetlab-style containers run QEMU inside the container.
     # Deterministic bounded wait (explicit timeout + interval; no jitter).
-    wrapper = ContainerRuntime()
     boot_timeout_s = 60
     interval_s = 1.0
     deadline = time.time() + boot_timeout_s
 
     while True:
-        cp = wrapper.exec(
+        cp = rt.substrate_exec(
             lab,
             node,
             ["sh", "-lc", "ps -eo comm,args | grep -E '[q]emu-system|[q]emu-kvm' >/dev/null"],
@@ -1514,6 +1513,53 @@ class Runtime:
             capture_output=capture_output,
         )
 
+    # --- runtime-axis exec-target seam (addendum 1744bbb, ratified form §3.5)
+    # Two targets, one seam: bare exec/sh/copy_* mean THE NOS (§4.1 ratified
+    # default); the substrate (the entity containerlab wired: veths, qdiscs,
+    # capture apparatus, launcher) requires the explicit substrate_* name.
+
+    def substrate_exec(
+        self,
+        lab: str,
+        node: str,
+        cmd: list[str],
+        *,
+        check: bool = False,
+        capture_output: bool = True,
+        interactive: bool = False,
+        timeout_s: float | None = None,
+    ) -> subprocess.CompletedProcess:
+        raise NotImplementedError
+
+    def substrate_sh(
+        self,
+        lab: str,
+        node: str,
+        script: str,
+        *,
+        check: bool = False,
+        capture_output: bool = True,
+    ) -> subprocess.CompletedProcess:
+        # Concrete sugar; mirrors Runtime.sh -- funnels to substrate_exec.
+        return self.substrate_exec(
+            lab,
+            node,
+            ["sh", "-lc", script],
+            check=check,
+            capture_output=capture_output,
+        )
+
+    def substrate_copy_from(
+        self,
+        lab: str,
+        node: str,
+        src_path: str,
+        dst_path: str,
+        *,
+        check: bool = True,
+    ):
+        raise NotImplementedError
+
     def is_running(self, lab: str, node: str) -> bool:
         raise NotImplementedError
     
@@ -1655,6 +1701,12 @@ class ContainerRuntime(Runtime):
         if isinstance(out, bytes):
             out = out.decode("utf-8", errors="replace")
         return (out or "").strip() == "true"
+
+    # Runtime-axis seam (addendum 1744bbb §5.2): for a container node the
+    # substrate IS the node -- class-body identity aliases, THE collapse.
+    # Guarded by identity assertions (REQ-45a-18); never turn into wrappers.
+    substrate_exec = exec
+    substrate_copy_from = copy_from_node
 
 
 def get_runtime(topo: dict[str, Any] | None = None) -> Runtime:

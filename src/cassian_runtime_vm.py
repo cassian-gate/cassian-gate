@@ -74,15 +74,21 @@ VM_SSH_RC_CONNECT_FAIL = 255
 
 # D01/D05: guest boot variance is absorbed entirely by this deadline. Explicit
 # pinned constants; no wall-clock content reaches output.
+# LD-R3 (ruled 2026-07-18): 300 is an implementation ESTIMATE, never validated
+# against a CI cold start (pull + boot + poll); launch.py reports ~25s local
+# boot. Kept per the ruling; first CI cold-start timing cited at §4.5-a closure.
 VM_GUEST_READY_TIMEOUT_S = 300
 VM_GUEST_READY_INTERVAL_S = 5.0
 
 # LD-45a-2 (as amended): the auth-fail leg names the credentials' real provenance --
 # the launcher's boot-time bootstrap, not a build-time property of the image.
 _VM_CRED_PROVENANCE = (
-    "Valid: an image whose vrnetlab launcher bootstraps the guest with these "
-    "credentials at boot (ghcr.io/cassian-gate/sonic-vm:202405 sets them over the "
-    "serial console). See docs/vm-runtime-capabilities.md."
+    "The launcher sets the guest password at every boot over the serial "
+    "console (default: admin). Valid: an image built via "
+    "contrib/sonic-image-build/ (launcher defaults), or an image whose "
+    "launcher credentials match the built-in constants "
+    "(ghcr.io/cassian-gate/sonic-vm:202405 does). "
+    "See docs/vm-runtime-capabilities.md."
 )
 
 
@@ -129,7 +135,8 @@ def guest_probe_deadline_error(node: str, rc: int | None, timeout_s: float) -> s
             f"(ssh rc=255) for {timeout_s:.0f}s. The wrapper is running and QEMU is "
             f"up, but nothing is answering on the guest's forwarded SSH port "
             f"(port 22 on the node's management address, host-forwarded by qemu). "
-            f"service is listening. See docs/vm-runtime-capabilities.md."
+            f"Valid: a booted guest whose SSH service is listening. "
+            f"See docs/vm-runtime-capabilities.md."
         )
     return (
         f"{node}: VM guest not ready within {timeout_s:.0f}s: the SSH transport "
@@ -204,6 +211,46 @@ class VmRuntime(Runtime):
     def container_id(self, lab: str, node: str) -> str:
         return self._wrapped.container_id(lab, node)
 
+    # --- substrate (wrapper; explicit name -- addendum 1744bbb §3.5) --------
+
+    def substrate_exec(
+        self,
+        lab: str,
+        node: str,
+        cmd: list[str],
+        *,
+        check: bool = False,
+        capture_output: bool = True,
+        interactive: bool = False,
+        timeout_s: float | None = None,
+    ) -> subprocess.CompletedProcess:
+        # The substrate is the vrnetlab launcher container the wrapped
+        # ContainerRuntime already reaches -- exactly what the readiness
+        # bypass hand-built before the seam existed (REQ-45a-4a).
+        return self._wrapped.exec(
+            lab,
+            node,
+            cmd,
+            check=check,
+            capture_output=capture_output,
+            interactive=interactive,
+            timeout_s=timeout_s,
+        )
+
+    def substrate_copy_from(
+        self,
+        lab: str,
+        node: str,
+        src_path: str,
+        dst_path: str,
+        *,
+        check: bool = True,
+    ):
+        # Substrate-side files (e.g. the pcap tcpdump wrote in the wrapper's
+        # netns): the launcher IS the right entity -- delegate to the wrapped
+        # ContainerRuntime (REQ-45a-8; pcap retrieval restored).
+        return self._wrapped.copy_from_node(lab, node, src_path, dst_path, check=check)
+
     # --- explicit-unsupported (deny-by-default -- REQ-45a-8 / B10) ---------
 
     def copy_to_node(self, lab: str, node: str, src: Path, dst: str) -> subprocess.CompletedProcess:
@@ -231,11 +278,12 @@ def _die_copy_unsupported(op: str, node: str) -> None:
     """
     die(
         "runtime." + op + ": node " + repr(node) + " has resolved runtime 'vm'; "
-        "copying files to or from a vm-runtime node is NOT SUPPORTED in this "
-        "release. Container copy reaches the vrnetlab launcher container, not the "
-        "guest NOS, so the file would land in the wrong entity. Valid: give the "
-        "operation a node whose resolved runtime is 'container'. Guest file "
-        "transfer for vm-runtime nodes is deferred to Phase 2 §4.5-f "
+        "copying files to or from the guest NOS of a vm-runtime node is NOT "
+        "SUPPORTED in this release. Bare copy_* means the NOS (addendum §4.1), "
+        "and guest file transfer is not built. Valid: give the operation a node "
+        "whose resolved runtime is 'container'; for substrate-side files (the "
+        "vrnetlab launcher container, e.g. pcaps) use substrate_copy_from. "
+        "Guest file transfer for vm-runtime nodes is deferred to Phase 2 §4.5-f "
         "(DC v2.1 §10, 'Model vs runtime backend')."
     )
 
@@ -298,6 +346,38 @@ class NodeDispatchingRuntime(Runtime):
         check: bool = True,
     ):
         return self._for(node).copy_from_node(lab, node, src_path, dst_path, check=check)
+
+    def substrate_exec(
+        self,
+        lab: str,
+        node: str,
+        cmd: list[str],
+        *,
+        check: bool = False,
+        capture_output: bool = True,
+        interactive: bool = False,
+        timeout_s: float | None = None,
+    ) -> subprocess.CompletedProcess:
+        return self._for(node).substrate_exec(
+            lab,
+            node,
+            cmd,
+            check=check,
+            capture_output=capture_output,
+            interactive=interactive,
+            timeout_s=timeout_s,
+        )
+
+    def substrate_copy_from(
+        self,
+        lab: str,
+        node: str,
+        src_path: str,
+        dst_path: str,
+        *,
+        check: bool = True,
+    ):
+        return self._for(node).substrate_copy_from(lab, node, src_path, dst_path, check=check)
 
     def node_id(self, lab: str, node: str) -> str:
         return self._container.node_id(lab, node)
