@@ -15,11 +15,12 @@ V9 = {
     "cassian_candidate.py":         "93db9b61e9fd22c74156fc0492119fc4e170a7a192684354c8a31c70876ff52d",
     "cassian_cli.py":               "9234f3fdb76b5432bac8bf22a9807f234da9dff3a72d7c334ed9e2508183898a",
     "cassian_common.py":            "a0469a2a1b3cdcc5a1fffc7cd02198447cf1e0cb1ee8657469c3fb2c57139a10",
-    "cassian_runtime_container.py": "b2a493f947c121416c992b8b9788a60acead190d305d58654c3c457def116ba3",
+    "cassian_runtime_container.py": "b3e45fa2a910617e1d4dcbcc1d6509b5385cecb4cb236498be2964796b92b59f",  # re-baselined from b2a493f9 (phase2 §4.5-a exec-target split); orig b2a493f9
+    "cassian_runtime_vm.py": "865545e48b51d077731d0d0560aeafd130192dd988b6d43c8ad646d23ed4f718",  # §4.5-a new module (WI-1 VM runtime backend); enforced (REQ-45a-9; LD-9)
     "cassian_state.py":             "aec4d412ee53555156cb5275c5d7a1329f54aaef298d4409feebcad2c198a9d6",
-    "cassian_tests.py":             "ba0a1f36245de1ac01853fca4e8a3100ff5aad28525e91ef26ebaf24f404b0af",
+    "cassian_tests.py":             "dd56046b93cd8961f0fe0f97b25fc8b6ed28946cbbeea3663997c47ba603cd87",  # re-baselined from ba0a1f36 (phase2 §4.5-a exec-target split); orig ba0a1f36
     "cassian_two_run.py":           "a6432665dbfee699713fe60c2e42d427c3c3fd9f82be7ec0ab65caa8b34c3ed9",  # re-baselined from cfafdfa6 (phase2 4.4 F-1 canonical serializer); orig 694f4e0d
-    "cassian.py":                   "cbc931d2f977c37249599bf63229b507ce6ea4d58eb6ca5525b7269b70d4c895",
+    "cassian.py":                   "588fbed521cf68903cf387f02534c58fdfd7b9a844c1ee8f6d375099280cc132",  # re-baselined from cbc931d2 (phase2 §4.5-a exec-target split; WI-1 stub-import removal); orig cbc931d2
 }
 
 fails = []

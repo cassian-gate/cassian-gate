@@ -2465,7 +2465,7 @@ def _pcap_resolve_target_to_node_iface(topo: dict[str, Any], target: dict[str, A
     return node, iface
 
 def _pcap_tool_precheck(rt: "Runtime", lab: str, node: str) -> tuple[bool, str]:
-    cp = rt.exec(lab, node, ["sh", "-lc", "command -v tcpdump >/dev/null"], check=False, capture_output=True)
+    cp = rt.substrate_exec(lab, node, ["sh", "-lc", "command -v tcpdump >/dev/null"], check=False, capture_output=True)
     if cp.returncode != 0:
         return False, "tcpdump not found"
     return True, "ok"
@@ -2516,7 +2516,7 @@ def _pcap_start(
     parts.append(f"nohup sh -lc {json.dumps(sh_cmd)} >/dev/null 2>&1 & echo $! > {pidfile}")
 
     script = " ; ".join(parts)
-    cp = rt.exec(lab, node, ["sh", "-lc", script], check=False, capture_output=True)
+    cp = rt.substrate_exec(lab, node, ["sh", "-lc", script], check=False, capture_output=True)
     if cp.returncode != 0:
         return False, "tcpdump start failed"
     return True, "ok"
@@ -2534,7 +2534,7 @@ def _pcap_stop(rt: "Runtime", lab: str, node: str, pidfile: str) -> tuple[bool, 
         "fi ; "
         "true"
     )
-    cp = rt.exec(lab, node, ["sh", "-lc", script], check=False, capture_output=True)
+    cp = rt.substrate_exec(lab, node, ["sh", "-lc", script], check=False, capture_output=True)
     if cp.returncode != 0:
         return False, "tcpdump stop failed"
     return True, "ok"
@@ -2707,7 +2707,7 @@ def execute_scenario(
                 # copy pcap out (best-effort, non-gating)
                 cp_ok = True
                 try:
-                    rt.copy_from_node(lab, node, tmp_pcap, out_pcap, check=True)
+                    rt.substrate_copy_from(lab, node, tmp_pcap, out_pcap, check=True)
                 except Exception:
                     cp_ok = False
                     tool_status = "failed"
@@ -2715,7 +2715,7 @@ def execute_scenario(
                         err = "pcap copy-out failed"
 
                 # attempt to remove tmp pcap (never fail)
-                rt.exec(lab, node, ["sh", "-lc", f"rm -f {tmp_pcap} 2>/dev/null || true"], check=False)
+                rt.substrate_exec(lab, node, ["sh", "-lc", f"rm -f {tmp_pcap} 2>/dev/null || true"], check=False)
 
                 # bytes written (host-side)
                 bytes_written = 0
@@ -2913,12 +2913,12 @@ def execute_scenario(
             _pcap_stop(rt, lab, node, pidfile)
             try:
                 Path(out_pcap).parent.mkdir(parents=True, exist_ok=True)
-                rt.copy_from_node(lab, node, tmp_pcap, out_pcap, check=True)
+                rt.substrate_copy_from(lab, node, tmp_pcap, out_pcap, check=True)
             except Exception:
                 tool_status = "failed"
                 if not err:
                     err = "pcap copy-out failed"
-            rt.exec(lab, node, ["sh", "-lc", f"rm -f {tmp_pcap} 2>/dev/null || true"], check=False)
+            rt.substrate_exec(lab, node, ["sh", "-lc", f"rm -f {tmp_pcap} 2>/dev/null || true"], check=False)
 
         bytes_written = 0
         try:

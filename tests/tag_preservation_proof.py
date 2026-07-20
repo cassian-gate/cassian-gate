@@ -14,12 +14,12 @@ _SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
 # Post-§4.7 baseline (branch-cut state). The 4 scoped modules (cassian_engine, cassian_model,
 # cassian_cli, cassian_tests) are intentionally excluded -- they are modified by §4.8.
 BASELINE = {
-    "cassian.py": "cbc931d2f977c37249599bf63229b507ce6ea4d58eb6ca5525b7269b70d4c895",
+    "cassian.py": "588fbed521cf68903cf387f02534c58fdfd7b9a844c1ee8f6d375099280cc132",  # re-baselined from cbc931d2 (phase2 §4.5-a exec-target split; WI-1 stub-import removal); orig cbc931d2
     "cassian_ai.py": "6900c52ea52f2a4a588b99478f10e967603b7a1a5f87b3b257878d4fde569361",
     "cassian_artifacts.py": "ae8a54302e4fa8fe2f89e3af0e1e16dcda0ff2ae7bc4a805b671f69029fbb04c",
     "cassian_candidate.py": "93db9b61e9fd22c74156fc0492119fc4e170a7a192684354c8a31c70876ff52d",
     "cassian_common.py": "a0469a2a1b3cdcc5a1fffc7cd02198447cf1e0cb1ee8657469c3fb2c57139a10",
-    "cassian_runtime_container.py": "b2a493f947c121416c992b8b9788a60acead190d305d58654c3c457def116ba3",
+    "cassian_runtime_container.py": "b3e45fa2a910617e1d4dcbcc1d6509b5385cecb4cb236498be2964796b92b59f",  # re-baselined from b2a493f9 (phase2 §4.5-a exec-target split); orig b2a493f9
     "cassian_state.py": "aec4d412ee53555156cb5275c5d7a1329f54aaef298d4409feebcad2c198a9d6",
     "cassian_two_run.py": "a6432665dbfee699713fe60c2e42d427c3c3fd9f82be7ec0ab65caa8b34c3ed9",  # re-baselined from cfafdfa6 (phase2 4.4 F-1 canonical serializer); orig 694f4e0d
 }

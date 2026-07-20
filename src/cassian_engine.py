@@ -686,6 +686,16 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         for label, image in image_defaults:
             checks.append((f"{label} ({image})", False, "advisory"))
 
+    # Advisory: VM-runtime (sonic-vm) environment -- additive, lab-free (REQ-45a-12).
+    # Appear on every host; all ADVISORY (⚠ if absent), never gate-critical: the
+    # image is pullable, and KVM / a recent containerlab matter only for vm-runtime
+    # labs. No new critical check -> exit semantics unchanged. Fixed order.
+    _sonic_vm_image = "ghcr.io/cassian-gate/sonic-vm:202405"
+    _sonic_vm_present = _run_ok(["docker", "image", "inspect", _sonic_vm_image]) if docker_cli else False
+    checks.append((f"sonic-vm image present-or-pullable ({_sonic_vm_image})", _sonic_vm_present, "advisory"))
+    checks.append(("KVM available (/dev/kvm)", _run_ok(["test", "-e", "/dev/kvm"]), "advisory"))
+    checks.append(("containerlab version reports", _run_ok(["containerlab", "version"]) if clab else False, "advisory"))
+
     # Output (deterministic)
     print("Environment readiness:")
     any_critical_fail = False
@@ -8633,7 +8643,7 @@ def cmd_test(args: argparse.Namespace) -> None:
         Capture interface-scoped *via* routes that Linux may remove when iface goes down.
         Deterministic: exact command, stable filtering + sanitization.
         """
-        cp = rt.exec(lab, node, ["ip", "-4", "route", "show", "dev", str(iface)], check=False)
+        cp = rt.substrate_exec(lab, node, ["ip", "-4", "route", "show", "dev", str(iface)], check=False)
         out = (cp.stdout or "") if hasattr(cp, "stdout") else ""
         lines: list[str] = []
 
@@ -8662,7 +8672,7 @@ def cmd_test(args: argparse.Namespace) -> None:
         Best-effort but deterministic: run in sorted order, no retries.
         """
         for r in sorted(set(routes)):
-            rt.exec(lab, node, ["ip", "-4", "route", "replace"] + r.split(), check=False)
+            rt.substrate_exec(lab, node, ["ip", "-4", "route", "replace"] + r.split(), check=False)
 
     def _find_link_interfaces_from_topology(
         topo: dict,
@@ -8802,7 +8812,7 @@ def cmd_test(args: argparse.Namespace) -> None:
         def _iface_down(node: str, iface: str) -> None:
             key = (node, iface)
             fault_state_routes_v4[key] = _snapshot_v4_via_routes(node, iface)
-            cp = rt.exec(
+            cp = rt.substrate_exec(
                 lab,
                 node,
                 ["ip", "link", "set", "dev", str(iface), "down"],
@@ -8811,7 +8821,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             _must_ok(cp, f"failed to set link down on {node}:{iface}")
 
         def _iface_up(node: str, iface: str) -> int:
-            cp = rt.exec(
+            cp = rt.substrate_exec(
                 lab,
                 node,
                 ["ip", "link", "set", "dev", str(iface), "up"],
@@ -8825,7 +8835,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             return len(routes)
 
         def _iface_netem_loss(node: str, iface: str, loss_percent: int) -> None:
-            cp = rt.exec(
+            cp = rt.substrate_exec(
                 lab,
                 node,
                 ["tc", "qdisc", "replace", "dev", str(iface), "root", "netem", "loss", f"{loss_percent}%"],
@@ -8834,7 +8844,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             _must_ok(cp, f"failed to apply packet loss on {node}:{iface}")
 
         def _iface_netem_delay(node: str, iface: str, latency_ms: int) -> None:
-            cp = rt.exec(
+            cp = rt.substrate_exec(
                 lab,
                 node,
                 ["tc", "qdisc", "replace", "dev", str(iface), "root", "netem", "delay", f"{latency_ms}ms"],
@@ -8843,7 +8853,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             _must_ok(cp, f"failed to apply latency on {node}:{iface}")
 
         def _iface_tbf(node: str, iface: str, bandwidth_mbps: int) -> None:
-            cp = rt.exec(
+            cp = rt.substrate_exec(
                 lab,
                 node,
                 [
@@ -9972,7 +9982,7 @@ def cmd_test(args: argparse.Namespace) -> None:
 
                     # Background + pid capture
                     sh = " ".join([_shell_quote(x) for x in td]) + " >/dev/null 2>&1 & echo $!"
-                    cp = rt.exec(lab, node, cmd + [sh], check=False, capture_output=True)
+                    cp = rt.substrate_exec(lab, node, cmd + [sh], check=False, capture_output=True)
 
                     pid = ""
                     if cp.stdout:
@@ -10061,7 +10071,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     chosen_tmp = ""
                     try:
                         for cand in candidates:
-                            cp_exists = rt.exec(
+                            cp_exists = rt.substrate_exec(
                                 lab,
                                 node,
                                 ["sh", "-lc", f"test -f {cand} && echo OK || true"],
@@ -10084,7 +10094,7 @@ def cmd_test(args: argparse.Namespace) -> None:
 
                     try:
                         if pid:
-                            rt.exec(
+                            rt.substrate_exec(
                                 lab,
                                 node,
                                 ["sh", "-lc", f"kill {pid} >/dev/null 2>&1 || true"],
@@ -10093,7 +10103,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                             )
                         else:
                             # Best effort: kill by filename pattern (still scoped to step id)
-                            rt.exec(
+                            rt.substrate_exec(
                                 lab,
                                 node,
                                 ["sh", "-lc", f"pkill -f 'tcpdump.*netsim_pcap_{int(cur.get('step_seq_start')):03d}' >/dev/null 2>&1 || true"],
@@ -10113,7 +10123,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                             if not err:
                                 err = "pcap tmp file not found in node"
                         else:
-                            rt.copy_from_node(lab, node, chosen_tmp, str(pcap_path))
+                            rt.substrate_copy_from(lab, node, chosen_tmp, str(pcap_path))
                             try:
                                 bytes_written = int(pcap_path.stat().st_size)
                             except Exception:
@@ -10126,7 +10136,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     # attempt to remove tmp pcaps (never fail)
                     try:
                         for cand in candidates:
-                            rt.exec(lab, node, ["sh", "-lc", f"rm -f {cand} 2>/dev/null || true"], check=False, capture_output=False)
+                            rt.substrate_exec(lab, node, ["sh", "-lc", f"rm -f {cand} 2>/dev/null || true"], check=False, capture_output=False)
                     except Exception:
                         pass
 

@@ -136,13 +136,14 @@ def main():
     check("(b) rejection is the FRR type gate, not the runtime gate (accepted ordering)",
           "src to be a node of type 'frr'" in b_m and not _is_runtime_gate(b_m))
 
-    # ---------------------------------------------------------------- ruled case (c)
-    c_o, c_m = _validate({
+    # ---------------------------------------------------------------- ruled case (c) [FLIPPED]
+    # REQ-45a-6a: ping left the exec-into gate. The VM runtime backend now executes
+    # ping against the guest via the delivered dispatch, so ping-on-vm VALIDATES.
+    # The one-template §13 assertions move to a still-gated kind (P-13, tcp).
+    c_o, _c_m = _validate({
         "name": "ping-vm-src", "kind": "ping", "src": "s1", "dst": "r1",
     })
-    check("(c) ping src on vm node rejected", c_o == "die")
-    check("(c) rejection is the RUNTIME gate", _is_runtime_gate(c_m))
-    check("(c) message names the kind", "ping test references" in c_m)
+    check("(c) ping src on vm node now VALIDATES (handoff to delivered dispatch)", c_o == "ok")
 
     # ---------------------------------------------------------------- ruled case (d)
     d_o, d_m = _validate({
@@ -173,21 +174,35 @@ def main():
     check("(f) message names the kind", "route_prefix test references" in f_m)
     check("(f) message names the node", "'s1'" in f_m)
 
+    # ---------------------------------------------------------------- ruled case (g)
+    # ospf_neighbor_up: like bgp_community (case b), the frr src type gate fires
+    # FIRST and its message stands -- type-gate-first ordering (REQ-45a-7; OSPF
+    # anchor; Pin-2). 'neighbor' is required or an earlier field check pre-empts,
+    # so the test is well-formed to reach the type gate.
+    g_o, g_m = _validate({
+        "name": "ospf-vm-src", "kind": "invariant", "type": "ospf_neighbor_up",
+        "src": "s1", "neighbor": "2.2.2.2",
+    })
+    check("(g) ospf_neighbor_up src on vm node rejected", g_o == "die")
+    check("(g) rejection is the FRR type gate, not the runtime gate (type-gate-first)",
+          "requires src to be a node of type 'frr'" in g_m and not _is_runtime_gate(g_m))
+
     # ---------------------------------------------------------------- P-13
     # DC v2.1 §13 (a)/(b)/(c) are non-negotiable for hard-fail rejection of
-    # authoritative input. Asserted on the ping case; the message is one template.
+    # authoritative input. Asserted on the tcp case (d) -- a still-gated kind
+    # carrying the SAME one-template runtime-gate message (ping left the gate).
     check("P-13 (a) what: names the offending reference and its runtime",
-          "references src node 's1', whose resolved runtime is 'vm'" in c_m)
+          "references src node 's1', whose resolved runtime is 'vm'" in d_m)
     check("P-13 (a) what: states UNSUPPORTED, not broken",
-          "NOT SUPPORTED in this release" in c_m and "broken" not in c_m)
+          "NOT SUPPORTED in this release" in d_m and "broken" not in d_m)
     check("P-13 (b) where: names the input locus",
-          "tests[1] (ping-vm-src)" in c_m)
+          "tests[1] (tcp-vm-src)" in d_m)
     check("P-13 (c) valid: names the corrective action",
-          "Valid: give src a node whose resolved runtime is 'container'" in c_m)
+          "Valid: give src a node whose resolved runtime is 'container'" in d_m)
     check("P-13 (c) valid: cites the contract clause defining validity",
-          "DC v2.1 §10" in c_m)
+          "DC v2.1 §10" in d_m)
     check("P-13 explains WHY the verdict would be wrong (engineer-first)",
-          "vrnetlab launcher" in c_m and "wrong entity" in c_m)
+          "vrnetlab launcher" in d_m and "wrong entity" in d_m)
 
     # ---------------------------------------------------------------- P-CARVE
     # ping dst/to/to_ip are addressing only -- dataplane ICMP to a vm node is
@@ -215,9 +230,9 @@ def main():
           not (map_o == "die" and _is_runtime_gate(map_m)))
 
     # ---------------------------------------------------------------- P-ALIAS
-    al1_o, al1_m = _validate({"name": "ping-from-vm", "kind": "ping",
-                              "from": "s1", "dst": "r1"})
-    check("P-ALIAS ping 'from' alias is read", al1_o == "die" and _is_runtime_gate(al1_m))
+    al1_o, _al1_m = _validate({"name": "ping-from-vm", "kind": "ping",
+                               "from": "s1", "dst": "r1"})
+    check("P-ALIAS ping 'from' on vm now validates (ping left the gate)", al1_o == "ok")
     al2_o, al2_m = _validate({"name": "tcp-to-vm", "kind": "tcp", "src": "r1",
                               "to": "s1", "port": 443})
     check("P-ALIAS tcp 'to' alias is read", al2_o == "die" and _is_runtime_gate(al2_m))
@@ -236,9 +251,66 @@ def main():
     check("P-NR container route_prefix via on: still validates", nr4_o == "ok")
 
     # ---------------------------------------------------------------- P-DET
-    d1_o, d1_m = _validate({"name": "ping-vm-src", "kind": "ping", "src": "s1", "dst": "r1"})
-    d2_o, d2_m = _validate({"name": "ping-vm-src", "kind": "ping", "src": "s1", "dst": "r1"})
-    check("P-DET deterministic rejection message", d1_m == d2_m and d1_m == c_m)
+    dt1_o, dt1_m = _validate({"name": "tcp-vm-src", "kind": "tcp", "src": "s1", "dst": "r1", "port": 443})
+    dt2_o, dt2_m = _validate({"name": "tcp-vm-src", "kind": "tcp", "src": "s1", "dst": "r1", "port": 443})
+    check("P-DET deterministic rejection message", dt1_m == dt2_m and dt1_m == d_m)
+
+    # ---------------------------------------------------------------- P-EC (error content)
+    # REQ-45a-4b/-8: the readiness error classes and the copy-UNSUP text shipped in
+    # the Finding-C commit are §13(a)(b)(c) surfaces; assert their corrected content.
+    import cassian_runtime_vm as _rv
+    _ec_b = _rv.classify_guest_probe_rc("s1", _rv.VM_SSHPASS_RC_AUTH_FAIL)
+    check("P-EC (b) readiness auth-fail names boot-time provenance (default: admin)",
+          bool(_ec_b) and "default: admin" in _ec_b and "contrib/sonic-image-build/" in _ec_b)
+    check("P-EC (b) readiness auth-fail cites the capabilities doc",
+          bool(_ec_b) and "docs/vm-runtime-capabilities.md" in _ec_b)
+    _ec_a = _rv.guest_probe_deadline_error("s1", _rv.VM_SSH_RC_CONNECT_FAIL, 300)
+    check("P-EC (a) readiness connect-fail has a Valid: clause (no dangling fragment)",
+          "Valid: a booted guest whose SSH service is listening" in _ec_a)
+    _ec_c = _rv.guest_probe_deadline_error("s1", 1, 300)
+    check("P-EC (c) readiness timeout has a Valid: clause",
+          "Valid: a booted guest that executes commands" in _ec_c)
+    try:
+        _rv.VmRuntime().copy_from_node("lab", "s1", "/a", "/b")
+        _ec_cu = ""
+    except SystemExit as _e:
+        _ec_cu = str(_e)
+    check("P-EC copy-UNSUP is direction-accurate (guest NOS), not the falsified 'wrong entity'",
+          "copying files to or from the guest NOS" in _ec_cu and "wrong entity" not in _ec_cu)
+    check("P-EC copy-UNSUP names substrate_copy_from as the valid substrate-side surface",
+          "substrate_copy_from" in _ec_cu)
+    check("P-EC copy-UNSUP defers guest transfer to the named sub-handover",
+          "4.5-f" in _ec_cu)
+
+    # ---------------------------------------------------------------- P-ROUTE (dispatch (d)(v))
+    # A substrate op reaches the substrate (bare argv into the wrapper); a NOS op
+    # reaches the guest (ssh argv). Both traverse the wrapped ContainerRuntime.exec,
+    # distinguished by argv shape -- lab-free, asserted on the dispatch facade.
+    import subprocess as _sp
+    class _RecWrapped(_rv.ContainerRuntime):
+        def __init__(self):
+            self.calls = []
+        def node_id(self, lab, node):
+            return "10.255.0.9"
+        def exec(self, lab, node, cmd, *, check=False, capture_output=True,
+                 interactive=False, timeout_s=None):
+            self.calls.append(list(cmd))
+            return _sp.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
+    _rec = _RecWrapped()
+    _vm = _rv.VmRuntime(_rec)
+    _vm.substrate_exec("lab", "s1", ["tc", "qdisc", "show"])
+    _sub_argv = _rec.calls[-1]
+    check("P-ROUTE substrate op reaches the substrate (bare argv, no ssh wrap)",
+          _sub_argv[:3] == ["tc", "qdisc", "show"] and not any("ssh" in x for x in _sub_argv))
+    _vm.exec("lab", "s1", ["show", "version"])
+    _nos_argv = _rec.calls[-1]
+    check("P-ROUTE NOS op reaches the guest (ssh argv into the guest)",
+          any("ssh" in x for x in _nos_argv) and _nos_argv[:3] != ["show", "version"])
+    _ndr = _rv.NodeDispatchingRuntime({"s1": "vm", "c1": "container"})
+    check("P-ROUTE dispatch facade routes vm node -> VmRuntime",
+          type(_ndr._for("s1")).__name__ == "VmRuntime")
+    check("P-ROUTE dispatch facade routes container node -> ContainerRuntime",
+          type(_ndr._for("c1")).__name__ == "ContainerRuntime")
 
     failed = [n for n, ok in checks if not ok]
     for n, ok in checks:

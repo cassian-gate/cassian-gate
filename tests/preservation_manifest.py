@@ -38,6 +38,7 @@ MODULE_ROSTER = frozenset({
     "src/cassian_import.py",
     "src/cassian_model.py",
     "src/cassian_runtime_container.py",
+    "src/cassian_runtime_vm.py",
     "src/cassian_state.py",
     "src/cassian_tests.py",
     "src/cassian_two_run.py",

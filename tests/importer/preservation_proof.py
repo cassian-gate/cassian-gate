@@ -36,16 +36,17 @@ from preservation_manifest import MODULE_ROSTER
 # === FORK_BASELINE BEGIN (generated at apply-time from the live merge-base) ===
 BASELINE = {
     "src/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "src/cassian.py": "cbc931d2f977c37249599bf63229b507ce6ea4d58eb6ca5525b7269b70d4c895",
+    "src/cassian.py": "588fbed521cf68903cf387f02534c58fdfd7b9a844c1ee8f6d375099280cc132",  # re-baselined from cbc931d2 (phase2 §4.5-a exec-target split; WI-1 stub-import removal); orig cbc931d2
     "src/cassian_ai.py": "6900c52ea52f2a4a588b99478f10e967603b7a1a5f87b3b257878d4fde569361",
     "src/cassian_artifacts.py": "ae8a54302e4fa8fe2f89e3af0e1e16dcda0ff2ae7bc4a805b671f69029fbb04c",
     "src/cassian_candidate.py": "93db9b61e9fd22c74156fc0492119fc4e170a7a192684354c8a31c70876ff52d",
     "src/cassian_common.py": "a0469a2a1b3cdcc5a1fffc7cd02198447cf1e0cb1ee8657469c3fb2c57139a10",
-    "src/cassian_engine.py": "ea27795ae7b41642cc995eb87b2986737ec23c2333f5cbd061cbcf8b3ce9505b",  # re-baselined for the R-O1/R-O6 remediation (UX-1 Next:-block print conditionality); authority d9850b4 + H-1..H-5 carry-forward note; orig f3831817
-    "src/cassian_model.py": "663b244c1a775cfdda942311cbff2716b0605fe6749ba6fb1b2d40435756765e",  # re-baselined from e71f0e1c (R-O1 Addendum #2: route_prefix exec-into extension; d9850b4 + H-1..H-5 carry-forward + Addendum #2); orig 4b9f01aa
-    "src/cassian_runtime_container.py": "b2a493f947c121416c992b8b9788a60acead190d305d58654c3c457def116ba3",
+    "src/cassian_engine.py": "dec1f30733dfebcecbe48a94be915ff5c0c1efece930213c25f50f3abd8baaab",  # re-baselined from ea27795a (phase2 §4.5-a exec-target split); orig f3831817
+    "src/cassian_model.py": "84eca8d5b9cf5ba0f5ece9cc52a4782126eab928092c62bf4047f70072300da2",  # re-baselined from 663b244c (phase2 §4.5-a exec-target split); orig 4b9f01aa
+    "src/cassian_runtime_container.py": "b3e45fa2a910617e1d4dcbcc1d6509b5385cecb4cb236498be2964796b92b59f",  # re-baselined from b2a493f9 (phase2 §4.5-a exec-target split); orig b2a493f9
+    "src/cassian_runtime_vm.py": "865545e48b51d077731d0d0560aeafd130192dd988b6d43c8ad646d23ed4f718",  # §4.5-a new module (WI-1 VM runtime backend); enforced (REQ-45a-9; LD-9)
     "src/cassian_state.py": "aec4d412ee53555156cb5275c5d7a1329f54aaef298d4409feebcad2c198a9d6",
-    "src/cassian_tests.py": "ba0a1f36245de1ac01853fca4e8a3100ff5aad28525e91ef26ebaf24f404b0af",
+    "src/cassian_tests.py": "dd56046b93cd8961f0fe0f97b25fc8b6ed28946cbbeea3663997c47ba603cd87",  # re-baselined from ba0a1f36 (phase2 §4.5-a exec-target split); orig ba0a1f36
     "src/cassian_two_run.py": "a6432665dbfee699713fe60c2e42d427c3c3fd9f82be7ec0ab65caa8b34c3ed9",  # re-baselined from cfafdfa6 (phase2 4.4 F-1 canonical serializer); orig 694f4e0d
 }
 # === FORK_BASELINE END ===
