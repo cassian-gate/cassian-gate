@@ -240,6 +240,17 @@ jobs:
           ./src/cassian.py test --two-run --two-run-topology "$T" --candidate-config "$C" "$B" || true
           python tests/two_run_real_run_positive_proof.py /tmp/two_run_gate_run1 "$BUNDLE"
 
+      - name: VM-runtime assertion leg — validate/up/test/down (§4.5-a, REQ-45a-5)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Pull the ghcr tag directly (no local-retag dependency; B-8 stays backlog).
+          docker pull ghcr.io/cassian-gate/sonic-vm:202405
+          ./src/cassian.py validate topologies/vm-assertion-smoke.yaml
+          ./src/cassian.py up topologies/vm-assertion-smoke.yaml --reconfigure
+          ./src/cassian.py test vm-assertion-smoke
+          ./src/cassian.py down vm-assertion-smoke
+
       - name: Upload artifacts (always; bounded on success)
         if: always()
         uses: actions/upload-artifact@v4
