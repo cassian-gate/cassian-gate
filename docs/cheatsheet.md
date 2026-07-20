@@ -662,13 +662,17 @@ Supported node types:
 
 Important current boundary for vendor NOS VM nodes:
 
-- tests and `exec` against supported `sonic-vm` / NOS VM nodes are **not currently a supported test surface**
-- unsupported NOS VM test/exec input is rejected explicitly at validation time
-- current truthful behavior for unsupported NOS VM test/exec input is:
+- **ping tests are supported** on `sonic-vm` / NOS VM nodes: a ping with `src:` the guest runs against the guest NOS and produces an authoritative verdict
+- **`tcp`, `bgp_neighbor`, `route_prefix`, and invariant kinds are not supported** on vm-runtime nodes (deferred, DC v2.1 §10) and are rejected explicitly at validation time
+- current truthful behavior for an unsupported NOS VM test kind is:
   - misuse / unsupported test surface
   - exit code `2`
 
-Example of current unsupported behavior:
+Substrate vs NOS (exec target): bare `exec` / `sh` / `copy_*` reach the **guest NOS**; `substrate_exec` / `substrate_sh` / `substrate_copy_from` reach the **vrnetlab substrate** (the wrapper). Default is bare = NOS.
+
+File copy on vm nodes: guest `copy_*` is UNSUPPORTED (deferred to §4.5-f); `substrate_copy_from` works; `substrate_copy_to` is intentionally absent (demand-led).
+
+Example of an unsupported test kind (tcp on a vm node):
 
 ```yaml
 nodes:
@@ -679,36 +683,40 @@ nodes:
 
 tests:
   - name: reach
-    kind: ping
+    kind: tcp
     src: s1
-    dst: r1
+    to: 10.0.0.1
+    port: 179
 ```
 
 Expected outcome (message abridged):
 
 ```text
-ERROR: tests[1] (reach): ping test references src node 's1', whose resolved runtime
-is 'vm'; running a ping test against a vm-runtime node is NOT SUPPORTED in this
-release. ... Valid: give src a node whose resolved runtime is 'container'.
+ERROR: tests[1] (reach): tcp test references src node 's1', whose resolved runtime
+is 'vm'; running a tcp test against a vm-runtime node is NOT SUPPORTED in this
+release. ... Valid: give src a node whose resolved runtime is 'container'. vm-runtime
+nodes currently support lifecycle (up/status/down), node readiness, and ping tests
+(executed against the guest); other test kinds are deferred.
 exit code: 2
 ```
 
-Meaning: container exec reaches the vrnetlab launcher container, not the guest NOS, so a verdict from it would describe the wrong entity.
+Meaning: for the gated kinds, container exec would reach the vrnetlab launcher container, not the guest NOS, so a verdict from it would describe the wrong entity. A ping does not have this problem -- it is executed against the guest and is supported.
 
 Which references are rejected:
 
-- rejected: `src` (or `from`) on `ping`, `tcp`, `bgp_neighbor`, and every invariant type, and `dst` (or `to`) on `tcp`
-- not rejected: `dst` / `to` / `to_ip` on `ping` — addressing only, not a node the framework execs into
-- not rejected: IP literals — only node names resolve to a runtime
+- rejected: `src` (or `from`) on `tcp`, `bgp_neighbor`, and every invariant type, and `dst` (or `to`) on `tcp`
+- not rejected: `src` on `ping` -- ping is supported on vm nodes and runs against the guest
+- not rejected: `dst` / `to` / `to_ip` on `ping` -- addressing only, not a node the framework execs into
+- not rejected: IP literals -- only node names resolve to a runtime
 
 Support boundary:
 
-- supported current surfaces for `sonic-vm`: lifecycle (`up` / `status` / `down`) and node readiness only
-- unsupported current surfaces: tests, `exec`, and candidate-config input against `sonic-vm` / NOS VM nodes
+- supported current surfaces for `sonic-vm`: lifecycle (`up` / `status` / `down`), node readiness, and **ping tests** (executed against the guest)
+- unsupported current surfaces: `tcp` / `bgp_neighbor` / `route_prefix` / invariant tests, guest-file `copy_*`, and candidate-config input against `sonic-vm` / NOS VM nodes
 
 Scope boundary:
 
-- this does not currently establish test or `exec` support for `sonic-vm` or other vendor NOS VM node types
+- this does not currently establish `tcp` / `bgp_neighbor` / invariant / `route_prefix` test or guest `exec` support for `sonic-vm` or other vendor NOS VM node types
 - any future NOS VM test/exec support requires an explicit contract surface and proof
 
 ---
