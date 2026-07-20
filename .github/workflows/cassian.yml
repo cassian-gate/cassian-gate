@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   gate:
@@ -239,6 +240,13 @@ jobs:
           cp -r "$BUNDLE" /tmp/two_run_gate_run1
           ./src/cassian.py test --two-run --two-run-topology "$T" --candidate-config "$C" "$B" || true
           python tests/two_run_real_run_positive_proof.py /tmp/two_run_gate_run1 "$BUNDLE"
+
+      - name: Log in to ghcr.io (private CI image; O-4 GITHUB_TOKEN)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: VM-runtime assertion leg — validate/up/test/down (§4.5-a, REQ-45a-5)
         shell: bash
