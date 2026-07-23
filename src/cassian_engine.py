@@ -2186,6 +2186,37 @@ def cmd_vty(args: argparse.Namespace) -> None:
             code=2,
         )
 
+    # REQ-45b-7 / D-086.OPS: pre-dispatch node-type gate. `cassian vty` is an
+    # FRR vtysh shortcut; a non-FRR node must be told so before vtysh is
+    # reached, not after it fails. Placed BEFORE the vty() call; vty()'s body
+    # is untouched (P7).
+    #
+    # The gate fires only when the type is actually resolvable. If the lab's
+    # resolved topology is absent the antecedent ("resolved type != frr") is
+    # not met, and behaviour falls through unchanged -- calling
+    # _load_resolved_topology unconditionally would die(code=2) with a
+    # lab-artifacts message, adding a SECOND operator-visible delta beyond the
+    # one ruled for this handover.
+    _vty_topo_path = LABS_DIR / f"clab-{lab}" / "topology.resolved.yaml"
+    if _vty_topo_path.is_file():
+        try:
+            _vty_topo = _load_resolved_topology(lab)
+        except SystemExit:
+            raise
+        except Exception:
+            _vty_topo = {}
+        _vty_ntype = _nos_ntype(_vty_topo, node)
+        if _vty_ntype and _vty_ntype != "frr":
+            die(
+                f"ERROR: 'cassian vty' is an FRR vtysh shortcut; node '{node}' "
+                f"is type '{_vty_ntype}', not 'frr'.\n"
+                "Supported: frr nodes only.\n"
+                "Next:\n"
+                f'  Run: cassian exec {lab} {node} "{command}"   '
+                "(NOS-agnostic, allow-listed)",
+                code=2,
+            )
+
     # command is provided as a single string; e.g. "show bgp summary"
     cp = vty(rt, lab, node, command)
 
