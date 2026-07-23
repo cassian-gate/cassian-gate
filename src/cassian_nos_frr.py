@@ -1191,6 +1191,107 @@ def _collect_evpn_routes(rt, lab, node, req: ObservationRequest) -> Observation:
     )
 
 
+
+
+# -------------------------
+# OSPF collection handler (WI-C3e, REQ-45b-4)
+# -------------------------
+# The declared expected FSM state is an expectation, not an observation --
+# it stays core (design §5) and is merged into observed_state there.
+
+
+def _collect_ospf_neighbors(rt, lab, node, req: ObservationRequest) -> Observation:
+    """Probe + normalize FRR OSPF neighbor state for ospf_neighbor_up."""
+    # H4: OSPF neighbor-state evaluator (REQ-H4-7 / B07).
+    # FRR JSON shape: {"neighbors": {"<router-id>": [{"nbrState": ...}]}}.
+    # Neighbor key is the OSPF router-ID literal (validated as IPv4
+    # at WI-1). FSM state may carry a role qualifier suffix
+    # ("Full/DR", "Full/Backup", "Full/DROther", "2-Way/DROther");
+    # the parser splits on '/' and maps to D-1's closed declarable
+    # set, with any outside-set literal mapped to "Unknown" with
+    # empty last_error per B07.
+    neighbor = str(req.params.get("neighbor") or "").strip()
+    cp = rt.exec(lab, node, ["vtysh", "-c", "show ip ospf neighbor json"], check=False)
+    probe_ok = (getattr(cp, "returncode", 1) == 0)
+    out = (cp.stdout or "") if hasattr(cp, "stdout") else ""
+
+    declarable_states = (
+        "Down",
+        "Attempt",
+        "Init",
+        "2-Way",
+        "ExStart",
+        "Exchange",
+        "Loading",
+        "Full",
+    )
+    observed_state_str: str = "Unknown"
+    last_error: str = ""
+    parse_error: str = ""
+    neighbor_present: bool = False
+
+    if probe_ok:
+        try:
+            data = json.loads(out or "{}")
+            nbrs = data.get("neighbors")
+            if isinstance(nbrs, dict):
+                if not nbrs:
+                    observed_state_str = "NotConfigured"
+                    last_error = "ospf neighbor table empty"
+                    parse_error = "ospf neighbor table empty"
+                else:
+                    entries = nbrs.get(neighbor)
+                    if isinstance(entries, list) and entries:
+                        first = entries[0] if isinstance(entries[0], dict) else None
+                        if isinstance(first, dict):
+                            neighbor_present = True
+                            raw_state = first.get("nbrState")
+                            if raw_state:
+                                base = str(raw_state).split("/", 1)[0].strip()
+                                if base in declarable_states:
+                                    observed_state_str = base
+                                else:
+                                    observed_state_str = "Unknown"
+                                    last_error = ""
+                    else:
+                        observed_state_str = "NotConfigured"
+                        last_error = "neighbor not present in ospf neighbor table"
+                        parse_error = "neighbor not present in ospf neighbor table"
+            else:
+                observed_state_str = "NotConfigured"
+                last_error = "ospf neighbor table empty"
+                parse_error = "ospf neighbor table empty"
+        except Exception:
+            observed_state_str = "Unknown"
+            last_error = "vtysh output not parseable as JSON"
+            parse_error = "vtysh output not parseable as JSON"
+    else:
+        observed_state_str = "Unknown"
+        last_error = "vtysh command failed"
+        parse_error = "vtysh command failed"
+
+    # Predicate: neighbor present AND observed FSM state matches the
+    # declared expected state. Test record's 'state' is defaulted to
+    # "Full" by WI-2 per LD-2 if omitted.
+
+    observed_state = {
+        "neighbor_present": neighbor_present,
+        "state": observed_state_str,
+        "last_error": last_error,
+    }
+    evidence = {
+        "cmd": "vtysh -c 'show ip ospf neighbor json'",
+        "parse_error": parse_error,
+        "returncode": getattr(cp, "returncode", None),
+    }
+
+    return Observation(
+        kind=req.kind,
+        data=observed_state,
+        evidence=dict(evidence, probe_ok=probe_ok),
+    )
+
+
 _COLLECT_HANDLERS = {
     "bgp_session_up": _collect_bgp_session_up,
     "bgp_med_equals": _collect_bgp_med_equals,
@@ -1205,6 +1306,7 @@ _COLLECT_HANDLERS = {
     "evpn_mac_route_present": _collect_evpn_routes,
     "evpn_mac_route_absent": _collect_evpn_routes,
     "evpn_vni_route_present": _collect_evpn_routes,
+    "ospf_neighbor_up": _collect_ospf_neighbors,
 }
 
 

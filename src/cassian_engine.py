@@ -5799,91 +5799,47 @@ def cmd_test(args: argparse.Namespace) -> None:
             return vtysh_ok, predicate_ok, observed_state, evidence
 
         if inv_type == "ospf_neighbor_up":
-            # H4: OSPF neighbor-state evaluator (REQ-H4-7 / B07).
-            # FRR JSON shape: {"neighbors": {"<router-id>": [{"nbrState": ...}]}}.
-            # Neighbor key is the OSPF router-ID literal (validated as IPv4
-            # at WI-1). FSM state may carry a role qualifier suffix
-            # ("Full/DR", "Full/Backup", "Full/DROther", "2-Way/DROther");
-            # the parser splits on '/' and maps to D-1's closed declarable
-            # set, with any outside-set literal mapped to "Unknown" with
-            # empty last_error per B07.
             neighbor = str(t.get("neighbor") or "").strip()
-            cp = rt.exec(lab, src, ["vtysh", "-c", "show ip ospf neighbor json"], check=False)
-            vtysh_ok = (getattr(cp, "returncode", 1) == 0)
-            out = (cp.stdout or "") if hasattr(cp, "stdout") else ""
-
-            declarable_states = (
-                "Down",
-                "Attempt",
-                "Init",
-                "2-Way",
-                "ExStart",
-                "Exchange",
-                "Loading",
-                "Full",
-            )
-            observed_state_str: str = "Unknown"
-            last_error: str = ""
-            parse_error: str = ""
-            neighbor_present: bool = False
-
-            if vtysh_ok:
-                try:
-                    data = json.loads(out or "{}")
-                    nbrs = data.get("neighbors")
-                    if isinstance(nbrs, dict):
-                        if not nbrs:
-                            observed_state_str = "NotConfigured"
-                            last_error = "ospf neighbor table empty"
-                            parse_error = "ospf neighbor table empty"
-                        else:
-                            entries = nbrs.get(neighbor)
-                            if isinstance(entries, list) and entries:
-                                first = entries[0] if isinstance(entries[0], dict) else None
-                                if isinstance(first, dict):
-                                    neighbor_present = True
-                                    raw_state = first.get("nbrState")
-                                    if raw_state:
-                                        base = str(raw_state).split("/", 1)[0].strip()
-                                        if base in declarable_states:
-                                            observed_state_str = base
-                                        else:
-                                            observed_state_str = "Unknown"
-                                            last_error = ""
-                            else:
-                                observed_state_str = "NotConfigured"
-                                last_error = "neighbor not present in ospf neighbor table"
-                                parse_error = "neighbor not present in ospf neighbor table"
-                    else:
-                        observed_state_str = "NotConfigured"
-                        last_error = "ospf neighbor table empty"
-                        parse_error = "ospf neighbor table empty"
-                except Exception:
-                    observed_state_str = "Unknown"
-                    last_error = "vtysh output not parseable as JSON"
-                    parse_error = "vtysh output not parseable as JSON"
-            else:
-                observed_state_str = "Unknown"
-                last_error = "vtysh command failed"
-                parse_error = "vtysh command failed"
+            # Provider seam (REQ-45b-4): probe + FRR OSPF-JSON normalization are
+            # provider-side. The declared expected FSM state is an expectation,
+            # not an observation, so it is resolved core-side (design §5) and
+            # merged into observed_state here -- byte-identically to the
+            # pre-extraction dict (key order is not observable: results.json is
+            # written with sort_keys=True and the §13(c) renderer sorts keys).
+            try:
+                _obs = _nos_collect(
+                    rt, lab, src, _nos_ntype(src),
+                    ObservationRequest(kind="ospf_neighbor_up", params={"neighbor": neighbor}),
+                    "cmd_test invariant collection",
+                )
+            except NosCapabilityUnsupported as _unsup:
+                # Deny-by-default (B02 / founder ruling A on F-45b-C3-1).
+                return (
+                    False,
+                    False,
+                    {"neighbor_present": False, "state": "Unsupported", "last_error": _unsup.message},
+                    {
+                        "cmd": "",
+                        "parse_error": _unsup.message,
+                        "returncode": None,
+                        "reason": "unsupported_provider_capability",
+                        "node_type": _unsup.ntype,
+                    },
+                )
+            vtysh_ok = bool(_obs.evidence.get("probe_ok"))
+            observed_state = dict(_obs.data)
+            evidence = {k: v for k, v in _obs.evidence.items() if k != "probe_ok"}
 
             # Predicate: neighbor present AND observed FSM state matches the
             # declared expected state. Test record's 'state' is defaulted to
             # "Full" by WI-2 per LD-2 if omitted.
             expected_state = str(t.get("state") or "Full").strip()
-            predicate_ok = bool(neighbor_present and observed_state_str == expected_state)
+            observed_state["expected_state"] = expected_state
+            predicate_ok = bool(
+                observed_state.get("neighbor_present")
+                and observed_state.get("state") == expected_state
+            )
 
-            observed_state = {
-                "neighbor_present": neighbor_present,
-                "state": observed_state_str,
-                "last_error": last_error,
-                "expected_state": expected_state,
-            }
-            evidence = {
-                "cmd": "vtysh -c 'show ip ospf neighbor json'",
-                "parse_error": parse_error,
-                "returncode": getattr(cp, "returncode", None),
-            }
             return vtysh_ok, predicate_ok, observed_state, evidence
 
         if inv_type == "interface_state":
