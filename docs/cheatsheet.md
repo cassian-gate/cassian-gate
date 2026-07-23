@@ -94,6 +94,9 @@ cassian vty <lab> <node> "<command>"
 cassian collect <lab>
 ```
 
+`cassian vty` is FRR-only. On a non-FRR node it exits `2` and redirects you to
+`cassian exec` (NOS-agnostic, allow-listed).
+
 ### DevOps Integration
 
 ```bash
@@ -408,7 +411,7 @@ cassian test <topology.yaml>
 ```bash
 cassian status <lab>
 cassian exec <lab> <node>
-cassian vty <lab> <node>
+cassian vty <lab> <node>          # FRR-only; non-FRR redirects to cassian exec
 cassian collect <lab>
 cassian down <lab>
 ```
