@@ -51,7 +51,12 @@ from typing import TYPE_CHECKING, Any
 # (design §3.2) hosting the NOS-neutral helpers the relocated FRR parse
 # family reaches -- admitted symbols named here and asserted by
 # tests/nos_leaf_import_proof.py.
-from cassian_common import _RE_IPV4_PREFIX, _RE_NEIGH_LINE, _normalize_prefix
+from cassian_common import (
+    _RE_IPV4_PREFIX,
+    _RE_NEIGH_LINE,
+    _canonical_community_token,
+    _normalize_prefix,
+)
 from cassian_nos_types import (
     CandidateSpec,
     CapabilityDisposition,
@@ -359,8 +364,459 @@ def _collect_bgp_session_up(rt, lab, node, req: ObservationRequest) -> Observati
 # Kind -> handler. Migrated incrementally through §4.5-b WI-C3a..C3f; a kind
 # absent here is not yet routed through the seam and still runs its
 # pre-existing inline core path (not a second seam -- an unmigrated one).
+
+
+# -------------------------
+# BGP attribute-family collection handlers (WI-C3b, REQ-45b-4)
+# -------------------------
+
+
+def _collect_bgp_med_equals(rt, lab, node, req: ObservationRequest) -> Observation:
+    """Probe + normalize FRR `show ip bgp <prefix> json` for bgp_med_equals."""
+    norm_prefix = str(req.params.get("prefix") or "").strip()
+    cp = rt.exec(
+        lab,
+        node,
+        ["vtysh", "-c", f"show ip bgp {norm_prefix} json"],
+        check=False,
+        capture_output=True,
+    )
+
+    if isinstance(cp, str):
+        out = cp
+        rc = None
+    else:
+        out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
+        if isinstance(out, (bytes, bytearray)):
+            try:
+                out = out.decode("utf-8", errors="replace")
+            except Exception:
+                out = str(out)
+        rc = getattr(cp, "returncode", None)
+
+    probe_ok = (rc in (0, None))
+
+    parse_error = ""
+    observed_med = None
+    empty_first_doc = (str(out or "").strip() in ("", "{}"))
+
+    try:
+        doc = json.loads(str(out or "").strip()) if str(out or "").strip() else {}
+        route_obj = None
+
+        if isinstance(doc, dict):
+            cand = doc.get(norm_prefix)
+            if isinstance(cand, list) and cand:
+                route_obj = cand[0]
+            elif isinstance(cand, dict):
+                route_obj = cand
+            elif (
+                doc.get("prefix") is not None
+                and (_normalize_prefix(str(doc.get("prefix"))) or str(doc.get("prefix"))) == norm_prefix
+            ):
+                route_obj = doc
+            else:
+                routes = doc.get("routes")
+                if isinstance(routes, dict):
+                    cand = routes.get(norm_prefix)
+                    if isinstance(cand, list) and cand:
+                        route_obj = cand[0]
+                    elif isinstance(cand, dict):
+                        route_obj = cand
+                    else:
+                        for k, v in routes.items():
+                            nk = _normalize_prefix(str(k)) or str(k)
+                            if nk != norm_prefix:
+                                continue
+                            if isinstance(v, list) and v:
+                                route_obj = v[0]
+                                break
+                            if isinstance(v, dict):
+                                route_obj = v
+                                break
+                if route_obj is None:
+                    for k, v in doc.items():
+                        nk = _normalize_prefix(str(k)) or str(k)
+                        if nk != norm_prefix:
+                            continue
+                        if isinstance(v, list) and v:
+                            route_obj = v[0]
+                            break
+                        if isinstance(v, dict):
+                            route_obj = v
+                            break
+        else:
+            raise ValueError("unexpected_bgp_prefix_json_shape")
+
+        if not isinstance(route_obj, dict):
+            parse_error = "prefix not present in bgp json"
+        else:
+            for key in ("med", "metric"):
+                val = route_obj.get(key)
+                if val is None or str(val).strip() == "":
+                    continue
+                try:
+                    observed_med = int(val)
+                    break
+                except Exception:
+                    continue
+
+            if observed_med is None:
+                paths = route_obj.get("paths")
+                if isinstance(paths, list):
+                    for path in paths:
+                        if not isinstance(path, dict):
+                            continue
+                        for key in ("med", "metric"):
+                            val = path.get(key)
+                            if val is None or str(val).strip() == "":
+                                continue
+                            try:
+                                observed_med = int(val)
+                                break
+                            except Exception:
+                                continue
+                        if observed_med is not None:
+                            break
+
+            if observed_med is None:
+                parse_error = "med not present in bgp json"
+    except Exception as e:
+        parse_error = str(e)
+
+
+    observed_state = {
+        "norm_prefix": norm_prefix,
+        "observed_med": observed_med,
+    }
+    evidence = {
+        "cmd": f"vtysh -c 'show ip bgp {norm_prefix} json'",
+        "rc": rc,
+        "parse_error": parse_error,
+        "empty_first_doc": empty_first_doc,
+    }
+
+    return Observation(
+        kind="bgp_med_equals",
+        data=observed_state,
+        evidence=dict(evidence, probe_ok=probe_ok),
+    )
+
+
+def _collect_bgp_localpref_equals(rt, lab, node, req: ObservationRequest) -> Observation:
+    """Probe + normalize FRR `show ip bgp <prefix> json` for bgp_localpref_equals."""
+    prefix = str(req.params.get("prefix") or "").strip()
+
+    cp = rt.exec(lab, node, ["vtysh", "-c", f"show ip bgp {prefix} json"], check=False)
+    out = cp.stdout or ""
+    rc = cp.returncode
+    if isinstance(out, (bytes, bytearray)):
+        try:
+            out = out.decode("utf-8", errors="replace")
+        except Exception:
+            out = str(out)
+
+    probe_ok = (rc == 0)
+
+    parse_error = ""
+    observed_localpref = None
+    try:
+        doc = json.loads(str(out or "").strip()) if str(out or "").strip() else {}
+        route_obj = None
+        if isinstance(doc, dict):
+            cand = doc.get(prefix)
+            if isinstance(cand, list) and cand:
+                route_obj = cand[0]
+            elif isinstance(cand, dict):
+                route_obj = cand
+            elif (
+                doc.get("prefix") is not None
+                and (_normalize_prefix(str(doc.get("prefix"))) or str(doc.get("prefix"))) == prefix
+            ):
+                route_obj = doc
+            else:
+                routes = doc.get("routes")
+                if isinstance(routes, dict):
+                    cand = routes.get(prefix)
+                    if isinstance(cand, list) and cand:
+                        route_obj = cand[0]
+                    elif isinstance(cand, dict):
+                        route_obj = cand
+                    else:
+                        for k, v in routes.items():
+                            nk = _normalize_prefix(str(k)) or str(k)
+                            if nk != prefix:
+                                continue
+                            if isinstance(v, list) and v:
+                                route_obj = v[0]
+                                break
+                            if isinstance(v, dict):
+                                route_obj = v
+                                break
+                if route_obj is None:
+                    for k, v in doc.items():
+                        nk = _normalize_prefix(str(k)) or str(k)
+                        if nk != prefix:
+                            continue
+                        if isinstance(v, list) and v:
+                            route_obj = v[0]
+                            break
+                        if isinstance(v, dict):
+                            route_obj = v
+                            break
+        else:
+            raise ValueError("unexpected_bgp_prefix_json_shape")
+
+        if not isinstance(route_obj, dict):
+            parse_error = "prefix not present in bgp json"
+        else:
+            for key in ("locPrf", "localpref", "localPref", "local_preference"):
+                val = route_obj.get(key)
+                if val is None or str(val).strip() == "":
+                    continue
+                try:
+                    observed_localpref = int(val)
+                    break
+                except Exception:
+                    continue
+
+            if observed_localpref is None:
+                paths = route_obj.get("paths")
+                if isinstance(paths, list):
+                    for path in paths:
+                        if not isinstance(path, dict):
+                            continue
+                        for key in ("locPrf", "localpref", "localPref", "local_preference"):
+                            val = path.get(key)
+                            if val is None or str(val).strip() == "":
+                                continue
+                            try:
+                                observed_localpref = int(val)
+                                break
+                            except Exception:
+                                continue
+                        if observed_localpref is not None:
+                            break
+
+            if observed_localpref is None:
+                parse_error = "localpref not present in bgp json"
+    except Exception as e:
+        parse_error = str(e)
+
+
+    observed_state = {
+        "norm_prefix": prefix,
+        "observed_localpref": observed_localpref,
+    }
+    evidence = {
+        "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+        "rc": rc,
+        "parse_error": parse_error,
+    }
+
+    return Observation(
+        kind="bgp_localpref_equals",
+        data=observed_state,
+        evidence=dict(evidence, probe_ok=probe_ok),
+    )
+
+
+def _collect_bgp_community(rt, lab, node, req: ObservationRequest) -> Observation:
+    """Probe + normalize FRR `show ip bgp <prefix> json` for bgp_community."""
+    prefix = str(req.params.get("prefix") or "").strip()
+
+    cp = rt.exec(lab, node, ["vtysh", "-c", f"show ip bgp {prefix} json"], check=False)
+    out = cp.stdout or ""
+    rc = cp.returncode
+    if isinstance(out, (bytes, bytearray)):
+        try:
+            out = out.decode("utf-8", errors="replace")
+        except Exception:
+            out = str(out)
+
+    probe_ok = (rc == 0)
+
+    parse_error = ""
+    route_present = False
+    observed_tokens = []
+    empty_first_doc = False
+    try:
+        _s = str(out or "").strip()
+        doc = json.loads(_s) if _s else {}
+        if isinstance(doc, dict) and not doc:
+            empty_first_doc = True
+        route_obj = None
+        if isinstance(doc, dict):
+            cand = doc.get(prefix)
+            if isinstance(cand, list) and cand:
+                route_obj = cand[0]
+            elif isinstance(cand, dict):
+                route_obj = cand
+            elif (
+                doc.get("prefix") is not None
+                and (_normalize_prefix(str(doc.get("prefix"))) or str(doc.get("prefix"))) == prefix
+            ):
+                route_obj = doc
+            else:
+                routes = doc.get("routes")
+                if isinstance(routes, dict):
+                    cand = routes.get(prefix)
+                    if isinstance(cand, list) and cand:
+                        route_obj = cand[0]
+                    elif isinstance(cand, dict):
+                        route_obj = cand
+                    else:
+                        for k, v in routes.items():
+                            nk = _normalize_prefix(str(k)) or str(k)
+                            if nk != prefix:
+                                continue
+                            if isinstance(v, list) and v:
+                                route_obj = v[0]
+                                break
+                            if isinstance(v, dict):
+                                route_obj = v
+                                break
+                if route_obj is None:
+                    for k, v in doc.items():
+                        nk = _normalize_prefix(str(k)) or str(k)
+                        if nk != prefix:
+                            continue
+                        if isinstance(v, list) and v:
+                            route_obj = v[0]
+                            break
+                        if isinstance(v, dict):
+                            route_obj = v
+                            break
+        else:
+            raise ValueError("unexpected_bgp_prefix_json_shape")
+
+        if isinstance(route_obj, dict):
+            route_present = True
+            observed_tokens = _route_communities(route_obj)
+    except Exception as e:
+        parse_error = str(e)
+
+
+    observed_state = {
+        "norm_prefix": prefix,
+        "route_present": route_present,
+        "observed_communities": sorted({_canonical_community_token(t) for t in observed_tokens}),
+    }
+    evidence = {
+        "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+        "rc": rc,
+        "parse_error": parse_error,
+        "empty_first_doc": empty_first_doc,
+    }
+
+    return Observation(
+        kind="bgp_community",
+        data=observed_state,
+        evidence=dict(evidence, probe_ok=probe_ok),
+    )
+
+
+def _collect_bgp_as_path(rt, lab, node, req: ObservationRequest) -> Observation:
+    """Probe + normalize FRR `show ip bgp <prefix> json` for bgp_as_path."""
+    prefix = str(req.params.get("prefix") or "").strip()
+
+    cp = rt.exec(lab, node, ["vtysh", "-c", f"show ip bgp {prefix} json"], check=False)
+    out = cp.stdout or ""
+    rc = cp.returncode
+    if isinstance(out, (bytes, bytearray)):
+        try:
+            out = out.decode("utf-8", errors="replace")
+        except Exception:
+            out = str(out)
+
+    probe_ok = (rc == 0)
+
+    parse_error = ""
+    route_present = False
+    observed_path = ""
+    empty_first_doc = False
+    try:
+        _s = str(out or "").strip()
+        doc = json.loads(_s) if _s else {}
+        if isinstance(doc, dict) and not doc:
+            empty_first_doc = True
+        route_obj = None
+        if isinstance(doc, dict):
+            cand = doc.get(prefix)
+            if isinstance(cand, list) and cand:
+                route_obj = cand[0]
+            elif isinstance(cand, dict):
+                route_obj = cand
+            elif (
+                doc.get("prefix") is not None
+                and (_normalize_prefix(str(doc.get("prefix"))) or str(doc.get("prefix"))) == prefix
+            ):
+                route_obj = doc
+            else:
+                routes = doc.get("routes")
+                if isinstance(routes, dict):
+                    cand = routes.get(prefix)
+                    if isinstance(cand, list) and cand:
+                        route_obj = cand[0]
+                    elif isinstance(cand, dict):
+                        route_obj = cand
+                    else:
+                        for k, v in routes.items():
+                            nk = _normalize_prefix(str(k)) or str(k)
+                            if nk != prefix:
+                                continue
+                            if isinstance(v, list) and v:
+                                route_obj = v[0]
+                                break
+                            if isinstance(v, dict):
+                                route_obj = v
+                                break
+                if route_obj is None:
+                    for k, v in doc.items():
+                        nk = _normalize_prefix(str(k)) or str(k)
+                        if nk != prefix:
+                            continue
+                        if isinstance(v, list) and v:
+                            route_obj = v[0]
+                            break
+                        if isinstance(v, dict):
+                            route_obj = v
+                            break
+        else:
+            raise ValueError("unexpected_bgp_prefix_json_shape")
+
+        if isinstance(route_obj, dict):
+            route_present = True
+            observed_path = _route_as_path(route_obj)
+    except Exception as e:
+        parse_error = str(e)
+
+
+    observed_state = {
+        "norm_prefix": prefix,
+        "route_present": route_present,
+        "observed_as_path": observed_path,
+    }
+    evidence = {
+        "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+        "rc": rc,
+        "parse_error": parse_error,
+        "empty_first_doc": empty_first_doc,
+    }
+
+    return Observation(
+        kind="bgp_as_path",
+        data=observed_state,
+        evidence=dict(evidence, probe_ok=probe_ok),
+    )
+
+
 _COLLECT_HANDLERS = {
     "bgp_session_up": _collect_bgp_session_up,
+    "bgp_med_equals": _collect_bgp_med_equals,
+    "bgp_localpref_equals": _collect_bgp_localpref_equals,
+    "bgp_community": _collect_bgp_community,
+    "bgp_as_path": _collect_bgp_as_path,
 }
 
 
@@ -444,3 +900,76 @@ FRR_PROVIDER = NosProvider(
     state_profiles={},
     state_argv_allow=deferred_leg("state_argv_allow", "§4.5-d"),
 )
+
+
+# -------------------------
+# FRR route-attribute extractors (scope §2.0 MOVE; founder ruling B' on
+# F-45b-C3b-1)
+# -------------------------
+# Relocated byte-identical from cassian_engine. One-line re-import shims stand
+# at the engine sites so `cassian_engine.__dict__` still binds both names --
+# four CI-gated proofs outside the §14.4 whitelist read them there
+# (bgp_{as_path,community}_{eval_match,replay_determinism}_proof). Shims owed
+# removal at §4.5-c (BL-P2-4.5b-3, fourth family).
+
+def _route_communities(route_obj):
+    """Extract raw BGP community tokens from a vtysh route object:
+    route_obj['community'] {'list'|'string'} (preferred), else the per-path
+    paths[].community (the FRR per-path location). Returns a list of raw token
+    strings (possibly empty)."""
+    def _from_comm(comm):
+        if isinstance(comm, dict):
+            lst = comm.get("list")
+            if isinstance(lst, list) and lst:
+                return [str(x) for x in lst]
+            s = comm.get("string")
+            if isinstance(s, str) and s.strip():
+                return [tok for tok in s.split() if tok]
+        elif isinstance(comm, str) and comm.strip():
+            return [tok for tok in comm.split() if tok]
+        return []
+
+    if not isinstance(route_obj, dict):
+        return []
+    toks = _from_comm(route_obj.get("community"))
+    if toks:
+        return toks
+    paths = route_obj.get("paths")
+    if isinstance(paths, list):
+        for path in paths:
+            if isinstance(path, dict):
+                toks = _from_comm(path.get("community"))
+                if toks:
+                    return toks
+    return []
+
+
+def _route_as_path(route_obj):
+    """Extract the AS_PATH from a vtysh route object (`show ip bgp <prefix>
+    json`) as a canonical asplain, path-ordered, space-joined string. Read from
+    route_obj['aspath']['string'] (defensive top-level mirror) else the per-path
+    paths[].aspath.string (the FRR per-path location, real-capture confirmed).
+    Returns '' if absent. Order is preserved verbatim -- never sorted (AS_PATH is
+    order-significant)."""
+    def _from_aspath(asp):
+        if isinstance(asp, dict):
+            s = asp.get("string")
+            if isinstance(s, str) and s.strip():
+                return " ".join(tok for tok in s.split() if tok)
+        elif isinstance(asp, str) and asp.strip():
+            return " ".join(tok for tok in asp.split() if tok)
+        return ""
+
+    if not isinstance(route_obj, dict):
+        return ""
+    s = _from_aspath(route_obj.get("aspath"))
+    if s:
+        return s
+    paths = route_obj.get("paths")
+    if isinstance(paths, list):
+        for path in paths:
+            if isinstance(path, dict):
+                s = _from_aspath(path.get("aspath"))
+                if s:
+                    return s
+    return ""
