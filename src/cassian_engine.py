@@ -5499,109 +5499,62 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         if inv_type == "evpn_bgp_session_up":
             peer = str(t.get("peer") or "").strip()
-            cp = rt.exec(
-                lab,
-                src,
-                ["vtysh", "-c", "show bgp l2vpn evpn summary json"],
-                check=False,
-                capture_output=True,
-            )
-
-            if isinstance(cp, str):
-                out = cp
-                rc = None
-            else:
-                out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
-                if isinstance(out, (bytes, bytearray)):
-                    try:
-                        out = out.decode("utf-8", errors="replace")
-                    except Exception:
-                        out = str(out)
-                rc = getattr(cp, "returncode", None)
-
-            vtysh_ok = (rc in (0, None))
-
-            evidence_entries: list = []
-            parse_error: str = ""
-            present: bool = False
-
+            # Expectation derivation from topology fields stays CORE (design §5,
+            # the invariant side of the split); only NOS-output parsing moves.
+            peer_ips: set = set()
+            for link in (topo.get("links") or []):
+                endpoints = list(link.get("endpoints") or [])
+                if len(endpoints) != 2:
+                    continue
+                try:
+                    a_node, _a_if = str(endpoints[0]).split(":", 1)
+                    b_node, _b_if = str(endpoints[1]).split(":", 1)
+                except Exception:
+                    continue
+                if a_node == src and b_node == peer:
+                    ips = list(link.get("ipv4") or [])
+                    if len(ips) >= 2:
+                        try:
+                            peer_ips.add(str(ipaddress.ip_interface(ips[0]).ip))
+                        except Exception:
+                            pass
+                elif b_node == src and a_node == peer:
+                    ips = list(link.get("ipv4") or [])
+                    if len(ips) >= 2:
+                        try:
+                            peer_ips.add(str(ipaddress.ip_interface(ips[0]).ip))
+                        except Exception:
+                            pass
+            # Provider seam (REQ-45b-4).
             try:
-                doc = json.loads(str(out or "").strip()) if str(out or "").strip() else {}
-                peers = {}
-                if isinstance(doc, dict):
-                    peers = doc.get("peers", {})
-                    if not isinstance(peers, dict):
-                        peers = {}
-                else:
-                    raise ValueError("unexpected_evpn_bgp_summary_json_shape")
+                _obs = _nos_collect(
+                    rt, lab, src, _nos_ntype(src),
+                    ObservationRequest(
+                        kind="evpn_bgp_session_up",
+                        params={"peer": peer, "peer_ips": sorted(peer_ips)},
+                    ),
+                    "cmd_test invariant collection",
+                )
+            except NosCapabilityUnsupported as _unsup:
+                # Deny-by-default (B02 / founder ruling A on F-45b-C3-1).
+                return (
+                    False,
+                    False,
+                    {"peer": peer, "unsupported": True},
+                    {
+                        "cmd": "",
+                        "rc": None,
+                        "parse_error": _unsup.message,
+                        "reason": "unsupported_provider_capability",
+                        "node_type": _unsup.ntype,
+                    },
+                )
+            vtysh_ok = bool(_obs.evidence.get("probe_ok"))
+            observed_state = dict(_obs.data)
+            evidence = {k: v for k, v in _obs.evidence.items() if k != "probe_ok"}
 
-                peer_ips: set = set()
-                for link in (topo.get("links") or []):
-                    endpoints = list(link.get("endpoints") or [])
-                    if len(endpoints) != 2:
-                        continue
-                    try:
-                        a_node, _a_if = str(endpoints[0]).split(":", 1)
-                        b_node, _b_if = str(endpoints[1]).split(":", 1)
-                    except Exception:
-                        continue
-                    if a_node == src and b_node == peer:
-                        ips = list(link.get("ipv4") or [])
-                        if len(ips) >= 2:
-                            try:
-                                peer_ips.add(str(ipaddress.ip_interface(ips[0]).ip))
-                            except Exception:
-                                pass
-                    elif b_node == src and a_node == peer:
-                        ips = list(link.get("ipv4") or [])
-                        if len(ips) >= 2:
-                            try:
-                                peer_ips.add(str(ipaddress.ip_interface(ips[0]).ip))
-                            except Exception:
-                                pass
+            predicate_ok = bool(observed_state.get("present"))
 
-                for nbr_ip, pdata in peers.items():
-                    if not isinstance(pdata, dict):
-                        continue
-                    rec = {
-                        "neighbor": str(nbr_ip or "").strip(),
-                        "peerName": str(pdata.get("peerName") or "").strip(),
-                        "state": str(pdata.get("state") or "").strip(),
-                        "node": src,
-                    }
-                    evidence_entries.append(rec)
-                    if rec["state"].lower() != "established":
-                        continue
-                    if rec["peerName"] == peer:
-                        present = True
-                    elif rec["neighbor"] in peer_ips:
-                        present = True
-            except Exception as e:
-                parse_error = str(e)
-
-            evidence_entries = sorted(
-                evidence_entries,
-                key=lambda x: (
-                    str(x.get("neighbor") or ""),
-                    str(x.get("peerName") or ""),
-                    str(x.get("state") or ""),
-                    str(x.get("node") or ""),
-                ),
-            )
-
-            predicate_ok = bool(present)
-
-            observed_state = {
-                "peer": peer,
-                "present": present,
-                "neighbors": evidence_entries,
-            }
-            evidence = {
-                "cmd": "vtysh -c 'show bgp l2vpn evpn summary json'",
-                "rc": rc,
-                "parse_error": parse_error,
-                "neighbors": evidence_entries,
-            }
             return vtysh_ok, predicate_ok, observed_state, evidence
 
         if inv_type in ("route_present", "route_absent"):
@@ -5677,138 +5630,34 @@ def cmd_test(args: argparse.Namespace) -> None:
         if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent", "evpn_vni_route_present"):
             mac = str(t.get("_mac") or "").strip().lower()
             vni_i = t.get("_vni_i")
-            cp = rt.exec(
-                lab,
-                src,
-                ["vtysh", "-c", "show bgp l2vpn evpn route json"],
-                check=False,
-                capture_output=True,
-            )
-
-            if isinstance(cp, str):
-                out = cp
-                rc = None
-            else:
-                out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
-                if isinstance(out, (bytes, bytearray)):
-                    try:
-                        out = out.decode("utf-8", errors="replace")
-                    except Exception:
-                        out = str(out)
-                rc = getattr(cp, "returncode", None)
-
-            vtysh_ok = (rc in (0, None))
-
-            raw = str(out or "").strip()
-            evidence_entries: list = []
-            present = False
-            parse_error = ""
-
-            def _append_entry(mac_val, vni_val, state_val):
-                nonlocal present
-                rec = {
-                    "mac": str(mac_val or "").strip().lower(),
-                    "vni": vni_val,
-                    "route_type": state_val,
-                    "node": src,
-                }
-                if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent") and not rec["mac"]:
-                    return
-                evidence_entries.append(rec)
-                if inv_type == "evpn_vni_route_present":
-                    if rec["vni"] == vni_i:
-                        present = True
-                else:
-                    if rec["mac"] == mac and rec["vni"] == vni_i:
-                        if state_val is None or str(state_val).lower() in ("2", "2-evpn", "macip", "type2"):
-                            present = True
-
+            # Provider seam (REQ-45b-4): the parse filters by observation kind,
+            # which the request carries.
             try:
-                doc = json.loads(raw) if raw else {}
-                seen = set()
+                _obs = _nos_collect(
+                    rt, lab, src, _nos_ntype(src),
+                    ObservationRequest(kind=inv_type, params={"mac": mac, "vni_i": vni_i}),
+                    "cmd_test invariant collection",
+                )
+            except NosCapabilityUnsupported as _unsup:
+                # Deny-by-default (B02 / founder ruling A on F-45b-C3-1).
+                return (
+                    False,
+                    False,
+                    {"mac": mac, "vni_i": vni_i, "unsupported": True},
+                    {
+                        "cmd": "",
+                        "rc": None,
+                        "parse_error": _unsup.message,
+                        "reason": "unsupported_provider_capability",
+                        "node_type": _unsup.ntype,
+                    },
+                )
+            vtysh_ok = bool(_obs.evidence.get("probe_ok"))
+            observed_state = dict(_obs.data)
+            evidence = {k: v for k, v in _obs.evidence.items() if k != "probe_ok"}
 
-                if isinstance(doc, dict):
-                    for rd_key, rd_val in doc.items():
-                        if rd_key in ("numPrefix", "numPaths"):
-                            continue
-                        if not isinstance(rd_val, dict):
-                            continue
+            predicate_ok = bool(observed_state.get("present"))
 
-                        vni_ctx = None
-                        m_rt = re.search(r"RT:\d+:(\d+)", json.dumps(rd_val), flags=re.IGNORECASE)
-                        if m_rt:
-                            try:
-                                vni_ctx = int(m_rt.group(1))
-                            except Exception:
-                                vni_ctx = None
-
-                        for prefix_key, prefix_val in rd_val.items():
-                            if prefix_key == "rd":
-                                continue
-                            if not isinstance(prefix_val, dict):
-                                continue
-                            for path_group in list(prefix_val.get("paths") or []):
-                                if not isinstance(path_group, list):
-                                    continue
-                                for entry in path_group:
-                                    if not isinstance(entry, dict):
-                                        continue
-
-                                    mac_val = None
-                                    for key in ("mac", "macAddr", "macaddr"):
-                                        val = entry.get(key)
-                                        if isinstance(val, str) and val.strip():
-                                            mac_val = val.strip().lower()
-                                            break
-
-                                    vni_val = None
-                                    for key in ("vni",):
-                                        val = entry.get(key)
-                                        if val is None or str(val).strip() == "":
-                                            continue
-                                        try:
-                                            vni_val = int(val)
-                                            break
-                                        except Exception:
-                                            continue
-                                    if vni_val is None:
-                                        vni_val = vni_ctx
-
-                                    state_val = entry.get("routeType")
-                                    if state_val is None:
-                                        state_val = entry.get("type")
-                                    if isinstance(state_val, str):
-                                        state_val = state_val.strip()
-
-                                    if inv_type == "evpn_vni_route_present" and vni_val is None:
-                                        continue
-                                    if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent") and not mac_val:
-                                        continue
-
-                                    sig = (mac_val, vni_val, state_val, src)
-                                    if sig in seen:
-                                        continue
-                                    seen.add(sig)
-                                    _append_entry(mac_val, vni_val, state_val)
-                else:
-                    raise ValueError("unexpected_evpn_json_shape")
-
-            except Exception as e:
-                parse_error = str(e)
-
-            predicate_ok = bool(present)
-
-            observed_state = {
-                "mac": mac,
-                "vni_i": vni_i,
-                "present": present,
-                "evidence_entries": evidence_entries,
-            }
-            evidence = {
-                "cmd": "vtysh -c 'show bgp l2vpn evpn route json'",
-                "rc": rc,
-                "parse_error": parse_error,
-            }
             return vtysh_ok, predicate_ok, observed_state, evidence
 
         if inv_type in ("route_advertised_to", "route_not_advertised_to"):

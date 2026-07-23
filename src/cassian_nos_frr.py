@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import re
 from typing import TYPE_CHECKING, Any
 
 # Justified `cassian_common` leg (REQ-45b-17): the ruled acyclic floor
@@ -948,6 +949,248 @@ def _collect_advertised_routes(rt, lab, node, req: ObservationRequest) -> Observ
     )
 
 
+
+
+# -------------------------
+# EVPN-family collection handlers (WI-C3d, REQ-45b-4)
+# -------------------------
+
+
+def _collect_evpn_bgp_summary(rt, lab, node, req: ObservationRequest) -> Observation:
+    """Probe + normalize FRR EVPN state for evpn_bgp_session_up."""
+    _peer_ips = set(req.params.get("peer_ips") or [])
+    # Expectation set derived CORE-side from topology fields (design §5:
+    # expectation-derivation is the invariant side and stays core); the
+    # provider only parses NOS output and matches against it.
+    peer = str(req.params.get("peer") or "").strip()
+    cp = rt.exec(
+        lab,
+        node,
+        ["vtysh", "-c", "show bgp l2vpn evpn summary json"],
+        check=False,
+        capture_output=True,
+    )
+
+    if isinstance(cp, str):
+        out = cp
+        rc = None
+    else:
+        out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
+        if isinstance(out, (bytes, bytearray)):
+            try:
+                out = out.decode("utf-8", errors="replace")
+            except Exception:
+                out = str(out)
+        rc = getattr(cp, "returncode", None)
+
+    probe_ok = (rc in (0, None))
+
+    evidence_entries: list = []
+    parse_error: str = ""
+    present: bool = False
+
+    try:
+        doc = json.loads(str(out or "").strip()) if str(out or "").strip() else {}
+        peers = {}
+        if isinstance(doc, dict):
+            peers = doc.get("peers", {})
+            if not isinstance(peers, dict):
+                peers = {}
+        else:
+            raise ValueError("unexpected_evpn_bgp_summary_json_shape")
+
+        for nbr_ip, pdata in peers.items():
+            if not isinstance(pdata, dict):
+                continue
+            rec = {
+                "neighbor": str(nbr_ip or "").strip(),
+                "peerName": str(pdata.get("peerName") or "").strip(),
+                "state": str(pdata.get("state") or "").strip(),
+                "node": node,
+            }
+            evidence_entries.append(rec)
+            if rec["state"].lower() != "established":
+                continue
+            if rec["peerName"] == peer:
+                present = True
+            elif rec["neighbor"] in _peer_ips:
+                present = True
+    except Exception as e:
+        parse_error = str(e)
+
+    evidence_entries = sorted(
+        evidence_entries,
+        key=lambda x: (
+            str(x.get("neighbor") or ""),
+            str(x.get("peerName") or ""),
+            str(x.get("state") or ""),
+            str(x.get("node") or ""),
+        ),
+    )
+
+
+    observed_state = {
+        "peer": peer,
+        "present": present,
+        "neighbors": evidence_entries,
+    }
+    evidence = {
+        "cmd": "vtysh -c 'show bgp l2vpn evpn summary json'",
+        "rc": rc,
+        "parse_error": parse_error,
+        "neighbors": evidence_entries,
+    }
+
+    return Observation(
+        kind=req.kind,
+        data=observed_state,
+        evidence=dict(evidence, probe_ok=probe_ok),
+    )
+
+
+def _collect_evpn_routes(rt, lab, node, req: ObservationRequest) -> Observation:
+    """Probe + normalize FRR EVPN state for evpn_mac_route_present, evpn_mac_route_absent, evpn_vni_route_present."""
+    mac = str(req.params.get("mac") or "").strip().lower()
+    vni_i = req.params.get("vni_i")
+    cp = rt.exec(
+        lab,
+        node,
+        ["vtysh", "-c", "show bgp l2vpn evpn route json"],
+        check=False,
+        capture_output=True,
+    )
+
+    if isinstance(cp, str):
+        out = cp
+        rc = None
+    else:
+        out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
+        if isinstance(out, (bytes, bytearray)):
+            try:
+                out = out.decode("utf-8", errors="replace")
+            except Exception:
+                out = str(out)
+        rc = getattr(cp, "returncode", None)
+
+    probe_ok = (rc in (0, None))
+
+    raw = str(out or "").strip()
+    evidence_entries: list = []
+    present = False
+    parse_error = ""
+
+    def _append_entry(mac_val, vni_val, state_val):
+        nonlocal present
+        rec = {
+            "mac": str(mac_val or "").strip().lower(),
+            "vni": vni_val,
+            "route_type": state_val,
+            "node": node,
+        }
+        if req.kind in ("evpn_mac_route_present", "evpn_mac_route_absent") and not rec["mac"]:
+            return
+        evidence_entries.append(rec)
+        if req.kind == "evpn_vni_route_present":
+            if rec["vni"] == vni_i:
+                present = True
+        else:
+            if rec["mac"] == mac and rec["vni"] == vni_i:
+                if state_val is None or str(state_val).lower() in ("2", "2-evpn", "macip", "type2"):
+                    present = True
+
+    try:
+        doc = json.loads(raw) if raw else {}
+        seen = set()
+
+        if isinstance(doc, dict):
+            for rd_key, rd_val in doc.items():
+                if rd_key in ("numPrefix", "numPaths"):
+                    continue
+                if not isinstance(rd_val, dict):
+                    continue
+
+                vni_ctx = None
+                m_rt = re.search(r"RT:\d+:(\d+)", json.dumps(rd_val), flags=re.IGNORECASE)
+                if m_rt:
+                    try:
+                        vni_ctx = int(m_rt.group(1))
+                    except Exception:
+                        vni_ctx = None
+
+                for prefix_key, prefix_val in rd_val.items():
+                    if prefix_key == "rd":
+                        continue
+                    if not isinstance(prefix_val, dict):
+                        continue
+                    for path_group in list(prefix_val.get("paths") or []):
+                        if not isinstance(path_group, list):
+                            continue
+                        for entry in path_group:
+                            if not isinstance(entry, dict):
+                                continue
+
+                            mac_val = None
+                            for key in ("mac", "macAddr", "macaddr"):
+                                val = entry.get(key)
+                                if isinstance(val, str) and val.strip():
+                                    mac_val = val.strip().lower()
+                                    break
+
+                            vni_val = None
+                            for key in ("vni",):
+                                val = entry.get(key)
+                                if val is None or str(val).strip() == "":
+                                    continue
+                                try:
+                                    vni_val = int(val)
+                                    break
+                                except Exception:
+                                    continue
+                            if vni_val is None:
+                                vni_val = vni_ctx
+
+                            state_val = entry.get("routeType")
+                            if state_val is None:
+                                state_val = entry.get("type")
+                            if isinstance(state_val, str):
+                                state_val = state_val.strip()
+
+                            if req.kind == "evpn_vni_route_present" and vni_val is None:
+                                continue
+                            if req.kind in ("evpn_mac_route_present", "evpn_mac_route_absent") and not mac_val:
+                                continue
+
+                            sig = (mac_val, vni_val, state_val, node)
+                            if sig in seen:
+                                continue
+                            seen.add(sig)
+                            _append_entry(mac_val, vni_val, state_val)
+        else:
+            raise ValueError("unexpected_evpn_json_shape")
+
+    except Exception as e:
+        parse_error = str(e)
+
+
+    observed_state = {
+        "mac": mac,
+        "vni_i": vni_i,
+        "present": present,
+        "evidence_entries": evidence_entries,
+    }
+    evidence = {
+        "cmd": "vtysh -c 'show bgp l2vpn evpn route json'",
+        "rc": rc,
+        "parse_error": parse_error,
+    }
+
+    return Observation(
+        kind=req.kind,
+        data=observed_state,
+        evidence=dict(evidence, probe_ok=probe_ok),
+    )
+
+
 _COLLECT_HANDLERS = {
     "bgp_session_up": _collect_bgp_session_up,
     "bgp_med_equals": _collect_bgp_med_equals,
@@ -958,6 +1201,10 @@ _COLLECT_HANDLERS = {
     "route_absent": _collect_route_prefix_table,
     "route_advertised_to": _collect_advertised_routes,
     "route_not_advertised_to": _collect_advertised_routes,
+    "evpn_bgp_session_up": _collect_evpn_bgp_summary,
+    "evpn_mac_route_present": _collect_evpn_routes,
+    "evpn_mac_route_absent": _collect_evpn_routes,
+    "evpn_vni_route_present": _collect_evpn_routes,
 }
 
 
