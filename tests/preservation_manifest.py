@@ -37,6 +37,9 @@ MODULE_ROSTER = frozenset({
     "src/cassian_engine.py",
     "src/cassian_import.py",
     "src/cassian_model.py",
+    # §4.5-b new modules (WI-B NOS provider structure); enforced (REQ-45b-13; LD-9).
+    "src/cassian_nos_frr.py",
+    "src/cassian_nos_types.py",
     "src/cassian_runtime_container.py",
     "src/cassian_runtime_vm.py",
     "src/cassian_state.py",
