@@ -4950,7 +4950,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 "attempts": attempts,
                 "retry_timeout_s": (retry_timeout_s if expected == "pass" else 0),
                 "retry_interval_s": (retry_interval_s if expected == "pass" else 0),
-                "last_rc": last_obs.evidence.get("returncode"),
+                "last_rc": getattr(last_cp, "returncode", None),
                 "src_ip": (str(src_ip).strip() if src_ip else ""),
                 "src_if": (str(src_if).strip() if src_if else ""),
             },
@@ -8769,7 +8769,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             "succeeded": bool(succeeded),
             "time_to_success_ms": (int(first_success_ms) if (expected == "pass") else None),
             "time_to_first_success_ms": (int(first_success_ms) if (expected == "fail" and succeeded) else None),
-            "last_rc": last_obs.evidence.get("returncode"),
+            "last_rc": getattr(last_cp, "returncode", None),
         }
 
         # Keep type-specific info inside meta

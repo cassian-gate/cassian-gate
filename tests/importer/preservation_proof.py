@@ -41,7 +41,7 @@ BASELINE = {
     "src/cassian_artifacts.py": "ae8a54302e4fa8fe2f89e3af0e1e16dcda0ff2ae7bc4a805b671f69029fbb04c",
     "src/cassian_candidate.py": "7775a062f27461fc76b1ae6c1e252550e30ecf3498412885e0a82e9fe02799ed",  # re-baselined from 93db9b61 (phase2 §4.5-b WI-D1 registry-derived candidate subdirs); orig 93db9b61
     "src/cassian_common.py": "0f5a326f3407811ba9afa8c449a15a9526e101a0ba258998b29bd633e48223bb",  # re-baselined from a0469a2a (phase2 §4.5-b WI-C1/C2 NOS-neutral re-homes + A-S6 provenance comment); orig a0469a2a
-    "src/cassian_engine.py": "362c9abc01287a4b8ec9fdc3010face653e4d28aace123a4704d5fb718133504",  # re-baselined from dec1f307 (phase2 §4.5-b WI-C1..C4b extraction + WI-D1/-E/-F (collect seam, status/collect dispatch, vty gate)); orig f3831817
+    "src/cassian_engine.py": "c9b536d4f5952c3b8bf7a475b57cd2783ba934ae90a47d61b062a246bfad2782",  # re-baselined from 362c9abc (phase2 §4.5-b WI-C3f1 forward-fix: restore the two collateral "last_rc" sites in run_ping_test and wait_for_predicate); orig f3831817
     "src/cassian_model.py": "5cd62d9dc44eea8e9a31dda6e157ea5f702b48b90df9a45ed0095a2dfae2ad5a",  # re-baselined from 84eca8d5 (phase2 §4.5-b WI-B registry + WI-D1 derivations + WI-D2 node_runtime_map homing); orig 4b9f01aa
     "src/cassian_nos_frr.py": "3c53970d87a18ea828f0bb9008f24c75b22fdf5dd3a45a7c45e0b72faedd7ff3",  # §4.5-b new module (WI-B NOS provider structure); enforced (REQ-45b-13; LD-9)
     "src/cassian_nos_types.py": "b4e4cec8e0532b3280db4c8f0480f1884336a273ee7690d8992eee087b362eb6",  # §4.5-b new module (WI-B NOS provider structure); enforced (REQ-45b-13; LD-9)
