@@ -24,6 +24,7 @@ from cassian_model import (
     adapt_ansible_rendered_dir,
     _compile_frr_as_path_regex,
     nos_provider_for,
+    NOS_PROVIDERS,
 )
 from cassian_nos_types import CAP_UNSUP, Observation, ObservationRequest, capability_for
 from cassian_tests import (
@@ -2803,63 +2804,6 @@ def cmd_collect(args: argparse.Namespace) -> None:
     def write(name: str, content: str) -> None:
         (outdir / name).write_text(content, encoding="utf-8")
 
-    def normalize_bgp_summary(text: str) -> str:
-        """
-        Deterministic BGP neighbor snapshot from `show bgp summary`.
-
-        We intentionally discard volatile counters/timers and keep only:
-        - neighbor address
-        - ASN (best-effort parse)
-        - state (Established vs Idle/Active/etc.)
-
-        Output format (one per neighbor):
-          <NEIGHBOR> AS=<ASN or ?> STATE=<STATE>
-        """
-        lines = (text or "").splitlines()
-        out: list[str] = []
-        in_table = False
-
-        for line in lines:
-            # Detect the table header
-            if ("Neighbor" in line) and ("Up/Down" in line):
-                in_table = True
-                out.append(line.rstrip())
-                continue
-
-            if not in_table:
-                # Keep pre-table lines as-is (usually stable)
-                out.append(line.rstrip())
-                continue
-
-            if not line.strip():
-                out.append("")
-                continue
-
-            parts = line.split()
-            if len(parts) < 2:
-                out.append(line.rstrip())
-                continue
-
-            nbr = parts[0]
-            # Neighbor column must look like an IP (v4/v6) to be a row
-            if not re.match(r"^[0-9A-Fa-f:.]+$", nbr):
-                out.append(line.rstrip())
-                continue
-
-            # Heuristic: AS is the first integer token shortly after the neighbor/V columns
-            asn: str | None = None
-            for tok in parts[1:6]:
-                if tok.isdigit():
-                    asn = tok
-                    break
-
-            # Last token often is State/PfxRcd. If it's numeric => Established.
-            last = parts[-1]
-            state = "Established" if last.isdigit() else last
-
-            out.append(f"{nbr} AS={asn or '?'} STATE={state}")
-
-        return "\n".join(out).rstrip() + "\n"
 
     def scrub_containerlab_inspect_json(raw: str) -> str:
         """
@@ -2945,9 +2889,14 @@ def cmd_collect(args: argparse.Namespace) -> None:
             cp = rt.sh(lab, name, "sysctl -n net.ipv4.ip_forward", check=False, capture_output=True)
             write(f"{name}.ip-forward.txt", (cp.stdout or cp.stderr or "").strip() + "\n")
 
-        if n.get("type") == "frr":
-            cp = rt.exec(lab, name, ["vtysh", "-c", "show bgp summary"], check=False, capture_output=True)
-            write(f"{name}.bgp-summary.txt", normalize_bgp_summary(cp.stdout or cp.stderr or ""))
+        # Provider-dispatched artifact targets (REQ-45b-6). The 4 sh sites above
+        # are NOS-agnostic and stay core; artifact mechanics (name, path, write)
+        # stay core here -- the provider supplies content only.
+        _ntype = str(n.get("type") or "").strip().lower()
+        if _ntype in NOS_PROVIDERS:
+            for _target in NOS_PROVIDERS[_ntype].collect_targets:
+                _sobs = _target.run(rt, lab, name)
+                write(f"{name}.{_target.artifact_name}", _sobs.stdout)
 
         if include_logs:
             # Runtime should own log collection in future; keep docker-less for now.

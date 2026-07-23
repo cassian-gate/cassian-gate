@@ -61,9 +61,11 @@ from cassian_common import (
 from cassian_nos_types import (
     CandidateSpec,
     CapabilityDisposition,
+    CollectTarget,
     NosProvider,
     Observation,
     ObservationRequest,
+    StatusObservation,
     deferred_leg,
     impl,
 )
@@ -1436,6 +1438,96 @@ _FRR_CAPABILITIES: dict[str, CapabilityDisposition] = {
 }
 
 
+
+# -------------------------
+# `cassian collect` artifact targets (WI-C4a, REQ-45b-6 / A-H5-A-S5)
+# -------------------------
+# The FRR text-table normalizer relocates here byte-identically from its nested
+# definition in cmd_collect (census-invisible, stdlib-self-contained). Artifact
+# mechanics -- output paths, writing, recording -- stay core; the provider
+# supplies only the artifact's content.
+
+def normalize_bgp_summary(text: str) -> str:
+    """
+    Deterministic BGP neighbor snapshot from `show bgp summary`.
+
+    We intentionally discard volatile counters/timers and keep only:
+    - neighbor address
+    - ASN (best-effort parse)
+    - state (Established vs Idle/Active/etc.)
+
+    Output format (one per neighbor):
+      <NEIGHBOR> AS=<ASN or ?> STATE=<STATE>
+    """
+    lines = (text or "").splitlines()
+    out: list[str] = []
+    in_table = False
+
+    for line in lines:
+        # Detect the table header
+        if ("Neighbor" in line) and ("Up/Down" in line):
+            in_table = True
+            out.append(line.rstrip())
+            continue
+
+        if not in_table:
+            # Keep pre-table lines as-is (usually stable)
+            out.append(line.rstrip())
+            continue
+
+        if not line.strip():
+            out.append("")
+            continue
+
+        parts = line.split()
+        if len(parts) < 2:
+            out.append(line.rstrip())
+            continue
+
+        nbr = parts[0]
+        # Neighbor column must look like an IP (v4/v6) to be a row
+        if not re.match(r"^[0-9A-Fa-f:.]+$", nbr):
+            out.append(line.rstrip())
+            continue
+
+        # Heuristic: AS is the first integer token shortly after the neighbor/V columns
+        asn: str | None = None
+        for tok in parts[1:6]:
+            if tok.isdigit():
+                asn = tok
+                break
+
+        # Last token often is State/PfxRcd. If it's numeric => Established.
+        last = parts[-1]
+        state = "Established" if last.isdigit() else last
+
+        out.append(f"{nbr} AS={asn or '?'} STATE={state}")
+
+    return "\n".join(out).rstrip() + "\n"
+
+
+def _collect_bgp_summary_artifact(rt, lab, node) -> StatusObservation:
+    """Content probe for `<node>.bgp-summary.txt`.
+
+    Reproduces cmd_collect's shipped call exactly: one `show bgp summary` with
+    check=False / capture_output=True, then the relocated normalizer over
+    `stdout or stderr or ""`. `stdout` carries the finished artifact content;
+    core writes it.
+    """
+    cp = rt.exec(lab, node, ["vtysh", "-c", "show bgp summary"], check=False, capture_output=True)
+    return StatusObservation(
+        returncode=getattr(cp, "returncode", None),
+        stdout=normalize_bgp_summary(cp.stdout or cp.stderr or ""),
+        stderr="",
+        evidence={"cmd": "vtysh -c 'show bgp summary'"},
+    )
+
+
+FRR_COLLECT_TARGETS = (
+    CollectTarget(artifact_name="bgp-summary.txt", run=_collect_bgp_summary_artifact),
+)
+
+
 FRR_PROVIDER = NosProvider(
     node_type=FRR_NODE_TYPE,
     default_image=FRR_DEFAULT_IMAGE,
@@ -1463,7 +1555,7 @@ FRR_PROVIDER = NosProvider(
     status_routes=deferred_leg(
         "status_routes", "§4.5-b (this handover's status WI)"
     ),
-    collect_targets=(),  # filled by this handover's collect WI (B04)
+    collect_targets=FRR_COLLECT_TARGETS,
     doctor_checks=deferred_leg("doctor_checks", "post-§4.5-b (unassigned)"),
     # -- bounded per-type rules: deferred; decision sites stay inline --
     exec_command_rule=deferred_leg("exec_command_rule", "§4.5-d (LD-45b-6)"),
