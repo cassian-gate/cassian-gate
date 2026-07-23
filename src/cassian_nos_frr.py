@@ -1528,6 +1528,77 @@ FRR_COLLECT_TARGETS = (
 )
 
 
+
+# -------------------------
+# Operational status legs (WI-C4b, REQ-45b-5 / B03)
+# -------------------------
+# `_node_exec` mirrors cmd_status's nested helper exactly (rt.exec with
+# check=False/capture_output=True, bytes-decoded, stripped) so the probe
+# sequence and the strings fed to the parsers are unchanged.
+#
+# Probe sequence is preserved per mode, including the shipped double-fetch that
+# text-mode + want_raw performs (json, text, text again). The routes block does
+# NOT double-fetch -- it derives raw text from data already returned -- and that
+# asymmetry is preserved as-is (REQ-45b-P2: a delta is a HALT, never a
+# fix-in-place). Recorded as a finding for later deliberate repair.
+
+
+def _node_exec(rt, lab, node, cmd: list) -> str:
+    cp = rt.exec(lab, node, cmd, check=False, capture_output=True)
+    out = cp.stdout.decode("utf-8", errors="replace") if isinstance(cp.stdout, bytes) else cp.stdout
+    return (out or "").strip()
+
+
+def _status_bgp_summary(rt, lab, node, want_raw: bool = False) -> StatusObservation:
+    """BGP summary status leg. `want_raw` is the ratified §3.3 extension."""
+    out_json = _node_exec(rt, lab, node, ["vtysh", "-c", "show bgp summary json"])
+    observed = parse_frr_bgp_summary_neighbors_json(out_json)
+    if observed:
+        parser_mode = "json"
+    else:
+        out_text = _node_exec(rt, lab, node, ["vtysh", "-c", "show bgp summary"])
+        observed = parse_frr_bgp_summary_neighbors(out_text)
+        parser_mode = "text"
+
+    raw_text = None
+    if want_raw:
+        raw_text = _node_exec(rt, lab, node, ["vtysh", "-c", "show bgp summary"])
+
+    return StatusObservation(
+        returncode=None,
+        stdout="",
+        stderr="",
+        data={"observed": observed, "parser_mode": parser_mode, "raw_text": raw_text},
+        evidence={"cmd": "vtysh -c 'show bgp summary json'"},
+    )
+
+
+def _status_routes(rt, lab, node) -> StatusObservation:
+    """Route-table status leg. Signature per design §3.3, unextended."""
+    rt_json = _node_exec(rt, lab, node, ["vtysh", "-c", "show ip route json"])
+    observed = parse_frr_show_ip_route_prefixes_json(rt_json)
+    rt_text = ""
+    if observed:
+        parser_mode = "json"
+    else:
+        rt_text = _node_exec(rt, lab, node, ["vtysh", "-c", "show ip route"])
+        observed = parse_frr_show_ip_route_prefixes(rt_text)
+        parser_mode = "text"
+
+    return StatusObservation(
+        returncode=None,
+        stdout="",
+        stderr="",
+        data={
+            "observed": observed,
+            "parser_mode": parser_mode,
+            "rt_text": rt_text,
+            "rt_json": rt_json,
+        },
+        evidence={"cmd": "vtysh -c 'show ip route json'"},
+    )
+
+
 FRR_PROVIDER = NosProvider(
     node_type=FRR_NODE_TYPE,
     default_image=FRR_DEFAULT_IMAGE,
@@ -1549,12 +1620,8 @@ FRR_PROVIDER = NosProvider(
         apply=deferred_leg("candidate.apply", "BL-P2-4.5b-2 destination"),
     ),
     # -- operational legs: wired by this handover's status/collect WIs --
-    status_bgp_summary=deferred_leg(
-        "status_bgp_summary", "§4.5-b (this handover's status WI)"
-    ),
-    status_routes=deferred_leg(
-        "status_routes", "§4.5-b (this handover's status WI)"
-    ),
+    status_bgp_summary=_status_bgp_summary,
+    status_routes=_status_routes,
     collect_targets=FRR_COLLECT_TARGETS,
     doctor_checks=deferred_leg("doctor_checks", "post-§4.5-b (unassigned)"),
     # -- bounded per-type rules: deferred; decision sites stay inline --

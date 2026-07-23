@@ -127,6 +127,7 @@ class StatusObservation:
     returncode: int
     stdout: str
     stderr: str
+    data: Mapping[str, Any] = field(default_factory=dict)
     evidence: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -203,7 +204,12 @@ class NosProvider:
     candidate: "CandidateSpec | None"
 
     # ---- operational ----
-    status_bgp_summary: "Callable[[Runtime, str, str], StatusObservation] | None"
+    # `status_bgp_summary` carries a defaulted `want_raw` beyond design §3.3's
+    # (rt, lab, node) signature: the raw-text variant is a caller-varying probe
+    # and the unextended form cannot reproduce the shipped per-mode probe
+    # sequence (founder ruling on F-45b-C4-1). `status_routes` is unchanged --
+    # it derives its raw text from data the leg already returns.
+    status_bgp_summary: "Callable[[Runtime, str, str, bool], StatusObservation] | None"
     status_routes: "Callable[[Runtime, str, str], StatusObservation] | None"
     collect_targets: tuple[CollectTarget, ...]
     doctor_checks: Callable[[], "list[tuple[str, bool, str]]"]

@@ -62,10 +62,6 @@ from cassian_runtime_container import (
     compare_expected_vs_observed_prefixes,
 )
 from cassian_tests import (
-    parse_frr_show_ip_route_prefixes,
-    parse_frr_bgp_summary_neighbors,
-    parse_frr_bgp_summary_neighbors_json,
-    parse_frr_show_ip_route_prefixes_json,
     compare_expected_vs_observed_bgp,
     verify_fw_routed_ready,
     derive_expected_bgp_neighbors_from_links,
@@ -2508,14 +2504,12 @@ def cmd_status(args: argparse.Namespace) -> None:
             }
 
             try:
-                out_json = _node_exec(name, ["vtysh", "-c", "show bgp summary json"])
-                observed = parse_frr_bgp_summary_neighbors_json(out_json)
-                if observed:
-                    bgp_rec["parser_mode"] = "json"
-                else:
-                    out_text = _node_exec(name, ["vtysh", "-c", "show bgp summary"])
-                    observed = parse_frr_bgp_summary_neighbors(out_text)
-                    bgp_rec["parser_mode"] = "text"
+                # Provider seam (REQ-45b-5 / B03): probes and FRR parsing are
+                # provider-side; comparison, records and verdicts stay core.
+                _p = nos_provider_for(_nos_ntype(topo, name), "cmd_status bgp summary")
+                _sobs = _p.status_bgp_summary(rt, lab, name, bool(bgp_verbose and not as_json))
+                observed = _sobs.data.get("observed") or {}
+                bgp_rec["parser_mode"] = _sobs.data.get("parser_mode") or "none"
 
                 cmp = compare_expected_vs_observed_bgp(expected, observed)
                 bgp_rec.update(cmp)
@@ -2526,7 +2520,7 @@ def cmd_status(args: argparse.Namespace) -> None:
                     exp_established_peers += len(cmp["established"])
 
                 if bgp_verbose and not as_json:
-                    bgp_rec["raw_text"] = _node_exec(name, ["vtysh", "-c", "show bgp summary"])
+                    bgp_rec["raw_text"] = _sobs.data.get("raw_text")
 
                 if strict and expected and not bgp_rec["ok"]:
                     strict_fail = True
@@ -2555,15 +2549,13 @@ def cmd_status(args: argparse.Namespace) -> None:
             }
 
             try:
-                rt_json = _node_exec(name, ["vtysh", "-c", "show ip route json"])
-                observed = parse_frr_show_ip_route_prefixes_json(rt_json)
-                rt_text = ""
-                if observed:
-                    routes_rec["parser_mode"] = "json"
-                else:
-                    rt_text = _node_exec(name, ["vtysh", "-c", "show ip route"])
-                    observed = parse_frr_show_ip_route_prefixes(rt_text)
-                    routes_rec["parser_mode"] = "text"
+                # Provider seam (REQ-45b-5 / B03).
+                _p = nos_provider_for(_nos_ntype(topo, name), "cmd_status routes")
+                _robs = _p.status_routes(rt, lab, name)
+                observed = _robs.data.get("observed") or set()
+                rt_json = _robs.data.get("rt_json") or ""
+                rt_text = _robs.data.get("rt_text") or ""
+                routes_rec["parser_mode"] = _robs.data.get("parser_mode") or "none"
 
                 cmp = compare_expected_vs_observed_prefixes(expected_routes, observed)
                 routes_rec.update(cmp)
