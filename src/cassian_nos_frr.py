@@ -56,6 +56,8 @@ from cassian_nos_types import (
     CandidateSpec,
     CapabilityDisposition,
     NosProvider,
+    Observation,
+    ObservationRequest,
     deferred_leg,
     impl,
 )
@@ -261,6 +263,115 @@ def parse_frr_bgp_summary_neighbors(out: str) -> dict[str, dict[str, Any]]:
 
     return obs
 
+
+# -------------------------
+# Observation collection seam (REQ-45b-4, B02)
+# -------------------------
+# `collect` is the ONE seam invariants/tests use to read FRR state. Each
+# handler probes the NOS and normalizes its output into a core-owned
+# `Observation`; none of them decides pass/fail (design §5). `data` carries
+# the normalized payload core renders as `observed_state`; `evidence` carries
+# the command, diagnostics, and the probe outcome (`probe_ok` -- NOS-neutral
+# field name for what core's retry loops read as `vtysh_ok`).
+#
+# Ordering note (verified, §4.5-b): `observed_state`/`evidence` key ORDER is
+# not observable -- `write_json_canonical` serializes with sort_keys=True
+# (frozen policy) and `_format_observed_state_block` iterates
+# sorted(observed_state.keys()). Key sets and values are what must be
+# preserved byte-for-byte (REQ-45b-P2).
+
+
+def _collect_bgp_session_up(rt, lab, node, req: ObservationRequest) -> Observation:
+    """Probe + normalize FRR BGP summary for one declared neighbor."""
+    neighbor = str(req.params.get("neighbor") or "").strip()
+    cp = rt.exec(lab, node, ["vtysh", "-c", "show bgp summary json"], check=False)
+    probe_ok = (getattr(cp, "returncode", 1) == 0)
+    out = (cp.stdout or "") if hasattr(cp, "stdout") else ""
+
+    observed_state_str: str = "Unknown"
+    last_error: str = ""
+    parse_error: str = ""
+    peer_present: bool = False
+
+    if probe_ok:
+        try:
+            data = json.loads(out or "{}")
+            peers = None
+            top_peers = data.get("peers")
+            if isinstance(top_peers, dict):
+                peers = top_peers
+            else:
+                v4u = data.get("ipv4Unicast")
+                if isinstance(v4u, dict):
+                    inner = v4u.get("peers")
+                    if isinstance(inner, dict):
+                        peers = inner
+            if peers is None:
+                for _, v in sorted(data.items()):
+                    if isinstance(v, dict):
+                        inner = v.get("peers")
+                        if isinstance(inner, dict):
+                            peers = inner
+                            break
+            if isinstance(peers, dict):
+                p = peers.get(neighbor)
+                if isinstance(p, dict):
+                    peer_present = True
+                    raw_state = p.get("state") or p.get("bgpState") or p.get("peerState")
+                    if raw_state:
+                        observed_state_str = str(raw_state)
+                    reset_reason = p.get("lastResetReason")
+                    if reset_reason:
+                        last_error = str(reset_reason)
+                else:
+                    observed_state_str = "NotConfigured"
+                    last_error = "neighbor not present in summary"
+                    parse_error = "neighbor not present in summary"
+            else:
+                observed_state_str = "Unknown"
+                last_error = "peers not found in summary"
+                parse_error = "peers not found in summary"
+        except Exception:
+            observed_state_str = "Unknown"
+            last_error = "vtysh output not parseable as JSON"
+            parse_error = "vtysh output not parseable as JSON"
+    else:
+        observed_state_str = "Unknown"
+        last_error = "vtysh command failed"
+        parse_error = "vtysh command failed"
+
+    return Observation(
+        kind="bgp_session_up",
+        data={
+            "peer_present": peer_present,
+            "state": observed_state_str,
+            "last_error": last_error,
+        },
+        evidence={
+            "cmd": "vtysh -c 'show bgp summary json'",
+            "parse_error": parse_error,
+            "returncode": getattr(cp, "returncode", None),
+            "probe_ok": probe_ok,
+        },
+    )
+
+
+# Kind -> handler. Migrated incrementally through §4.5-b WI-C3a..C3f; a kind
+# absent here is not yet routed through the seam and still runs its
+# pre-existing inline core path (not a second seam -- an unmigrated one).
+_COLLECT_HANDLERS = {
+    "bgp_session_up": _collect_bgp_session_up,
+}
+
+
+def collect(rt, lab, node, req: ObservationRequest) -> Observation:
+    """The single provider-side collection entry (REQ-45b-4)."""
+    handler = _COLLECT_HANDLERS.get(req.kind)
+    if handler is None:
+        return deferred_leg(f"collect:{req.kind}", "§4.5-b WI-C3b..C3f")()
+    return handler(rt, lab, node, req)
+
+
 FRR_NODE_TYPE = "frr"
 
 # REQ-45b-11 single source: the model's effective-image default for frr
@@ -310,7 +421,7 @@ FRR_PROVIDER = NosProvider(
     nos_ready=deferred_leg("nos_ready", "§4.5-d/-f"),
     convergence_wait=deferred_leg("convergence_wait", "§4.5-d/-f"),
     # -- validation seam: wired by this handover's extraction WI --
-    collect=deferred_leg("collect", "§4.5-b (this handover's extraction WI)"),
+    collect=collect,
     # -- change workflow: subdir/extensions ship (REQ-45b-8 derivation
     #    source); validate/apply legs are BL-P2-4.5b-2 NON-GOALs here --
     candidate=CandidateSpec(

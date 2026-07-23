@@ -23,7 +23,9 @@ from cassian_model import (
     adapt_terraform_plan_json,
     adapt_ansible_rendered_dir,
     _compile_frr_as_path_regex,
+    nos_provider_for,
 )
+from cassian_nos_types import CAP_UNSUP, Observation, ObservationRequest, capability_for
 from cassian_tests import (
     validate_scenarios,
     _preflight_default_out,
@@ -3426,6 +3428,37 @@ def _bgp_as_path_observed(pattern, observed_path):
     return "pass" if rx.search(observed_path or "") else "fail"
 
 
+class NosCapabilityUnsupported(Exception):
+    """Raised when a provider does not declare the requested observation kind.
+
+    Deny-by-default (design §3.4): the caller turns this into a deterministic
+    UNSUP-fail record in results -- never silence, never an implicit pass
+    (Doctrine §1.11).
+    """
+
+    def __init__(self, ntype: str, kind: str, message: str) -> None:
+        super().__init__(message)
+        self.ntype = ntype
+        self.kind = kind
+        self.message = message
+
+
+def _nos_collect(rt, lab, node, ntype, request, seam):
+    """The single core-side entry to provider observation collection.
+
+    Deny-by-default at two levels (B01/B02): an unregistered node type dies
+    with the §6.6 registry UNSUP; a registered provider that does not declare
+    the requested kind raises NosCapabilityUnsupported for the caller to
+    record as an explicit UNSUP-fail. Core never parses NOS output; the
+    provider never decides a verdict (design §5).
+    """
+    provider = nos_provider_for(ntype, seam)
+    disp = capability_for(provider, request.kind)
+    if disp.state == CAP_UNSUP:
+        raise NosCapabilityUnsupported(ntype, request.kind, disp.message or "")
+    return provider.collect(rt, lab, node, request)
+
+
 def cmd_test(args: argparse.Namespace) -> None:
     """
     v1 update (Section C): Scenarios wired into cmd_test (minimal invasive).
@@ -4057,6 +4090,17 @@ def cmd_test(args: argparse.Namespace) -> None:
 
     nodes = topo.get("nodes", []) or []
     nodes_by_name = {n["name"]: n for n in nodes}
+
+    def _nos_ntype(name: str) -> str:
+        """Resolve a node's type from the resolved topology, deterministically.
+
+        Same idiom as the pre-existing per-test lookup (run_route_prefix_test);
+        the resolved topology is the single source (DC §1 authoritative input).
+        """
+        for _n in (topo.get("nodes") or []):
+            if isinstance(_n, dict) and _n.get("name") == name:
+                return str(_n.get("type") or "").strip().lower()
+        return ""
 
     # Results artifact (written at end, even on failure if possible)
     results: dict = {
@@ -5467,75 +5511,47 @@ def cmd_test(args: argparse.Namespace) -> None:
         """
         if inv_type == "bgp_session_up":
             neighbor = str(t.get("dst") or "").strip()
-            cp = rt.exec(lab, src, ["vtysh", "-c", "show bgp summary json"], check=False)
-            vtysh_ok = (getattr(cp, "returncode", 1) == 0)
-            out = (cp.stdout or "") if hasattr(cp, "stdout") else ""
+            # Provider seam (REQ-45b-4): probe + FRR-JSON normalization live in
+            # the NOS provider; predicate evaluation, observed_state and the
+            # verdict stay core (design §5).
+            try:
+                _obs = _nos_collect(
+                    rt, lab, src, _nos_ntype(src),
+                    ObservationRequest(kind="bgp_session_up", params={"neighbor": neighbor}),
+                    "cmd_test invariant collection",
+                )
+            except NosCapabilityUnsupported as _unsup:
+                # Deny-by-default (B02 / design §3.4): a registered provider that
+                # does not declare this (kind, node-type) pair yields a
+                # deterministic UNSUP-fail record -- never silence (Doctrine
+                # §1.11), never an implicit pass. Ratified as a deliberate
+                # operator-visible delta alongside REQ-45b-7 (founder ruling,
+                # F-45b-C3-1); replaces the pre-extraction rendering, which
+                # reported a probe failure for what is a declaration error and
+                # so misrepresented intent (Doctrine §1.6).
+                return (
+                    False,
+                    False,
+                    {
+                        "peer_present": False,
+                        "state": "Unsupported",
+                        "last_error": _unsup.message,
+                    },
+                    {
+                        "cmd": "",
+                        "parse_error": _unsup.message,
+                        "returncode": None,
+                        "reason": "unsupported_provider_capability",
+                        "node_type": _unsup.ntype,
+                    },
+                )
+            vtysh_ok = bool(_obs.evidence.get("probe_ok"))
+            observed_state = dict(_obs.data)
+            evidence = {k: v for k, v in _obs.evidence.items() if k != "probe_ok"}
 
-            observed_state_str: str = "Unknown"
-            last_error: str = ""
-            parse_error: str = ""
-            peer_present: bool = False
+            st_norm = str(observed_state.get("state") or "").strip().lower()
+            predicate_ok = bool(observed_state.get("peer_present") and st_norm == "established")
 
-            if vtysh_ok:
-                try:
-                    data = json.loads(out or "{}")
-                    peers = None
-                    top_peers = data.get("peers")
-                    if isinstance(top_peers, dict):
-                        peers = top_peers
-                    else:
-                        v4u = data.get("ipv4Unicast")
-                        if isinstance(v4u, dict):
-                            inner = v4u.get("peers")
-                            if isinstance(inner, dict):
-                                peers = inner
-                    if peers is None:
-                        for _, v in sorted(data.items()):
-                            if isinstance(v, dict):
-                                inner = v.get("peers")
-                                if isinstance(inner, dict):
-                                    peers = inner
-                                    break
-                    if isinstance(peers, dict):
-                        p = peers.get(neighbor)
-                        if isinstance(p, dict):
-                            peer_present = True
-                            raw_state = p.get("state") or p.get("bgpState") or p.get("peerState")
-                            if raw_state:
-                                observed_state_str = str(raw_state)
-                            reset_reason = p.get("lastResetReason")
-                            if reset_reason:
-                                last_error = str(reset_reason)
-                        else:
-                            observed_state_str = "NotConfigured"
-                            last_error = "neighbor not present in summary"
-                            parse_error = "neighbor not present in summary"
-                    else:
-                        observed_state_str = "Unknown"
-                        last_error = "peers not found in summary"
-                        parse_error = "peers not found in summary"
-                except Exception:
-                    observed_state_str = "Unknown"
-                    last_error = "vtysh output not parseable as JSON"
-                    parse_error = "vtysh output not parseable as JSON"
-            else:
-                observed_state_str = "Unknown"
-                last_error = "vtysh command failed"
-                parse_error = "vtysh command failed"
-
-            st_norm = observed_state_str.strip().lower()
-            predicate_ok = bool(peer_present and st_norm == "established")
-
-            observed_state = {
-                "peer_present": peer_present,
-                "state": observed_state_str,
-                "last_error": last_error,
-            }
-            evidence = {
-                "cmd": "vtysh -c 'show bgp summary json'",
-                "parse_error": parse_error,
-                "returncode": getattr(cp, "returncode", None),
-            }
             return vtysh_ok, predicate_ok, observed_state, evidence
 
         if inv_type == "evpn_bgp_session_up":
