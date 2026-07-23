@@ -924,22 +924,7 @@ def write_containerlab_file(topo_path: Path) -> Path:
 # Runtime helpers
 # -------------------------
 
-def _normalize_prefix(cidr: str) -> str | None:
-    try:
-        # Accept inputs that may already be parsed (e.g., IPv4Network) by coercing to str.
-        if not isinstance(cidr, str):
-            cidr = str(cidr)
-
-        cidr = cidr.strip()
-        if not cidr:
-            return None
-
-        n = ipaddress.ip_network(cidr, strict=False)
-        if n.version != 4:
-            return None
-        return str(n)
-    except Exception:
-        return None
+from cassian_common import _normalize_prefix  # re-homed to cassian_common (§4.5-b A-H4); shim owed removal at §4.5-c (BL-P2-4.5b-3)
 
 def compare_expected_vs_observed_prefixes(expected: set[str], observed: set[str]) -> dict[str, Any]:
     missing = sorted([p for p in expected if p not in observed])

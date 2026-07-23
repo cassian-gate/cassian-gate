@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -23,6 +24,42 @@ DEFAULT_IMAGES = {
     "host": "alpine:latest",
     "nft-fw": "alpine:latest",
 }
+
+# -------------------------
+# NOS-neutral address helpers (Phase 2 §4.5-b re-homes)
+# -------------------------
+# Re-homed to the ruled acyclic floor (design §3.2: model -> provider ->
+# common) so the FRR provider can reach them without a provider->core import
+# (W10/B12). Behaviour byte-identical; one-line re-import shims stand at the
+# original sites and are owed removal at §4.5-c (BL-P2-4.5b-3).
+
+# `_normalize_prefix`: re-homed from cassian_runtime_container:927 (A-H4/A-S4)
+# -- NOS-neutral, census-invisible, dual-consumed by STAYS-core surfaces
+# (engine, cassian_tests, facade) and by the relocated FRR parse family.
+def _normalize_prefix(cidr: str) -> str | None:
+    try:
+        # Accept inputs that may already be parsed (e.g., IPv4Network) by coercing to str.
+        if not isinstance(cidr, str):
+            cidr = str(cidr)
+
+        cidr = cidr.strip()
+        if not cidr:
+            return None
+
+        n = ipaddress.ip_network(cidr, strict=False)
+        if n.version != 4:
+            return None
+        return str(n)
+    except Exception:
+        return None
+
+# `_RE_NEIGH_LINE` / `_RE_IPV4_PREFIX`: re-homed from cassian_tests:373-374
+# per founder ruling (option A, F-45b-C1-1) -- census-invisible module-level
+# data in the W10/B12 closure of the relocated parse family; NOS-neutral IPv4
+# patterns (no FRR token), so common is their home on merit, following the
+# A-H3 `_BGP_COMMUNITY_CANON` module-level-data re-home pattern.
+_RE_NEIGH_LINE = re.compile(r"^\s*(\d{1,3}(?:\.\d{1,3}){3})\s+")
+_RE_IPV4_PREFIX = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3}/\d{1,2})\b")
 
 # -------------------------
 # Shell helpers

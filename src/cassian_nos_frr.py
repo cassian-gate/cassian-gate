@@ -43,8 +43,15 @@ matures with the SONiC provider (§4.5-c onward).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import ipaddress
+import json
+from typing import TYPE_CHECKING, Any
 
+# Justified `cassian_common` leg (REQ-45b-17): the ruled acyclic floor
+# (design §3.2) hosting the NOS-neutral helpers the relocated FRR parse
+# family reaches -- admitted symbols named here and asserted by
+# tests/nos_leaf_import_proof.py.
+from cassian_common import _RE_IPV4_PREFIX, _RE_NEIGH_LINE, _normalize_prefix
 from cassian_nos_types import (
     CandidateSpec,
     CapabilityDisposition,
@@ -56,6 +63,203 @@ from cassian_nos_types import (
 if TYPE_CHECKING:  # annotation-only; no runtime import (REQ-45b-17)
     pass
 
+
+# -------------------------
+# Relocated FRR output-parse family (REQ-45b-21)
+# -------------------------
+# Byte-identical relocation from cassian_tests.py (v34 L433/451/487/620);
+# one-line re-import shims stand at the old sites so cassian.py's facade and
+# every importer are byte-untouched (shims owed removal at §4.5-c,
+# BL-P2-4.5b-3). These parse NOS output into core-defined structures; they
+# decide nothing (design §5).
+
+def parse_frr_show_ip_route_prefixes(text: str) -> set[str]:
+    """
+    Parse `vtysh -c "show ip route"` and extract IPv4 prefixes.
+    This avoids fragile column indexes.
+    """
+    out: set[str] = set()
+    if not text:
+        return out
+
+    for line in text.splitlines():
+        m = _RE_IPV4_PREFIX.search(line)
+        if not m:
+            continue
+        p = _normalize_prefix(m.group(1))
+        if p:
+            out.add(p)
+    return out
+
+def parse_frr_show_ip_route_prefixes_json(raw: str) -> set[str]:
+    """
+    Parse `vtysh -c "show ip route json"` into a set of prefixes like "192.168.1.0/24".
+    Returns empty set if raw isn't valid/expected JSON.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return set()
+
+    try:
+        doc = json.loads(raw)
+    except Exception:
+        return set()
+
+    prefixes: set[str] = set()
+
+    # FRR typically returns keys as prefixes at the top level (e.g. "10.0.0.0/31": {...})
+    # Some versions may wrap under "routes" or "routeTable"; handle a couple common shapes.
+    if isinstance(doc, dict):
+        if "routes" in doc and isinstance(doc["routes"], dict):
+            route_dict = doc["routes"]
+        else:
+            route_dict = doc
+
+        for k, v in route_dict.items():
+            if not isinstance(k, str):
+                continue
+            # keep only things that look like prefixes
+            try:
+                ipaddress.ip_network(k, strict=False)
+            except Exception:
+                continue
+            prefixes.add(k)
+
+    return prefixes
+
+def parse_frr_bgp_summary_neighbors_json(out: str) -> dict[str, dict[str, Any]]:
+    """
+    Parse FRR `show bgp summary json`.
+
+    Observed schema (FRR):
+      {
+        "ipv4Unicast": {
+          "peers": {
+            "10.0.0.1": { "state": "Established", "pfxRcd": 1, "peerState": "OK", ... },
+            ...
+          }
+        }
+      }
+
+    Returns:
+      { "<neighbor_ip>": {"established": bool, "raw": "<state>"} }
+
+    Notes:
+      - We treat `state` as authoritative when present.
+      - We only fall back to `peerState` / `pfxRcd` if `state` is missing, because
+        `pfxRcd` can remain non-zero even after an admin shutdown (stale last-known).
+    """
+    import json
+
+    if not out:
+        return {}
+
+    try:
+        obj = json.loads(out)
+    except Exception:
+        return {}
+
+    v4 = obj.get("ipv4Unicast")
+    if not isinstance(v4, dict):
+        return {}
+
+    peers = v4.get("peers")
+    if not isinstance(peers, dict):
+        return {}
+
+    res: dict[str, dict[str, Any]] = {}
+
+    for nbr_ip, pdata in peers.items():
+        if not isinstance(nbr_ip, str):
+            continue
+        if not _RE_NEIGH_LINE.match(nbr_ip + " "):
+            continue
+
+        established = False
+        raw_state = ""
+
+        if isinstance(pdata, dict):
+            state = pdata.get("state")
+            peer_state = pdata.get("peerState")
+            pfx = pdata.get("pfxRcd")
+
+            # Authoritative: `state` if present
+            if isinstance(state, str) and state.strip():
+                raw_state = state.strip()
+                established = raw_state.lower().startswith("estab")
+            else:
+                # Fallback signals only if `state` is missing
+                if isinstance(peer_state, str) and peer_state.strip().upper() == "OK":
+                    established = True
+                elif isinstance(pfx, int):
+                    established = True
+                elif isinstance(pfx, str) and pfx.isdigit():
+                    established = True
+
+        res[nbr_ip] = {"established": bool(established), "raw": raw_state}
+
+    return res
+
+def parse_frr_bgp_summary_neighbors(out: str) -> dict[str, dict[str, Any]]:
+    """
+    Parse `show bgp summary` and return:
+      { "<neighbor_ip>": {"established": bool, "raw": "<line>"} }
+
+    Robust logic:
+      - Find the table header and locate the 'State/PfxRcd' column index.
+      - Neighbor rows start with an IPv4 address.
+      - Established if State/PfxRcd token is numeric OR equals 'Established' (case-insensitive).
+    """
+    obs: dict[str, dict[str, Any]] = {}
+    if not out:
+        return obs
+    if "No BGP neighbors found" in out:
+        return obs
+
+    lines = out.splitlines()
+
+    # 1) Find header and determine column index for State/PfxRcd
+    state_idx: int | None = None
+    for line in lines:
+        if "Neighbor" in line and "State/PfxRcd" in line:
+            cols = line.split()
+            # Example header tokens:
+            # Neighbor V AS MsgRcvd MsgSent TblVer InQ OutQ Up/Down State/PfxRcd PfxSnt Desc
+            for i, c in enumerate(cols):
+                if c == "State/PfxRcd":
+                    state_idx = i
+                    break
+            break
+
+    # Fallback: if we can't find header, keep a safe heuristic:
+    # treat as established if ANY token is exactly 'Established' OR ANY token is purely numeric
+    fallback = (state_idx is None)
+
+    for line in lines:
+        m = _RE_NEIGH_LINE.match(line)
+        if not m:
+            continue
+
+        ip = m.group(1)
+        cols = line.split()
+
+        established = False
+        if fallback:
+            if any(c.lower() == "established" for c in cols):
+                established = True
+            else:
+                # In established rows there is typically at least one numeric token at State/PfxRcd,
+                # but fallback is less precise; still better than "last token".
+                established = any(c.isdigit() for c in cols)
+        else:
+            if len(cols) > state_idx:
+                state = cols[state_idx]
+                if state.isdigit() or state.lower() == "established":
+                    established = True
+
+        obs[ip] = {"established": established, "raw": line.rstrip("\n")}
+
+    return obs
 
 FRR_NODE_TYPE = "frr"
 
