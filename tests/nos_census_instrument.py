@@ -31,8 +31,40 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "src")
 
 # --- ratified figures (scope §2.2, A-S1-corrected §2.0 accounting) ---
-SUBSTRATE_TOTAL = 26          # any receiver, tree-wide
+# --- substrate site inventory (ratified figures, scope §2.2) ---
+# CENSUS SET = the modules scope §2.2 enumerated and froze: 26 sites, engine 13.
+# TREE-WIDE  = every module this instrument iterates: 28 sites. The difference is
+# cassian_runtime_vm.py's 2 sites, which lie OUTSIDE the census set.
+#
+# The pre-correction instrument asserted 26 under a "tree-wide" LABEL while
+# iterating a module list that includes cassian_runtime_vm.py. The two agreed
+# only because its regex could not see those 2 sites -- they use call-expression
+# receivers: `self._for(node).substrate_exec(...)`. Corrected under MS condition
+# C-1 (F-MS-1): the AST method sees them, both figures are asserted, and each is
+# labelled by the set it is defined over.
+#
+# Zero-touch (REQ-45b-P1) verified for all 28: the per-module inventory below is
+# identical on the pre-extraction tree (v34) and at closure.
+SUBSTRATE_CENSUS_SET = ("cassian_engine.py", "cassian_runtime_container.py",
+                        "cassian_tests.py")
+SUBSTRATE_CENSUS_TOTAL = 26
+SUBSTRATE_TREEWIDE_TOTAL = 28
 SUBSTRATE_ENGINE = 13
+SUBSTRATE_PER_MODULE = {
+    "cassian_engine.py": 13,
+    "cassian_runtime_container.py": 6,
+    "cassian_runtime_vm.py": 2,
+    "cassian_tests.py": 7,
+}
+# Scope §2.1: "Receiver recorded per site." Recorded AND asserted -- a count
+# alone cannot see an existing site's receiver form changing (name -> call),
+# which is a real drift mode on a frozen surface.
+SUBSTRATE_RECEIVER_KINDS = {
+    "cassian_engine.py": ["name"],
+    "cassian_runtime_container.py": ["name"],
+    "cassian_runtime_vm.py": ["call"],
+    "cassian_tests.py": ["name"],
+}
 FRR_TOKENS = ("frr", "frrouting", "vtysh", "zebra", "bgpd", "ospfd",
               "staticd", "watchfrr", "mgmtd")
 FOUR_VALUE_VOCABULARY = ("section", "item", "section-narrative", "N/A-DIM")
@@ -103,22 +135,74 @@ print("REQ-45b-20 — NOS extraction census instrument")
 print("=" * 60)
 
 # --------------------------------------------------------------------- C-1 --
-sub_pat = re.compile(r"\w+\.substrate_(?:exec|sh|copy_from)\s*\(")
-per_mod, total = {}, 0
-for name in CORE_MODULES:
-    n = len(sub_pat.findall(read(name)))
-    if n:
-        per_mod[name] = n
-        total += n
-check(total == SUBSTRATE_TOTAL,
-      f"C-1 substrate_* call sites tree-wide == {SUBSTRATE_TOTAL} (got {total}) [Pin P-2]")
-check(per_mod.get("cassian_engine.py") == SUBSTRATE_ENGINE,
+# RATIFIED METHOD (scope §2.1): "Python AST walk over the 14 v33 modules; a site
+# = an `ast.Call` whose `func` is an `ast.Attribute` with attribute in the verb
+# set. Receiver recorded per site."
+#
+# PBE-P2-8 COVERAGE LIMIT (documented in-file, as that precedent requires).
+# This is a STATIC AST census. It sees a site only where the verb is written
+# literally as an attribute of a call expression. It CANNOT see:
+#   (a) dynamic dispatch -- getattr(rt, "substrate_" + verb)(...)
+#   (b) a substrate method aliased to another name and called via the alias
+#   (c) a call constructed through exec/eval
+# The residual is defended INDEPENDENTLY, at routing level rather than by
+# vocabulary, in tests/substrate_target_preservation_proof.py:
+#   - the ContainerRuntime.substrate_exec is ContainerRuntime.exec identity
+#     assertions (REQ-45a-18), which fail the moment the collapse diverges,
+#     however the call is spelled; and
+#   - the bare-verb denylist over the migrated families (now including
+#     cassian_runtime_vm.py), which catches a substrate-exclusive command
+#     routed through a non-substrate verb.
+# Neither is vocabulary-derived from this census, so they do not share its blind
+# spot -- the PBE-P2-6 independent-corroboration property.
+SUBSTRATE_VERBS = {"substrate_exec", "substrate_sh", "substrate_copy_from"}
+
+
+def substrate_sites(name):
+    """Ratified AST method. Returns sorted [(lineno, verb, receiver_kind)]."""
+    out = []
+    for node in ast.walk(ast.parse(read(name))):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+           and node.func.attr in SUBSTRATE_VERBS:
+            recv = node.func.value
+            kind = ("name" if isinstance(recv, ast.Name)
+                    else "attribute" if isinstance(recv, ast.Attribute)
+                    else "call" if isinstance(recv, ast.Call)
+                    else type(recv).__name__.lower())
+            out.append((node.lineno, node.func.attr, kind))
+    return sorted(out)
+
+
+_sites = {n: substrate_sites(n) for n in CORE_MODULES}
+_sites = {n: v for n, v in _sites.items() if v}
+_treewide = sum(len(v) for v in _sites.values())
+_census = sum(len(v) for n, v in _sites.items() if n in SUBSTRATE_CENSUS_SET)
+
+check(_treewide == SUBSTRATE_TREEWIDE_TOTAL,
+      f"C-1 substrate_* sites TREE-WIDE (all iterated modules) == "
+      f"{SUBSTRATE_TREEWIDE_TOTAL} (got {_treewide}) [Pin P-2]")
+check(_census == SUBSTRATE_CENSUS_TOTAL,
+      f"C-1 substrate_* sites over the §2.2 CENSUS SET == "
+      f"{SUBSTRATE_CENSUS_TOTAL} (got {_census})")
+check(len(_sites.get("cassian_engine.py", [])) == SUBSTRATE_ENGINE,
       f"C-1 engine substrate sites == {SUBSTRATE_ENGINE} "
-      f"(got {per_mod.get('cassian_engine.py')})")
-print(f"         per module: {per_mod}")
-for name in PROVIDER_MODULES:
-    check(not sub_pat.search(read(name)),
-          f"C-1 no substrate_* site in {name} (providers never touch the substrate)")
+      f"(got {len(_sites.get('cassian_engine.py', []))})")
+_inv = {n: len(v) for n, v in _sites.items()}
+check(_inv == SUBSTRATE_PER_MODULE,
+      f"C-1 per-module site inventory unchanged (got {_inv})")
+for _n, _v in sorted(_sites.items()):
+    print(f"         {_n:32s} {len(_v):3d} site(s), receiver kinds: "
+          f"{sorted({k for _, _, k in _v})}")
+_kinds = {n: sorted({k for _, _, k in v}) for n, v in _sites.items()}
+check(_kinds == SUBSTRATE_RECEIVER_KINDS,
+      f"C-1 per-site receiver kinds unchanged (§2.1 'receiver recorded per "
+      f"site') (got {_kinds})")
+check(any(k == "call" for _v in _sites.values() for _, _, k in _v),
+      "C-1 NON-VACUITY: the method resolves call-expression receivers "
+      "(the form the pre-correction regex could not see)")
+for _n in PROVIDER_MODULES:
+    check(not substrate_sites(_n),
+          f"C-1 no substrate_* site in {_n} (providers never touch the substrate)")
 
 # --------------------------------------------------------------------- C-4 --
 eng = read("cassian_engine.py")
