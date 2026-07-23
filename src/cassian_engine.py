@@ -5605,46 +5605,41 @@ def cmd_test(args: argparse.Namespace) -> None:
             return vtysh_ok, predicate_ok, observed_state, evidence
 
         if inv_type in ("route_present", "route_absent"):
-            norm_prefix = str(t.get("_norm_prefix") or "").strip()
-            cp = rt.exec(
-                lab,
-                src,
-                ["vtysh", "-c", "show ip route json"],
-                check=False,
-                capture_output=True,
-            )
+            _prefix = str(t.get("_norm_prefix") or "").strip()
+            _params = {"prefix": _prefix}
+            _target = src
+            # Provider seam (REQ-45b-4): one observation serves both members of
+            # the pair; the present/absent flip stays a core predicate decision.
+            try:
+                _obs = _nos_collect(
+                    rt, lab, _target, _nos_ntype(_target),
+                    ObservationRequest(kind=inv_type, params=_params),
+                    "cmd_test invariant collection",
+                )
+            except NosCapabilityUnsupported as _unsup:
+                # Deny-by-default (B02 / founder ruling A on F-45b-C3-1).
+                return (
+                    False,
+                    False,
+                    {"norm_prefix": _prefix, "unsupported": True},
+                    {
+                        "cmd": "",
+                        "rc": None,
+                        "parse_error": _unsup.message,
+                        "reason": "unsupported_provider_capability",
+                        "node_type": _unsup.ntype,
+                    },
+                )
+            vtysh_ok = bool(_obs.evidence.get("probe_ok"))
+            observed_state = dict(_obs.data)
+            evidence = {k: v for k, v in _obs.evidence.items() if k != "probe_ok"}
 
-            if isinstance(cp, str):
-                out = cp
-                rc = None
-            else:
-                out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
-                if isinstance(out, (bytes, bytearray)):
-                    try:
-                        out = out.decode("utf-8", errors="replace")
-                    except Exception:
-                        out = str(out)
-                rc = getattr(cp, "returncode", None)
-
-            vtysh_ok = (rc in (0, None))
-
-            observed_prefixes = parse_frr_show_ip_route_prefixes_json(str(out or ""))
-            present = norm_prefix in set(observed_prefixes or [])
-
+            _present = bool(observed_state.get("present"))
             if inv_type == "route_present":
-                predicate_ok = bool(present)
+                predicate_ok = _present
             else:
-                predicate_ok = not bool(present)
+                predicate_ok = not _present
 
-            observed_state = {
-                "norm_prefix": norm_prefix,
-                "present": present,
-                "observed_prefixes": list(observed_prefixes or []),
-            }
-            evidence = {
-                "cmd": "vtysh -c 'show ip route json'",
-                "rc": rc,
-            }
             return vtysh_ok, predicate_ok, observed_state, evidence
 
         if inv_type == "bgp_med_equals":
@@ -5818,82 +5813,41 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         if inv_type in ("route_advertised_to", "route_not_advertised_to"):
             node = str(t.get("node") or "")
-            peer_ip = str(t.get("_peer_ip") or "").strip()
-            prefix = str(t.get("_norm_prefix") or "").strip()
-
-            cp = rt.exec(
-                lab,
-                node,
-                ["vtysh", "-c", f"show ip bgp neighbor {peer_ip} advertised-routes json"],
-                check=False,
-            )
-            out = cp.stdout or ""
-            rc = cp.returncode
-            if isinstance(out, (bytes, bytearray)):
-                try:
-                    out = out.decode("utf-8", errors="replace")
-                except Exception:
-                    out = str(out)
-
-            vtysh_ok = (rc == 0)
-
-            raw = str(out or "").strip()
-            parse_error = ""
-            advertised_prefixes: list = []
-
-            def _collect_adv_prefixes(obj):
-                found = []
-                if isinstance(obj, dict):
-                    for container_key in ("advertisedRoutes", "routes"):
-                        container = obj.get(container_key)
-                        if isinstance(container, dict):
-                            for k, v in container.items():
-                                if isinstance(v, (dict, list)):
-                                    nk = _normalize_prefix(str(k)) or str(k)
-                                    if nk:
-                                        found.append(nk)
-                    for k, v in obj.items():
-                        if isinstance(v, (dict, list)):
-                            nk = _normalize_prefix(str(k)) or str(k)
-                            if nk and "/" in nk:
-                                found.append(nk)
-                    for key in ("prefix", "network"):
-                        val = obj.get(key)
-                        nk = _normalize_prefix(str(val)) or str(val or "")
-                        if nk:
-                            found.append(nk)
-                    paths = obj.get("paths")
-                    if isinstance(paths, list):
-                        for path in paths:
-                            found.extend(_collect_adv_prefixes(path))
-                elif isinstance(obj, list):
-                    for item in obj:
-                        found.extend(_collect_adv_prefixes(item))
-                return found
-
+            _prefix = str(t.get("_norm_prefix") or "").strip()
+            _params = {"prefix": _prefix, "peer_ip": str(t.get("_peer_ip") or "").strip()}
+            _target = node
+            # Provider seam (REQ-45b-4): one observation serves both members of
+            # the pair; the present/absent flip stays a core predicate decision.
             try:
-                doc = json.loads(raw) if raw else {}
-                advertised_prefixes = sorted(set(_collect_adv_prefixes(doc)))
-            except Exception as e:
-                parse_error = str(e)
+                _obs = _nos_collect(
+                    rt, lab, _target, _nos_ntype(_target),
+                    ObservationRequest(kind=inv_type, params=_params),
+                    "cmd_test invariant collection",
+                )
+            except NosCapabilityUnsupported as _unsup:
+                # Deny-by-default (B02 / founder ruling A on F-45b-C3-1).
+                return (
+                    False,
+                    False,
+                    {"norm_prefix": _prefix, "unsupported": True},
+                    {
+                        "cmd": "",
+                        "rc": None,
+                        "parse_error": _unsup.message,
+                        "reason": "unsupported_provider_capability",
+                        "node_type": _unsup.ntype,
+                    },
+                )
+            vtysh_ok = bool(_obs.evidence.get("probe_ok"))
+            observed_state = dict(_obs.data)
+            evidence = {k: v for k, v in _obs.evidence.items() if k != "probe_ok"}
 
-            present = prefix in advertised_prefixes
-
+            _present = bool(observed_state.get("present"))
             if inv_type == "route_advertised_to":
-                predicate_ok = bool(present)
+                predicate_ok = _present
             else:
-                predicate_ok = not bool(present)
+                predicate_ok = not _present
 
-            observed_state = {
-                "norm_prefix": prefix,
-                "present": present,
-                "advertised_prefixes": advertised_prefixes,
-            }
-            evidence = {
-                "cmd": f"vtysh -c 'show ip bgp neighbor {peer_ip} advertised-routes json'",
-                "rc": rc,
-                "parse_error": parse_error,
-            }
             return vtysh_ok, predicate_ok, observed_state, evidence
 
         if inv_type == "bgp_localpref_equals":

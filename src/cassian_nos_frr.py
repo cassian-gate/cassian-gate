@@ -811,12 +811,153 @@ def _collect_bgp_as_path(rt, lab, node, req: ObservationRequest) -> Observation:
     )
 
 
+
+
+# -------------------------
+# Route-family collection handlers (WI-C3c, REQ-45b-4)
+# -------------------------
+# One observation serves both members of each pair; the present/absent flip is
+# a core predicate decision, never a provider one (design §5).
+
+
+def _collect_route_prefix_table(rt, lab, node, req: ObservationRequest) -> Observation:
+    """Probe + normalize FRR routing state for route_present, route_absent."""
+    norm_prefix = str(req.params.get("prefix") or "").strip()
+    cp = rt.exec(
+        lab,
+        node,
+        ["vtysh", "-c", "show ip route json"],
+        check=False,
+        capture_output=True,
+    )
+
+    if isinstance(cp, str):
+        out = cp
+        rc = None
+    else:
+        out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
+        if isinstance(out, (bytes, bytearray)):
+            try:
+                out = out.decode("utf-8", errors="replace")
+            except Exception:
+                out = str(out)
+        rc = getattr(cp, "returncode", None)
+
+    probe_ok = (rc in (0, None))
+
+    observed_prefixes = parse_frr_show_ip_route_prefixes_json(str(out or ""))
+    present = norm_prefix in set(observed_prefixes or [])
+
+
+    observed_state = {
+        "norm_prefix": norm_prefix,
+        "present": present,
+        "observed_prefixes": list(observed_prefixes or []),
+    }
+    evidence = {
+        "cmd": "vtysh -c 'show ip route json'",
+        "rc": rc,
+    }
+
+    return Observation(
+        kind=req.kind,
+        data=observed_state,
+        evidence=dict(evidence, probe_ok=probe_ok),
+    )
+
+
+def _collect_advertised_routes(rt, lab, node, req: ObservationRequest) -> Observation:
+    """Probe + normalize FRR routing state for route_advertised_to, route_not_advertised_to."""
+    peer_ip = str(req.params.get("peer_ip") or "").strip()
+    prefix = str(req.params.get("prefix") or "").strip()
+
+    cp = rt.exec(
+        lab,
+        node,
+        ["vtysh", "-c", f"show ip bgp neighbor {peer_ip} advertised-routes json"],
+        check=False,
+    )
+    out = cp.stdout or ""
+    rc = cp.returncode
+    if isinstance(out, (bytes, bytearray)):
+        try:
+            out = out.decode("utf-8", errors="replace")
+        except Exception:
+            out = str(out)
+
+    probe_ok = (rc == 0)
+
+    raw = str(out or "").strip()
+    parse_error = ""
+    advertised_prefixes: list = []
+
+    def _collect_adv_prefixes(obj):
+        found = []
+        if isinstance(obj, dict):
+            for container_key in ("advertisedRoutes", "routes"):
+                container = obj.get(container_key)
+                if isinstance(container, dict):
+                    for k, v in container.items():
+                        if isinstance(v, (dict, list)):
+                            nk = _normalize_prefix(str(k)) or str(k)
+                            if nk:
+                                found.append(nk)
+            for k, v in obj.items():
+                if isinstance(v, (dict, list)):
+                    nk = _normalize_prefix(str(k)) or str(k)
+                    if nk and "/" in nk:
+                        found.append(nk)
+            for key in ("prefix", "network"):
+                val = obj.get(key)
+                nk = _normalize_prefix(str(val)) or str(val or "")
+                if nk:
+                    found.append(nk)
+            paths = obj.get("paths")
+            if isinstance(paths, list):
+                for path in paths:
+                    found.extend(_collect_adv_prefixes(path))
+        elif isinstance(obj, list):
+            for item in obj:
+                found.extend(_collect_adv_prefixes(item))
+        return found
+
+    try:
+        doc = json.loads(raw) if raw else {}
+        advertised_prefixes = sorted(set(_collect_adv_prefixes(doc)))
+    except Exception as e:
+        parse_error = str(e)
+
+    present = prefix in advertised_prefixes
+
+
+    observed_state = {
+        "norm_prefix": prefix,
+        "present": present,
+        "advertised_prefixes": advertised_prefixes,
+    }
+    evidence = {
+        "cmd": f"vtysh -c 'show ip bgp neighbor {peer_ip} advertised-routes json'",
+        "rc": rc,
+        "parse_error": parse_error,
+    }
+
+    return Observation(
+        kind=req.kind,
+        data=observed_state,
+        evidence=dict(evidence, probe_ok=probe_ok),
+    )
+
+
 _COLLECT_HANDLERS = {
     "bgp_session_up": _collect_bgp_session_up,
     "bgp_med_equals": _collect_bgp_med_equals,
     "bgp_localpref_equals": _collect_bgp_localpref_equals,
     "bgp_community": _collect_bgp_community,
     "bgp_as_path": _collect_bgp_as_path,
+    "route_present": _collect_route_prefix_table,
+    "route_absent": _collect_route_prefix_table,
+    "route_advertised_to": _collect_advertised_routes,
+    "route_not_advertised_to": _collect_advertised_routes,
 }
 
 
