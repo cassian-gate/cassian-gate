@@ -3331,22 +3331,7 @@ def _fail_fast_drops(declared_tests, from_idx):
     return out
 
 
-_BGP_COMMUNITY_CANON = {
-    "no-export": "no-export", "noexport": "no-export",
-    "no-advertise": "no-advertise", "noadvertise": "no-advertise",
-    "local-as": "local-as", "localas": "local-as",
-    "internet": "internet", "0:0": "internet",
-}
-
-
-def _canonical_community_token(token):
-    """Canonicalize one BGP community token for form- and order-insensitive
-    comparison. Maps operator-declared well-known forms (no-export, no-advertise,
-    local-AS, internet) and FRR JSON forms (.list camelCase noExport/noAdvertise/
-    localAs/internet; .string hyphenated; numeric 0:0 for internet) to a single
-    canonical token. AS:VAL literals pass through (lowercased)."""
-    k = str(token).strip().lower()
-    return _BGP_COMMUNITY_CANON.get(k, k)
+from cassian_common import _BGP_COMMUNITY_CANON, _canonical_community_token  # re-homed to cassian_common (§4.5-b A-H3); shim owed removal at §4.5-c (BL-P2-4.5b-3)
 
 
 def _route_communities(route_obj):

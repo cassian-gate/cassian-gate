@@ -61,6 +61,36 @@ def _normalize_prefix(cidr: str) -> str | None:
 _RE_NEIGH_LINE = re.compile(r"^\s*(\d{1,3}(?:\.\d{1,3}){3})\s+")
 _RE_IPV4_PREFIX = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3}/\d{1,2})\b")
 
+
+# -------------------------
+# BGP community canonicalization (Phase 2 §4.5-b A-H3/A-S3 re-home)
+# -------------------------
+# Re-homed from cassian_engine L3334-3349. Dual-consumed: the provider's
+# observed-side normalization at the collect seam AND the STAYS-core predicate
+# `_bgp_community_observed` (engine). Provider-only homing would be a W10 split
+# (core->provider import); model-homing (PBE-1b-9) is unavailable because
+# REQ-45b-17 forbids provider<->model imports -- `cassian_common` is the ruled
+# acyclic floor (design §3.2: model -> provider -> common). A one-line
+# re-import shim stands at the engine site, owed removal at §4.5-c
+# (BL-P2-4.5b-3). Behaviour byte-identical.
+
+_BGP_COMMUNITY_CANON = {
+    "no-export": "no-export", "noexport": "no-export",
+    "no-advertise": "no-advertise", "noadvertise": "no-advertise",
+    "local-as": "local-as", "localas": "local-as",
+    "internet": "internet", "0:0": "internet",
+}
+
+
+def _canonical_community_token(token):
+    """Canonicalize one BGP community token for form- and order-insensitive
+    comparison. Maps operator-declared well-known forms (no-export, no-advertise,
+    local-AS, internet) and FRR JSON forms (.list camelCase noExport/noAdvertise/
+    localAs/internet; .string hyphenated; numeric 0:0 for internet) to a single
+    canonical token. AS:VAL literals pass through (lowercased)."""
+    k = str(token).strip().lower()
+    return _BGP_COMMUNITY_CANON.get(k, k)
+
 # -------------------------
 # Shell helpers
 # -------------------------
