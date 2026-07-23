@@ -26,6 +26,99 @@ from cassian_artifacts import (
     load_yaml,
 )
 
+from types import MappingProxyType
+
+from cassian_nos_types import (
+    CandidateSpec,
+    NosProvider,
+    deferred_leg,
+    validate_provider,
+)
+from cassian_nos_frr import FRR_PROVIDER
+
+# -------------------------
+# NOS provider registry (Phase 2 §4.5-b, REQ-45b-1; design §3.3)
+# -------------------------
+# Model-homed frozen mapping node.type -> NosProvider: the SINGLE source from
+# which the candidate subdir mapping (REQ-45b-8), the known-type tuple
+# (REQ-45b-9), and the frr default image (REQ-45b-11/-11-ext) derive.
+# Dispatch is deny-by-default (B01): unknown types get the deterministic
+# §13-grade UNSUP below -- no fallback chains, no environment probing, no
+# partial support.
+
+# LD-H1: nft-fw registry entry -- a minimal in-registry provider instance
+# (no new src module; roster stays ruled-17 and nft-fw stays NOS-orthogonal
+# per PBE-P2-1). Carries its candidate subdir ('nft' <-> node type 'nft-fw';
+# vocabularies mapped, never unified, REQ-45b-8), its known-type membership,
+# and LD-H2 placeholders for every content leg. default_image=None: nft-fw
+# image defaults STAY at the existing model/common maps untouched -- only the
+# frr entry is REGISTRY-DERIVED (LD-H1 / REQ-45b-11 / P5).
+_NFT_FW_PROVIDER = NosProvider(
+    node_type="nft-fw",
+    default_image=None,
+    runtime_requirement=None,
+    capabilities={},  # deny-by-default: no content leg lands here (PBE-P2-1)
+    gen_node_config=deferred_leg("gen_node_config", "nft-fw content handover (unassigned)"),
+    provision=deferred_leg("provision", "nft-fw content handover (unassigned)"),
+    nos_ready=deferred_leg("nos_ready", "nft-fw content handover (unassigned)"),
+    convergence_wait=deferred_leg("convergence_wait", "nft-fw content handover (unassigned)"),
+    collect=deferred_leg("collect", "nft-fw content handover (unassigned)"),
+    candidate=CandidateSpec(
+        subdir="nft",
+        extensions=(".nft", ".ruleset"),
+        validate=deferred_leg("candidate.validate", "nft-fw content handover (unassigned)"),
+        apply=deferred_leg("candidate.apply", "nft-fw content handover (unassigned)"),
+    ),
+    status_bgp_summary=None,  # design §3.3: None => explicit UNSUP
+    status_routes=None,
+    collect_targets=(),
+    doctor_checks=deferred_leg("doctor_checks", "nft-fw content handover (unassigned)"),
+    exec_command_rule=deferred_leg("exec_command_rule", "§4.5-d (LD-45b-6)"),
+    state_profiles={},
+    state_argv_allow=deferred_leg("state_argv_allow", "§4.5-d"),
+)
+
+NOS_PROVIDERS = MappingProxyType({
+    "frr": FRR_PROVIDER,
+    "nft-fw": _NFT_FW_PROVIDER,
+})
+
+# Import-time completeness + key coherence (B10): every registered provider
+# passes the contract-completeness check; a registry key must equal its
+# provider's node_type (dispatch-key coherence). Fails loud at import.
+for _nos_key, _nos_p in NOS_PROVIDERS.items():
+    if _nos_key != _nos_p.node_type:
+        die(
+            f"NOS_PROVIDERS registry key {_nos_key!r} != provider.node_type "
+            f"{_nos_p.node_type!r} (dispatch-key coherence)"
+        )
+    validate_provider(_nos_p)
+del _nos_key, _nos_p
+
+
+def nos_provider_for(ntype: str, seam: str) -> NosProvider:
+    """Deny-by-default provider dispatch (REQ-45b-1, B01).
+
+    The single lookup every provider seam uses. Unknown type -> the exact
+    §6.6 registry UNSUP (deterministic; supported set rendered sorted, D06),
+    exit-2 band. No fallback chains; no environment probing.
+    """
+    p = NOS_PROVIDERS.get(ntype)
+    if p is None:
+        supported = ", ".join(sorted(NOS_PROVIDERS))
+        die(
+            f"ERROR: unsupported node type '{ntype}' at {seam}: no NOS "
+            "provider is registered for it.\n"
+            f"Supported: {supported}.\n"
+            "Next:\n"
+            "  Extension route: add src/cassian_nos_<token>.py and register "
+            "it in NOS_PROVIDERS\n"
+            "  (see the NOS expansion structure design).",
+            code=2,
+        )
+    return p
+
+
 # -------------------------
 # Input adapters (read-only, advisory-only)
 # -------------------------
