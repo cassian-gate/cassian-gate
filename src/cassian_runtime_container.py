@@ -1395,24 +1395,6 @@ def docker_is_running(container: str) -> bool:
 def vty(rt: Runtime, lab: str, node: str, cmd: str) -> subprocess.CompletedProcess:
     return rt.exec(lab, node, ["vtysh", "-c", cmd], check=False, capture_output=True)
 
-def ensure_ip_tools(rt: "Runtime", lab: str, node: str) -> None:
-    """
-    Ensure the 'ip' command is available inside the node.
-
-    Runtime contract:
-      - No docker/container_name usage
-      - No package installs
-      - Pure capability check
-    """
-    cp = rt.sh(
-        lab,
-        node,
-        "command -v ip >/dev/null",
-        check=False,
-        capture_output=False,
-    )
-    if cp.returncode != 0:
-        die(f"{node}: 'ip' not found (image must include iproute2)")
 
 def resolved_topology_path(lab: str) -> Path:
     return lab_dir(lab) / "topology.resolved.yaml"
