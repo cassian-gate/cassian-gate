@@ -24,6 +24,7 @@ from cassian_model import (
     adapt_ansible_rendered_dir,
     _compile_frr_as_path_regex,
     nos_provider_for,
+    nos_default_image,
     NOS_PROVIDERS,
 )
 from cassian_nos_types import CAP_UNSUP, Observation, ObservationRequest, capability_for
@@ -671,9 +672,11 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     checks.append(("ip -j JSON capability", _ip_json_capable(), "advisory"))
 
     # Non-critical: image presence (report only; do not pull)
-    # These are resolve-time hard defaults in netsim_model.py.
+    # These are resolve-time hard defaults in cassian_model.py. The FRR entry
+    # derives from the provider registry (REQ-45b-11-ext): one source, two
+    # readers -- this and the model's hard_defaults map.
     image_defaults = [
-        ("FRR image present", "frrouting/frr:latest"),
+        ("FRR image present", nos_default_image("frr")),
         ("nft-fw image present", "ghcr.io/cassian-gate/nft-fw:latest"),
         ("host image present", "wbitt/network-multitool:latest"),
     ]

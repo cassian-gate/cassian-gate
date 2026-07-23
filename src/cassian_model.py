@@ -96,6 +96,43 @@ for _nos_key, _nos_p in NOS_PROVIDERS.items():
 del _nos_key, _nos_p
 
 
+# -------------------------
+# Registry-derived vocabularies (WI-D; REQ-45b-8/-9/-11, PBE-P2-6)
+# -------------------------
+# One source (NOS_PROVIDERS), several readers. Every derivation is sorted so
+# ordering is deterministic (Doctrine §1.4).
+
+
+def nos_known_types() -> tuple[str, ...]:
+    """Registry-derived node types, sorted (REQ-45b-9)."""
+    return tuple(sorted(NOS_PROVIDERS))
+
+
+def nos_candidate_subdirs() -> dict[str, str]:
+    """Explicit candidate-subdir <-> node-type mapping, registry-derived.
+
+    Returns subdir -> node_type (REQ-45b-8). The mapping is carried, never
+    inferred: `nft` maps to node type `nft-fw`; the vocabularies are mapped,
+    never silently unified.
+    """
+    out: dict[str, str] = {}
+    for _t in sorted(NOS_PROVIDERS):
+        _c = NOS_PROVIDERS[_t].candidate
+        if _c is not None:
+            out[_c.subdir] = _t
+    return out
+
+
+def nos_default_image(ntype: str) -> "str | None":
+    """Provider-declared default image for a node type (REQ-45b-11/-11-ext).
+
+    None when the provider declares none -- non-frr image defaults stay in
+    their existing maps untouched (LD-H1 / P5).
+    """
+    _p = NOS_PROVIDERS.get(ntype)
+    return _p.default_image if _p is not None else None
+
+
 def nos_provider_for(ntype: str, seam: str) -> NosProvider:
     """Deny-by-default provider dispatch (REQ-45b-1, B01).
 
@@ -1750,7 +1787,9 @@ def topo_to_containerlab(topo: dict) -> dict:
     hard_defaults = {
         "host": "wbitt/network-multitool:latest",
         "nft-fw": "ghcr.io/cassian-gate/nft-fw:latest",
-        "frr": "frrouting/frr:latest",
+        # REQ-45b-11: registry-derived from the FRR provider's default_image.
+        # Non-frr entries are untouched (P5).
+        "frr": nos_default_image("frr"),
     }
 
     evpn = _validate_fabric_evpn_presence_only(topo)
@@ -2355,10 +2394,13 @@ def resolve_topology(topo: dict) -> dict:
             if src_node not in _exec_node_types:
                 die(f"{ctx}: exec test target node {src_node!r} is not declared in topology 'nodes:'")
             derived_type = _exec_node_types[src_node]
-            if derived_type not in ("frr", "nft-fw"):
+            # REQ-45b-9: registry-derived, sorted -> ("frr", "nft-fw").
+            _known = nos_known_types()
+            if derived_type not in _known:
                 die(
                     f"{ctx}: exec test target node {src_node!r} has node type "
-                    f"{derived_type!r}; exec supports only node types 'frr', 'nft-fw'"
+                    f"{derived_type!r}; exec supports only node types "
+                    + ", ".join(repr(_k) for _k in _known)
                 )
             t["src"] = src_node
             cmd_raw = t.get("command")

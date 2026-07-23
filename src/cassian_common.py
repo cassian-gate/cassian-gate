@@ -18,6 +18,14 @@ QUIET_RUN = False
 _QUIET_DIE = False
 
 
+# Shadowed-duplicate provenance (Phase 2 §4.5-b, A-S6): the "frr" entry below
+# is NOT the live source. At resolve time it is shadowed for frr by the model's
+# `hard_defaults` chain (cassian_model resolution order), which derives from the
+# FRR provider's `default_image` (REQ-45b-11). This entry stays because
+# `cassian_common` may not import `cassian_model` under the ruled acyclic order
+# (design §3.2: model -> provider -> common), so it is underivable from the
+# registry here. It is a shadowed duplicate, not a second live reader --
+# REQ-45b-11-ext's "one source, two readers" is scoped to live readers.
 DEFAULT_IMAGES = {
     "frr": "frrouting/frr:latest",
     "linux": "alpine:latest",
