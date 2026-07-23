@@ -81,14 +81,21 @@ def token_lines_with_frr(src):
     return hits
 
 
-def fstring_tokens_seen(src):
-    names = set()
-    try:
-        for tok in tokenize.generate_tokens(io.StringIO(src).readline):
-            names.add(tokenize.tok_name.get(tok.type, ""))
-    except Exception:
-        pass
-    return {n for n in names if n.startswith("FSTRING")}
+def fstring_counting_is_complete():
+    """Behavioural probe: is FRR content INSIDE an f-string counted?
+
+    Deliberately NOT a check for FSTRING_START/MIDDLE/END token types -- those
+    exist only on Python 3.12+, so probing for them asserts an interpreter
+    version rather than a property, and reds a correct tree on an older
+    interpreter. (That is exactly how this check first failed: green on 3.12,
+    red on <3.12, with no code defect.)
+
+    The property A-S1 cares about holds on BOTH: on 3.12+ the text arrives in
+    FSTRING_MIDDLE tokens; on <3.12 the whole literal is one STRING token whose
+    `.string` still contains it. Either way `token_lines_with_frr` finds it.
+    """
+    sample = 'a = 1\nb = f"vtysh -c {cmd} json"\n'
+    return token_lines_with_frr(sample) == {2}
 
 
 print("=" * 60)
@@ -115,8 +122,11 @@ for name in PROVIDER_MODULES:
 
 # --------------------------------------------------------------------- C-4 --
 eng = read("cassian_engine.py")
-check(bool(fstring_tokens_seen(eng)),
-      "C-4 tokenizer emits FSTRING_* tokens (f-string-complete; A-S1)")
+check(fstring_counting_is_complete(),
+      "C-4 f-string-hosted FRR content IS counted (A-S1; interpreter-independent)")
+print(f"         interpreter: Python {sys.version_info.major}.{sys.version_info.minor} "
+      f"(FSTRING_* token types: {'yes' if sys.version_info[:2] >= (3, 12) else 'no'} "
+      "-- immaterial; the counting property is asserted behaviourally)")
 naive = {i for i, l in enumerate(eng.split("\n"), 1)
          if re.search("|".join(FRR_TOKENS), l, re.I)}
 complete = token_lines_with_frr(eng)
