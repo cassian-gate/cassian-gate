@@ -7,6 +7,9 @@ from typing import Any
 
 from cassian_common import die
 from cassian_runtime_container import ContainerRuntime, Runtime
+# REQ-45b-12: node_runtime_map is model-homed (PBE-1b-9); this module
+# consumes the single source rather than owning a second derivation.
+from cassian_model import node_runtime_map
 
 # LD-45a-2 (RULED 2026-07-16), AMENDED (SP #1 inline, founder-ruled 2026-07-17):
 # vrnetlab-image credentials, carried as module constants. NOT a topology/schema key
@@ -398,25 +401,6 @@ class NodeDispatchingRuntime(Runtime):
         return self._container.container_id(lab, node)
 
 
-def node_runtime_map(topo: dict[str, Any] | None) -> dict[str, str]:
-    """
-    Derive {node_name: resolved_runtime} from a resolved topology.
-
-    Same shape as the model's exec-into gate derivation (cassian_model.py:2874-2878)
-    and reads the same resolved field; no normalization helper is introduced and no
-    model semantics are keyed on transport (PBE-1b-9 inert; DC v2.1 §10).
-    """
-    out: dict[str, str] = {}
-    if not isinstance(topo, dict):
-        return out
-    for n in (topo.get("nodes") or []):
-        if not isinstance(n, dict):
-            continue
-        name = str(n.get("name") or "").strip()
-        if not name:
-            continue
-        out[name] = str(n.get("runtime") or "").strip().lower()
-    return out
 
 
 def build_runtime(topo: dict[str, Any] | None = None) -> Runtime:

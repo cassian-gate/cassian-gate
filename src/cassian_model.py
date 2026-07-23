@@ -97,6 +97,37 @@ del _nos_key, _nos_p
 
 
 # -------------------------
+# Node -> runtime derivation (WI-D2; REQ-45b-12, PBE-1b-9, PBE-P2-6)
+# -------------------------
+# Model-homed single source for {node_name: resolved_runtime}. Previously
+# defined in cassian_runtime_vm and independently re-derived inline by the
+# model's exec-into gate; both now read this one helper. Per PBE-P2-6 the two
+# checks still corroborate independently -- neither is dropped -- they just
+# stop deriving the mapping twice. Relocated byte-identically from
+# cassian_runtime_vm (def-site v34 L401).
+
+def node_runtime_map(topo: dict[str, Any] | None) -> dict[str, str]:
+    """
+    Derive {node_name: resolved_runtime} from a resolved topology.
+
+    Same shape as the model's exec-into gate derivation (cassian_model.py:2874-2878)
+    and reads the same resolved field; no normalization helper is introduced and no
+    model semantics are keyed on transport (PBE-1b-9 inert; DC v2.1 §10).
+    """
+    out: dict[str, str] = {}
+    if not isinstance(topo, dict):
+        return out
+    for n in (topo.get("nodes") or []):
+        if not isinstance(n, dict):
+            continue
+        name = str(n.get("name") or "").strip()
+        if not name:
+            continue
+        out[name] = str(n.get("runtime") or "").strip().lower()
+    return out
+
+
+# -------------------------
 # Registry-derived vocabularies (WI-D; REQ-45b-8/-9/-11, PBE-P2-6)
 # -------------------------
 # One source (NOS_PROVIDERS), several readers. Every derivation is sorted so
@@ -3011,11 +3042,11 @@ def resolve_topology(topo: dict) -> dict:
         # ----------------------------
         _eig_kind = str(t.get("kind") or "").strip().lower()
         if _eig_kind in ("tcp", "bgp_neighbor", "invariant", "route_prefix"):
-            _eig_runtimes = {
-                str(_n.get("name") or "").strip(): str(_n.get("runtime") or "").strip().lower()
-                for _n in (resolved.get("nodes") or [])
-                if isinstance(_n, dict) and str(_n.get("name") or "").strip()
-            }
+            # REQ-45b-12 / PBE-P2-6: read the model-homed shared source instead
+            # of re-deriving. This check remains an independent corroborating
+            # gate -- it is not dropped, it just stops being a second
+            # derivation of the same mapping.
+            _eig_runtimes = node_runtime_map(resolved)
             _eig_ctx = f"tests[{i}] ({t.get('name', '<unnamed>')})"
             _eig_refs = [("src", t.get("src") or t.get("from"))]
             if _eig_kind == "tcp":
