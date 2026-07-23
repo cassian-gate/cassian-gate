@@ -3386,6 +3386,21 @@ class NosCapabilityUnsupported(Exception):
         self.message = message
 
 
+def _nos_ntype(topo, name: str) -> str:
+    """Resolve a node's type from the resolved topology, deterministically.
+
+    Module-level (WI-C3f) so every collection caller can reach it, including
+    `run_invariant_test`, whose body the source-validating proofs execute in
+    `cassian_engine.__dict__` where nested helpers do not exist. Same idiom and
+    same result as the pre-hoist nested form; the resolved topology is the
+    single source (DC §1 authoritative input).
+    """
+    for _n in (topo.get("nodes") or []):
+        if isinstance(_n, dict) and _n.get("name") == name:
+            return str(_n.get("type") or "").strip().lower()
+    return ""
+
+
 def _nos_collect(rt, lab, node, ntype, request, seam):
     """The single core-side entry to provider observation collection.
 
@@ -4034,16 +4049,6 @@ def cmd_test(args: argparse.Namespace) -> None:
     nodes = topo.get("nodes", []) or []
     nodes_by_name = {n["name"]: n for n in nodes}
 
-    def _nos_ntype(name: str) -> str:
-        """Resolve a node's type from the resolved topology, deterministically.
-
-        Same idiom as the pre-existing per-test lookup (run_route_prefix_test);
-        the resolved topology is the single source (DC §1 authoritative input).
-        """
-        for _n in (topo.get("nodes") or []):
-            if isinstance(_n, dict) and _n.get("name") == name:
-                return str(_n.get("type") or "").strip().lower()
-        return ""
 
     # Results artifact (written at end, even on failure if possible)
     results: dict = {
@@ -4970,7 +4975,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 "attempts": attempts,
                 "retry_timeout_s": (retry_timeout_s if expected == "pass" else 0),
                 "retry_interval_s": (retry_interval_s if expected == "pass" else 0),
-                "last_rc": getattr(last_cp, "returncode", None),
+                "last_rc": last_obs.evidence.get("returncode"),
                 "src_ip": (str(src_ip).strip() if src_ip else ""),
                 "src_if": (str(src_if).strip() if src_if else ""),
             },
@@ -5218,79 +5223,34 @@ def cmd_test(args: argparse.Namespace) -> None:
         interval_s = float(t.get("retry_interval_s") or 1.0)
 
         def attempt():
-            # Prefer JSON for deterministic parsing
-            cp = rt.exec(lab, src, ["vtysh", "-c", "show bgp summary json"], check=False)
-            ok = (getattr(cp, "returncode", 1) == 0)
-            out = (cp.stdout or "") if hasattr(cp, "stdout") else ""
-            return ok, cp, out
+            # Provider seam (REQ-45b-4): the probe and its FRR-JSON parse are
+            # provider-side; the retry driver, verdict and record stay core.
+            _obs = _nos_collect(
+                rt, lab, src, _nos_ntype(topo, src),
+                ObservationRequest(kind="bgp_neighbor", params={"neighbor": neighbor}),
+                "cmd_test bgp_neighbor collection",
+            )
+            return bool(_obs.evidence.get("probe_ok")), _obs
 
         start = time.time()
 
         # Only retry when we expect "up" (deterministic + aligns with readiness semantics)
         if expected == "up" and timeout_s > 0:
             def try_once():
-                ok, cp, out = attempt()
-                return ok, (cp, out)
+                ok, _o = attempt()
+                return ok, _o
 
             ok, last_payload, attempts, dur_ms = retry_until(timeout_s, interval_s, try_once)
-            last_cp, last_out = last_payload
+            last_obs = last_payload
         else:
-            ok, last_cp, last_out = attempt()
+            ok, last_obs = attempt()
             attempts = 1
             dur_ms = int((time.time() - start) * 1000)
 
-        observed = "down"
-        state = None
-        parse_error = ""
+        observed = str(last_obs.data.get("observed") or "down")
+        state = last_obs.data.get("state")
+        parse_error = str(last_obs.evidence.get("parse_error") or "")
 
-        if ok:
-            try:
-                data = json.loads(last_out or "{}")
-
-                def _extract_peers(obj: dict) -> dict | None:
-                    # 1) Some FRR builds: peers at top-level
-                    peers = obj.get("peers")
-                    if isinstance(peers, dict):
-                        return peers
-
-                    # 2) Common FRR: peers under address-family key, e.g. ipv4Unicast.peers
-                    v4u = obj.get("ipv4Unicast")
-                    if isinstance(v4u, dict):
-                        peers = v4u.get("peers")
-                        if isinstance(peers, dict):
-                            return peers
-
-                    # 3) Defensive: scan 1 level deep for any dict that contains a peers dict
-                    for _, v in obj.items():
-                        if isinstance(v, dict):
-                            peers = v.get("peers")
-                            if isinstance(peers, dict):
-                                return peers
-
-                    return None
-
-                peers = _extract_peers(data)
-                if not isinstance(peers, dict):
-                    peers = {}
-                    parse_error = "peers not found in summary"
-
-                p = peers.get(neighbor)
-
-                if isinstance(p, dict):
-                    # FRR fields vary; prefer "state" when present
-                    state = p.get("state") or p.get("bgpState") or p.get("peerState")
-                    st = (state or "").strip().lower()
-                    observed = "up" if st == "established" else "down"
-                else:
-                    observed = "down"
-                    if not parse_error:
-                        parse_error = "neighbor not present in summary"
-
-            except Exception as e:
-                observed = "down"
-                parse_error = f"json parse error: {e.__class__.__name__}"
-        else:
-            parse_error = "vtysh command failed"
 
         verdict = "pass" if observed == expected else "fail"
 
@@ -5300,7 +5260,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             "attempts": attempts,
             "timeout_s": timeout_s,
             "retry_interval_s": interval_s,
-            "last_rc": getattr(last_cp, "returncode", None),
+            "last_rc": last_obs.evidence.get("returncode"),
         }
 
         evidence = {
@@ -5459,7 +5419,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             # verdict stay core (design §5).
             try:
                 _obs = _nos_collect(
-                    rt, lab, src, _nos_ntype(src),
+                    rt, lab, src, _nos_ntype(topo, src),
                     ObservationRequest(kind="bgp_session_up", params={"neighbor": neighbor}),
                     "cmd_test invariant collection",
                 )
@@ -5528,7 +5488,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             # Provider seam (REQ-45b-4).
             try:
                 _obs = _nos_collect(
-                    rt, lab, src, _nos_ntype(src),
+                    rt, lab, src, _nos_ntype(topo, src),
                     ObservationRequest(
                         kind="evpn_bgp_session_up",
                         params={"peer": peer, "peer_ips": sorted(peer_ips)},
@@ -5565,7 +5525,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             # the pair; the present/absent flip stays a core predicate decision.
             try:
                 _obs = _nos_collect(
-                    rt, lab, _target, _nos_ntype(_target),
+                    rt, lab, _target, _nos_ntype(topo, _target),
                     ObservationRequest(kind=inv_type, params=_params),
                     "cmd_test invariant collection",
                 )
@@ -5601,7 +5561,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             # provider-side; predicate evaluation and the verdict stay core.
             try:
                 _obs = _nos_collect(
-                    rt, lab, src, _nos_ntype(src),
+                    rt, lab, src, _nos_ntype(topo, src),
                     ObservationRequest(kind="bgp_med_equals", params={"prefix": _prefix}),
                     "cmd_test invariant collection",
                 )
@@ -5634,7 +5594,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             # which the request carries.
             try:
                 _obs = _nos_collect(
-                    rt, lab, src, _nos_ntype(src),
+                    rt, lab, src, _nos_ntype(topo, src),
                     ObservationRequest(kind=inv_type, params={"mac": mac, "vni_i": vni_i}),
                     "cmd_test invariant collection",
                 )
@@ -5669,7 +5629,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             # the pair; the present/absent flip stays a core predicate decision.
             try:
                 _obs = _nos_collect(
-                    rt, lab, _target, _nos_ntype(_target),
+                    rt, lab, _target, _nos_ntype(topo, _target),
                     ObservationRequest(kind=inv_type, params=_params),
                     "cmd_test invariant collection",
                 )
@@ -5706,7 +5666,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             # provider-side; predicate evaluation and the verdict stay core.
             try:
                 _obs = _nos_collect(
-                    rt, lab, node, _nos_ntype(node),
+                    rt, lab, node, _nos_ntype(topo, node),
                     ObservationRequest(kind="bgp_localpref_equals", params={"prefix": _prefix}),
                     "cmd_test invariant collection",
                 )
@@ -5739,7 +5699,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             # provider-side; predicate evaluation and the verdict stay core.
             try:
                 _obs = _nos_collect(
-                    rt, lab, node, _nos_ntype(node),
+                    rt, lab, node, _nos_ntype(topo, node),
                     ObservationRequest(kind="bgp_community", params={"prefix": _prefix}),
                     "cmd_test invariant collection",
                 )
@@ -5772,7 +5732,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             # provider-side; predicate evaluation and the verdict stay core.
             try:
                 _obs = _nos_collect(
-                    rt, lab, node, _nos_ntype(node),
+                    rt, lab, node, _nos_ntype(topo, node),
                     ObservationRequest(kind="bgp_as_path", params={"prefix": _prefix}),
                     "cmd_test invariant collection",
                 )
@@ -5808,7 +5768,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             # written with sort_keys=True and the §13(c) renderer sorts keys).
             try:
                 _obs = _nos_collect(
-                    rt, lab, src, _nos_ntype(src),
+                    rt, lab, src, _nos_ntype(topo, src),
                     ObservationRequest(kind="ospf_neighbor_up", params={"neighbor": neighbor}),
                     "cmd_test invariant collection",
                 )
@@ -8834,7 +8794,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             "succeeded": bool(succeeded),
             "time_to_success_ms": (int(first_success_ms) if (expected == "pass") else None),
             "time_to_first_success_ms": (int(first_success_ms) if (expected == "fail" and succeeded) else None),
-            "last_rc": getattr(last_cp, "returncode", None),
+            "last_rc": last_obs.evidence.get("returncode"),
         }
 
         # Keep type-specific info inside meta

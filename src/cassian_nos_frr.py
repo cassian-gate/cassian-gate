@@ -1292,6 +1292,85 @@ def _collect_ospf_neighbors(rt, lab, node, req: ObservationRequest) -> Observati
     )
 
 
+
+
+def _collect_bgp_neighbor(rt, lab, node, req: ObservationRequest) -> Observation:
+    """Probe + normalize FRR BGP summary for a bgp_neighbor step.
+
+    Parse text relocated verbatim from run_bgp_neighbor_test (WI-C3f); only the
+    probe-result names change (`last_out` -> `out`, `ok` -> `probe_ok`). Core
+    keeps the retry driver, the verdict, and the record.
+    """
+    neighbor = str(req.params.get("neighbor") or "").strip()
+    cp = rt.exec(lab, node, ["vtysh", "-c", "show bgp summary json"], check=False)
+    probe_ok = (getattr(cp, "returncode", 1) == 0)
+    out = (cp.stdout or "") if hasattr(cp, "stdout") else ""
+
+    observed = "down"
+    state = None
+    parse_error = ""
+
+    if probe_ok:
+        try:
+            data = json.loads(out or "{}")
+
+            def _extract_peers(obj: dict) -> dict | None:
+                # 1) Some FRR builds: peers at top-level
+                peers = obj.get("peers")
+                if isinstance(peers, dict):
+                    return peers
+
+                # 2) Common FRR: peers under address-family key, e.g. ipv4Unicast.peers
+                v4u = obj.get("ipv4Unicast")
+                if isinstance(v4u, dict):
+                    peers = v4u.get("peers")
+                    if isinstance(peers, dict):
+                        return peers
+
+                # 3) Defensive: scan 1 level deep for any dict that contains a peers dict
+                for _, v in obj.items():
+                    if isinstance(v, dict):
+                        peers = v.get("peers")
+                        if isinstance(peers, dict):
+                            return peers
+
+                return None
+
+            peers = _extract_peers(data)
+            if not isinstance(peers, dict):
+                peers = {}
+                parse_error = "peers not found in summary"
+
+            p = peers.get(neighbor)
+
+            if isinstance(p, dict):
+                # FRR fields vary; prefer "state" when present
+                state = p.get("state") or p.get("bgpState") or p.get("peerState")
+                st = (state or "").strip().lower()
+                observed = "up" if st == "established" else "down"
+            else:
+                observed = "down"
+                if not parse_error:
+                    parse_error = "neighbor not present in summary"
+
+        except Exception as e:
+            observed = "down"
+            parse_error = f"json parse error: {e.__class__.__name__}"
+    else:
+        parse_error = "vtysh command failed"
+
+    return Observation(
+        kind="bgp_neighbor",
+        data={"observed": observed, "state": state},
+        evidence={
+            "cmd": "vtysh -c 'show bgp summary json'",
+            "parse_error": parse_error,
+            "returncode": getattr(cp, "returncode", None),
+            "probe_ok": probe_ok,
+        },
+    )
+
+
 _COLLECT_HANDLERS = {
     "bgp_session_up": _collect_bgp_session_up,
     "bgp_med_equals": _collect_bgp_med_equals,
@@ -1307,6 +1386,7 @@ _COLLECT_HANDLERS = {
     "evpn_mac_route_absent": _collect_evpn_routes,
     "evpn_vni_route_present": _collect_evpn_routes,
     "ospf_neighbor_up": _collect_ospf_neighbors,
+    "bgp_neighbor": _collect_bgp_neighbor,
 }
 
 
