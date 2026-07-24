@@ -9,19 +9,21 @@ import sys
 
 from preservation_manifest import MODULE_ROSTER
 
-_SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+# REQ-45b-14: baseline keys carry the src/ prefix (manifest convention), so
+# paths join from the repo root, not from src/.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Post-§4.7 baseline (branch-cut state). The 4 scoped modules (cassian_engine, cassian_model,
 # cassian_cli, cassian_tests) are intentionally excluded -- they are modified by §4.8.
 BASELINE = {
-    "cassian.py": "588fbed521cf68903cf387f02534c58fdfd7b9a844c1ee8f6d375099280cc132",  # re-baselined from cbc931d2 (phase2 §4.5-a exec-target split; WI-1 stub-import removal); orig cbc931d2
-    "cassian_ai.py": "6900c52ea52f2a4a588b99478f10e967603b7a1a5f87b3b257878d4fde569361",
-    "cassian_artifacts.py": "ae8a54302e4fa8fe2f89e3af0e1e16dcda0ff2ae7bc4a805b671f69029fbb04c",
-    "cassian_candidate.py": "93db9b61e9fd22c74156fc0492119fc4e170a7a192684354c8a31c70876ff52d",
-    "cassian_common.py": "a0469a2a1b3cdcc5a1fffc7cd02198447cf1e0cb1ee8657469c3fb2c57139a10",
-    "cassian_runtime_container.py": "b3e45fa2a910617e1d4dcbcc1d6509b5385cecb4cb236498be2964796b92b59f",  # re-baselined from b2a493f9 (phase2 §4.5-a exec-target split); orig b2a493f9
-    "cassian_state.py": "aec4d412ee53555156cb5275c5d7a1329f54aaef298d4409feebcad2c198a9d6",
-    "cassian_two_run.py": "a6432665dbfee699713fe60c2e42d427c3c3fd9f82be7ec0ab65caa8b34c3ed9",  # re-baselined from cfafdfa6 (phase2 4.4 F-1 canonical serializer); orig 694f4e0d
+    "src/cassian.py": "45c5180e30e2d4bda791db9c90d8ae31c0797e7fbe98d2df47c54127643b6c2d",  # re-baselined from 588fbed5 (phase2 §4.5-b WI-F dead-code sweep (ensure_ip_tools import) + guardrail comment correction); orig cbc931d2
+    "src/cassian_ai.py": "6900c52ea52f2a4a588b99478f10e967603b7a1a5f87b3b257878d4fde569361",
+    "src/cassian_artifacts.py": "ae8a54302e4fa8fe2f89e3af0e1e16dcda0ff2ae7bc4a805b671f69029fbb04c",
+    "src/cassian_candidate.py": "7775a062f27461fc76b1ae6c1e252550e30ecf3498412885e0a82e9fe02799ed",  # re-baselined from 93db9b61 (phase2 §4.5-b WI-D1 registry-derived candidate subdirs); orig 93db9b61
+    "src/cassian_common.py": "0f5a326f3407811ba9afa8c449a15a9526e101a0ba258998b29bd633e48223bb",  # re-baselined from a0469a2a (phase2 §4.5-b WI-C1/C2 NOS-neutral re-homes + A-S6 provenance comment); orig a0469a2a
+    "src/cassian_runtime_container.py": "7eecee129911d838d15e7e20463db66475fd190b9cbbfb0435ebc33a79303761",  # re-baselined from b3e45fa2 (phase2 §4.5-b WI-C1 _normalize_prefix shim + WI-F ensure_ip_tools removal); orig b2a493f9
+    "src/cassian_state.py": "aec4d412ee53555156cb5275c5d7a1329f54aaef298d4409feebcad2c198a9d6",
+    "src/cassian_two_run.py": "a6432665dbfee699713fe60c2e42d427c3c3fd9f82be7ec0ab65caa8b34c3ed9",  # re-baselined from cfafdfa6 (phase2 4.4 F-1 canonical serializer); orig 694f4e0d
 }
 
 
@@ -36,13 +38,13 @@ def sha256(path):
 def main():
     drift = []
     # REQ-43-5: subset consistency -- the curated subset may not reference a non-rostered module.
-    non_rostered = sorted(k for k in BASELINE
-                          if (k if k.startswith("src/") else "src/" + k) not in MODULE_ROSTER)
+    # REQ-45b-14: keys are src/<n>.py; the "src/"+k adapter shim is removed.
+    non_rostered = sorted(k for k in BASELINE if k not in MODULE_ROSTER)
     if non_rostered:
         print("FAIL: curated subset references non-rostered module(s): %s" % ", ".join(non_rostered))
         sys.exit(1)
     for mod, expected in sorted(BASELINE.items()):
-        path = os.path.join(_SRC, mod)
+        path = os.path.join(_ROOT, mod)
         if not os.path.isfile(path):
             print("  MISSING %s" % mod)
             drift.append(mod)

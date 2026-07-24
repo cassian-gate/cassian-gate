@@ -107,6 +107,12 @@ check("TM-CI-1 scripts/verify_phase1.sh absent from the repo",
 check("fold is CI-wired: wf_12_13_replay_proof.py present in the gate",
       "wf_12_13_replay_proof.py" in gate)
 
+# §4.5-b (REQ-45b-18 / §14.4 conditional entry): the three NOS provider-structure
+# proofs are gate-wired in lockstep with the cassian.yml step that runs them.
+for _p in ("nos_leaf_import_proof.py", "nos_deny_by_default_proof.py",
+           "nos_census_instrument.py"):
+    check(f"§4.5-b proof is CI-wired: {_p} present in the gate", _p in gate)
+
 fails = [n for n, ok in checks if not ok]
 print(f"PO-B3-fold (WF-12/13 replay): {len(checks) - len(fails)}/{len(checks)} checks passed.")
 for n, ok in checks:

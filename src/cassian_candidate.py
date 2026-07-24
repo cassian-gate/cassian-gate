@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from cassian_common import die
+from cassian_model import nos_candidate_subdirs
 from cassian_artifacts import lab_dir
 from cassian_runtime_container import Runtime
 
@@ -70,7 +71,11 @@ def _candidate_parse_dir_or_die(topo: dict[str, Any], cand_dir: Path) -> list[di
         if isinstance(n, dict) and isinstance(n.get("name"), str):
             nodes_by_name[n["name"]] = n
 
-    allowed_subdirs = {"frr", "nft"}
+    # REQ-45b-8: one source (NOS_PROVIDERS) via the model-homed derivation.
+    # `_subdir_types` carries the explicit subdir -> node-type mapping
+    # (frr->frr, nft->nft-fw); vocabularies are mapped, never unified.
+    _subdir_types = nos_candidate_subdirs()
+    allowed_subdirs = set(_subdir_types)
     plan: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     saw_any = False
@@ -122,7 +127,7 @@ def _candidate_parse_dir_or_die(topo: dict[str, Any], cand_dir: Path) -> list[di
             node = p.stem
             if node not in nodes_by_name:
                 _cand_misuse(f"--candidate-config: candidate targets unknown node '{node}' (file: frr/{p.name})")
-            if nodes_by_name[node].get("type") != "frr":
+            if nodes_by_name[node].get("type") != _subdir_types["frr"]:
                 _cand_misuse(f"--candidate-config: frr/{p.name} targets node '{node}' but node.type is not 'frr'")
 
             key = (node, "frr")

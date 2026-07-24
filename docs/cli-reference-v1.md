@@ -120,6 +120,11 @@ Behavior:
 
 **Purpose:** Run a vtysh command on an FRR node.
 
+**FRR-only.** `cassian vty` is a vtysh shortcut. If `<node>` resolves to any
+node type other than `frr`, the command exits `2` before running anything and
+redirects you to `cassian exec <lab> <node> "<command>"`, which is NOS-agnostic
+and allow-listed.
+
 Arguments:
 
 * `<lab>`: lab name

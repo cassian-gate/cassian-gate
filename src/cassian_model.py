@@ -26,6 +26,167 @@ from cassian_artifacts import (
     load_yaml,
 )
 
+from types import MappingProxyType
+
+from cassian_nos_types import (
+    CandidateSpec,
+    NosProvider,
+    deferred_leg,
+    validate_provider,
+)
+from cassian_nos_frr import FRR_PROVIDER
+
+# -------------------------
+# NOS provider registry (Phase 2 §4.5-b, REQ-45b-1; design §3.3)
+# -------------------------
+# Model-homed frozen mapping node.type -> NosProvider: the SINGLE source from
+# which the candidate subdir mapping (REQ-45b-8), the known-type tuple
+# (REQ-45b-9), and the frr default image (REQ-45b-11/-11-ext) derive.
+# Dispatch is deny-by-default (B01): unknown types get the deterministic
+# §13-grade UNSUP below -- no fallback chains, no environment probing, no
+# partial support.
+
+# LD-H1: nft-fw registry entry -- a minimal in-registry provider instance
+# (no new src module; roster stays ruled-17 and nft-fw stays NOS-orthogonal
+# per PBE-P2-1). Carries its candidate subdir ('nft' <-> node type 'nft-fw';
+# vocabularies mapped, never unified, REQ-45b-8), its known-type membership,
+# and LD-H2 placeholders for every content leg. default_image=None: nft-fw
+# image defaults STAY at the existing model/common maps untouched -- only the
+# frr entry is REGISTRY-DERIVED (LD-H1 / REQ-45b-11 / P5).
+_NFT_FW_PROVIDER = NosProvider(
+    node_type="nft-fw",
+    default_image=None,
+    runtime_requirement=None,
+    capabilities={},  # deny-by-default: no content leg lands here (PBE-P2-1)
+    gen_node_config=deferred_leg("gen_node_config", "nft-fw content handover (unassigned)"),
+    provision=deferred_leg("provision", "nft-fw content handover (unassigned)"),
+    nos_ready=deferred_leg("nos_ready", "nft-fw content handover (unassigned)"),
+    convergence_wait=deferred_leg("convergence_wait", "nft-fw content handover (unassigned)"),
+    collect=deferred_leg("collect", "nft-fw content handover (unassigned)"),
+    candidate=CandidateSpec(
+        subdir="nft",
+        extensions=(".nft", ".ruleset"),
+        validate=deferred_leg("candidate.validate", "nft-fw content handover (unassigned)"),
+        apply=deferred_leg("candidate.apply", "nft-fw content handover (unassigned)"),
+    ),
+    status_bgp_summary=None,  # design §3.3: None => explicit UNSUP
+    status_routes=None,
+    collect_targets=(),
+    doctor_checks=deferred_leg("doctor_checks", "nft-fw content handover (unassigned)"),
+    exec_command_rule=deferred_leg("exec_command_rule", "§4.5-d (LD-45b-6)"),
+    state_profiles={},
+    state_argv_allow=deferred_leg("state_argv_allow", "§4.5-d"),
+)
+
+NOS_PROVIDERS = MappingProxyType({
+    "frr": FRR_PROVIDER,
+    "nft-fw": _NFT_FW_PROVIDER,
+})
+
+# Import-time completeness + key coherence (B10): every registered provider
+# passes the contract-completeness check; a registry key must equal its
+# provider's node_type (dispatch-key coherence). Fails loud at import.
+for _nos_key, _nos_p in NOS_PROVIDERS.items():
+    if _nos_key != _nos_p.node_type:
+        die(
+            f"NOS_PROVIDERS registry key {_nos_key!r} != provider.node_type "
+            f"{_nos_p.node_type!r} (dispatch-key coherence)"
+        )
+    validate_provider(_nos_p)
+del _nos_key, _nos_p
+
+
+# -------------------------
+# Node -> runtime derivation (WI-D2; REQ-45b-12, PBE-1b-9, PBE-P2-6)
+# -------------------------
+# Model-homed single source for {node_name: resolved_runtime}. Previously
+# defined in cassian_runtime_vm and independently re-derived inline by the
+# model's exec-into gate; both now read this one helper. Per PBE-P2-6 the two
+# checks still corroborate independently -- neither is dropped -- they just
+# stop deriving the mapping twice. Relocated byte-identically from
+# cassian_runtime_vm (def-site v34 L401).
+
+def node_runtime_map(topo: dict[str, Any] | None) -> dict[str, str]:
+    """
+    Derive {node_name: resolved_runtime} from a resolved topology.
+
+    Same shape as the model's exec-into gate derivation (cassian_model.py:2874-2878)
+    and reads the same resolved field; no normalization helper is introduced and no
+    model semantics are keyed on transport (PBE-1b-9 inert; DC v2.1 §10).
+    """
+    out: dict[str, str] = {}
+    if not isinstance(topo, dict):
+        return out
+    for n in (topo.get("nodes") or []):
+        if not isinstance(n, dict):
+            continue
+        name = str(n.get("name") or "").strip()
+        if not name:
+            continue
+        out[name] = str(n.get("runtime") or "").strip().lower()
+    return out
+
+
+# -------------------------
+# Registry-derived vocabularies (WI-D; REQ-45b-8/-9/-11, PBE-P2-6)
+# -------------------------
+# One source (NOS_PROVIDERS), several readers. Every derivation is sorted so
+# ordering is deterministic (Doctrine §1.4).
+
+
+def nos_known_types() -> tuple[str, ...]:
+    """Registry-derived node types, sorted (REQ-45b-9)."""
+    return tuple(sorted(NOS_PROVIDERS))
+
+
+def nos_candidate_subdirs() -> dict[str, str]:
+    """Explicit candidate-subdir <-> node-type mapping, registry-derived.
+
+    Returns subdir -> node_type (REQ-45b-8). The mapping is carried, never
+    inferred: `nft` maps to node type `nft-fw`; the vocabularies are mapped,
+    never silently unified.
+    """
+    out: dict[str, str] = {}
+    for _t in sorted(NOS_PROVIDERS):
+        _c = NOS_PROVIDERS[_t].candidate
+        if _c is not None:
+            out[_c.subdir] = _t
+    return out
+
+
+def nos_default_image(ntype: str) -> "str | None":
+    """Provider-declared default image for a node type (REQ-45b-11/-11-ext).
+
+    None when the provider declares none -- non-frr image defaults stay in
+    their existing maps untouched (LD-H1 / P5).
+    """
+    _p = NOS_PROVIDERS.get(ntype)
+    return _p.default_image if _p is not None else None
+
+
+def nos_provider_for(ntype: str, seam: str) -> NosProvider:
+    """Deny-by-default provider dispatch (REQ-45b-1, B01).
+
+    The single lookup every provider seam uses. Unknown type -> the exact
+    §6.6 registry UNSUP (deterministic; supported set rendered sorted, D06),
+    exit-2 band. No fallback chains; no environment probing.
+    """
+    p = NOS_PROVIDERS.get(ntype)
+    if p is None:
+        supported = ", ".join(sorted(NOS_PROVIDERS))
+        die(
+            f"ERROR: unsupported node type '{ntype}' at {seam}: no NOS "
+            "provider is registered for it.\n"
+            f"Supported: {supported}.\n"
+            "Next:\n"
+            "  Extension route: add src/cassian_nos_<token>.py and register "
+            "it in NOS_PROVIDERS\n"
+            "  (see the NOS expansion structure design).",
+            code=2,
+        )
+    return p
+
+
 # -------------------------
 # Input adapters (read-only, advisory-only)
 # -------------------------
@@ -1657,7 +1818,9 @@ def topo_to_containerlab(topo: dict) -> dict:
     hard_defaults = {
         "host": "wbitt/network-multitool:latest",
         "nft-fw": "ghcr.io/cassian-gate/nft-fw:latest",
-        "frr": "frrouting/frr:latest",
+        # REQ-45b-11: registry-derived from the FRR provider's default_image.
+        # Non-frr entries are untouched (P5).
+        "frr": nos_default_image("frr"),
     }
 
     evpn = _validate_fabric_evpn_presence_only(topo)
@@ -2262,10 +2425,13 @@ def resolve_topology(topo: dict) -> dict:
             if src_node not in _exec_node_types:
                 die(f"{ctx}: exec test target node {src_node!r} is not declared in topology 'nodes:'")
             derived_type = _exec_node_types[src_node]
-            if derived_type not in ("frr", "nft-fw"):
+            # REQ-45b-9: registry-derived, sorted -> ("frr", "nft-fw").
+            _known = nos_known_types()
+            if derived_type not in _known:
                 die(
                     f"{ctx}: exec test target node {src_node!r} has node type "
-                    f"{derived_type!r}; exec supports only node types 'frr', 'nft-fw'"
+                    f"{derived_type!r}; exec supports only node types "
+                    + ", ".join(repr(_k) for _k in _known)
                 )
             t["src"] = src_node
             cmd_raw = t.get("command")
@@ -2876,11 +3042,11 @@ def resolve_topology(topo: dict) -> dict:
         # ----------------------------
         _eig_kind = str(t.get("kind") or "").strip().lower()
         if _eig_kind in ("tcp", "bgp_neighbor", "invariant", "route_prefix"):
-            _eig_runtimes = {
-                str(_n.get("name") or "").strip(): str(_n.get("runtime") or "").strip().lower()
-                for _n in (resolved.get("nodes") or [])
-                if isinstance(_n, dict) and str(_n.get("name") or "").strip()
-            }
+            # REQ-45b-12 / PBE-P2-6: read the model-homed shared source instead
+            # of re-deriving. This check remains an independent corroborating
+            # gate -- it is not dropped, it just stops being a second
+            # derivation of the same mapping.
+            _eig_runtimes = node_runtime_map(resolved)
             _eig_ctx = f"tests[{i}] ({t.get('name', '<unnamed>')})"
             _eig_refs = [("src", t.get("src") or t.get("from"))]
             if _eig_kind == "tcp":

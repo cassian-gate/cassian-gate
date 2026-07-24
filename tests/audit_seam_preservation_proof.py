@@ -7,7 +7,7 @@ import sys, os, ast, hashlib
 SRC = os.path.join(os.path.dirname(__file__), "..", "src", "cassian_tests.py")
 
 # v9 baselines (computed from the declared v9 consolidated snapshot).
-WHOLE_MODULE_V9 = "dd56046b93cd8961f0fe0f97b25fc8b6ed28946cbbeea3663997c47ba603cd87"  # re-baselined from ba0a1f36 (phase2 §4.5-a exec-target split); orig ba0a1f36
+WHOLE_MODULE_V9 = "49f484b027c146c3c4f513ef3829e6909b0d142743f3ffdbcdadf3c8751ae2d0"  # re-baselined from dd56046b (phase2 §4.5-b WI-C1 parse-family relocation shims); orig ba0a1f36
 SEAM_SEGMENT_V9 = {
     "_format_test_summary":        "2119d19a5667f77168df07ec5edcaa4d3001cdca49386027f1c6186c1f727ffa",
     "write_test_summary_artifact": "ff523b7eb74ebdff684ac8cb179842cd71c099e73913398ed280507343263420",
@@ -20,7 +20,7 @@ def ck(c, msg):
 
 src = open(SRC, encoding="utf-8").read()
 whole = hashlib.sha256(src.encode("utf-8")).hexdigest()
-ck(whole == WHOLE_MODULE_V9, f"whole-module cassian_tests.py == v9 (dd56046b...)  [{whole[:12]}...]")
+ck(whole == WHOLE_MODULE_V9, f"whole-module cassian_tests.py == v9 (49f484b0...)  [{whole[:12]}...]")
 
 tree = ast.parse(src)
 lines = src.splitlines(keepends=True)

@@ -46,17 +46,19 @@ from preservation_manifest import MODULE_ROSTER
 # d37a75f per-module SHA-256 baseline (authoritative: git show d37a75f:src/*).
 D37A75F_BASELINE = {
     "src/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "src/cassian.py": "588fbed521cf68903cf387f02534c58fdfd7b9a844c1ee8f6d375099280cc132",  # re-baselined from cbc931d2 (phase2 §4.5-a exec-target split; WI-1 stub-import removal); orig cbc931d2
+    "src/cassian.py": "45c5180e30e2d4bda791db9c90d8ae31c0797e7fbe98d2df47c54127643b6c2d",  # re-baselined from 588fbed5 (phase2 §4.5-b WI-F dead-code sweep (ensure_ip_tools import) + guardrail comment correction); orig cbc931d2
     "src/cassian_ai.py": "6900c52ea52f2a4a588b99478f10e967603b7a1a5f87b3b257878d4fde569361",
     "src/cassian_artifacts.py": "ae8a54302e4fa8fe2f89e3af0e1e16dcda0ff2ae7bc4a805b671f69029fbb04c",
-    "src/cassian_candidate.py": "93db9b61e9fd22c74156fc0492119fc4e170a7a192684354c8a31c70876ff52d",
+    "src/cassian_candidate.py": "7775a062f27461fc76b1ae6c1e252550e30ecf3498412885e0a82e9fe02799ed",  # re-baselined from 93db9b61 (phase2 §4.5-b WI-D1 registry-derived candidate subdirs); orig 93db9b61
     "src/cassian_cli.py": "9234f3fdb76b5432bac8bf22a9807f234da9dff3a72d7c334ed9e2508183898a",
     "src/cassian_import.py": "604c8d8ff2bc461f8b43d7e5be6f63bd00f653ce6f83b64ffff9cf90450cf71c",  # §4.14 new module, enforced (LD-8/LD-9)
-    "src/cassian_common.py": "a0469a2a1b3cdcc5a1fffc7cd02198447cf1e0cb1ee8657469c3fb2c57139a10",
-    "src/cassian_runtime_container.py": "b3e45fa2a910617e1d4dcbcc1d6509b5385cecb4cb236498be2964796b92b59f",  # re-baselined from b2a493f9 (phase2 §4.5-a exec-target split); orig b2a493f9
-    "src/cassian_runtime_vm.py": "865545e48b51d077731d0d0560aeafd130192dd988b6d43c8ad646d23ed4f718",  # §4.5-a new module (WI-1 VM runtime backend); enforced (REQ-45a-9; LD-9)
+    "src/cassian_nos_frr.py": "3c53970d87a18ea828f0bb9008f24c75b22fdf5dd3a45a7c45e0b72faedd7ff3",  # §4.5-b new module (WI-B NOS provider structure); enforced (REQ-45b-13; LD-9)
+    "src/cassian_nos_types.py": "b4e4cec8e0532b3280db4c8f0480f1884336a273ee7690d8992eee087b362eb6",  # §4.5-b new module (WI-B NOS provider structure); enforced (REQ-45b-13; LD-9)
+    "src/cassian_common.py": "0f5a326f3407811ba9afa8c449a15a9526e101a0ba258998b29bd633e48223bb",  # re-baselined from a0469a2a (phase2 §4.5-b WI-C1/C2 NOS-neutral re-homes + A-S6 provenance comment); orig a0469a2a
+    "src/cassian_runtime_container.py": "7eecee129911d838d15e7e20463db66475fd190b9cbbfb0435ebc33a79303761",  # re-baselined from b3e45fa2 (phase2 §4.5-b WI-C1 _normalize_prefix shim + WI-F ensure_ip_tools removal); orig b2a493f9
+    "src/cassian_runtime_vm.py": "3832ad07ef6e9ce483bc0fe0f017df4584b15bf6c3a90c55fbb0b2b14f84f494",  # re-baselined from 865545e4 (phase2 §4.5-b WI-D2 node_runtime_map model-homing); orig 865545e4
     "src/cassian_state.py": "aec4d412ee53555156cb5275c5d7a1329f54aaef298d4409feebcad2c198a9d6",
-    "src/cassian_tests.py": "dd56046b93cd8961f0fe0f97b25fc8b6ed28946cbbeea3663997c47ba603cd87",  # re-baselined from ba0a1f36 (phase2 §4.5-a exec-target split); orig ba0a1f36
+    "src/cassian_tests.py": "49f484b027c146c3c4f513ef3829e6909b0d142743f3ffdbcdadf3c8751ae2d0",  # re-baselined from dd56046b (phase2 §4.5-b WI-C1 parse-family relocation shims); orig ba0a1f36
     "src/cassian_two_run.py": "a6432665dbfee699713fe60c2e42d427c3c3fd9f82be7ec0ab65caa8b34c3ed9",  # re-baselined from cfafdfa6 (phase2 4.4 F-1 canonical serializer); orig 694f4e0d
 }
 

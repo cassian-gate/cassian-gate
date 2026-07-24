@@ -85,6 +85,14 @@ jobs:
           python tests/h53_resolve_interface_existence_proof.py
           python tests/h57_scenario_invariant_dispatch_generalization_proof.py
 
+      - name: NOS provider structure proof harnesses (§4.5-b)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/nos_leaf_import_proof.py
+          python tests/nos_deny_by_default_proof.py
+          python tests/nos_census_instrument.py
+
       - name: User-defined invariant (exec) proof harnesses (§4.7)
         shell: bash
         run: |

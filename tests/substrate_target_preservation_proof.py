@@ -65,7 +65,13 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
 # The migrated families (addendum §2.4).
-MIGRATED_FAMILIES = ("cassian_engine.py", "cassian_tests.py", "cassian_runtime_container.py")
+# Extended under MS condition C-1 (F-MS-1, §4.5-b closure): cassian_runtime_vm.py
+# added to the defended set. Its 2 substrate_* sites (L364/L383) use
+# call-expression receivers and were invisible to the pre-correction census
+# regex; they sit on a module §4.5-b modified (REQ-45b-12), so REQ-45b-P1's
+# zero-touch claim over them was previously undefended by BOTH instruments.
+MIGRATED_FAMILIES = ("cassian_engine.py", "cassian_tests.py",
+                     "cassian_runtime_container.py", "cassian_runtime_vm.py")
 
 # --- committed literal denylist (see module docstring for the ruling + the LIMIT) ---
 # Vocabulary-based, not semantic. Never auto-derived from the routing classes.
