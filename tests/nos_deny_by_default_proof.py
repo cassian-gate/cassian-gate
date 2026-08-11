@@ -16,22 +16,34 @@ Legs:
         on the guards' own predicate against a synthetic on-disk set, so the
         mechanism is proven without mutating the tree
 
-BOUNDED POSITIVE LEG (ruled). Leg (ii)'s positive half asserts only that the
-gate DOES NOT FIRE for an FRR node -- i.e. execution reaches the dispatch line.
-It does NOT assert that `vty` then succeeds. That is deliberate and bounded,
-not an oversight: the downstream path is blocked by pre-existing defect
-F-45b-E-1 (`vty` is called in `cassian_engine.cmd_vty` but is not imported into
-`cassian_engine`; every invocation reaching dispatch raises NameError). That
-defect is outside §4.5-b's §14.4 bounded touch set and is tracked as a Ledger
-row routed to the undefined-name defect-class remediation. When that row
-closes, this leg extends to assert end-to-end pass-through.
+EXTENDED POSITIVE LEG (REQ-UNDEF-21). Leg (ii)'s positive half formerly
+asserted only that the gate DOES NOT FIRE for an FRR node, because the
+downstream path was blocked by pre-existing defect F-45b-E-1 (`vty` called in
+`cassian_engine.cmd_vty` but never imported there; every invocation reaching
+dispatch raised NameError). That defect is now repaired by the undefined-name
+defect-class bounded remediation, so the leg is extended as promised: it runs
+the same vtysh command through `cassian vty` and directly through `docker
+exec`, and asserts the streams are byte-identical. That tests BR-2's claim
+that cmd_vty streams cp.stdout/cp.stderr UNCHANGED -- not merely that dispatch
+occurred.
+
+This leg needs a container runtime. It starts frrouting/frr:latest with a bare
+`docker run` (no containerlab, no sudo, no netns) and removes it in a finally.
+If docker is absent the leg FAILS with an actionable message; it does not skip.
+
+RESIDUAL, recorded rather than implied: this asserts pass-through of one
+command against one image. It does not assert vtysh semantics, nor behaviour
+under a lab deployed by containerlab.
 """
 import argparse
+import contextlib
+import io
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "src")
@@ -131,20 +143,67 @@ try:
     disp_at = src_txt.find("cp = vty(rt, lab, node, command)")
     check(0 < gate_at < disp_at, "(ii) gate is PRE-dispatch in cmd_vty source order")
 
-    # BOUNDED positive leg -- see module docstring (F-45b-E-1).
-    fired = False
-    try:
-        E.cmd_vty(argparse.Namespace(lab="nosdenyproof", node="r1",
-                                     command="show bgp summary"))
-    except SystemExit as ex:
-        fired = "FRR vtysh shortcut" in str(ex.code)
-    except NameError:
-        fired = False   # reached dispatch; blocked by F-45b-E-1 (bounded, tracked)
-    except Exception:
-        fired = False
-    check(not fired,
-          "(ii) BOUNDED positive leg: gate does NOT fire for an FRR node "
-          "(end-to-end pass-through unassertable -- F-45b-E-1, tracked)")
+    # EXTENDED positive leg (REQ-UNDEF-21) -- see module docstring.
+    # The gate must not fire for an FRR node, AND the command must pass the
+    # router's own output back unchanged.
+    if shutil.which("docker") is None:
+        check(False,
+              "(ii) EXTENDED positive leg: docker not found. This leg needs a "
+              "container runtime; it fails rather than skipping.")
+    else:
+        _CN = "clab-nosdenyproof-r1"
+        _VCMD = "show version"
+        subprocess.run(["docker", "rm", "-f", _CN],
+                       capture_output=True, text=True)
+        _up = subprocess.run(
+            ["docker", "run", "-d", "--name", _CN, "frrouting/frr:latest"],
+            capture_output=True, text=True)
+        try:
+            check(_up.returncode == 0,
+                  "(ii) EXTENDED: frrouting/frr container started "
+                  "(rc=%d) %s" % (_up.returncode, _up.stderr.strip()[:160]))
+            if _up.returncode == 0:
+                _direct = None
+                for _ in range(30):
+                    _direct = subprocess.run(
+                        ["docker", "exec", _CN, "vtysh", "-c", _VCMD],
+                        capture_output=True, text=True)
+                    if _direct.returncode == 0 and _direct.stdout.strip():
+                        break
+                    time.sleep(1)
+                check(_direct is not None and _direct.returncode == 0
+                      and bool(_direct.stdout.strip()),
+                      "(ii) EXTENDED: vtysh answers in the container "
+                      "(rc=%s)" % (None if _direct is None else _direct.returncode))
+
+                if _direct is not None and _direct.returncode == 0:
+                    _buf = io.StringIO()
+                    _rc = 0
+                    _oldq = CM.QUIET_RUN
+                    CM.QUIET_RUN = True
+                    try:
+                        with contextlib.redirect_stdout(_buf):
+                            try:
+                                E.cmd_vty(argparse.Namespace(
+                                    lab="nosdenyproof", node="r1",
+                                    command=_VCMD))
+                            except SystemExit as ex:
+                                _rc = ex.code
+                    finally:
+                        CM.QUIET_RUN = _oldq
+
+                    check(not (isinstance(_rc, str)
+                               and "FRR vtysh shortcut" in _rc),
+                          "(ii) EXTENDED: gate does NOT fire for an FRR node")
+                    check(_rc == 0,
+                          "(ii) EXTENDED: cmd_vty exits 0 on a live FRR node "
+                          "(got %r)" % (_rc,))
+                    check(_buf.getvalue() == _direct.stdout,
+                          "(ii) EXTENDED: cmd_vty stdout is BYTE-IDENTICAL to "
+                          "direct `docker exec vtysh -c` (BR-2 pass-through)")
+        finally:
+            subprocess.run(["docker", "rm", "-f", _CN],
+                           capture_output=True, text=True)
 finally:
     shutil.rmtree(labdir, ignore_errors=True)
 

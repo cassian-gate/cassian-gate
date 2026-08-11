@@ -27,6 +27,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # C1 (LD-UN-1) ruled Option B for the name-resolution guard: it runs
+      # the 3.10/3.11/3.12 matrix. This step provisions the two extra
+      # interpreters and runs BEFORE the pinned setup, so `python` still
+      # resolves to 3.11 for every other step. NG-4 -- the gate-wide matrix
+      # and requires-python policy -- is NOT decided here.
+      - name: Setup Python (guard matrix - 3.10, 3.12)
+        uses: actions/setup-python@v5
+        with:
+          python-version: |
+            3.10
+            3.12
+
       - name: Setup Python (pinned)
         uses: actions/setup-python@v5
         with:
@@ -65,6 +77,33 @@ jobs:
         run: |
           set -euo pipefail
           python -m py_compile src/*.py
+
+      - name: Name-resolution class-closure guard (undefined-name remediation)
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=""
+          for v in 3.10 3.11 3.12; do
+            command -v "python$v" >/dev/null 2>&1 || missing="$missing python$v"
+          done
+          if [ -n "$missing" ]; then
+            echo "ERROR: guard interpreter matrix incomplete; missing:$missing"
+            echo "C1 (LD-UN-1) ruled Option B. Provisioning the runner is in"
+            echo "scope for a runner-setup step; anything beyond that is a HALT"
+            echo "to the founder, never a fall back to single-version."
+            exit 2
+          fi
+          for v in 3.10 3.11 3.12; do
+            echo "=== python$v selftest (REQ-UNDEF-13 non-vacuity) ==="
+            "python$v" tests/name_resolution_guard.py --selftest
+            echo "=== python$v gate (REQ-UNDEF-12) ==="
+            "python$v" tests/name_resolution_guard.py
+          done
+          echo "=== replay determinism (DS-1; MS amendment A1) ==="
+          python3.11 tests/name_resolution_guard.py > "$RUNNER_TEMP/nrg1.txt"
+          python3.11 tests/name_resolution_guard.py > "$RUNNER_TEMP/nrg2.txt"
+          diff "$RUNNER_TEMP/nrg1.txt" "$RUNNER_TEMP/nrg2.txt"
+          echo "replay: byte-identical"
 
       - name: Observed-state absence-render proof harness (§4.1)
         shell: bash

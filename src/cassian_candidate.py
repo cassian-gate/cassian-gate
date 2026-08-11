@@ -80,6 +80,14 @@ def _candidate_parse_dir_or_die(topo: dict[str, Any], cand_dir: Path) -> list[di
     seen: set[tuple[str, str]] = set()
     saw_any = False
 
+    # UNDEF remediation: `_cand_misuse` was referenced at 18 sites below but
+    # bound nowhere, so every candidate-config misuse branch raised NameError
+    # instead of its shipped message (REQ-UNDEF-4, -8, -9). Function-local,
+    # matching the sibling below and this function's die(..., code=2)
+    # convention. No call-site message string is altered.
+    def _cand_misuse(msg: str) -> None:
+        die(msg, code=2)
+
     def _cand_misuse_invalid_structure() -> None:
         die(
             f"ERROR: Candidate config directory structure invalid: {cand_dir}\n"

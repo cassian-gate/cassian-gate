@@ -3267,7 +3267,14 @@ def resolve_topology(topo: dict) -> dict:
                 for j, nname in enumerate(scope, start=1):
                     if not isinstance(nname, str) or not nname.strip():
                         die(f"candidate_changes[{idx}] ({cid}).scope[{j}]: must be a non-empty string")
-                    if nname.strip() not in names:
+                    # UNDEF remediation: `names` was unbound in this scope, so
+                    # EVERY candidate_changes[*].scope entry raised NameError --
+                    # valid or not -- and the shipped rejection below never
+                    # rendered (REQ-UNDEF-7, -8, -9). Bound to nodes_by_name
+                    # (assigned unconditionally at the top level of this
+                    # function), NOT to `nodes`, which is conditionally bound
+                    # inside the ping branch and which Python itself suggests.
+                    if nname.strip() not in nodes_by_name:
                         die(f"candidate_changes[{idx}] ({cid}).scope[{j}]: unknown node '{nname.strip()}'")
 
     return resolved
