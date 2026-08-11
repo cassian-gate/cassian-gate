@@ -94,6 +94,12 @@ ALLOWLIST = {
 #     MS-F-4 because a permanent standing surface must state the true
 #     failure direction.
 #   - getattr indirection.
+#   - UnboundLocalError. A name assigned LATER in the same scope is bound as
+#     far as symtable is concerned, so a read before that assignment is
+#     invisible here. This is not hypothetical: the undefined-name instrument
+#     surfaced exactly such a defect in cmd_test's blocked-path blocks
+#     (F-UNDEF-11), repaired under the NG-6 amendment in carry-forward
+#     note 3. This guard would have gone green on those lines.
 #
 # NOT a limit, fixed rather than documented (MS-F-5): allowlist matching
 # was per-finding membership, so one entry could absorb N identical
@@ -101,14 +107,8 @@ ALLOWLIST = {
 # definitions in one scope produce identical triples on every supported
 # interpreter. A cardinality check now reds on a duplicate match. Listed
 # here only to record that it was considered for this block and rejected:
-# the four limits above are inherent to static analysis; that one was an
+# the five limits above are inherent to static analysis; that one was an
 # implementation choice.
-#   - UnboundLocalError. A name assigned LATER in the same scope is bound as
-#     far as symtable is concerned, so a read before that assignment is
-#     invisible here. This is not hypothetical: the undefined-name instrument
-#     surfaced exactly such a defect in cmd_test's blocked-path blocks
-#     (F-UNDEF-11), repaired under the NG-6 amendment in carry-forward
-#     note 3. This guard would have gone green on those lines.
 #
 # The residual is defended by the per-site traces and Ledger rows named in
 # the allowlist above -- tracked debt, not acceptance.
