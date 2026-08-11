@@ -101,15 +101,6 @@ ALLOWLIST = {
 #     (F-UNDEF-11), repaired under the NG-6 amendment in carry-forward
 #     note 3. This guard would have gone green on those lines.
 #
-# NOT a limit, fixed rather than documented (MS-F-5): allowlist matching
-# was per-finding membership, so one entry could absorb N identical
-# triples and exempt findings carrying no anchor. Two same-named nested
-# definitions in one scope produce identical triples on every supported
-# interpreter. A cardinality check now reds on a duplicate match. Listed
-# here only to record that it was considered for this block and rejected:
-# the five limits above are inherent to static analysis; that one was an
-# implementation choice.
-#
 # The residual is defended by the per-site traces and Ledger rows named in
 # the allowlist above -- tracked debt, not acceptance.
 # --------------------------------------------------------------------------
@@ -200,6 +191,28 @@ def glob_roster(root):
 def allowlisted_modules():
     """Modules the allowlist names. Each MUST appear in the roster."""
     return sorted({rel for rel, _scope, _name in ALLOWLIST})
+
+
+def nested_python(root):
+    """Any .py below src/ top level -> the sweep cannot see it (MS-R-1).
+
+    The ratified method sweeps `src/*.py`, flat. Its claim that this makes
+    new modules 'covered by default' holds ONLY while the tree is flat: a
+    module at src/nos/x.py is invisible, and every gate here prints PASS
+    while it is. This does not widen the sweep -- it refuses to certify a
+    tree shape the method was never ratified for. Resolving a red here is
+    a founder ruling, not a guard change.
+    """
+    src = os.path.join(root, "src")
+    found = []
+    for dirpath, _dirnames, filenames in os.walk(src):
+        if os.path.abspath(dirpath) == os.path.abspath(src):
+            continue
+        for f in filenames:
+            if f.endswith(".py"):
+                found.append(os.path.relpath(os.path.join(dirpath, f),
+                                             root))
+    return sorted(found)
 
 
 def roster_is_sufficient(paths):
@@ -413,6 +426,35 @@ def matching_legs():
              two_findings and membership_says_clean and cardinality_catches)]
 
 
+def tree_shape_legs():
+    """Non-vacuity for the two properties C-3 adds.
+
+    The tripwire leg builds a REAL subpackage tree; the staleness leg
+    exercises the matched/unmatched distinction the red now depends on.
+    Testing the predicates in isolation would repeat C-1's mistake.
+    """
+    out = []
+
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "src")
+        os.makedirs(os.path.join(src, "nos"))
+        open(os.path.join(src, "top.py"), "w").close()
+        flat_clean = nested_python(td) == []
+        open(os.path.join(src, "nos", "buried.py"), "w").close()
+        nested_caught = nested_python(td) == [os.path.join(
+            "src", "nos", "buried.py")]
+        out.append(("nested .py CAUGHT, flat tree clean (MS-R-1)",
+                    flat_clean and nested_caught))
+
+    entry = ("src/x.py", "top.f", "zz")
+    matched = {entry} - {f for f in [entry] if f in {entry}}
+    unmatched = {entry} - {f for f in [] if f in {entry}}
+    out.append(("stale entry distinguished from matched (MS-R-2)",
+                matched == set() and unmatched == {entry}))
+
+    return out
+
+
 def selftest():
     print("=" * 70)
     print("name-resolution guard -- SELFTEST (REQ-UNDEF-13 non-vacuity)")
@@ -448,6 +490,10 @@ def selftest():
         ok = ok and hit
         print("  %-45s %s" % (label, "PROVEN" if hit else "FAILED"))
 
+    for label, hit in tree_shape_legs():
+        ok = ok and hit
+        print("  %-45s %s" % (label, "PROVEN" if hit else "FAILED"))
+
     names = {f[2] for f in sweep_source(TRAP_DUNDERS)}
     clean = not names
     ok = ok and clean
@@ -465,6 +511,19 @@ def main():
 
     paths = roster(ROOT)
     preamble(paths, ROOT)
+
+    nested = nested_python(ROOT)
+    if nested:
+        print("\nFAIL: Python below src/ top level -- the sweep does not "
+              "recurse (MS-R-1).")
+        for p in nested:
+            print("  %s" % p)
+        print("The ratified method sweeps `src/*.py`, flat. These files are")
+        print("INVISIBLE to it, and every check below would print PASS while")
+        print("they are. Resolve by founder ruling -- widening the sweep")
+        print("amends the ratified method and is not this guard's to do.")
+        return 1
+    print("flat-tree precondition (no .py below src/ top level): PASS")
 
     sufficient, why = roster_is_sufficient(paths)
     if not sufficient:
@@ -522,8 +581,15 @@ def main():
         print("\nNOTE: allowlist entries with no matching finding:")
         for rel, scope, name in stale:
             print("  %s: %s: %s" % (rel, scope, name))
-        print("Not a failure -- an entry may go quiet on an interpreter whose")
-        print("scope labelling differs (PEP 709). Remove only with a ruling.")
+        print("FAIL: an allowlisted exemption matched nothing (MS-R-2 "
+              "mitigation).")
+        print("An entry outlives the site it was granted for. Left standing,")
+        print("it silently exempts the NEXT unbound name that resolves to the")
+        print("same (module, scope, name) -- the allowlist key carries no site")
+        print("component and symtable exposes none. Remove the entry by ruling.")
+        print("If an entry goes quiet only on one interpreter (PEP 709 scope")
+        print("labelling), that is itself a ruling moment, not a pass.")
+        return 1
 
     if unexpected:
         print("\nFAIL: %d finding(s) outside the allowlist." % len(unexpected))
