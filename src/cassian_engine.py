@@ -61,6 +61,10 @@ from cassian_runtime_container import (
     gen_nft_fw_rules,
     nft_fw_apply,
     compare_expected_vs_observed_prefixes,
+    # UNDEF remediation: `vty` was called at cmd_vty but never imported into
+    # cassian_engine, so every `cassian vty` invocation reaching dispatch
+    # raised NameError (REQ-UNDEF-5, -9). vty()'s body is untouched.
+    vty,
 )
 from cassian_tests import (
     compare_expected_vs_observed_bgp,
@@ -9827,10 +9831,21 @@ def cmd_test(args: argparse.Namespace) -> None:
 
             if want_scenarios and not (results.get("scenarios") or []):
                 scenario_items = []
-                if selected_scenario:
-                    scenario_items = [s for s in (scenarios or []) if isinstance(s, dict) and str(s.get("id") or "").strip() == selected_scenario]
-                elif run_all_scenarios:
-                    scenario_items = [s for s in (scenarios or []) if isinstance(s, dict)]
+                # UNDEF remediation: `selected_scenario` / `run_all_scenarios`
+                # were bound nowhere; a refactor renamed the pair and left these
+                # blocked-path references on the old names (REQ-UNDEF-6, -9).
+                # Rebound to the pair `want_scenarios` is derived from; the
+                # two-way dispatch semantics are unchanged.
+                # UNDEF remediation (out-of-class, NG-6 amended by CF note 3):
+                # `scenarios` is assigned only AFTER these blocks, so reading it
+                # here raised UnboundLocalError once the orphaned names above were
+                # rebound. Read from `topo` directly -- the identical expression the
+                # three in-scope assignments use. NOT a class member; the 30-site
+                # enumeration and the 26/3/1 split are unchanged.
+                if scenario_id:
+                    scenario_items = [s for s in (topo.get("scenarios") or []) if isinstance(s, dict) and str(s.get("id") or "").strip() == scenario_id]
+                elif all_scenarios:
+                    scenario_items = [s for s in (topo.get("scenarios") or []) if isinstance(s, dict)]
                 for s in scenario_items:
                     results["scenarios"].append(
                         {
@@ -9927,13 +9942,24 @@ def cmd_test(args: argparse.Namespace) -> None:
 
             if want_scenarios and not (results.get("scenarios") or []):
                 scenario_items = []
-                if selected_scenario:
+                # UNDEF remediation: `selected_scenario` / `run_all_scenarios`
+                # were bound nowhere; a refactor renamed the pair and left these
+                # blocked-path references on the old names (REQ-UNDEF-6, -9).
+                # Rebound to the pair `want_scenarios` is derived from; the
+                # two-way dispatch semantics are unchanged.
+                # UNDEF remediation (out-of-class, NG-6 amended by CF note 3):
+                # `scenarios` is assigned only AFTER these blocks, so reading it
+                # here raised UnboundLocalError once the orphaned names above were
+                # rebound. Read from `topo` directly -- the identical expression the
+                # three in-scope assignments use. NOT a class member; the 30-site
+                # enumeration and the 26/3/1 split are unchanged.
+                if scenario_id:
                     scenario_items = [
-                        s for s in (scenarios or [])
-                        if isinstance(s, dict) and str(s.get("id") or "").strip() == selected_scenario
+                        s for s in (topo.get("scenarios") or [])
+                        if isinstance(s, dict) and str(s.get("id") or "").strip() == scenario_id
                     ]
-                elif run_all_scenarios:
-                    scenario_items = [s for s in (scenarios or []) if isinstance(s, dict)]
+                elif all_scenarios:
+                    scenario_items = [s for s in (topo.get("scenarios") or []) if isinstance(s, dict)]
                 for s in scenario_items:
                     results["scenarios"].append(
                         {
