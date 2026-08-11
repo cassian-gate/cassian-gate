@@ -31,6 +31,7 @@ EXIT
 """
 
 import builtins
+import glob
 import hashlib
 import os
 import sys
@@ -84,7 +85,13 @@ ALLOWLIST = {
 #   - reachability. A flagged name may sit on a path no input reaches; an
 #     unflagged line may still crash. Per-site traces carry that burden.
 #   - dynamic binding: globals()/locals() mutation, exec, setattr on the
-#     module, star-imports resolved at runtime.
+#     module.
+#   - star-imports, which fail in the OPPOSITE direction: `from x import *`
+#     followed by a use of an imported name is reported as UNBOUND -- a
+#     FALSE POSITIVE, i.e. CI red on legitimate code, not a missed defect.
+#     Latent only: src/*.py contains no star-import today. Recorded at
+#     MS-F-4 because a permanent standing surface must state the true
+#     failure direction.
 #   - getattr indirection.
 #   - UnboundLocalError. A name assigned LATER in the same scope is bound as
 #     far as symtable is concerned, so a read before that assignment is
@@ -153,10 +160,35 @@ def sweep_source(source, rel="<injected>"):
 
 
 def roster(root):
+    """Swept-path roster, via os.listdir."""
     src = os.path.join(root, "src")
     return sorted(
         os.path.join("src", f) for f in os.listdir(src) if f.endswith(".py")
     )
+
+
+def glob_roster(root):
+    """Independent second enumeration of src/*.py, via glob.glob.
+
+    Mechanically distinct from roster()'s os.listdir + endswith, so the
+    two agreeing is evidence. Comparing roster() against itself -- which
+    is what shipped -- cannot fail and asserts nothing (MS condition C-1).
+    """
+    src = os.path.join(root, "src")
+    return sorted(
+        os.path.join("src", os.path.basename(p))
+        for p in glob.glob(os.path.join(src, "*.py"))
+    )
+
+
+def swept_set_agrees(swept, independent):
+    """Pure predicate, so --selftest can prove it returns False.
+
+    A check that cannot be shown to fail is not a check. The non-vacuity
+    leg for this predicate is in selftest() -- its absence is why C-1's
+    defect shipped.
+    """
+    return list(swept) == list(independent)
 
 
 def sha256_file(path):
@@ -269,6 +301,14 @@ def selftest():
     print("  %-45s %s" % ("trap: scope flattening",
                           "DETECTED" if hit else "MISSED"))
 
+    same = ["src/a.py", "src/b.py"]
+    diff = ["src/a.py"]
+    can_fail = (swept_set_agrees(same, list(same))
+                and not swept_set_agrees(same, diff))
+    ok = ok and can_fail
+    print("  %-45s %s" % ("swept-set assertion can FAIL (C-1)",
+                          "PROVEN" if can_fail else "VACUOUS"))
+
     names = {f[2] for f in sweep_source(TRAP_DUNDERS)}
     clean = not names
     ok = ok and clean
@@ -287,11 +327,15 @@ def main():
     paths = roster(ROOT)
     preamble(paths, ROOT)
 
-    glob_now = roster(ROOT)
-    if paths != glob_now:
-        print("\nFAIL: swept roster != src/*.py glob (deny-by-default breach)")
+    independent = glob_roster(ROOT)
+    if not swept_set_agrees(paths, independent):
+        print("\nFAIL: swept roster != independent src/*.py enumeration "
+              "(deny-by-default breach)")
+        print("  swept (os.listdir) : %s" % paths)
+        print("  independent (glob) : %s" % independent)
         return 1
-    print("swept-set assertion (roster == src/*.py glob): PASS")
+    print("swept-set assertion (os.listdir roster == glob.glob roster): "
+          "PASS -- %d files, two independent enumerations" % len(paths))
 
     findings = sweep(paths, ROOT)
 
