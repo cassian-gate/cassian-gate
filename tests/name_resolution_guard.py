@@ -36,6 +36,7 @@ import hashlib
 import os
 import sys
 import symtable
+import tempfile
 
 # --------------------------------------------------------------------------
 # (c) Module implicit dunders.  Omitting these produced a live false-positive
@@ -174,11 +175,39 @@ def glob_roster(root):
     two agreeing is evidence. Comparing roster() against itself -- which
     is what shipped -- cannot fail and asserts nothing (MS condition C-1).
     """
+    # glob.escape: `src` is a PATH, but glob reads its argument as a
+    # PATTERN. An unescaped metacharacter in the repository root makes
+    # glob enumerate a different directory -- which, with a decoy at the
+    # resolved path, makes both rosters agree for the wrong reason
+    # (MS condition C-2a). It also reds a healthy tree when no decoy
+    # exists. Escaping closes both directions.
     src = os.path.join(root, "src")
     return sorted(
         os.path.join("src", os.path.basename(p))
-        for p in glob.glob(os.path.join(src, "*.py"))
+        for p in glob.glob(os.path.join(glob.escape(src), "*.py"))
     )
+
+
+def allowlisted_modules():
+    """Modules the allowlist names. Each MUST appear in the roster."""
+    return sorted({rel for rel, _scope, _name in ALLOWLIST})
+
+
+def roster_is_sufficient(paths):
+    """Can this roster support a class-closure claim? -> (bool, reason)
+
+    A guard that sweeps nothing declares the class closed on no evidence
+    (MS condition C-2b). Non-emptiness alone is NOT enough: repackaging
+    src/ into a subpackage would leave src/__init__.py and pass a bare
+    check while sweeping nothing of substance. Every allowlisted module
+    must be present, or the guard is looking at the wrong tree.
+    """
+    if not paths:
+        return False, "roster is EMPTY -- nothing was swept"
+    missing = [m for m in allowlisted_modules() if m not in paths]
+    if missing:
+        return False, "allowlisted module(s) absent from roster: %s" % missing
+    return True, "ok"
 
 
 def swept_set_agrees(swept, independent):
@@ -282,6 +311,56 @@ TRAP_DUNDERS = (
 )
 
 
+def enumeration_legs():
+    """Non-vacuity aimed at the ENUMERATION, not at the predicate.
+
+    C-1's fix proved swept_set_agrees() returns False on a hand-built
+    pair. That established nothing about whether the two enumerations can
+    disagree on a real filesystem -- the gap the MS reviewer had to close
+    by attacking it. These legs build actual trees.
+    """
+    out = []
+
+    # E -- a dotfile: glob applies POSIX leading-dot semantics, listdir
+    # does not. Live proof the two mechanisms are genuinely independent.
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "src")
+        os.makedirs(src)
+        open(os.path.join(src, "visible.py"), "w").close()
+        open(os.path.join(src, ".hidden.py"), "w").close()
+        r, g = roster(td), glob_roster(td)
+        out.append(("enumerations DIVERGE on a dotfile",
+                    "src/.hidden.py" in r
+                    and "src/.hidden.py" not in g
+                    and not swept_set_agrees(r, g)))
+
+    # K -- metacharacter root plus a decoy holding a DIFFERENT basename.
+    # Unescaped, glob reads the decoy and returns ['src/decoy.py'].
+    # Escaped, it reads the real directory. This leg fails pre-C-2a.
+    with tempfile.TemporaryDirectory() as td:
+        root = os.path.join(td, "root[p]")
+        real = os.path.join(root, "src")
+        decoy = os.path.join(td, "rootp", "src")
+        os.makedirs(real)
+        os.makedirs(decoy)
+        open(os.path.join(real, "real.py"), "w").close()
+        open(os.path.join(decoy, "decoy.py"), "w").close()
+        r, g = roster(root), glob_roster(root)
+        out.append(("metachar root globbed LITERALLY",
+                    g == ["src/real.py"] and swept_set_agrees(r, g)))
+
+    # L -- roster sufficiency rejects the empty tree AND the subpackage
+    # shape that a bare non-empty check would wave through.
+    empty_ok, _ = roster_is_sufficient([])
+    stub_ok, _ = roster_is_sufficient(["src/__init__.py"])
+    full_ok, _ = roster_is_sufficient(
+        allowlisted_modules() + ["src/__init__.py"])
+    out.append(("roster sufficiency rejects empty + stub",
+                (not empty_ok) and (not stub_ok) and full_ok))
+
+    return out
+
+
 def selftest():
     print("=" * 70)
     print("name-resolution guard -- SELFTEST (REQ-UNDEF-13 non-vacuity)")
@@ -309,6 +388,10 @@ def selftest():
     print("  %-45s %s" % ("swept-set assertion can FAIL (C-1)",
                           "PROVEN" if can_fail else "VACUOUS"))
 
+    for label, hit in enumeration_legs():
+        ok = ok and hit
+        print("  %-45s %s" % (label, "PROVEN" if hit else "FAILED"))
+
     names = {f[2] for f in sweep_source(TRAP_DUNDERS)}
     clean = not names
     ok = ok and clean
@@ -326,6 +409,15 @@ def main():
 
     paths = roster(ROOT)
     preamble(paths, ROOT)
+
+    sufficient, why = roster_is_sufficient(paths)
+    if not sufficient:
+        print("\nFAIL: %s" % why)
+        print("A guard that sweeps nothing, or that cannot see the modules")
+        print("its own allowlist names, asserts nothing (MS condition C-2b).")
+        return 1
+    print("roster sufficiency (non-empty; all allowlisted modules present): "
+          "PASS")
 
     independent = glob_roster(ROOT)
     if not swept_set_agrees(paths, independent):
