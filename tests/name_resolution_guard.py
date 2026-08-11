@@ -94,6 +94,15 @@ ALLOWLIST = {
 #     MS-F-4 because a permanent standing surface must state the true
 #     failure direction.
 #   - getattr indirection.
+#
+# NOT a limit, fixed rather than documented (MS-F-5): allowlist matching
+# was per-finding membership, so one entry could absorb N identical
+# triples and exempt findings carrying no anchor. Two same-named nested
+# definitions in one scope produce identical triples on every supported
+# interpreter. A cardinality check now reds on a duplicate match. Listed
+# here only to record that it was considered for this block and rejected:
+# the four limits above are inherent to static analysis; that one was an
+# implementation choice.
 #   - UnboundLocalError. A name assigned LATER in the same scope is bound as
 #     far as symtable is concerned, so a read before that assignment is
 #     invisible here. This is not hypothetical: the undefined-name instrument
@@ -218,6 +227,22 @@ def swept_set_agrees(swept, independent):
     defect shipped.
     """
     return list(swept) == list(independent)
+
+
+def allowlist_match_counts(findings, allowlist):
+    """How many findings each allowlist entry absorbs.
+
+    Membership alone is not enough: `f in ALLOWLIST` is per-finding, so
+    ONE entry silently covers N identical triples, exempting findings
+    that carry no anchor of their own. Two same-named nested definitions
+    in one scope produce identical triples on EVERY supported
+    interpreter -- the exposure is not PEP-709-bound (MS-F-5).
+    """
+    counts = {}
+    for f in findings:
+        if f in allowlist:
+            counts[f] = counts.get(f, 0) + 1
+    return counts
 
 
 def sha256_file(path):
@@ -361,6 +386,33 @@ def enumeration_legs():
     return out
 
 
+def matching_legs():
+    """Non-vacuity aimed at the MATCHING, not the counter.
+
+    C-1's leg tested a predicate and missed the enumeration. C-2's legs
+    test the enumeration. This one tests how findings are matched against
+    the allowlist: build a duplicate scope path, allowlist its triple, and
+    confirm that plain membership reports CLEAN while the cardinality
+    check catches it. Exercising the counter alone would repeat C-1.
+    """
+    dup_src = ("def f():\n"
+               "    def h():\n"
+               "        return zz\n"
+               "    def h():\n"
+               "        return zz\n"
+               "    return h\n")
+    dup = sweep_source(dup_src, "src/x.py")
+    fake_allow = {("src/x.py", "top.f.h", "zz")}
+
+    two_findings = len(dup) == 2 and len(set(dup)) == 1
+    membership_says_clean = not [x for x in dup if x not in fake_allow]
+    counts = allowlist_match_counts(dup, fake_allow)
+    cardinality_catches = any(n > 1 for n in counts.values())
+
+    return [("allowlist over-match CAUGHT (MS-F-5)",
+             two_findings and membership_says_clean and cardinality_catches)]
+
+
 def selftest():
     print("=" * 70)
     print("name-resolution guard -- SELFTEST (REQ-UNDEF-13 non-vacuity)")
@@ -389,6 +441,10 @@ def selftest():
                           "PROVEN" if can_fail else "VACUOUS"))
 
     for label, hit in enumeration_legs():
+        ok = ok and hit
+        print("  %-45s %s" % (label, "PROVEN" if hit else "FAILED"))
+
+    for label, hit in matching_legs():
         ok = ok and hit
         print("  %-45s %s" % (label, "PROVEN" if hit else "FAILED"))
 
@@ -441,6 +497,22 @@ def main():
     unexpected = [f for f in findings if f not in ALLOWLIST]
     covered = {f for f in findings if f in ALLOWLIST}
     stale = sorted(ALLOWLIST - covered)
+
+    counts = allowlist_match_counts(findings, ALLOWLIST)
+    over = sorted(t for t, n in counts.items() if n > 1)
+    if over:
+        print("\nFAIL: an allowlist entry absorbed more than one finding "
+              "(MS-F-5).")
+        for rel, scope, name in over:
+            print("  %s: %s: %s  -- matched %d findings"
+                  % (rel, scope, name, counts[(rel, scope, name)]))
+        print("Each entry carries ONE trace or Ledger anchor. Absorbing a")
+        print("second finding would exempt an UN-ANCHORED one. Two distinct")
+        print("scopes can share a path -- same-named nested defs on any")
+        print("interpreter, comprehension labels below 3.12. Resolve by")
+        print("ruling, not by widening the allowlist.")
+        return 1
+    print("allowlist cardinality (no entry matches >1 finding): PASS")
 
     print("\nfindings    : %d" % len(findings))
     print("allowlisted : %d of %d entries matched" % (len(covered), len(ALLOWLIST)))
