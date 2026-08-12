@@ -37,6 +37,7 @@ import os
 import sys
 import symtable
 import tempfile
+import threading
 
 # --------------------------------------------------------------------------
 # (c) Module implicit dunders.  Omitting these produced a live false-positive
@@ -255,7 +256,7 @@ def allowlisted_modules():
 
 
 def nested_python(root):
-    """Any .py below src/ top level -> the sweep cannot see it (MS-R-1).
+    """Tree shapes the flat sweep cannot see -> (nested_py, revisits).
 
     The ratified method sweeps `src/*.py`, flat. Its claim that this makes
     new modules 'covered by default' holds ONLY while the tree is flat: a
@@ -263,17 +264,108 @@ def nested_python(root):
     while it is. This does not widen the sweep -- it refuses to certify a
     tree shape the method was never ratified for. Resolving a red here is
     a founder ruling, not a guard change.
+
+    SYMLINKED DIRECTORIES ARE FOLLOWED. `os.walk` defaults to
+    followlinks=False, so a symlinked src/nos -> /elsewhere holding .py
+    was importable and invisible to BOTH the flat sweep and this tripwire
+    -- the exact shape the tripwire exists to refuse.
+
+    Following links needs CYCLE HANDLING, not a keyword. Measured on
+    Linux, unguarded `os.walk(followlinks=True)`:
+
+        src/nos -> src            terminates,     41 dirs (kernel ELOOP
+                                  at 40 symlink traversals)
+        two-hop a -> b -> a       terminates,     83 dirs
+        4 dirs x 3 subdirs, each
+        linking back to src       DID NOT FINISH: >500,000 dirs in 15s
+
+    So the simple loop does not hang -- ELOOP stops it -- while a cycle
+    combined with branching does. On a REQUIRED status check that is worse
+    than the defect being fixed, so this walks with an explicit stack.
+
+    Directories are identified by (st_dev, st_ino), never by path.
+
+    Every directory is walked at most once, which makes the walk provably
+    finite. A directory reached a SECOND time is REPORTED, not silently
+    dropped -- as `src/<name>`, the second route to it.
+
+    Reporting rather than pruning quietly is load-bearing, and an earlier
+    draft of this function got it wrong. That draft reported only a
+    directory that was its own ANCESTOR, which is traversal-order
+    dependent: on `src/a` and `src/b` cross-linked, whichever is visited
+    first makes the other an alias rather than an ancestor, and a tree
+    with a real cycle and no .py in it went GREEN. Non-emptiness of the
+    revisit list does not depend on order -- exactly one route to a
+    directory is walked first and every other route is a revisit -- so
+    that is the property this reports.
+
+    A src/ tree reachable by more than one path is not the flat shape the
+    ratified method sweeps: with src/nos -> src every top-level module is
+    ALSO importable as nos.X, and there is no finite listing of what lies
+    below src/ at all. Same posture as a nested module: red, and resolve
+    by ruling.
+
+    Unreadable directories are skipped, as `os.walk(onerror=None)` did.
     """
     src = os.path.join(root, "src")
     found = []
-    for dirpath, _dirnames, filenames in os.walk(src):
-        if os.path.abspath(dirpath) == os.path.abspath(src):
+    revisits = []
+
+    def ident(path):
+        try:
+            st = os.stat(path)
+        except OSError:
+            return None
+        return (st.st_dev, st.st_ino)
+
+    top = ident(src)
+    seen = set() if top is None else {top}
+    stack = [src]
+
+    while stack:
+        here = stack.pop()
+        try:
+            names = sorted(os.listdir(here))
+        except OSError:
             continue
-        for f in filenames:
-            if f.endswith(".py"):
-                found.append(os.path.relpath(os.path.join(dirpath, f),
-                                             root))
-    return sorted(found)
+        at_top = os.path.abspath(here) == os.path.abspath(src)
+        for n in names:
+            p = os.path.join(here, n)
+            if os.path.isdir(p):
+                i = ident(p)
+                if i is None:
+                    continue
+                if i in seen:
+                    revisits.append(os.path.relpath(p, root))
+                    continue
+                seen.add(i)
+                stack.append(p)
+            elif n.endswith(".py") and not at_top:
+                found.append(os.path.relpath(p, root))
+
+    return sorted(found), sorted(revisits)
+
+
+def _bounded_call(fn, seconds):
+    """Run fn() under a wall-clock bound -> (finished, result).
+
+    A broken cycle guard turns a red into a HANG on a required status
+    check. A leg that tested it by simply calling the walker would
+    EXHIBIT that failure instead of reporting it -- CI would sit until the
+    job timeout with no signal. The call therefore runs on a daemon
+    thread: if it does not finish, the leg reds and the process can still
+    exit. Stdlib only; no new dependency.
+    """
+    box = {}
+
+    def run():
+        box["result"] = fn()
+
+    t = threading.Thread(target=run)
+    t.daemon = True
+    t.start()
+    t.join(seconds)
+    return (not t.is_alive()), box.get("result")
 
 
 def roster_is_sufficient(paths):
@@ -553,6 +645,101 @@ def canon_legs():
     return out
 
 
+def symlink_descent_legs():
+    """Non-vacuity for symlink descent and cycle handling (Finding 2).
+
+    Every leg builds a REAL tree on a REAL filesystem and calls the real
+    walker. The two cycle legs are bounded, so a regression reds here
+    instead of hanging the gate.
+    """
+    out = []
+    py = os.path.join("src", "nos", "buried.py")
+
+    # (i) the defect: a symlinked subdir holding .py was invisible.
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "src")
+        os.makedirs(src)
+        away = os.path.join(td, "elsewhere")
+        os.makedirs(away)
+        open(os.path.join(away, "buried.py"), "w").close()
+        os.symlink(away, os.path.join(src, "nos"))
+        nested, revisits = nested_python(td)
+        out.append(("symlinked subdir with .py CAUGHT",
+                    nested == [py] and revisits == []))
+
+    # (ii) the ruled vector: src/nos -> src. Bounded, and the second
+    # route is reported rather than pruned into silence.
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "src")
+        os.makedirs(src)
+        open(os.path.join(src, "top.py"), "w").close()
+        os.symlink(src, os.path.join(src, "nos"))
+        done, res = _bounded_call(lambda: nested_python(td), 10)
+        out.append(("cycle src/nos -> src TERMINATES and reds",
+                    done and res is not None
+                    and res[1] == [os.path.join("src", "nos")]
+                    and res[0] == []))
+
+    # (iii) the shape that actually explodes: a cycle plus branching.
+    # Unguarded this exceeds 500,000 directories without finishing.
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "src")
+        os.makedirs(src)
+        for i in range(4):
+            d = os.path.join(src, "d%d" % i)
+            os.makedirs(d)
+            for j in range(3):
+                os.makedirs(os.path.join(d, "s%d" % j))
+            os.symlink(src, os.path.join(d, "back"))
+        done, res = _bounded_call(lambda: nested_python(td), 10)
+        out.append(("cycle WITH branching TERMINATES",
+                    done and res is not None and len(res[1]) == 4
+                    and res[0] == []))
+
+    # (iv) two links to one real directory: must terminate, must report
+    # the .py exactly once, and must report the extra routes.
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "src")
+        real = os.path.join(src, "nos")
+        os.makedirs(real)
+        open(os.path.join(real, "buried.py"), "w").close()
+        os.symlink(real, os.path.join(src, "aliasA"))
+        os.symlink(real, os.path.join(src, "aliasB"))
+        done, res = _bounded_call(lambda: nested_python(td), 10)
+        out.append(("aliased dir: .py once, extra routes reported",
+                    done and res is not None
+                    and len(res[0]) == 1
+                    and res[0][0].endswith("buried.py")
+                    and len(res[1]) == 2))
+
+    # (v) a cross-linked cycle with NO .py anywhere. The ancestor-only
+    # draft went green here; this is the leg that caught it.
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "src")
+        os.makedirs(os.path.join(src, "a"))
+        os.makedirs(os.path.join(src, "b"))
+        os.symlink(os.path.join(src, "b"), os.path.join(src, "a", "tob"))
+        os.symlink(os.path.join(src, "a"), os.path.join(src, "b", "toa"))
+        done, res = _bounded_call(lambda: nested_python(td), 10)
+        out.append(("cross-cycle with no .py still REDS",
+                    done and res is not None and res[0] == []
+                    and len(res[1]) > 0))
+
+    # (vi) a plain flat tree must stay silent -- the leg that keeps the
+    # five above from being satisfied by a function that always reds.
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "src")
+        os.makedirs(src)
+        open(os.path.join(src, "cassian.py"), "w").close()
+        os.makedirs(os.path.join(src, "cassian_gate.egg-info"))
+        open(os.path.join(src, "cassian_gate.egg-info", "PKG-INFO"),
+             "w").close()
+        out.append(("flat tree with egg-info stays SILENT",
+                    nested_python(td) == ([], [])))
+
+    return out
+
+
 def tree_shape_legs():
     """Non-vacuity for the two properties C-3 adds.
 
@@ -566,10 +753,10 @@ def tree_shape_legs():
         src = os.path.join(td, "src")
         os.makedirs(os.path.join(src, "nos"))
         open(os.path.join(src, "top.py"), "w").close()
-        flat_clean = nested_python(td) == []
+        flat_clean = nested_python(td) == ([], [])
         open(os.path.join(src, "nos", "buried.py"), "w").close()
-        nested_caught = nested_python(td) == [os.path.join(
-            "src", "nos", "buried.py")]
+        nested_caught = nested_python(td) == (
+            [os.path.join("src", "nos", "buried.py")], [])
         out.append(("nested .py CAUGHT, flat tree clean (MS-R-1)",
                     flat_clean and nested_caught))
 
@@ -631,6 +818,10 @@ def selftest():
         ok = ok and hit
         print("  %-45s %s" % (label, "PROVEN" if hit else "FAILED"))
 
+    for label, hit in symlink_descent_legs():
+        ok = ok and hit
+        print("  %-45s %s" % (label, "PROVEN" if hit else "FAILED"))
+
     for label, hit in tree_shape_legs():
         ok = ok and hit
         print("  %-45s %s" % (label, "PROVEN" if hit else "FAILED"))
@@ -653,18 +844,25 @@ def main():
     paths = roster(ROOT)
     preamble(paths, ROOT)
 
-    nested = nested_python(ROOT)
-    if nested:
-        print("\nFAIL: Python below src/ top level -- the sweep does not "
-              "recurse (MS-R-1).")
+    nested, revisits = nested_python(ROOT)
+    if nested or revisits:
+        print("\nFAIL: the tree below src/ is not the flat shape the "
+              "ratified method sweeps.")
         for p in nested:
-            print("  %s" % p)
-        print("The ratified method sweeps `src/*.py`, flat. These files are")
-        print("INVISIBLE to it, and every check below would print PASS while")
-        print("they are. Resolve by founder ruling -- widening the sweep")
-        print("amends the ratified method and is not this guard's to do.")
+            print("  %s  -- .py below src/ top level (MS-R-1)" % p)
+        for p in revisits:
+            print("  %s  -- second route to a directory already walked "
+                  "(symlink alias or cycle)" % p)
+        print("The ratified method sweeps `src/*.py`, flat. Nested files are")
+        print("INVISIBLE to it, and a cyclic tree has no finite listing of")
+        print("what lies below src/ at all -- with src/nos -> src every")
+        print("top-level module is also importable as nos.X. Every check")
+        print("below would print PASS while either holds. Resolve by founder")
+        print("ruling -- widening the sweep amends the ratified method and is")
+        print("not this guard's to do.")
         return 1
-    print("flat-tree precondition (no .py below src/ top level): PASS")
+    print("flat-tree precondition (no .py below src/ top level, no "
+          "second route into it): PASS")
 
     sufficient, why = roster_is_sufficient(paths)
     if not sufficient:
