@@ -109,6 +109,67 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "src")
 
 
+# --------------------------------------------------------------------------
+# PEP 709 CANONICALISATION -- MATCHING ONLY.
+#
+# Python 3.12 inlines comprehensions into the parent scope (PEP 709), so one
+# source yields `top.f.listcomp` on 3.10/3.11 and `top.f` on 3.12 -- measured
+# on 3.10.20 / 3.11.15 / 3.12.3. The allowlist key carries no interpreter
+# component, so a comprehension-scoped exemption has NO key that matches on
+# all three, and this gate -- a REQUIRED status check -- has no green state
+# for it. The matcher canonicalises both sides before comparing.
+#
+# EMISSION IS UNTOUCHED. Findings are appended per scope table and printed
+# with their RAW scope path, never de-duplicated (REQ-UNDEF-12(b)).
+#
+# genexpr is EXCLUDED, and the exclusion is load-bearing: generator
+# expressions are NOT inlined by PEP 709 -- `top.f.genexpr` on all three
+# interpreters, measured. Adding it here would strip a live scope label and
+# silently collapse genexpr exemptions.
+#
+# LATENT RESIDUAL, measured clean at v43: a function, class or scope literally
+# named listcomp/setcomp/dictcomp would have a genuine label stripped, so an
+# exemption for one scope could cover another. AST walk over all 17 src
+# modules and the tests tree: zero instances. Clean today, not impossible.
+# --------------------------------------------------------------------------
+INLINED = ("listcomp", "setcomp", "dictcomp")
+
+
+def canon_scope(scope):
+    """Drop PEP 709-inlined comprehension labels from a scope path."""
+    return ".".join(p for p in scope.split(".") if p not in INLINED)
+
+
+def canon_key(triple):
+    """Canonical MATCHING key for a finding or an allowlist entry."""
+    rel, scope, name = triple
+    return (rel, canon_scope(scope), name)
+
+
+def is_allowlisted(finding, allowlist):
+    """Does any allowlist entry exempt this finding?"""
+    return canon_key(finding) in {canon_key(e) for e in allowlist}
+
+
+def matched_entries(findings, allowlist):
+    """Allowlist entries that at least one finding matches."""
+    seen = {canon_key(f) for f in findings}
+    return {e for e in allowlist if canon_key(e) in seen}
+
+
+def stale_entries(findings, allowlist):
+    """Allowlist entries no finding matches -> the MS-R-2 red.
+
+    EXTRACTED from main(), where it was inline as
+    `stale = sorted(ALLOWLIST - covered)`. With no predicate to call, the
+    selftest carried a replica of the expression instead -- which reported
+    PROVEN with the mitigation deleted entirely. C-1 and C-2 were both
+    repaired by extracting a pure predicate; this is that repair, applied
+    late.
+    """
+    return sorted(set(allowlist) - matched_entries(findings, allowlist))
+
+
 def module_bound(table):
     out = set()
     for sym in table.get_symbols():
@@ -243,18 +304,29 @@ def swept_set_agrees(swept, independent):
 
 
 def allowlist_match_counts(findings, allowlist):
-    """How many findings each allowlist entry absorbs.
+    """How many findings each allowlist ENTRY absorbs.
 
-    Membership alone is not enough: `f in ALLOWLIST` is per-finding, so
-    ONE entry silently covers N identical triples, exempting findings
-    that carry no anchor of their own. Two same-named nested definitions
-    in one scope produce identical triples on EVERY supported
-    interpreter -- the exposure is not PEP-709-bound (MS-F-5).
+    Membership alone is not enough: ONE entry silently covering N findings
+    exempts findings that carry no anchor of their own. Two same-named
+    nested definitions in one scope produce identical triples on EVERY
+    supported interpreter -- that exposure is not PEP-709-bound (MS-F-5).
+
+    Counting uses the SAME canonical key the matcher uses. Counting raw
+    while matching canonically measures the wrong thing: on 3.10/3.11 a
+    name unbound BOTH inside a comprehension AND in the function body
+    yields two findings, `top.f.listcomp` and `top.f` (measured). One
+    entry keyed `top.f.listcomp` exempts BOTH under canonical matching,
+    while a raw count sees one and stays green -- MS-F-5's exposure
+    arriving through the fix for the PEP 709 divergence. Keys are the RAW
+    entries, so the red prints each entry as the allowlist writes it.
     """
+    index = {}
+    for e in allowlist:
+        index.setdefault(canon_key(e), []).append(e)
     counts = {}
     for f in findings:
-        if f in allowlist:
-            counts[f] = counts.get(f, 0) + 1
+        for e in index.get(canon_key(f), ()):
+            counts[e] = counts.get(e, 0) + 1
     return counts
 
 
@@ -426,6 +498,61 @@ def matching_legs():
              two_findings and membership_says_clean and cardinality_catches)]
 
 
+def canon_legs():
+    """Non-vacuity for the canonical matcher, on the running interpreter.
+
+    Every leg calls the real matcher against findings a real sweep
+    produced. No interpreter is hardcoded: each expectation is derived
+    from what the sweep actually returns, so the same legs are meaningful
+    on 3.10, 3.11 and 3.12 without a version branch.
+    """
+    out = []
+    m = "src/x.py"
+
+    # (i) a comprehension-scoped exemption greens on THIS interpreter --
+    # the state that does not exist without canonicalisation.
+    comp = sweep_source("def f():\n    return [zz for _ in range(3)]\n", m)
+    entry = (m, "top.f.listcomp", "zz")
+    out.append(("comprehension exemption GREEN here",
+                len(comp) == 1
+                and [f for f in comp if not is_allowlisted(f, {entry})] == []
+                and stale_entries(comp, {entry}) == []))
+
+    # (ii) a NON-comprehension mismatch must still red, in both directions:
+    # the finding stays unexpected AND the entry goes stale.
+    nest = sweep_source("def f():\n    def h():\n        return zz\n"
+                        "    return h\n", m)
+    mism = (m, "top.f", "zz")
+    out.append(("non-comprehension mismatch still REDS",
+                len(nest) == 1
+                and [f for f in nest if not is_allowlisted(f, {mism})] == nest
+                and stale_entries(nest, {mism}) == [mism]))
+
+    # (iii) genexpr is NOT inlined by PEP 709, so it must NOT canonicalise
+    # onto its parent. Excluding it from INLINED is what this leg guards.
+    gen = sweep_source("def f():\n    return (zz for _ in range(3))\n", m)
+    parent = (m, "top.f", "zz")
+    out.append(("genexpr NOT canonicalised",
+                [f[1] for f in gen] == ["top.f.genexpr"]
+                and [f for f in gen if not is_allowlisted(f, {parent})] == gen))
+
+    # (iv) one name unbound BOTH in a comprehension AND in the body: two
+    # findings below 3.12, one on 3.12. The entry exempts EVERY finding, and
+    # the count must see every one it exempts -- so the MS-F-5 red fires
+    # exactly when there is more than one. A raw count sees fewer than it
+    # exempts, and this leg fails.
+    both = sweep_source("def f():\n    a = [zz for _ in range(3)]\n"
+                        "    return a, zz\n", m)
+    dual = (m, "top.f.listcomp", "zz")
+    counts = allowlist_match_counts(both, {dual})
+    out.append(("cardinality counts what matcher exempts",
+                [f for f in both if not is_allowlisted(f, {dual})] == []
+                and counts.get(dual, 0) == len(both)
+                and (any(n > 1 for n in counts.values()) == (len(both) > 1))))
+
+    return out
+
+
 def tree_shape_legs():
     """Non-vacuity for the two properties C-3 adds.
 
@@ -446,11 +573,21 @@ def tree_shape_legs():
         out.append(("nested .py CAUGHT, flat tree clean (MS-R-1)",
                     flat_clean and nested_caught))
 
-    entry = ("src/x.py", "top.f", "zz")
-    matched = {entry} - {f for f in [entry] if f in {entry}}
-    unmatched = {entry} - {f for f in [] if f in {entry}}
-    out.append(("stale entry distinguished from matched (MS-R-2)",
-                matched == set() and unmatched == {entry}))
+    # This leg was set algebra over three literals: it called no guard
+    # function, read no guard state, and reported PROVEN with the staleness
+    # mitigation deleted outright. It now calls the extracted predicate
+    # against findings a real sweep produced.
+    live = sweep_source("def f():\n    return zz\n", "src/x.py")
+    live_entry = live[0]
+    ghost = ("src/x.py", "top.gone", "zz")
+
+    matched_is_clean = stale_entries(live, {live_entry}) == []
+    planted_is_caught = stale_entries(live, {live_entry, ghost}) == [ghost]
+    no_finding_at_all = stale_entries([], {ghost}) == [ghost]
+
+    out.append(("stale entry CAUGHT by extracted predicate",
+                len(live) == 1 and matched_is_clean
+                and planted_is_caught and no_finding_at_all))
 
     return out
 
@@ -487,6 +624,10 @@ def selftest():
         print("  %-45s %s" % (label, "PROVEN" if hit else "FAILED"))
 
     for label, hit in matching_legs():
+        ok = ok and hit
+        print("  %-45s %s" % (label, "PROVEN" if hit else "FAILED"))
+
+    for label, hit in canon_legs():
         ok = ok and hit
         print("  %-45s %s" % (label, "PROVEN" if hit else "FAILED"))
 
@@ -550,12 +691,14 @@ def main():
     if not findings:
         print("  (none)")
     for rel, scope, name in findings:
-        state = "allowlisted" if (rel, scope, name) in ALLOWLIST else "UNEXPECTED"
+        state = ("allowlisted"
+                 if is_allowlisted((rel, scope, name), ALLOWLIST)
+                 else "UNEXPECTED")
         print("  %-12s %s: %s: %s" % (state, rel, scope, name))
 
-    unexpected = [f for f in findings if f not in ALLOWLIST]
-    covered = {f for f in findings if f in ALLOWLIST}
-    stale = sorted(ALLOWLIST - covered)
+    unexpected = [f for f in findings if not is_allowlisted(f, ALLOWLIST)]
+    covered = matched_entries(findings, ALLOWLIST)
+    stale = stale_entries(findings, ALLOWLIST)
 
     counts = allowlist_match_counts(findings, ALLOWLIST)
     over = sorted(t for t, n in counts.items() if n > 1)
