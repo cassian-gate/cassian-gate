@@ -55,11 +55,15 @@ BUILTINS = frozenset(dir(builtins))
 # (e) ALLOWLIST -- four entries, append-only, each anchored.
 #
 # Keyed on (module, scope-path, name): the finding unit this guard actually
-# emits.  symtable exposes no per-symbol line number, so a line-keyed
-# allowlist is not expressible in this guard's own output without bolting on
-# a second parser -- and line anchors drift on every edit (the excised site
-# moved 9280 -> 9284 during this instrument alone).  Amendment A2 re-anchored
-# REQ-UNDEF-11's excision proof from lines to scope for the same reason.
+# emits.  symtable exposes no per-symbol line number, so keying by line would
+# need a second pass -- a stdlib ast pass, at no new dependency.  Line-keying
+# was therefore DECLINED, not impossible: the earlier framing in this comment
+# said 'not expressible', which was corrected at MS addendum-1 7 row 3 and
+# again at carry-forward note 4 4.4, and is corrected here.  The cost was
+# judged not worth paying because line anchors drift on every edit (the
+# excised site moved 9280 -> 9284 during this instrument alone).  Amendment
+# A2 re-anchored REQ-UNDEF-11's excision proof from lines to scope for the
+# same reason.
 # Line numbers below are commentary, valid at the instrument's merge commit.
 # --------------------------------------------------------------------------
 ALLOWLIST = {
@@ -101,6 +105,36 @@ ALLOWLIST = {
 #     surfaced exactly such a defect in cmd_test's blocked-path blocks
 #     (F-UNDEF-11), repaired under the NG-6 amendment in carry-forward
 #     note 3. This guard would have gone green on those lines.
+#   - site identity. The allowlist is keyed on (module, scope-path, name).
+#     It carries no site component and symtable exposes none, so an entry
+#     exempts ANY finding matching its triple -- including a NEW unbound
+#     name at a DIFFERENT site in the same scope, after the anchored one is
+#     repaired. Demonstrated: repair the anchored read, plant a different
+#     unrepaired one in the same scope -> cardinality 1, unexpected [],
+#     exit 0. A stale entry is therefore a hard FAIL, not a note: an entry
+#     matching nothing has outlived its anchor and must be removed by
+#     ruling. Line-keying was DECLINED, not impossible -- a second stdlib
+#     ast pass would key by line at no new dependency (MS-R-2, carry-forward
+#     note 4 §4.4, BL-P2-UNDEF-8).
+#
+#   - tree shape. The sweep is FLAT: `src/*.py` does not recurse. A module
+#     at src/nos/x.py is invisible and every gate below would print PASS
+#     while it is. Latent only: zero .py files exist below src/ top level
+#     today, measured. The flat-tree precondition gate reds if that changes;
+#     widening the sweep amends the ratified method and is a founder ruling
+#     (MS-R-1, carry-forward note 4 §1).
+#
+#   - two same-named comprehensions in one scope, below 3.12. They produce
+#     two findings sharing one triple, which the cardinality check reds; on
+#     3.12 PEP 709 inlines them to one. Such a site cannot be allowlisted
+#     across the ratified interpreter set. No instance exists today.
+#     The same matching step drops the labels listcomp/setcomp/dictcomp
+#     from a scope path, so a function, class or scope literally so named
+#     has a REAL label dropped, and an exemption granted for one such scope
+#     would cover a finding in another. genexpr is excluded from the drop
+#     and is unaffected. Latent only: zero instances under src/ or tests/
+#     today, measured by AST walk over all 17 src modules and the tests
+#     tree.
 #
 # The residual is defended by the per-site traces and Ledger rows named in
 # the allowlist above -- tracked debt, not acceptance.
