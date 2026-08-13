@@ -40,6 +40,8 @@ _SRC = os.path.join(_ROOT, "src")
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
+from preservation_manifest import MODULE_ROSTER
+
 # Post-s4.10-merge per-module SHA-256 baseline. Authoritative source:
 #   git show $(git merge-base HEAD develop/phase1b):src/<module>
 # Generated at apply-time by the s4.11 WI-5 apply-script from the live
@@ -47,24 +49,26 @@ if _SRC not in sys.path:
 # === FORK_BASELINE BEGIN ===
 FORK_BASELINE = {
     "src/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "src/cassian.py": "cbc931d2f977c37249599bf63229b507ce6ea4d58eb6ca5525b7269b70d4c895",
+    "src/cassian.py": "45c5180e30e2d4bda791db9c90d8ae31c0797e7fbe98d2df47c54127643b6c2d",  # re-baselined from 588fbed5 (phase2 §4.5-b WI-F dead-code sweep (ensure_ip_tools import) + guardrail comment correction); orig cbc931d2
     "src/cassian_ai.py": "6900c52ea52f2a4a588b99478f10e967603b7a1a5f87b3b257878d4fde569361",
     "src/cassian_artifacts.py": "ae8a54302e4fa8fe2f89e3af0e1e16dcda0ff2ae7bc4a805b671f69029fbb04c",
-    "src/cassian_candidate.py": "93db9b61e9fd22c74156fc0492119fc4e170a7a192684354c8a31c70876ff52d",
+    "src/cassian_candidate.py": "217d8f08621db367a0d0666470793ff2335136846a4663ce95b4d0d3110330bc",  # re-baselined from 7775a062 (undef remediation: _cand_misuse helper, vty import, cmd_test rebinds + scenarios reads, resolve_topology names); orig 93db9b61
     "src/cassian_cli.py": "9234f3fdb76b5432bac8bf22a9807f234da9dff3a72d7c334ed9e2508183898a",
     "src/cassian_import.py": "604c8d8ff2bc461f8b43d7e5be6f63bd00f653ce6f83b64ffff9cf90450cf71c",  # §4.14 new module, enforced (LD-8/LD-9)
-    "src/cassian_common.py": "a0469a2a1b3cdcc5a1fffc7cd02198447cf1e0cb1ee8657469c3fb2c57139a10",
-    "src/cassian_engine.py": "34b74fa4d90462626cefd16900f16c6071075d835c1607fcb243593f84009f04",
-    "src/cassian_model.py": "f2421e9c5c8c18f847431d45274efe85298372d5b882b80fc84e2a733f7910f1",
-    "src/cassian_runtime_container.py": "b2a493f947c121416c992b8b9788a60acead190d305d58654c3c457def116ba3",
+    "src/cassian_nos_frr.py": "3c53970d87a18ea828f0bb9008f24c75b22fdf5dd3a45a7c45e0b72faedd7ff3",  # §4.5-b new module (WI-B NOS provider structure); enforced (REQ-45b-13; LD-9)
+    "src/cassian_nos_types.py": "b4e4cec8e0532b3280db4c8f0480f1884336a273ee7690d8992eee087b362eb6",  # §4.5-b new module (WI-B NOS provider structure); enforced (REQ-45b-13; LD-9)
+    "src/cassian_common.py": "0f5a326f3407811ba9afa8c449a15a9526e101a0ba258998b29bd633e48223bb",  # re-baselined from a0469a2a (phase2 §4.5-b WI-C1/C2 NOS-neutral re-homes + A-S6 provenance comment); orig a0469a2a
+    "src/cassian_runtime_container.py": "7eecee129911d838d15e7e20463db66475fd190b9cbbfb0435ebc33a79303761",  # re-baselined from b3e45fa2 (phase2 §4.5-b WI-C1 _normalize_prefix shim + WI-F ensure_ip_tools removal); orig b2a493f9
+    "src/cassian_runtime_vm.py": "3832ad07ef6e9ce483bc0fe0f017df4584b15bf6c3a90c55fbb0b2b14f84f494",  # re-baselined from 865545e4 (phase2 §4.5-b WI-D2 node_runtime_map model-homing); orig 865545e4
     "src/cassian_state.py": "aec4d412ee53555156cb5275c5d7a1329f54aaef298d4409feebcad2c198a9d6",
-    "src/cassian_tests.py": "ba0a1f36245de1ac01853fca4e8a3100ff5aad28525e91ef26ebaf24f404b0af",
-    "src/cassian_two_run.py": "694f4e0d8ca7e07e7f4843e4f269a697d74d19bcdece60adf6f339952e471452",
+    "src/cassian_tests.py": "49f484b027c146c3c4f513ef3829e6909b0d142743f3ffdbcdadf3c8751ae2d0",  # re-baselined from dd56046b (phase2 §4.5-b WI-C1 parse-family relocation shims); orig ba0a1f36
+    "src/cassian_two_run.py": "a6432665dbfee699713fe60c2e42d427c3c3fd9f82be7ec0ab65caa8b34c3ed9",  # re-baselined from cfafdfa6 (phase2 4.4 F-1 canonical serializer); orig 694f4e0d
 }
 # === FORK_BASELINE END ===
 
 # s4.11 scoped set -- modifiable; excluded from byte-identity enforcement.
 SCOPED = {"src/cassian_model.py", "src/cassian_engine.py"}
+ALLOWED_NEW = set()  # #2 bgp_as_path: no allowed-new; cassian_import is enforced
 
 # P17 -- one representative positive fixture per pre-s4.11 invariant family
 # (incl. s4.10 bgp_community via its set-gen positive fixture).
@@ -96,21 +100,29 @@ def _p16(checks):
         checks.append(("P16 src/ present", False))
         return
     head = set("src/" + n for n in os.listdir(src) if n.endswith(".py"))
-    known = set(FORK_BASELINE)
-    added, removed = head - known, known - head
+    # module-set drift read from the roster (bidirectional; LD-9 leg).
+    added, removed = head - MODULE_ROSTER, MODULE_ROSTER - head
     set_ok = True
     if added:
-        print("FAIL: src/ modules absent from the s4.11 baseline: " + str(sorted(added)))
+        print("FAIL: src/ modules absent from the module roster (unregistered): " + str(sorted(added)))
         set_ok = False
     if removed:
-        print("FAIL: baseline modules missing at HEAD: " + str(sorted(removed)))
+        print("FAIL: rostered src/ modules missing at HEAD: " + str(sorted(removed)))
         set_ok = False
-    checks.append(("P16 module-set matches post-s4.10-merge baseline (denom 14)", set_ok))
+    checks.append(("P16 module-set matches roster (denom " + str(len(MODULE_ROSTER)) + ")", set_ok))
+
+    # enforced set derived FROM THE ROSTER (not baseline keys); a rostered-enforced
+    # module absent from the baseline fails loud, never skipped, never auto-baselined.
+    enforced_set = MODULE_ROSTER - SCOPED - ALLOWED_NEW
+    unbaselined = sorted(m for m in enforced_set if m not in FORK_BASELINE)
+    if unbaselined:
+        print("FAIL: re-baseline required (rostered + enforced, absent from baseline): " + str(unbaselined))
+    checks.append(("P16 all enforced modules baselined (F-1 re-baseline guard)", not unbaselined))
 
     enforced = 0
     drift_ok = True
-    for mod in sorted(head):
-        if mod in SCOPED:
+    for mod in sorted(enforced_set):
+        if mod not in FORK_BASELINE:
             continue
         enforced += 1
         actual, expected = _sha256(os.path.join(_ROOT, mod)), FORK_BASELINE[mod]

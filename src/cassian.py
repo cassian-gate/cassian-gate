@@ -147,14 +147,12 @@ from cassian_runtime_container import (
     parse_lab_nodes,
     docker_is_running,
     vty,
-    ensure_ip_tools,
     resolved_topology_path,
     load_resolved_topology,
     frr_nodes_from_topology,
     _container_is_running,
     Runtime,
     ContainerRuntime,
-    VmRuntimeStub,
     get_runtime,
     list_owned_labs_from_artifacts,
 )
@@ -170,17 +168,22 @@ from cassian_engine import cmd_up, cmd_replay, cmd_down, cmd_destroy, cmd_cleanu
 from cassian_engine import cmd_test
 from cassian_cli import main
 
-# Phase-0 split guardrail marker:
-# scripts/verify_phase1.sh currently greps src/netsim.py for '^class ContainerRuntime'.
-# The real implementation lives in src/netsim_runtime_container.py (pure-move).
+# Phase-0 split guardrail marker (historical, inert).
+# Corrected §4.5-b (REQ-45b-16b): the grep-based gate this marker served no
+# longer exists -- tests/wf_12_13_replay_proof.py asserts both its absence from
+# the repo and its non-reintroduction into the CI workflow. The modules it
+# named were renamed in the Phase-0 split; ContainerRuntime lives in
+# src/cassian_runtime_container.py today. The sentinel below is retained rather
+# than removed so no external grep-based consumer breaks; it is inert.
 _GUARDRAIL_VERIFY_PHASE1 = """
 class ContainerRuntime
 """
 
-# Phase-0 split guardrail marker (Patch 6/7):
-# scripts/verify_phase1.sh greps src/cassian.py for argparse 'validate-contrib' subparser
-# and 'validate_contrib_path' import. After Patch 6, both moved to src/cassian_cli.py;
-# this sentinel preserves the strings in cassian.py for grep-based gate compatibility.
+# Phase-0 split guardrail marker (Patch 6/7) (historical, inert).
+# Corrected §4.5-b (REQ-45b-16b): the grep-based gate this marker served no
+# longer exists (see above). The 'validate-contrib' subparser and the
+# 'validate_contrib_path' import live in src/cassian_cli.py. The sentinel below
+# is retained rather than removed and is inert.
 _GUARDRAIL_VERIFY_PHASE1_VALIDATE_CONTRIB = """
 add_parser("validate-contrib"
 validate_contrib_path

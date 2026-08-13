@@ -26,6 +26,167 @@ from cassian_artifacts import (
     load_yaml,
 )
 
+from types import MappingProxyType
+
+from cassian_nos_types import (
+    CandidateSpec,
+    NosProvider,
+    deferred_leg,
+    validate_provider,
+)
+from cassian_nos_frr import FRR_PROVIDER
+
+# -------------------------
+# NOS provider registry (Phase 2 §4.5-b, REQ-45b-1; design §3.3)
+# -------------------------
+# Model-homed frozen mapping node.type -> NosProvider: the SINGLE source from
+# which the candidate subdir mapping (REQ-45b-8), the known-type tuple
+# (REQ-45b-9), and the frr default image (REQ-45b-11/-11-ext) derive.
+# Dispatch is deny-by-default (B01): unknown types get the deterministic
+# §13-grade UNSUP below -- no fallback chains, no environment probing, no
+# partial support.
+
+# LD-H1: nft-fw registry entry -- a minimal in-registry provider instance
+# (no new src module; roster stays ruled-17 and nft-fw stays NOS-orthogonal
+# per PBE-P2-1). Carries its candidate subdir ('nft' <-> node type 'nft-fw';
+# vocabularies mapped, never unified, REQ-45b-8), its known-type membership,
+# and LD-H2 placeholders for every content leg. default_image=None: nft-fw
+# image defaults STAY at the existing model/common maps untouched -- only the
+# frr entry is REGISTRY-DERIVED (LD-H1 / REQ-45b-11 / P5).
+_NFT_FW_PROVIDER = NosProvider(
+    node_type="nft-fw",
+    default_image=None,
+    runtime_requirement=None,
+    capabilities={},  # deny-by-default: no content leg lands here (PBE-P2-1)
+    gen_node_config=deferred_leg("gen_node_config", "nft-fw content handover (unassigned)"),
+    provision=deferred_leg("provision", "nft-fw content handover (unassigned)"),
+    nos_ready=deferred_leg("nos_ready", "nft-fw content handover (unassigned)"),
+    convergence_wait=deferred_leg("convergence_wait", "nft-fw content handover (unassigned)"),
+    collect=deferred_leg("collect", "nft-fw content handover (unassigned)"),
+    candidate=CandidateSpec(
+        subdir="nft",
+        extensions=(".nft", ".ruleset"),
+        validate=deferred_leg("candidate.validate", "nft-fw content handover (unassigned)"),
+        apply=deferred_leg("candidate.apply", "nft-fw content handover (unassigned)"),
+    ),
+    status_bgp_summary=None,  # design §3.3: None => explicit UNSUP
+    status_routes=None,
+    collect_targets=(),
+    doctor_checks=deferred_leg("doctor_checks", "nft-fw content handover (unassigned)"),
+    exec_command_rule=deferred_leg("exec_command_rule", "§4.5-d (LD-45b-6)"),
+    state_profiles={},
+    state_argv_allow=deferred_leg("state_argv_allow", "§4.5-d"),
+)
+
+NOS_PROVIDERS = MappingProxyType({
+    "frr": FRR_PROVIDER,
+    "nft-fw": _NFT_FW_PROVIDER,
+})
+
+# Import-time completeness + key coherence (B10): every registered provider
+# passes the contract-completeness check; a registry key must equal its
+# provider's node_type (dispatch-key coherence). Fails loud at import.
+for _nos_key, _nos_p in NOS_PROVIDERS.items():
+    if _nos_key != _nos_p.node_type:
+        die(
+            f"NOS_PROVIDERS registry key {_nos_key!r} != provider.node_type "
+            f"{_nos_p.node_type!r} (dispatch-key coherence)"
+        )
+    validate_provider(_nos_p)
+del _nos_key, _nos_p
+
+
+# -------------------------
+# Node -> runtime derivation (WI-D2; REQ-45b-12, PBE-1b-9, PBE-P2-6)
+# -------------------------
+# Model-homed single source for {node_name: resolved_runtime}. Previously
+# defined in cassian_runtime_vm and independently re-derived inline by the
+# model's exec-into gate; both now read this one helper. Per PBE-P2-6 the two
+# checks still corroborate independently -- neither is dropped -- they just
+# stop deriving the mapping twice. Relocated byte-identically from
+# cassian_runtime_vm (def-site v34 L401).
+
+def node_runtime_map(topo: dict[str, Any] | None) -> dict[str, str]:
+    """
+    Derive {node_name: resolved_runtime} from a resolved topology.
+
+    Same shape as the model's exec-into gate derivation (cassian_model.py:2874-2878)
+    and reads the same resolved field; no normalization helper is introduced and no
+    model semantics are keyed on transport (PBE-1b-9 inert; DC v2.1 §10).
+    """
+    out: dict[str, str] = {}
+    if not isinstance(topo, dict):
+        return out
+    for n in (topo.get("nodes") or []):
+        if not isinstance(n, dict):
+            continue
+        name = str(n.get("name") or "").strip()
+        if not name:
+            continue
+        out[name] = str(n.get("runtime") or "").strip().lower()
+    return out
+
+
+# -------------------------
+# Registry-derived vocabularies (WI-D; REQ-45b-8/-9/-11, PBE-P2-6)
+# -------------------------
+# One source (NOS_PROVIDERS), several readers. Every derivation is sorted so
+# ordering is deterministic (Doctrine §1.4).
+
+
+def nos_known_types() -> tuple[str, ...]:
+    """Registry-derived node types, sorted (REQ-45b-9)."""
+    return tuple(sorted(NOS_PROVIDERS))
+
+
+def nos_candidate_subdirs() -> dict[str, str]:
+    """Explicit candidate-subdir <-> node-type mapping, registry-derived.
+
+    Returns subdir -> node_type (REQ-45b-8). The mapping is carried, never
+    inferred: `nft` maps to node type `nft-fw`; the vocabularies are mapped,
+    never silently unified.
+    """
+    out: dict[str, str] = {}
+    for _t in sorted(NOS_PROVIDERS):
+        _c = NOS_PROVIDERS[_t].candidate
+        if _c is not None:
+            out[_c.subdir] = _t
+    return out
+
+
+def nos_default_image(ntype: str) -> "str | None":
+    """Provider-declared default image for a node type (REQ-45b-11/-11-ext).
+
+    None when the provider declares none -- non-frr image defaults stay in
+    their existing maps untouched (LD-H1 / P5).
+    """
+    _p = NOS_PROVIDERS.get(ntype)
+    return _p.default_image if _p is not None else None
+
+
+def nos_provider_for(ntype: str, seam: str) -> NosProvider:
+    """Deny-by-default provider dispatch (REQ-45b-1, B01).
+
+    The single lookup every provider seam uses. Unknown type -> the exact
+    §6.6 registry UNSUP (deterministic; supported set rendered sorted, D06),
+    exit-2 band. No fallback chains; no environment probing.
+    """
+    p = NOS_PROVIDERS.get(ntype)
+    if p is None:
+        supported = ", ".join(sorted(NOS_PROVIDERS))
+        die(
+            f"ERROR: unsupported node type '{ntype}' at {seam}: no NOS "
+            "provider is registered for it.\n"
+            f"Supported: {supported}.\n"
+            "Next:\n"
+            "  Extension route: add src/cassian_nos_<token>.py and register "
+            "it in NOS_PROVIDERS\n"
+            "  (see the NOS expansion structure design).",
+            code=2,
+        )
+    return p
+
+
 # -------------------------
 # Input adapters (read-only, advisory-only)
 # -------------------------
@@ -1657,7 +1818,9 @@ def topo_to_containerlab(topo: dict) -> dict:
     hard_defaults = {
         "host": "wbitt/network-multitool:latest",
         "nft-fw": "ghcr.io/cassian-gate/nft-fw:latest",
-        "frr": "frrouting/frr:latest",
+        # REQ-45b-11: registry-derived from the FRR provider's default_image.
+        # Non-frr entries are untouched (P5).
+        "frr": nos_default_image("frr"),
     }
 
     evpn = _validate_fabric_evpn_presence_only(topo)
@@ -2262,10 +2425,13 @@ def resolve_topology(topo: dict) -> dict:
             if src_node not in _exec_node_types:
                 die(f"{ctx}: exec test target node {src_node!r} is not declared in topology 'nodes:'")
             derived_type = _exec_node_types[src_node]
-            if derived_type not in ("frr", "nft-fw"):
+            # REQ-45b-9: registry-derived, sorted -> ("frr", "nft-fw").
+            _known = nos_known_types()
+            if derived_type not in _known:
                 die(
                     f"{ctx}: exec test target node {src_node!r} has node type "
-                    f"{derived_type!r}; exec supports only node types 'frr', 'nft-fw'"
+                    f"{derived_type!r}; exec supports only node types "
+                    + ", ".join(repr(_k) for _k in _known)
                 )
             t["src"] = src_node
             cmd_raw = t.get("command")
@@ -2808,6 +2974,105 @@ def resolve_topology(topo: dict) -> dict:
                 t["dst"] = t.get("to")
 
         # ----------------------------
+        # R-O1 exec-into gate: validate-time explicit-UNSUP for vm-runtime nodes.
+        #
+        # Authority: sonic-vm-open-questions-ruling-record (d9850b4), as extended by
+        # the H-1..H-5 carry-forward note (the exec-into principle, Rev-3).
+        #
+        # WHAT: every test kind whose evaluation EXECS INTO a referenced node is gated
+        # on runtime == "vm" at validate time, under that kind's own alias vocabulary.
+        # The kind set below is the CLOSED SET of exec-into kinds, enumerated against
+        # the engine's own universe check --
+        #   if kind not in ("ping","tcp","bgp_neighbor","route_prefix","invariant","exec")
+        # -- not a hand-maintained list. Gated references:
+        #   tcp           src (or from) + dst (or to)  -- dst is the listener
+        #   bgp_neighbor  src (or from)
+        #   invariant     src (or from), all types, via the node->src backfill
+        #   route_prefix  src (or on)  -- the vantage node
+        # HANDOFF (REQ-45a-6a): 'ping' WAS gated here. The VM runtime backend
+        # (§4.5-a) now executes ping against the guest over the delivered
+        # dispatch, so ping-on-vm validate-accepts. ping remains an exec-into
+        # kind in the engine's universe; it is simply no longer in THIS gate's
+        # set. Removing any further kind requires the same discharge -- a
+        # working guest path -- never a silent deletion (v8 §15).
+        # 'exec' is the sixth exec-into kind and is deliberately absent: its own type
+        # gate (frr / nft-fw only) pre-empts loudly for sonic-vm, so a gate here would
+        # be dead code. Adding a seventh kind to the engine's universe check without
+        # adding it here re-opens R-O1; the proof carries a case per kind.
+        # Container exec against a vm-runtime node reaches the vrnetlab launcher, not
+        # the guest NOS, so any verdict produced would describe the wrong entity.
+        # Refusing at validate time is the honest disposition until the VM runtime
+        # backend lands (§4.5). This is an UNSUPPORTED-capability gate, not a defect
+        # report.
+        #
+        # NOT gated (deliberate): references resolving to an address without exec --
+        # ping 'dst' / 'to' / 'to_ip' (dataplane ICMP via the vrnetlab bridge
+        # legitimately interrogates the guest), bgp_neighbor peer-IP, route_prefix
+        # 'prefix', and any IP-literal 'dst'. Scenario fault actions are stimulus, not
+        # verdict, and reach a vm node's dataplane for real via the vrnetlab bridge;
+        # they are out of the form by ruling, and verify_phase1.sh 4d proves them
+        # working against a live SONiC guest.
+        #
+        # Map-resolved references only: a name absent from the topology keeps its
+        # existing behaviour. No new declaration hard-fail is introduced here.
+        #
+        # PLACEMENT (binding -- anchored by structure, not line number): this pass must
+        # stay AFTER the generic test-reference normalization above ('on'->'src',
+        # 'from'->'src', non-ping 'to'->'dst', and their disagree-checks) and
+        # immediately BEFORE the ping validation block.
+        #
+        # ALIAS-COVERAGE DEPENDENCY (do not break): 'node:'-declared invariants and
+        # 'on:'-declared route_prefix tests are visible here ONLY because their
+        # backfills run earlier in this same loop iteration -- 'node'->'src' inside the
+        # invariant block, 'on'->'src' in the generic normalization above. Both fall
+        # through (no 'continue') and arrive with 'src' populated. The alias read below
+        # does NOT include 'node' or 'on'. Any reorganisation that moves this pass
+        # ahead of either backfill SILENTLY loses that kind's coverage.
+        # tests/vm_runtime_validate_rejection_proof.py cases (a) and (f) exist to
+        # catch exactly that.
+        #
+        # ORDERING (accepted): for bgp_community / bgp_as_path / ospf_neighbor_up the
+        # existing 'frr' src type gate fires earlier and its message stands; for kind
+        # 'exec' the existing type gate likewise pre-empts. Those gates are loud, so
+        # no silent path survives; this gate is their backstop, not their first line.
+        #
+        # Authority: sonic-vm-open-questions-ruling-record (d9850b4), the H-1..H-5
+        # carry-forward note (exec-into principle, Rev-3), and Addendum #2 (form
+        # re-derived to the principle's own boundary; closure by enumeration).
+        # ----------------------------
+        _eig_kind = str(t.get("kind") or "").strip().lower()
+        if _eig_kind in ("tcp", "bgp_neighbor", "invariant", "route_prefix"):
+            # REQ-45b-12 / PBE-P2-6: read the model-homed shared source instead
+            # of re-deriving. This check remains an independent corroborating
+            # gate -- it is not dropped, it just stops being a second
+            # derivation of the same mapping.
+            _eig_runtimes = node_runtime_map(resolved)
+            _eig_ctx = f"tests[{i}] ({t.get('name', '<unnamed>')})"
+            _eig_refs = [("src", t.get("src") or t.get("from"))]
+            if _eig_kind == "tcp":
+                _eig_refs.append(("dst", t.get("dst") or t.get("to")))
+            for _eig_field, _eig_val in _eig_refs:
+                if not isinstance(_eig_val, str) or not _eig_val.strip():
+                    continue
+                _eig_name = _eig_val.strip()
+                if is_ip_literal(_eig_name):
+                    continue
+                if _eig_runtimes.get(_eig_name) != "vm":
+                    continue
+                die(
+                    f"{_eig_ctx}: {_eig_kind} test references {_eig_field} node "
+                    f"{_eig_name!r}, whose resolved runtime is 'vm'; running a "
+                    f"{_eig_kind} test against a vm-runtime node is NOT SUPPORTED in "
+                    f"this release. Container exec reaches the vrnetlab launcher "
+                    f"container, not the guest NOS, so the verdict would describe the "
+                    f"wrong entity. Valid: give {_eig_field} a node whose resolved "
+                    f"runtime is 'container'. vm-runtime nodes currently support "
+                    f"lifecycle (up/status/down), node readiness, and ping tests "
+                    f"(executed against the guest); other test kinds are deferred "
+                    f"(DC v2.1 §10, 'Model vs runtime backend')."
+                )
+
+        # ----------------------------
         # v1 ping destination normalization
         # ----------------------------
         # ----------------------------
@@ -3002,7 +3267,14 @@ def resolve_topology(topo: dict) -> dict:
                 for j, nname in enumerate(scope, start=1):
                     if not isinstance(nname, str) or not nname.strip():
                         die(f"candidate_changes[{idx}] ({cid}).scope[{j}]: must be a non-empty string")
-                    if nname.strip() not in names:
+                    # UNDEF remediation: `names` was unbound in this scope, so
+                    # EVERY candidate_changes[*].scope entry raised NameError --
+                    # valid or not -- and the shipped rejection below never
+                    # rendered (REQ-UNDEF-7, -8, -9). Bound to nodes_by_name
+                    # (assigned unconditionally at the top level of this
+                    # function), NOT to `nodes`, which is conditionally bound
+                    # inside the ping branch and which Python itself suggests.
+                    if nname.strip() not in nodes_by_name:
                         die(f"candidate_changes[{idx}] ({cid}).scope[{j}]: unknown node '{nname.strip()}'")
 
     return resolved

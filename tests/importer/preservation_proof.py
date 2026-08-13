@@ -29,27 +29,32 @@ import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
+sys.path.insert(0, os.path.join(_ROOT, "tests"))  # locate preservation_manifest (script-dir is tests/importer/)
+
+from preservation_manifest import MODULE_ROSTER
 
 # === FORK_BASELINE BEGIN (generated at apply-time from the live merge-base) ===
 BASELINE = {
     "src/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "src/cassian.py": "cbc931d2f977c37249599bf63229b507ce6ea4d58eb6ca5525b7269b70d4c895",
+    "src/cassian.py": "45c5180e30e2d4bda791db9c90d8ae31c0797e7fbe98d2df47c54127643b6c2d",  # re-baselined from 588fbed5 (phase2 §4.5-b WI-F dead-code sweep (ensure_ip_tools import) + guardrail comment correction); orig cbc931d2
     "src/cassian_ai.py": "6900c52ea52f2a4a588b99478f10e967603b7a1a5f87b3b257878d4fde569361",
     "src/cassian_artifacts.py": "ae8a54302e4fa8fe2f89e3af0e1e16dcda0ff2ae7bc4a805b671f69029fbb04c",
-    "src/cassian_candidate.py": "93db9b61e9fd22c74156fc0492119fc4e170a7a192684354c8a31c70876ff52d",
-    "src/cassian_cli.py": "bcf460f7be2d2ec4280569bdfe3f30ab9d0784d6677a98a8db64579bf32ebf75",
-    "src/cassian_common.py": "a0469a2a1b3cdcc5a1fffc7cd02198447cf1e0cb1ee8657469c3fb2c57139a10",
-    "src/cassian_engine.py": "f3831817f66e62840deae7153270e8c627b09ba4131c965cf80e623f0f4db85e",
-    "src/cassian_model.py": "4b9f01aaa95e9c67e5bddc6e30752e60627103c1588a529db88cc0703732fa01",
-    "src/cassian_runtime_container.py": "b2a493f947c121416c992b8b9788a60acead190d305d58654c3c457def116ba3",
+    "src/cassian_candidate.py": "217d8f08621db367a0d0666470793ff2335136846a4663ce95b4d0d3110330bc",  # re-baselined from 7775a062 (undef remediation: _cand_misuse helper, vty import, cmd_test rebinds + scenarios reads, resolve_topology names); orig 93db9b61
+    "src/cassian_common.py": "0f5a326f3407811ba9afa8c449a15a9526e101a0ba258998b29bd633e48223bb",  # re-baselined from a0469a2a (phase2 §4.5-b WI-C1/C2 NOS-neutral re-homes + A-S6 provenance comment); orig a0469a2a
+    "src/cassian_engine.py": "aafd85a876c984a3899c223ebecbc50233020e4139b8b9c00c0da2aab3ee925f",  # re-baselined from c9b536d4 (undef remediation: _cand_misuse helper, vty import, cmd_test rebinds + scenarios reads, resolve_topology names); orig f3831817
+    "src/cassian_model.py": "30252dc1c125344e99abc9ef8d70552f2047c581df73d28204c25d4adf5cf6ec",  # re-baselined from 5cd62d9d (undef remediation: _cand_misuse helper, vty import, cmd_test rebinds + scenarios reads, resolve_topology names); orig 4b9f01aa
+    "src/cassian_nos_frr.py": "3c53970d87a18ea828f0bb9008f24c75b22fdf5dd3a45a7c45e0b72faedd7ff3",  # §4.5-b new module (WI-B NOS provider structure); enforced (REQ-45b-13; LD-9)
+    "src/cassian_nos_types.py": "b4e4cec8e0532b3280db4c8f0480f1884336a273ee7690d8992eee087b362eb6",  # §4.5-b new module (WI-B NOS provider structure); enforced (REQ-45b-13; LD-9)
+    "src/cassian_runtime_container.py": "7eecee129911d838d15e7e20463db66475fd190b9cbbfb0435ebc33a79303761",  # re-baselined from b3e45fa2 (phase2 §4.5-b WI-C1 _normalize_prefix shim + WI-F ensure_ip_tools removal); orig b2a493f9
+    "src/cassian_runtime_vm.py": "3832ad07ef6e9ce483bc0fe0f017df4584b15bf6c3a90c55fbb0b2b14f84f494",  # re-baselined from 865545e4 (phase2 §4.5-b WI-D2 node_runtime_map model-homing); orig 865545e4
     "src/cassian_state.py": "aec4d412ee53555156cb5275c5d7a1329f54aaef298d4409feebcad2c198a9d6",
-    "src/cassian_tests.py": "ba0a1f36245de1ac01853fca4e8a3100ff5aad28525e91ef26ebaf24f404b0af",
-    "src/cassian_two_run.py": "694f4e0d8ca7e07e7f4843e4f269a697d74d19bcdece60adf6f339952e471452",
+    "src/cassian_tests.py": "49f484b027c146c3c4f513ef3829e6909b0d142743f3ffdbcdadf3c8751ae2d0",  # re-baselined from dd56046b (phase2 §4.5-b WI-C1 parse-family relocation shims); orig ba0a1f36
+    "src/cassian_two_run.py": "a6432665dbfee699713fe60c2e42d427c3c3fd9f82be7ec0ab65caa8b34c3ed9",  # re-baselined from cfafdfa6 (phase2 4.4 F-1 canonical serializer); orig 694f4e0d
 }
 # === FORK_BASELINE END ===
 
 SCOPED = {"src/cassian_cli.py"}
-NEW_ALLOWED = {"src/cassian_import.py"}
+ALLOWED_NEW = {"src/cassian_import.py"}
 PRES_CRITICAL = {
     "src/cassian_model.py",      # LD-4 reuse-by-import; never edited
     "src/cassian_tests.py",      # §13(b)(c) render seam + invariant evaluation
@@ -79,15 +84,23 @@ def main():
         sys.exit(1)
     head = set("src/" + n for n in os.listdir(src_dir) if n.endswith(".py"))
 
-    added, removed = head - set(BASELINE) - NEW_ALLOWED, set(BASELINE) - head
-    record("PO-6 module-set drift = {cassian_import.py} added, none removed",
-           (not added) and (not removed) and (NEW_ALLOWED <= head),
+    # module-set drift read from the roster (bidirectional; LD-9 leg).
+    added, removed = head - MODULE_ROSTER, MODULE_ROSTER - head
+    record("PO-6 module-set matches roster (denom " + str(len(MODULE_ROSTER)) + ", bidirectional)",
+           (not added) and (not removed),
            "added=" + str(sorted(added)) + " removed=" + str(sorted(removed)))
+
+    # enforced set derived FROM THE ROSTER (not baseline keys); a rostered-enforced
+    # module absent from the baseline fails loud, never skipped, never auto-baselined.
+    enforced_set = MODULE_ROSTER - SCOPED - ALLOWED_NEW
+    unbaselined = sorted(m for m in enforced_set if m not in BASELINE)
+    record("PO-6 all enforced modules baselined (F-1 re-baseline guard)",
+           not unbaselined, "re-baseline required: " + str(unbaselined))
 
     enforced = 0
     drift = []
-    for mod in sorted(BASELINE):
-        if mod in SCOPED:
+    for mod in sorted(enforced_set):
+        if mod not in BASELINE:
             continue
         enforced += 1
         actual = _sha_file(mod)
@@ -99,8 +112,8 @@ def main():
            "; ".join(drift))
 
     record("PO-6 §13(b)(c) seam + advisory + results-writer + model in enforced set",
-           PRES_CRITICAL.issubset(set(BASELINE) - SCOPED),
-           "missing=" + str(sorted(PRES_CRITICAL - (set(BASELINE) - SCOPED))))
+           PRES_CRITICAL.issubset(enforced_set),
+           "missing=" + str(sorted(PRES_CRITICAL - enforced_set)))
 
     failed = [n for n, ok, _ in checks if not ok]
     for n, ok, detail in checks:

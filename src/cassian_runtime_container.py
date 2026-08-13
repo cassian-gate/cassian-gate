@@ -273,7 +273,7 @@ def _scenario_resolve_link_or_interface_targets(
 
 
 def _scenario_tc_replace(rt: "Runtime", lab: str, node: str, iface: str, qdisc_args: str) -> None:
-    cp = rt.sh(
+    cp = rt.substrate_sh(
         lab,
         node,
         f"tc qdisc replace dev {iface} root {qdisc_args}",
@@ -285,7 +285,7 @@ def _scenario_tc_replace(rt: "Runtime", lab: str, node: str, iface: str, qdisc_a
 
 
 def _scenario_tc_clear(rt: "Runtime", lab: str, node: str, iface: str) -> None:
-    cp = rt.sh(
+    cp = rt.substrate_sh(
         lab,
         node,
         f"tc qdisc del dev {iface} root",
@@ -307,7 +307,7 @@ def scenario_apply_fault(
         targets, target_label = _scenario_resolve_link_or_interface_targets(topo, action, spec)
         desired = "down" if action == "link_down" else "up"
         for node, iface in targets:
-            cp = rt.sh(
+            cp = rt.substrate_sh(
                 lab,
                 node,
                 f"ip link set dev {iface} {desired}",
@@ -326,7 +326,7 @@ def scenario_apply_fault(
         targets, target_label = _scenario_resolve_link_or_interface_targets(topo, action, spec)
         node, iface = targets[0]
         desired = "down" if action == "interface_down" else "up"
-        cp = rt.sh(
+        cp = rt.substrate_sh(
             lab,
             node,
             f"ip link set dev {iface} {desired}",
@@ -924,22 +924,7 @@ def write_containerlab_file(topo_path: Path) -> Path:
 # Runtime helpers
 # -------------------------
 
-def _normalize_prefix(cidr: str) -> str | None:
-    try:
-        # Accept inputs that may already be parsed (e.g., IPv4Network) by coercing to str.
-        if not isinstance(cidr, str):
-            cidr = str(cidr)
-
-        cidr = cidr.strip()
-        if not cidr:
-            return None
-
-        n = ipaddress.ip_network(cidr, strict=False)
-        if n.version != 4:
-            return None
-        return str(n)
-    except Exception:
-        return None
+from cassian_common import _normalize_prefix  # re-homed to cassian_common (§4.5-b A-H4); shim owed removal at §4.5-c (BL-P2-4.5b-3)
 
 def compare_expected_vs_observed_prefixes(expected: set[str], observed: set[str]) -> dict[str, Any]:
     missing = sorted([p for p in expected if p not in observed])
@@ -1219,16 +1204,33 @@ def verify_frr_ready(rt: Runtime, lab: str, rtr: str, require_evpn_bgp: bool = F
 
 def verify_sonic_vm_ready(rt: Runtime, lab: str, node: str) -> None:
     """
-    VM substrate readiness gate (v1.5).
+    VM readiness gate: substrate, then guest-exec reachability (REQ-45a-4a/-4b).
 
-    This is intentionally minimal and deterministic:
-      - verifies the containerlab node instance is running
-      - verifies a QEMU process exists inside the wrapper container (vrnetlab-style)
-    No NOS CLI parsing. No semantic interpretation.
+    Two legs, in order:
+
+      1. SUBSTRATE (wrapper-level). The containerlab node instance is running and a
+         QEMU process exists inside the vrnetlab wrapper. Probed through a
+         ContainerRuntime constructed HERE, deliberately: this leg must reach the
+         WRAPPER, and the passed `rt` routes vm-node exec to the GUEST, where no
+         qemu process exists (the guest IS the VM). Founder ruling, 2026-07-16.
+
+      2. GUEST (via `rt`). A trivial command returns rc=0 over the ruled transport.
+         Bounded poll, explicit deadline; transport results classified per B07.
+
+    Doctrine 1.7: readiness NEVER influences a verdict. Doctrine 1.9: polling exists
+    only here. No NOS CLI parsing. No semantic interpretation.
     """
+    from cassian_runtime_vm import (
+        VM_GUEST_READY_INTERVAL_S,
+        VM_GUEST_READY_TIMEOUT_S,
+        classify_guest_probe_rc,
+        guest_probe_deadline_error,
+    )
+
     if not rt.is_running(lab, node):
         die(f"{node}: VM substrate container is not running")
 
+    # --- leg 1: substrate (wrapper) ---------------------------------------
     # vrnetlab-style containers run QEMU inside the container.
     # Deterministic bounded wait (explicit timeout + interval; no jitter).
     boot_timeout_s = 60
@@ -1236,7 +1238,7 @@ def verify_sonic_vm_ready(rt: Runtime, lab: str, node: str) -> None:
     deadline = time.time() + boot_timeout_s
 
     while True:
-        cp = rt.exec(
+        cp = rt.substrate_exec(
             lab,
             node,
             ["sh", "-lc", "ps -eo comm,args | grep -E '[q]emu-system|[q]emu-kvm' >/dev/null"],
@@ -1250,6 +1252,25 @@ def verify_sonic_vm_ready(rt: Runtime, lab: str, node: str) -> None:
             die(f"{node}: VM substrate not ready within {boot_timeout_s}s (qemu process not detected)")
 
         time.sleep(interval_s)
+
+    # --- leg 2: guest-exec reachability (D01: boot variance absorbed here) --
+    guest_deadline = time.time() + VM_GUEST_READY_TIMEOUT_S
+    last_rc = None
+
+    while True:
+        cp = rt.exec(lab, node, ["true"], check=False, capture_output=True)
+        last_rc = cp.returncode
+        if last_rc == 0:
+            return
+
+        fatal = classify_guest_probe_rc(node, last_rc)
+        if fatal is not None:
+            die(fatal)
+
+        if time.time() >= guest_deadline:
+            die(guest_probe_deadline_error(node, last_rc, VM_GUEST_READY_TIMEOUT_S))
+
+        time.sleep(VM_GUEST_READY_INTERVAL_S)
 
 def verify_lab_ready(rt: Runtime, topo: dict, lab: str) -> None:
     nodes = topo.get("nodes", []) or []
@@ -1374,24 +1395,6 @@ def docker_is_running(container: str) -> bool:
 def vty(rt: Runtime, lab: str, node: str, cmd: str) -> subprocess.CompletedProcess:
     return rt.exec(lab, node, ["vtysh", "-c", cmd], check=False, capture_output=True)
 
-def ensure_ip_tools(rt: "Runtime", lab: str, node: str) -> None:
-    """
-    Ensure the 'ip' command is available inside the node.
-
-    Runtime contract:
-      - No docker/container_name usage
-      - No package installs
-      - Pure capability check
-    """
-    cp = rt.sh(
-        lab,
-        node,
-        "command -v ip >/dev/null",
-        check=False,
-        capture_output=False,
-    )
-    if cp.returncode != 0:
-        die(f"{node}: 'ip' not found (image must include iproute2)")
 
 def resolved_topology_path(lab: str) -> Path:
     return lab_dir(lab) / "topology.resolved.yaml"
@@ -1476,6 +1479,53 @@ class Runtime:
             check=check,
             capture_output=capture_output,
         )
+
+    # --- runtime-axis exec-target seam (addendum 1744bbb, ratified form §3.5)
+    # Two targets, one seam: bare exec/sh/copy_* mean THE NOS (§4.1 ratified
+    # default); the substrate (the entity containerlab wired: veths, qdiscs,
+    # capture apparatus, launcher) requires the explicit substrate_* name.
+
+    def substrate_exec(
+        self,
+        lab: str,
+        node: str,
+        cmd: list[str],
+        *,
+        check: bool = False,
+        capture_output: bool = True,
+        interactive: bool = False,
+        timeout_s: float | None = None,
+    ) -> subprocess.CompletedProcess:
+        raise NotImplementedError
+
+    def substrate_sh(
+        self,
+        lab: str,
+        node: str,
+        script: str,
+        *,
+        check: bool = False,
+        capture_output: bool = True,
+    ) -> subprocess.CompletedProcess:
+        # Concrete sugar; mirrors Runtime.sh -- funnels to substrate_exec.
+        return self.substrate_exec(
+            lab,
+            node,
+            ["sh", "-lc", script],
+            check=check,
+            capture_output=capture_output,
+        )
+
+    def substrate_copy_from(
+        self,
+        lab: str,
+        node: str,
+        src_path: str,
+        dst_path: str,
+        *,
+        check: bool = True,
+    ):
+        raise NotImplementedError
 
     def is_running(self, lab: str, node: str) -> bool:
         raise NotImplementedError
@@ -1619,47 +1669,31 @@ class ContainerRuntime(Runtime):
             out = out.decode("utf-8", errors="replace")
         return (out or "").strip() == "true"
 
+    # Runtime-axis seam (addendum 1744bbb §5.2): for a container node the
+    # substrate IS the node -- class-body identity aliases, THE collapse.
+    # Guarded by identity assertions (REQ-45a-18); never turn into wrappers.
+    substrate_exec = exec
+    substrate_copy_from = copy_from_node
 
-class VmRuntimeStub(Runtime):
-    def __init__(self) -> None:
-        self._msg = "VM runtime not implemented yet (Phase-1 stub). Use container runtime."
-
-    def node_id(self, lab: str, node: str) -> str:
-        die(self._msg)
-        raise RuntimeError(self._msg)
-
-    def exec(
-        self,
-        lab: str,
-        node: str,
-        cmd: list[str],
-        *,
-        check: bool = False,
-        capture_output: bool = True,
-        interactive: bool = False,
-    ) -> subprocess.CompletedProcess:
-        die(self._msg)
-        raise RuntimeError(self._msg)
-
-    def is_running(self, lab: str, node: str) -> bool:
-        die(self._msg)
-        return False
-
-    def is_running_id(self, node_id: str) -> bool:
-        die(self._msg)
-        return False
-    
-    def exists_id(self, node_id: str) -> bool:
-        die(self._msg)
-        return False
 
 def get_runtime(topo: dict[str, Any] | None = None) -> Runtime:
     """
-    Decide runtime. For now:
-      - default: container
-      - allow future extension: topo['runtime'] or node['runtime'] (not required yet)
+    Decide runtime (REQ-45a-2 / B01).
+
+    Returns the node-dispatching runtime iff any resolved node has runtime == "vm";
+    otherwise ContainerRuntime -- including topo=None, so bare call sites keep their
+    existing container semantics (wrapper-level lifecycle is the ruled behaviour for
+    vm labs at bare sites).
+
+    DC v2.1 §10 / cassian_model.py:881: dispatch keys solely on the resolved
+    `runtime` value, never on node.type (D07; P4 Arista-clean).
+
+    Imported at function scope deliberately: cassian_runtime_vm imports this module,
+    so a module-scope import here would close an import cycle.
     """
-    return ContainerRuntime()
+    from cassian_runtime_vm import build_runtime
+
+    return build_runtime(topo)
 
 def list_owned_labs_from_artifacts() -> list[tuple[str, Path]]:
     """
