@@ -35,6 +35,7 @@ from cassian_nos_types import (
     validate_provider,
 )
 from cassian_nos_frr import FRR_PROVIDER
+from cassian_nos_sonic import SONIC_PROVIDER
 
 # -------------------------
 # NOS provider registry (Phase 2 §4.5-b, REQ-45b-1; design §3.3)
@@ -81,6 +82,10 @@ _NFT_FW_PROVIDER = NosProvider(
 NOS_PROVIDERS = MappingProxyType({
     "frr": FRR_PROVIDER,
     "nft-fw": _NFT_FW_PROVIDER,
+    # §4.5-c REQ-45C-1: SONiC provider leaf. Registration is inert for
+    # dispatch -- no decision site calls gen_node_config/provision yet
+    # (LD-H2 point 2); it wires identity, default_image and capabilities.
+    "sonic-vm": SONIC_PROVIDER,
 })
 
 # Import-time completeness + key coherence (B10): every registered provider
@@ -1821,6 +1826,8 @@ def topo_to_containerlab(topo: dict) -> dict:
         # REQ-45b-11: registry-derived from the FRR provider's default_image.
         # Non-frr entries are untouched (P5).
         "frr": nos_default_image("frr"),
+        # §4.5-c REQ-45C-1: registry-derived, mirroring the FRR shape.
+        "sonic-vm": nos_default_image("sonic-vm"),
     }
 
     evpn = _validate_fabric_evpn_presence_only(topo)
