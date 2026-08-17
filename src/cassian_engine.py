@@ -623,6 +623,53 @@ def cmd_validate(args: argparse.Namespace) -> None:
     finally:
         cassian_common._QUIET_DIE = prev_quiet
 
+def _assert_vm_images_present(vm_nodes: list[dict]) -> None:
+    """
+    Fail-fast image gate for VM-runtime nodes (REQ-45C-31).
+
+    Cassian Gate does not distribute NOS images. A VM node's image is produced by
+    contrib/sonic-image-build/ and resolved from the local Docker image store; no
+    registry pull is performed here or in CI (REQ-45C-11).
+
+    Coverage limit (PBE-P2-8): this asserts that the reference resolves in the
+    local image store. It does not, and cannot, distinguish an image produced by
+    contrib/sonic-image-build/ from one tagged by hand -- the vrnetlab build
+    label is byte-identical in both cases. Provenance of the local tag is an
+    operator responsibility, not a property this gate can verify.
+    """
+    for _n in vm_nodes:
+        image = str(_n.get("image") or "").strip()
+        node = str(_n.get("name") or "<unnamed>").strip()
+        if not image:
+            continue
+        try:
+            _p = subprocess.run(
+                ["docker", "image", "inspect", image],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            present = _p.returncode == 0
+        except Exception:
+            present = False
+        if present:
+            continue
+        _tail = image.rsplit("/", 1)[-1]
+        version = _tail.rsplit(":", 1)[1] if ":" in _tail else "202405"
+        die(
+            "VM image contract violation\n"
+            f"node: {node}\n"
+            f"reason: image reference did not resolve: {image}\n"
+            "detail: not present at the contrib-owned local path (no local Docker "
+            "image carries this reference); Cassian Gate does not distribute NOS "
+            "images and performs no registry pull\n"
+            "required: build it with the contrib path, then re-run:\n"
+            f"  ./contrib/sonic-image-build/build.sh <your-sonic-vm.qcow2> {version}\n"
+            "notes: see contrib/sonic-image-build/README.md for qcow2 sourcing "
+            "(bring-your-own NOS).",
+            code=2,
+        )
+
+
 def cmd_doctor(args: argparse.Namespace) -> None:
     """
     Read-only environment readiness checks.
@@ -1270,6 +1317,7 @@ def cmd_up(args: argparse.Namespace) -> None:
         first_vm = vm_nodes[0]
         first_name = str(first_vm.get("name") or "<unnamed>").strip()
         assert_vm_runtime_supported(first_name)
+        _assert_vm_images_present(vm_nodes)
     _maybe_print_privilege_notice("A")
     _run_containerlab(["sudo", "containerlab", "deploy", "-t", str(out)], check=True)
 

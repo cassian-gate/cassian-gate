@@ -299,8 +299,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Pull the ghcr tag directly (no local-retag dependency; B-8 stays backlog).
-          docker pull ghcr.io/cassian-gate/sonic-vm:202405
+          # Image resolves from the contrib-owned local tag (REQ-45C-11); no registry
+          # pull. A missing image fails at up/ with the REQ-45C-31 (a)/(b)/(c) error.
           ./src/cassian.py validate topologies/vm-assertion-smoke.yaml
           ./src/cassian.py up topologies/vm-assertion-smoke.yaml --reconfigure
           ./src/cassian.py test vm-assertion-smoke
