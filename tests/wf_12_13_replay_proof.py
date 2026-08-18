@@ -113,6 +113,16 @@ for _p in ("nos_leaf_import_proof.py", "nos_deny_by_default_proof.py",
            "nos_census_instrument.py"):
     check(f"§4.5-b proof is CI-wired: {_p} present in the gate", _p in gate)
 
+# §4.5-c (§14.4 conditional lockstep; Ledger BL-P2-4.5c-11): the four lab-free
+# SONiC base-lifecycle proofs are gate-wired in lockstep with the cassian.yml
+# step that runs them. A proof that never gates enforces nothing.
+# Coverage limit (PBE-P2-8), stated rather than implied: this is a substring test
+# over cassian.yml. It proves each proof is NAMED in the gate. It does NOT prove
+# the step executes, that the runner reaches it, or that the proof passes.
+for _p in ("sonic_leaf_import_proof.py", "sonic_configgen_determinism_proof.py",
+           "sonic_provision_supply_proof.py", "sonic_image_lifecycle_proof.py"):
+    check(f"§4.5-c proof is CI-wired: {_p} present in the gate", _p in gate)
+
 fails = [n for n, ok in checks if not ok]
 print(f"PO-B3-fold (WF-12/13 replay): {len(checks) - len(fails)}/{len(checks)} checks passed.")
 for n, ok in checks:

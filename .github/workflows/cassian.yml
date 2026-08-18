@@ -132,6 +132,15 @@ jobs:
           python tests/nos_deny_by_default_proof.py
           python tests/nos_census_instrument.py
 
+      - name: SONiC base lifecycle proof harnesses (§4.5-c)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/sonic_leaf_import_proof.py
+          python tests/sonic_configgen_determinism_proof.py
+          python tests/sonic_provision_supply_proof.py
+          python tests/sonic_image_lifecycle_proof.py
+
       - name: User-defined invariant (exec) proof harnesses (§4.7)
         shell: bash
         run: |
