@@ -192,8 +192,25 @@ class NosProvider:
     runtime_requirement: str | None
     capabilities: Mapping[str, CapabilityDisposition]
 
-    gen_node_config: Callable[[dict, dict], "dict[str, str] | None"]
-    provision: Callable[["Runtime", str, str, dict, dict], None]
+    # `gen_node_config` carries a third argument and `provision` returns the
+    # mapping it applied, beyond ratified design `:144`/`:147`. Founder ruling
+    # (§4.5-c Chat 3, orchestration shape): SONiC's generated overlay depends
+    # on device facts that exist only after boot, so `provision` probes,
+    # generates THROUGH this leg, supplies, and returns what it applied; core
+    # serializes that return value via `write_json_canonical` (PBE-P2-7,
+    # REQ-45C-20/-42). Providers still author no artifact.
+    #
+    # Generation stays a PURE function of its arguments -- observed facts are
+    # passed in, never fetched here -- so REQ-45C-20's determinism property is
+    # checkable without a runtime. The facts mapping is OPAQUE to core: core
+    # passes it through and never interprets it, keeping NOS vocabulary out of
+    # the contract (design `:244` (i)).
+    #
+    # Design `:147`'s `cfg_artifacts` parameter was never implemented in any
+    # shipped version (the fifth argument has always been `topo`, preceded by
+    # `node_d`); it is amended forward, not restored.
+    gen_node_config: Callable[[dict, dict, "Mapping[str, Any] | None"], "dict[str, Any] | None"]
+    provision: Callable[["Runtime", str, str, dict, dict], "dict[str, Any] | None"]
     nos_ready: Callable[["Runtime", str, str], None]
     convergence_wait: Callable[["Runtime", str, str, int], None]
 
