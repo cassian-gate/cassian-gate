@@ -79,7 +79,7 @@ import ipaddress
 import time
 
 from cassian_common import fail, is_ip_literal, validate_ip_literal
-from cassian_artifacts import write_json_canonical
+from cassian_artifacts import write_json_canonical, node_cfg_dir
 from cassian_state import (
     _state_capture_expand_plan_or_die,
     _state_capture_run_plan,
@@ -249,6 +249,32 @@ def _command_uses_workspace_labs(cmd: str) -> bool:
         "gen",
         "cleanup",
     }
+
+def _provision_nos_providers(rt, lab_name: str, topo: dict) -> None:
+    """Dispatch `provision` for every node whose provider wires it.
+
+    Deferred legs are skipped by inspecting the LD-H2 placeholder marker, so an
+    unwired provider is never invoked and never fails loud for merely existing.
+    """
+    for n in topo.get("nodes", []) or []:
+        if not isinstance(n, dict):
+            continue
+        prov = NOS_PROVIDERS.get(n.get("type"))
+        if prov is None:
+            continue
+        if getattr(prov.provision, "cassian_deferred_leg", None) is not None:
+            continue
+        name = str(n.get("name") or "").strip()
+        if not name:
+            continue
+        applied = prov.provision(rt, lab_name, name, n, topo)
+        if not applied:
+            continue
+        for fname, content in applied.items():
+            out_path = node_cfg_dir(lab_name, name) / str(fname)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            write_json_canonical(out_path, content)
+
 
 def _bind_workspace_labs_dir(workspace: Path) -> None:
     labs_dir = Path(workspace) / "labs"
@@ -1369,6 +1395,13 @@ def cmd_up(args: argparse.Namespace) -> None:
 
     # 5) FRR provisioning
     configure_frr_interfaces_from_topology(rt, lab_name, topo)
+
+    # 5b) NOS-provider provisioning (§4.5-c REQ-45C-1). Providers own the NOS
+    # mechanics; core owns orchestration and artifact recording. Per R-C3-14
+    # `provision` returns the mapping it applied and core serializes it here
+    # through `write_json_canonical` (PBE-P2-7) as run-directory evidence --
+    # LD-45C-2 gives it no directory contract, so nothing consumes the path.
+    _provision_nos_providers(rt, lab_name, topo)
     evpn_leaf_setup_vxlan_from_topology(rt, lab_name, topo)
 
     # Deterministic EVPN host-attachment stimulation for MAC learning

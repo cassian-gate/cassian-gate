@@ -32,7 +32,9 @@ implementation of the same leg is not looking at a contradiction.
 
 from __future__ import annotations
 
+import json
 import re
+import shlex
 import sys
 from typing import TYPE_CHECKING, Any, Mapping
 
@@ -356,21 +358,135 @@ def _assert_overlay_platform_clean(overlay: dict, node: str) -> None:
             )
 
 
-def provision(rt: "Runtime", lab: str, node: str, node_d: dict, topo: dict) -> None:
-    """Supply the generated overlay to the guest (REQ-45C-1 supply path).
+# Guest-side staging path for the overlay. /tmp is tmpfs on the image, so the
+# payload does not persist across a reboot -- consistent with LD-45C-2's
+# no-persistence property (`/etc/sonic/config_db.json` is never rewritten).
+_OVERLAY_GUEST_PATH = "/tmp/cassian-overlay.json"
 
-    Wired at the WI-1 base leg for the port-map precondition only; the overlay
-    apply path lands with the interface/addressing content leg. The design
-    places both inside `provision` (design `:228`).
+
+def _guest_stdout(rt: "Runtime", lab: str, node: str, argv: list,
+                  what: str) -> str:
+    """Run a read command on the guest and return its STDOUT only.
+
+    F-45C-C3-20: the guest's SSH banner (`/etc/issue.net`) lands on STDERR, and
+    `VmRuntime.exec` passes rc/stdout/stderr through unrewritten (REQ-45a-1a),
+    so stdout is clean. Concatenating stderr would reintroduce the banner and
+    break every parse -- measured 2026-08-18, do not "fix" this by merging.
     """
-    _fail(
-        "SONiC provision leg not yet wired",
-        node,
-        "the overlay apply path lands with the §4.5-c addressing content leg",
-        "reaching this placeholder is a defect; the base leg wires generation "
-        "and the port-map precondition only",
-        "report this with the command that produced it",
+    cp = rt.exec(lab, node, argv, check=False, capture_output=True)
+    if getattr(cp, "returncode", 1) != 0:
+        _fail(
+            "SONiC guest probe failed",
+            node,
+            f"could not read {what} from the guest",
+            f"command exited {getattr(cp, 'returncode', '?')}; the guest may "
+            "not have finished booting, or is not a supported SONiC build",
+            "confirm the node is running and retry; if it persists, report "
+            "this with the node's boot log",
+        )
+    return cp.stdout or ""
+
+
+def probe_facts(rt: "Runtime", lab: str, node: str) -> "dict[str, Any]":
+    """Observe the device facts generation needs (R-C3-13).
+
+    Returns the opaque facts mapping passed to `gen_node_config`. Core never
+    interprets it -- it is provider vocabulary by design (contract note at
+    `cassian_nos_types.py`).
+    """
+    hwsku = _guest_stdout(
+        rt, lab, node,
+        ["sonic-cfggen", "-d", "-v", "DEVICE_METADATA.localhost.hwsku"],
+        "the platform HwSKU",
+    ).strip()
+
+    raw = _guest_stdout(
+        rt, lab, node, ["sonic-cfggen", "-d", "--var-json", "PORT"],
+        "the PORT table",
     )
+    try:
+        port_table = json.loads(raw)
+    except ValueError:
+        _fail(
+            "SONiC guest PORT table is not parseable",
+            node,
+            "the guest returned a PORT payload that is not JSON",
+            "generation derives interface naming from this table; Cassian "
+            "will not proceed on an unreadable one",
+            "report this with the guest's `sonic-cfggen -d --var-json PORT` "
+            "output",
+        )
+
+    order = derive_port_order(port_table, node)
+    _cross_check_port_map(hwsku, order, node)
+    return {"hwsku": hwsku, "port_order": order}
+
+
+def provision(rt: "Runtime", lab: str, node: str, node_d: dict,
+              topo: dict) -> "dict[str, Any] | None":
+    """Probe, generate, supply, and return what was applied (R-C3-12/-14).
+
+    SUPPLY PATH (R-C3-12, founder ruling): the overlay reaches the guest
+    through the supported `exec` verb -- write, then `config load -y`, which
+    dispatches to `sonic-cfggen --write-to-db` and MERGES at field level.
+    Measured 2026-08-18 on sonic-vm:202405: PORT 32 -> 32, hwsku/platform/mac
+    intact, `/etc/sonic/config_db.json` md5 unchanged. The containerlab boot
+    mount is NOT used: vrnetlab resolves it to `config replace` + `config save`,
+    which is wholesale replacement and is what LD-45C-2 forbids.
+
+    This does NOT use `copy_to_node`, whose REQ-45a-8/B10 UNSUP declaration for
+    vm-runtime guests stands unchanged and is §4.5-f's to lift.
+
+    SERIALIZATION: the string built here is the TRANSPORT payload, not the
+    authoritative artifact. Core writes the artifact from this function's
+    return value via `write_json_canonical` (PBE-P2-7, REQ-45C-42). The policy
+    below is byte-identical to that serializer's, and the supply proof asserts
+    the equality rather than assuming it.
+    """
+    facts = probe_facts(rt, lab, node)
+    out = gen_node_config(node_d, topo, facts)
+    if not out:
+        return None
+
+    overlay = out.get("config_db.json")
+    if overlay is None:
+        _fail(
+            "SONiC generation returned no overlay",
+            node,
+            "gen_node_config returned a mapping without 'config_db.json'",
+            "the supply path has nothing to apply; this is a generation defect",
+            "report this with the topology that produced it",
+        )
+
+    payload = json.dumps(overlay, indent=2, sort_keys=True, ensure_ascii=False)
+    payload = payload.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n") + "\n"
+
+    write_cmd = "printf '%s' " + shlex.quote(payload) + " > " + shlex.quote(_OVERLAY_GUEST_PATH)
+    cp = rt.exec(lab, node, ["sh", "-c", write_cmd], check=False, capture_output=True)
+    if getattr(cp, "returncode", 1) != 0:
+        _fail(
+            "SONiC overlay could not be staged on the guest",
+            node,
+            f"writing {_OVERLAY_GUEST_PATH} exited {getattr(cp, 'returncode', '?')}",
+            "the overlay is supplied through the exec verb; without the staged "
+            "file `config load` has nothing to merge",
+            "confirm the guest filesystem is writable at /tmp and retry",
+        )
+
+    cp = rt.exec(lab, node,
+                 ["sudo", "config", "load", _OVERLAY_GUEST_PATH, "-y"],
+                 check=False, capture_output=True)
+    if getattr(cp, "returncode", 1) != 0:
+        _fail(
+            "SONiC overlay apply failed",
+            node,
+            f"`config load` exited {getattr(cp, 'returncode', '?')}",
+            "the generated overlay was staged but not merged into ConfigDB; "
+            "the node's declared addressing is therefore absent",
+            "report this with the staged overlay and the command output",
+        )
+
+    return out
 
 
 SONIC_PROVIDER = NosProvider(
