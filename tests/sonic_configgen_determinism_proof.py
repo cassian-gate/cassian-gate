@@ -47,7 +47,19 @@ TOPO = {
 }
 NODE = TOPO["nodes"][0]
 
-out = S.gen_node_config(NODE, TOPO)
+# Observed-facts fixture: the guest PORT table measured on sonic-vm:202405
+# (2026-08-18, through the exec channel). Generation is a PURE function of its
+# arguments -- no runtime is needed here, which is the property R-C3-14 chose
+# this orchestration shape to preserve.
+_GUEST_PORT_TABLE = {f"Ethernet{i * 4}": {"index": str(i)} for i in range(32)}
+_PORT_ORDER = S.derive_port_order(_GUEST_PORT_TABLE, "s1")
+FACTS = {"hwsku": "Force10-S6000", "port_order": _PORT_ORDER}
+
+check("R-C3-13 derived order reproduces the recorded Force10-S6000 map",
+      _PORT_ORDER == S._SONIC_PORT_MAPS["Force10-S6000"],
+      "32/32 agreement, measured on the guest")
+
+out = S.gen_node_config(NODE, TOPO, FACTS)
 check("REQ-45C-1 generation returns a filename->content mapping",
       isinstance(out, dict) and list(out) == ["config_db.json"],
       "keys: %s" % (list(out) if isinstance(out, dict) else type(out).__name__))
@@ -102,8 +114,8 @@ try:
     from pathlib import Path
     _p1 = Path(_tmp) / "a.json"
     _p2 = Path(_tmp) / "b.json"
-    write_json_canonical(_p1, S.gen_node_config(NODE, TOPO)["config_db.json"])
-    write_json_canonical(_p2, S.gen_node_config(NODE, TOPO)["config_db.json"])
+    write_json_canonical(_p1, S.gen_node_config(NODE, TOPO, FACTS)["config_db.json"])
+    write_json_canonical(_p2, S.gen_node_config(NODE, TOPO, FACTS)["config_db.json"])
     _b1 = io.open(_p1, "rb").read()
     _b2 = io.open(_p2, "rb").read()
     check("REQ-45C-20 two consecutive generations are byte-identical",
@@ -128,52 +140,84 @@ finally:
 # --- Rejection legs ---------------------------------------------------------
 _bad_iface = False
 try:
-    S.sonic_port_for_iface("swp1", "Force10-S6000", "s1")
+    S.sonic_port_for_iface("swp1", _PORT_ORDER, "s1")
 except SystemExit as _e:
     _bad_iface = (_e.code == 2)
 check("REQ-45C-5 unrecognized interface form rejected, exit 2", _bad_iface)
 
 _oob = False
 try:
-    S.sonic_port_for_iface("eth99", "Force10-S6000", "s1")
+    S.sonic_port_for_iface("eth99", _PORT_ORDER, "s1")
 except SystemExit as _e:
     _oob = (_e.code == 2)
 check("REQ-45C-5 out-of-range interface rejected, exit 2", _oob)
 
-_unknown_hwsku = False
+_unlisted_ok = True
 try:
-    S.sonic_port_for_iface("eth1", "Some-Unlisted-HwSKU", "s1")
+    S._cross_check_port_map("Some-Unlisted-HwSKU", _PORT_ORDER, "s1")
+except SystemExit:
+    _unlisted_ok = False
+check("R-C3-13 an unlisted HwSKU is SUPPORTED, not refused",
+      _unlisted_ok, "derivation is authoritative; the table is a drift witness")
+
+_missing_generation = False
+try:
+    S.gen_node_config(NODE, TOPO, None)
 except SystemExit as _e:
-    _unknown_hwsku = (_e.code == 2)
-check("REQ-45C-5 unknown HwSKU fails loud rather than guessing, exit 2",
-      _unknown_hwsku, "deny-by-default")
+    _missing_generation = (_e.code == 2)
+check("R-C3-13 NON-VACUITY: generation without observed facts fails loud, exit 2",
+      _missing_generation, "generation never probes and never guesses")
+
+_dup = {"Ethernet0": {"index": "0"}, "Ethernet4": {"index": "0"}}
+_dup_caught = False
+try:
+    S.derive_port_order(_dup, "s1")
+except SystemExit as _e:
+    _dup_caught = (_e.code == 2)
+check("F-45C-C3-21 duplicate port index is ambiguous and fails loud, exit 2",
+      _dup_caught, "breakout platforms are outside measured coverage")
+
+_noidx = {"Ethernet0": {"lanes": "25,26,27,28"}}
+_noidx_caught = False
+try:
+    S.derive_port_order(_noidx, "s1")
+except SystemExit as _e:
+    _noidx_caught = (_e.code == 2)
+check("F-45C-C3-21 a port with no usable index fails loud, exit 2", _noidx_caught)
+
+_empty_caught = False
+try:
+    S.derive_port_order({}, "s1")
+except SystemExit as _e:
+    _empty_caught = (_e.code == 2)
+check("R-C3-13 an empty guest PORT table fails loud, exit 2", _empty_caught)
 
 # --- Port-map assertion against a guest PORT table --------------------------
-_good_table = {n: {"index": str(i)} for i, n in
-               enumerate(S._SONIC_PORT_MAPS["Force10-S6000"])}
 _ok = True
 try:
-    S._assert_port_map_matches_guest(_good_table, "Force10-S6000", "s1")
+    S._cross_check_port_map("Force10-S6000", _PORT_ORDER, "s1")
 except SystemExit:
     _ok = False
-check("REQ-45C-5 matching guest PORT table passes the assertion", _ok)
+check("REQ-45C-5 derived order matching the recorded map passes the cross-check",
+      _ok)
 
-_reordered = dict(_good_table)
-_reordered["Ethernet0"] = {"index": "31"}
-_reordered["Ethernet124"] = {"index": "0"}
+_reordered_table = dict(_GUEST_PORT_TABLE)
+_reordered_table["Ethernet0"] = {"index": "31"}
+_reordered_table["Ethernet124"] = {"index": "0"}
 _caught = False
 try:
-    S._assert_port_map_matches_guest(_reordered, "Force10-S6000", "s1")
+    S._cross_check_port_map(
+        "Force10-S6000", S.derive_port_order(_reordered_table, "s1"), "s1")
 except SystemExit as _e:
     _caught = (_e.code == 2)
 check("REQ-45C-5 NON-VACUITY: a re-ordered guest PORT table is caught, exit 2",
-      _caught, "proves the assertion checks order, not just membership")
+      _caught, "proves the cross-check compares order, not just membership")
 
-_short = {n: {"index": str(i)} for i, n in
-          enumerate(S._SONIC_PORT_MAPS["Force10-S6000"][:16])}
+_short_table = {f"Ethernet{i * 4}": {"index": str(i)} for i in range(16)}
 _caught_set = False
 try:
-    S._assert_port_map_matches_guest(_short, "Force10-S6000", "s1")
+    S._cross_check_port_map(
+        "Force10-S6000", S.derive_port_order(_short_table, "s1"), "s1")
 except SystemExit as _e:
     _caught_set = (_e.code == 2)
 check("REQ-45C-5 NON-VACUITY: a different guest port set is caught, exit 2",

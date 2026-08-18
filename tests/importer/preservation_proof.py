@@ -44,7 +44,7 @@ BASELINE = {
     "src/cassian_engine.py": "674c96817d98a6e25dc4ac537a7c7fd29d516250da9ece22f8493f0f2dee5836",  # re-baselined from c9b536d4 (undef remediation: _cand_misuse helper, vty import, cmd_test rebinds + scenarios reads, resolve_topology names); orig f3831817
     "src/cassian_model.py": "4bef85cd0a6be4edd2c4a24ffadecf46833512108046e32e297153d66a22ec48",  # re-baselined from 5cd62d9d (undef remediation: _cand_misuse helper, vty import, cmd_test rebinds + scenarios reads, resolve_topology names); orig 4b9f01aa
     "src/cassian_nos_frr.py": "3c53970d87a18ea828f0bb9008f24c75b22fdf5dd3a45a7c45e0b72faedd7ff3",  # §4.5-b new module (WI-B NOS provider structure); enforced (REQ-45b-13; LD-9)
-    "src/cassian_nos_sonic.py": "3477294d2ca1040226118c2082e2806987bce38b77b786c363a5bdd559eaf501",  # §4.5-c new module (WI-1 SONiC provider); enforced (REQ-45C-39; LD-9)
+    "src/cassian_nos_sonic.py": "1a16dea65bd5c5e533ca2a9db2926cfaa722e74033e5a4619a38abdf66c4925b",  # §4.5-c new module (WI-1 SONiC provider); enforced (REQ-45C-39; LD-9)
     "src/cassian_nos_types.py": "fc04876a3850df098dc500c7f70c55e54b06279b792c13fadf424bc25a08f85c",  # §4.5-b new module (WI-B NOS provider structure); enforced (REQ-45b-13; LD-9)
     "src/cassian_runtime_container.py": "7eecee129911d838d15e7e20463db66475fd190b9cbbfb0435ebc33a79303761",  # re-baselined from b3e45fa2 (phase2 §4.5-b WI-C1 _normalize_prefix shim + WI-F ensure_ip_tools removal); orig b2a493f9
     "src/cassian_runtime_vm.py": "3832ad07ef6e9ce483bc0fe0f017df4584b15bf6c3a90c55fbb0b2b14f84f494",  # re-baselined from 865545e4 (phase2 §4.5-b WI-D2 node_runtime_map model-homing); orig 865545e4

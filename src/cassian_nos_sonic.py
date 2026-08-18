@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import re
 import sys
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Mapping
 
 from cassian_nos_types import (
     CapabilityDisposition,
@@ -68,14 +68,26 @@ SONIC_DEFAULT_IMAGE = "local/sonic-vm:202405"
 # table carries a 0-based `index` field aligned with numeric port-name order
 # (Ethernet0 -> 0, Ethernet4 -> 1, ... Ethernet124 -> 31).
 #
+# THE TABLE IS A CROSS-CHECK, NOT THE MAPPING SOURCE (R-C3-13). The mapping is
+# DERIVED from the guest's own PORT table by `derive_port_order` below --
+# measured evidence beats an inferred table (Doctrine §1.7). This table is
+# retained as a drift witness only.
+#
 # COVERAGE LIMIT (PBE-P2-8), stated rather than implied:
-#   * This table is keyed on HwSKU and covers ONLY the HwSKUs listed. A guest
-#     reporting an unlisted HwSKU is a loud failure, never a best-effort guess.
-#   * `_assert_port_map_matches_guest` verifies the guest's port SET and INDEX
-#     ORDER against this table. It does NOT verify vrnetlab's positional
+#   * `_cross_check_port_map` is LOUD when a LISTED HwSKU's derived order
+#     differs from this table -- that means the image changed under a map this
+#     module still records. It is SILENT on an unlisted HwSKU: derivation is
+#     authoritative, so an unrecognised platform is supported, not refused.
+#   * Neither derivation nor the cross-check verifies vrnetlab's positional
 #     attachment contract -- that `eth{N}` reaches the N-th port is settled by
 #     the REQ-45C-5 provisioning proof (declare a non-stock address, read it
-#     back from the expected port), not by this assertion.
+#     back from the expected port), not here.
+#   * F-45C-C3-21: derivation assumes `index` is UNIQUE per port. Measured
+#     unique and contiguous 0..31 on Force10-S6000 (sonic-vm:202405, verified
+#     through the exec channel 2026-08-18). Platforms with breakout ports may
+#     repeat `index` across sub-ports; that is ambiguous for positional mapping
+#     and fails loud below rather than picking arbitrarily. NOT verifiable on
+#     the supported image -- no breakout-capable platform is in the set.
 #   * Port speed is deliberately not asserted: sonic-vm:202405 reports
 #     UINT32_MAX on the virtual link (F-45C-C3-6).
 _SONIC_PORT_MAPS: dict[str, tuple[str, ...]] = {
@@ -99,24 +111,93 @@ def _fail(summary: str, node: str, reason: str, detail: str, required: str) -> N
     raise SystemExit(2)
 
 
-def _port_map_for(hwsku: str, node: str) -> tuple[str, ...]:
-    ports = _SONIC_PORT_MAPS.get(hwsku)
-    if ports is None:
-        known = ", ".join(sorted(_SONIC_PORT_MAPS)) or "<none>"
+def derive_port_order(port_table: dict, node: str) -> tuple[str, ...]:
+    """Derive the platform's positional port order from the guest's PORT table.
+
+    R-C3-13: the mapping is MEASURED from the device, never inferred from a
+    static table (Doctrine §1.7 -- behavioural evidence over inferred
+    evidence). Ports are ordered by the platform's own `index`; `eth{N}` maps
+    to position N-1. Ordering is index-base-independent, so a 1-based platform
+    orders identically to a 0-based one.
+
+    Fails loud (never guesses) when the table is empty, when `index` is absent
+    or non-integer, or when `index` REPEATS -- see F-45C-C3-21 above.
+    """
+    if not isinstance(port_table, dict) or not port_table:
         _fail(
-            "SONiC platform port map unknown",
+            "SONiC guest reported no ports",
             node,
-            f"no port map is declared for HwSKU {hwsku!r}",
-            "interface names are platform-specific; Cassian will not guess a "
-            "port map, because a wrong guess addresses the wrong ports silently",
-            f"add a port map for {hwsku!r} to _SONIC_PORT_MAPS in "
-            f"src/cassian_nos_sonic.py (known: {known})",
+            "the guest PORT table is empty or unreadable",
+            "the positional eth<N> mapping is derived from the guest's own "
+            "PORT table; without it Cassian cannot name a single interface",
+            "confirm the guest booted and that ConfigDB carries a PORT table",
         )
-    return ports  # type: ignore[return-value]
+
+    indexed: list[tuple[int, str]] = []
+    for pname, row in port_table.items():
+        raw = row.get("index") if isinstance(row, dict) else None
+        try:
+            idx = int(raw)
+        except (TypeError, ValueError):
+            _fail(
+                "SONiC port carries no usable index",
+                node,
+                f"port {pname!r} has index {raw!r}, which is not an integer",
+                "positional mapping orders ports by the platform's own index; "
+                "an unusable index makes the order undefined",
+                "report this with the guest's PORT table; the image may not be "
+                "a supported SONiC build",
+            )
+        indexed.append((idx, pname))
+
+    seen: dict[int, str] = {}
+    for idx, pname in indexed:
+        if idx in seen:
+            _fail(
+                "SONiC port index is ambiguous",
+                node,
+                f"index {idx} is reported by both {seen[idx]!r} and {pname!r}",
+                "a repeated index makes positional eth<N> mapping ambiguous; "
+                "Cassian will not pick one arbitrarily (F-45C-C3-21). Breakout "
+                "platforms are outside the measured coverage of this leg",
+                "declare interfaces by explicit port name, or use a platform "
+                "whose PORT table carries one index per port",
+            )
+        seen[idx] = pname
+
+    return tuple(pname for _, pname in sorted(indexed))
 
 
-def sonic_port_for_iface(iface: str, hwsku: str, node: str) -> str:
-    """Map a topology container interface (`eth{N}`) to its SONiC port name."""
+def _cross_check_port_map(hwsku: str, derived: tuple[str, ...], node: str) -> None:
+    """Cross-check the derived order against the recorded map, where recorded.
+
+    LOUD on a listed HwSKU whose derived order differs -- the image changed
+    under a map this module still records, and silently adapting would hide it
+    (Doctrine §1.11). SILENT on an unlisted HwSKU: derivation is authoritative
+    (R-C3-13), so an unrecognised platform is supported rather than refused.
+    """
+    recorded = _SONIC_PORT_MAPS.get(hwsku)
+    if recorded is None:
+        return
+    if tuple(derived) != tuple(recorded):
+        _fail(
+            "SONiC derived port order does not match the recorded map",
+            node,
+            f"HwSKU {hwsku!r} is recorded, but the guest's derived order differs",
+            f"recorded[0:3]={tuple(recorded)[0:3]} derived[0:3]={tuple(derived)[0:3]}; "
+            f"recorded {len(recorded)} ports, guest reports {len(derived)}",
+            "the image changed under the recorded map; update _SONIC_PORT_MAPS "
+            "in src/cassian_nos_sonic.py, or pin the image it was measured against",
+        )
+
+
+def sonic_port_for_iface(iface: str, ports: tuple[str, ...], node: str) -> str:
+    """Map a topology container interface (`eth{N}`) to its SONiC port name.
+
+    `ports` is the DERIVED order from `derive_port_order` (R-C3-13), not a
+    table lookup. Pure: every input is an argument, so REQ-45C-20's determinism
+    property is checkable without a runtime.
+    """
     m = _ETH_IFACE_RE.match(str(iface).strip())
     if not m:
         _fail(
@@ -128,59 +209,16 @@ def sonic_port_for_iface(iface: str, hwsku: str, node: str) -> str:
             "declare link endpoints on this node as '<node>:eth<N>' with N >= 1",
         )
     n = int(m.group(1))
-    ports = _port_map_for(hwsku, node)
     if n < 1 or n > len(ports):
         _fail(
             "SONiC interface out of range",
             node,
             f"interface {iface!r} has no corresponding data port",
-            f"HwSKU {hwsku!r} exposes {len(ports)} data ports "
+            f"this platform exposes {len(ports)} data ports "
             f"(eth1 .. eth{len(ports)})",
             f"declare an interface within eth1 .. eth{len(ports)}",
         )
     return ports[n - 1]
-
-
-def _assert_port_map_matches_guest(port_table: dict, hwsku: str, node: str) -> None:
-    """Verify the guest's live PORT table against the assumed map (REQ-45C-5).
-
-    Checks the port SET and the platform's own `index` ORDER. A mismatch means
-    the image or HwSKU changed under a map this module still assumes -- a loud
-    failure, never a silent adaptation (Doctrine §1.11).
-    """
-    expected = _port_map_for(hwsku, node)
-    observed_names = set(port_table)
-    if observed_names != set(expected):
-        missing = sorted(set(expected) - observed_names)
-        extra = sorted(observed_names - set(expected))
-        _fail(
-            "SONiC port map does not match the guest",
-            node,
-            f"guest PORT table does not match the declared map for HwSKU {hwsku!r}",
-            f"expected {len(expected)} ports; guest reports {len(observed_names)}"
-            f" (missing: {missing[:4] or 'none'}; unexpected: {extra[:4] or 'none'})",
-            "update _SONIC_PORT_MAPS in src/cassian_nos_sonic.py for this image, "
-            "or pin the image the map was measured against",
-        )
-
-    def _idx(name: str) -> int:
-        raw = port_table.get(name, {})
-        val = raw.get("index") if isinstance(raw, dict) else None
-        try:
-            return int(val)
-        except (TypeError, ValueError):
-            return -1
-
-    observed_order = tuple(sorted(expected, key=_idx))
-    if observed_order != expected:
-        _fail(
-            "SONiC port ordering does not match the guest",
-            node,
-            f"guest PORT index order differs from the declared map for {hwsku!r}",
-            f"declared[0:3]={expected[0:3]} guest[0:3]={observed_order[0:3]}",
-            "the positional eth<N> mapping is unsafe on this image; update "
-            "_SONIC_PORT_MAPS in src/cassian_nos_sonic.py",
-        )
 
 
 # -------------------------
@@ -225,7 +263,9 @@ def _links_for_node(node_name: str, topo: dict) -> list[tuple[str, str]]:
     return out
 
 
-def gen_node_config(node: dict, topo: dict) -> "dict[str, Any] | None":
+def gen_node_config(
+    node: dict, topo: dict, facts: "Mapping[str, Any] | None" = None
+) -> "dict[str, Any] | None":
     """Generate the SONiC `config_db.json` OVERLAY for one node (LD-45C-2).
 
     Returns {"config_db.json": <overlay>} -- a filename -> content mapping.
@@ -249,7 +289,19 @@ def gen_node_config(node: dict, topo: dict) -> "dict[str, Any] | None":
             "add a 'name' to this node declaration",
         )
 
-    hwsku = str(node.get("hwsku") or "Force10-S6000").strip()
+    ports = facts.get("port_order") if isinstance(facts, dict) else None
+    if not ports:
+        _fail(
+            "SONiC generation requires observed device facts",
+            name,
+            "no derived port order was supplied to gen_node_config",
+            "R-C3-13: interface naming is derived from the guest's own PORT "
+            "table, so generation runs after boot with observed facts passed "
+            "in. Generation never probes; it is a pure function of arguments",
+            "call gen_node_config from provision, which probes the guest and "
+            "supplies facts={'hwsku': ..., 'port_order': (...)}",
+        )
+    ports = tuple(ports)
 
     overlay: dict[str, Any] = {
         "DEVICE_METADATA": {"localhost": {"hostname": name}},
@@ -257,7 +309,7 @@ def gen_node_config(node: dict, topo: dict) -> "dict[str, Any] | None":
 
     interfaces: dict[str, dict] = {}
     for iface, ip_cidr in _links_for_node(name, topo):
-        port = sonic_port_for_iface(iface, hwsku, name)
+        port = sonic_port_for_iface(iface, ports, name)
         interfaces.setdefault(port, {})
         interfaces[f"{port}|{ip_cidr}"] = {}
     if interfaces:
