@@ -1536,11 +1536,13 @@ FRR_COLLECT_TARGETS = (
 # check=False/capture_output=True, bytes-decoded, stripped) so the probe
 # sequence and the strings fed to the parsers are unchanged.
 #
-# Probe sequence is preserved per mode, including the shipped double-fetch that
-# text-mode + want_raw performs (json, text, text again). The routes block does
-# NOT double-fetch -- it derives raw text from data already returned -- and that
-# asymmetry is preserved as-is (REQ-45b-P2: a delta is a HALT, never a
-# fix-in-place). Recorded as a finding for later deliberate repair.
+# Probe sequence per mode is 1/2/2/2 (REQ-45C-16). The double-fetch that
+# text-mode + want_raw formerly performed (json, text, text again) is repaired
+# by reuse: when the text fallback already ran, its output IS the raw text.
+# The routes block never double-fetched -- it derives raw text from data already
+# returned -- and the summary leg now mirrors it, closing the asymmetry §4.5-b
+# preserved and recorded for later deliberate repair (REQ-45b-P2). Counts are
+# enforced by tests/sonic_status_probe_sequence_proof.py, not by this comment.
 
 
 def _node_exec(rt, lab, node, cmd: list) -> str:
@@ -1553,6 +1555,7 @@ def _status_bgp_summary(rt, lab, node, want_raw: bool = False) -> StatusObservat
     """BGP summary status leg. `want_raw` is the ratified §3.3 extension."""
     out_json = _node_exec(rt, lab, node, ["vtysh", "-c", "show bgp summary json"])
     observed = parse_frr_bgp_summary_neighbors_json(out_json)
+    out_text = None
     if observed:
         parser_mode = "json"
     else:
@@ -1562,7 +1565,11 @@ def _status_bgp_summary(rt, lab, node, want_raw: bool = False) -> StatusObservat
 
     raw_text = None
     if want_raw:
-        raw_text = _node_exec(rt, lab, node, ["vtysh", "-c", "show bgp summary"])
+        # REQ-45C-16 reuse: the text fallback already fetched this exact
+        # command, so re-issuing it would be a second probe for the same bytes.
+        raw_text = (out_text if out_text is not None
+                    else _node_exec(rt, lab, node,
+                                    ["vtysh", "-c", "show bgp summary"]))
 
     return StatusObservation(
         returncode=None,
