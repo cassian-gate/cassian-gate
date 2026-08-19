@@ -370,7 +370,6 @@ def _coverage_touch_nodes_from_test(
 import re
 import ipaddress
 
-from cassian_common import _RE_NEIGH_LINE, _RE_IPV4_PREFIX  # re-homed to cassian_common (§4.5-b F-45b-C1-1, founder ruling A); shim owed removal at §4.5-c (BL-P2-4.5b-3)
 
 def derive_expected_routes_for_frr(topo: dict[str, Any]) -> dict[str, set[str]]:
     """
@@ -429,11 +428,8 @@ def derive_expected_routes_for_frr(topo: dict[str, Any]) -> dict[str, set[str]]:
 
     return expected
 
-from cassian_nos_frr import parse_frr_show_ip_route_prefixes  # relocated to the FRR provider (§4.5-b REQ-45b-21); shim owed removal at §4.5-c (BL-P2-4.5b-3)
 
-from cassian_nos_frr import parse_frr_show_ip_route_prefixes_json  # relocated to the FRR provider (§4.5-b REQ-45b-21); shim owed removal at §4.5-c (BL-P2-4.5b-3)
 
-from cassian_nos_frr import parse_frr_bgp_summary_neighbors_json  # relocated to the FRR provider (§4.5-b REQ-45b-21); shim owed removal at §4.5-c (BL-P2-4.5b-3)
 
 def _node_index_by_name(topo: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """
@@ -495,7 +491,6 @@ def derive_expected_bgp_neighbors_from_links(topo: dict[str, Any]) -> dict[str, 
     return expected
 
 
-from cassian_nos_frr import parse_frr_bgp_summary_neighbors  # relocated to the FRR provider (§4.5-b REQ-45b-21); shim owed removal at §4.5-c (BL-P2-4.5b-3)
 
 def compare_expected_vs_observed_bgp(expected: set[str], observed: dict[str, dict[str, Any]]) -> dict[str, Any]:
     obs_set = set(observed.keys())

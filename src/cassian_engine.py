@@ -3404,10 +3404,9 @@ def _fail_fast_drops(declared_tests, from_idx):
     return out
 
 
-from cassian_common import _BGP_COMMUNITY_CANON, _canonical_community_token  # re-homed to cassian_common (§4.5-b A-H3); shim owed removal at §4.5-c (BL-P2-4.5b-3)
+from cassian_common import _canonical_community_token  # common-homed (§4.5-b A-H3); live import, used below
 
 
-from cassian_nos_frr import _route_communities  # relocated to the FRR provider (§4.5-b F-45b-C3b-1, founder ruling B'); shim owed removal at §4.5-c (BL-P2-4.5b-3)
 
 
 def _bgp_community_observed(expected, match, observed_canon):
@@ -3424,7 +3423,6 @@ def _bgp_community_observed(expected, match, observed_canon):
     return "pass" if ok else "fail"
 
 
-from cassian_nos_frr import _route_as_path  # relocated to the FRR provider (§4.5-b F-45b-C3b-1, founder ruling B'); shim owed removal at §4.5-c (BL-P2-4.5b-3)
 
 
 def _bgp_as_path_observed(pattern, observed_path):

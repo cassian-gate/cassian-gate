@@ -7,7 +7,7 @@ import sys, os, ast, hashlib
 SRC = os.path.join(os.path.dirname(__file__), "..", "src", "cassian_tests.py")
 
 # v9 baselines (computed from the declared v9 consolidated snapshot).
-WHOLE_MODULE_V9 = "49f484b027c146c3c4f513ef3829e6909b0d142743f3ffdbcdadf3c8751ae2d0"  # re-baselined from dd56046b (phase2 §4.5-b WI-C1 parse-family relocation shims); orig ba0a1f36
+WHOLE_MODULE_V9 = "b8dc85343fd4cbff537add7d103cd75cf838434064a6a3503c76fa8305e32ee6"  # re-baselined from 49f484b0 (phase2 §4.5-c WI-5 shim removal; founder ruling D-6, taken only with both seam segment pins PASSING); prior dd56046b; orig ba0a1f36
 SEAM_SEGMENT_V9 = {
     "_format_test_summary":        "2119d19a5667f77168df07ec5edcaa4d3001cdca49386027f1c6186c1f727ffa",
     "write_test_summary_artifact": "ff523b7eb74ebdff684ac8cb179842cd71c099e73913398ed280507343263420",
