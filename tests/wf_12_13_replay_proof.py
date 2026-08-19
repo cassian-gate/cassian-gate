@@ -121,7 +121,8 @@ for _p in ("nos_leaf_import_proof.py", "nos_deny_by_default_proof.py",
 # the step executes, that the runner reaches it, or that the proof passes.
 for _p in ("sonic_leaf_import_proof.py", "sonic_configgen_determinism_proof.py",
            "sonic_provision_supply_proof.py", "sonic_image_lifecycle_proof.py",
-           "sonic_lifecycle_proof.py", "sonic_status_probe_sequence_proof.py"):
+           "sonic_lifecycle_proof.py", "sonic_status_probe_sequence_proof.py",
+           "wheel_import_proof.py"):
     check(f"§4.5-c proof is CI-wired: {_p} present in the gate", _p in gate)
 
 fails = [n for n, ok in checks if not ok]

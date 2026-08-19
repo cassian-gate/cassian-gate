@@ -142,6 +142,7 @@ jobs:
           python tests/sonic_image_lifecycle_proof.py
           python tests/sonic_lifecycle_proof.py
           python tests/sonic_status_probe_sequence_proof.py
+          python tests/wheel_import_proof.py
 
       - name: User-defined invariant (exec) proof harnesses (§4.7)
         shell: bash
