@@ -1327,8 +1327,19 @@ def cmd_up(args: argparse.Namespace) -> None:
         if isinstance(lab_name, str) and lab_name.strip():
             lab_name = lab_name.strip()
             existing_clab = LABS_DIR / f"{lab_name}.clab.yaml"
-            if existing_clab.exists():
-                _run_containerlab(["sudo", "containerlab", "destroy", "-t", str(existing_clab)], check=False)
+            if not existing_clab.exists():
+                # Doctrine §1.9: the destroy is unconditional under --reconfigure.
+                # The topology file is workspace state; the containers it must
+                # remove are daemon state. Gating the destroy on the file made the
+                # gate skip teardown whenever the file was absent (CI wipes `labs/`
+                # every run), which is the silent conditional behaviour §1.4 forbids.
+                # Materialise the file so the destroy always has a target; it lands
+                # at LABS_DIR/<lab>.clab.yaml, a SIBLING of lab_dir(), so neither
+                # the destroy nor the rm -rf below removes it. Lab-directory
+                # artifacts are still generated after cleanup (see below) -- that
+                # ordering is load-bearing and unchanged.
+                existing_clab = write_containerlab_file(topo_path)
+            _run_containerlab(["sudo", "containerlab", "destroy", "-t", str(existing_clab)], check=False)
             run(["sudo", "rm", "-rf", str(lab_dir(lab_name))], check=False)
 
     # Generate AFTER destroy/cleanup
