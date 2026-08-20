@@ -93,7 +93,7 @@ from cassian_candidate import (
     _write_candidate_apply_artifact,
 )
 from cassian_two_run import _cmd_test_two_run
-from cassian_runtime_container import _normalize_prefix, verify_lab_ready
+from cassian_runtime_container import _normalize_prefix, verify_lab_ready, verify_sonic_vm_ready
 from cassian_model import build_node_links
 from cassian_tests import (
     ensure_nc,
@@ -267,6 +267,16 @@ def _provision_nos_providers(rt, lab_name: str, topo: dict) -> None:
         name = str(n.get("name") or "").strip()
         if not name:
             continue
+        # Reachability gate before any provider dispatch. Runtime-layer
+        # concern per the ratified NOS design's readiness split: substrate and
+        # transport are core's, NOS readiness is the provider's. `cmd_up` has
+        # no lab-wide reachability gate, and `verify_lab_ready` cannot serve as
+        # one -- `verify_host_ready` and `verify_frr_ready` require provisioning
+        # `cmd_up` has not yet performed. Scoped here to VM-runtime provider
+        # nodes; the host/nft-fw/frr residual is a routed backlog row.
+        if getattr(prov, "runtime_requirement", None) == "vm":
+            verify_sonic_vm_ready(rt, lab_name, name)
+
         applied = prov.provision(rt, lab_name, name, n, topo)
         if not applied:
             continue
