@@ -387,6 +387,51 @@ def _guest_stdout(rt: "Runtime", lab: str, node: str, argv: list,
     return cp.stdout or ""
 
 
+# Single-sourced (PBE-P2-6): `nos_ready` asserts the very read `probe_facts`
+# depends on, so the two must never drift into parallel literals.
+_HWSKU_ARGV = ("sonic-cfggen", "-d", "-v", "DEVICE_METADATA.localhost.hwsku")
+
+
+def nos_ready(rt: "Runtime", lab: str, node: str) -> None:
+    """NOS-readiness leg (design :240 "control-plane responsive").
+
+    SINGLE-SHOT, deliberately -- founder ruling 2026-08-20. Transport and
+    substrate readiness are the runtime layer's and are already established
+    before this leg runs: core gates vm-runtime provider nodes on
+    `verify_sonic_vm_ready`, whose leg 2 polls to VM_GUEST_READY_TIMEOUT_S.
+    Re-polling here would wait for something already waited for, and this
+    provider is a leaf whose import floor admits neither `time` nor
+    `cassian_runtime_vm` (sonic_leaf_import_proof P-SIMP-2).
+
+    RATCHET, not a gap-closing assertion (R-C3-16, requirement (d)): measured
+    across four cold boots of local/sonic-vm:202405 (2026-08-20), CONFIG_DB
+    answered this read at the FIRST reachable sample every time, while SSH
+    first answered at 23.0-27.6s. The leg exists to FAIL LOUDLY if that
+    ordering ever ceases to hold -- silence must never read as success
+    (Doctrine 1.11).
+
+    COVERAGE LIMIT (PBE-P2-8): this asserts CONFIG_DB serves the provider's
+    own read. It does NOT assert that swss, syncd, bgp or any other SONiC
+    container is serving -- measured, those arrive up to ~90s later. Legs
+    needing those conditions poll for them themselves (REQ-45C-8/-29 precheck;
+    convergence_wait). It also does NOT bound waiting: a guest that never
+    becomes reachable is caught by the runtime-layer gate, not here.
+    """
+    cp = rt.exec(lab, node, list(_HWSKU_ARGV), check=False, capture_output=True)
+    if getattr(cp, "returncode", 1) == 0 and (cp.stdout or "").strip():
+        return
+    _fail(
+        "SONiC control plane not ready",
+        node,
+        "the guest did not serve DEVICE_METADATA.localhost.hwsku from CONFIG_DB",
+        f"`{' '.join(_HWSKU_ARGV)}` exited "
+        f"{getattr(cp, 'returncode', '?')} with empty or no stdout; the guest "
+        "is reachable but its configuration database is not serving",
+        "report this with the node's boot log; the transport gate passed, so "
+        "this is a NOS-readiness fault rather than a connectivity one",
+    )
+
+
 def probe_facts(rt: "Runtime", lab: str, node: str) -> "dict[str, Any]":
     """Observe the device facts generation needs (R-C3-13).
 
@@ -396,7 +441,7 @@ def probe_facts(rt: "Runtime", lab: str, node: str) -> "dict[str, Any]":
     """
     hwsku = _guest_stdout(
         rt, lab, node,
-        ["sonic-cfggen", "-d", "-v", "DEVICE_METADATA.localhost.hwsku"],
+        list(_HWSKU_ARGV),
         "the platform HwSKU",
     ).strip()
 
@@ -497,10 +542,12 @@ SONIC_PROVIDER = NosProvider(
     # -- lifecycle legs the ratified design assigns to SONiC (design :240) --
     gen_node_config=gen_node_config,
     provision=provision,
-    # nos_ready / convergence_wait land with the precheck + convergence leg;
-    # transient placeholders, replaced before closure (RG-45C-P7 is a closure
-    # gate). Provider-scoped, per the HALT-1 note above.
-    nos_ready=deferred_leg("nos_ready", "§4.5-c precheck leg"),
+    # nos_ready lands here (§4.5-c, founder ruling 2026-08-20); design :228
+    # and :240 assign it to SONiC, and RG-45C-P7 / NG-9 require it wired before
+    # closure. convergence_wait remains a transient placeholder, replaced
+    # before closure by the convergence leg. Provider-scoped, per the HALT-1
+    # note above.
+    nos_ready=nos_ready,
     convergence_wait=deferred_leg("convergence_wait", "§4.5-c convergence leg"),
     # -- validation seam: SONiC collection lands at §4.5-d/-e --
     collect=deferred_leg("collect", "§4.5-d/-e"),

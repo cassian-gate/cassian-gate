@@ -123,7 +123,8 @@ for _p in ("sonic_leaf_import_proof.py", "sonic_configgen_determinism_proof.py",
            "sonic_provision_supply_proof.py", "sonic_image_lifecycle_proof.py",
            "sonic_lifecycle_proof.py", "sonic_status_probe_sequence_proof.py",
            "wheel_import_proof.py", "reconfigure_clean_state_proof.py",
-           "sonic_provision_readiness_gate_proof.py"):
+           "sonic_provision_readiness_gate_proof.py",
+           "sonic_nos_ready_proof.py"):
     check(f"§4.5-c proof is CI-wired: {_p} present in the gate", _p in gate)
 
 fails = [n for n, ok in checks if not ok]

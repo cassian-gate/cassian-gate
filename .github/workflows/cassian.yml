@@ -145,6 +145,7 @@ jobs:
           python tests/wheel_import_proof.py
           python tests/reconfigure_clean_state_proof.py
           python tests/sonic_provision_readiness_gate_proof.py
+          python tests/sonic_nos_ready_proof.py
 
       - name: User-defined invariant (exec) proof harnesses (§4.7)
         shell: bash

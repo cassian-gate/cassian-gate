@@ -277,6 +277,16 @@ def _provision_nos_providers(rt, lab_name: str, topo: dict) -> None:
         if getattr(prov, "runtime_requirement", None) == "vm":
             verify_sonic_vm_ready(rt, lab_name, name)
 
+        # NOS-readiness leg at the engine -> adapter boundary (design :188).
+        # Marker-guarded exactly as `provision` is above: a provider whose
+        # `nos_ready` is still a deferred placeholder is SKIPPED, never
+        # invoked. The guard is forward-looking -- today the `provision`
+        # skip already excludes FRR and nft-fw, whose `provision` legs are
+        # themselves deferred -- and becomes load-bearing the moment a
+        # provider lands `provision` without `nos_ready`.
+        if getattr(prov.nos_ready, "cassian_deferred_leg", None) is None:
+            prov.nos_ready(rt, lab_name, name)
+
         applied = prov.provision(rt, lab_name, name, n, topo)
         if not applied:
             continue
