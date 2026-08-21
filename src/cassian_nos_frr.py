@@ -1196,6 +1196,87 @@ def _collect_evpn_routes(rt, lab, node, req: ObservationRequest) -> Observation:
 
 
 # -------------------------
+# Supplementary EVPN text-mode collection handler (§4.5-c WI-7, REQ-45C-14)
+# -------------------------
+# Migrated out of `run_invariant_test` under the LD-45C-1 ruling: a second
+# ObservationRequest of a distinct kind, issued core-side only when the JSON
+# leg yields no matching route. Composition and the misuse exit stay core.
+
+_EVPN_TEXT_EXCERPT_CHARS = 2000
+
+_RE_EVPN_MAC_ROUTE_TEXT = re.compile(
+    r"\[2\]:\[0\]:\[48\]:\[([0-9a-f:]{17})\]", re.IGNORECASE
+)
+
+
+def _collect_evpn_routes_text(rt, lab, node, req: ObservationRequest) -> Observation:
+    """Supplementary text-mode EVPN MAC-route probe (REQ-45C-14, LD-45C-1).
+
+    Issued core-side only when the JSON leg yields no matching route. Parses
+    the text form into NOS-neutral records and decides nothing: composition of
+    `evidence_entries` / `present`, the `parse_error` merge, and the rc-gated
+    misuse exit all stay core (design §5). The probe returncode travels in
+    `evidence`; this leg raises no control-flow exit.
+
+    Coverage limit (PBE-P2-8): the pattern recognises EVPN route-type 2 (MAC)
+    entries only. Route-type 3/5 text forms are not parsed here, and
+    `evpn_vni_route_present` does not route to this leg -- it has no text
+    fallback, matching the pre-migration core block, which gated on
+    `inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent")`.
+    """
+    vni_i = req.params.get("vni_i")
+    cp = rt.exec(
+        lab,
+        node,
+        ["vtysh", "-c", "show bgp l2vpn evpn route"],
+        check=False,
+        capture_output=True,
+    )
+
+    if isinstance(cp, str):
+        out = cp
+        rc = None
+    else:
+        out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
+        if isinstance(out, (bytes, bytearray)):
+            try:
+                out = out.decode("utf-8", errors="replace")
+            except Exception:
+                out = str(out)
+        rc = getattr(cp, "returncode", None)
+
+    records: list[dict] = []
+    parse_error = ""
+    try:
+        text = str(out or "")
+        for line in text.splitlines():
+            m = _RE_EVPN_MAC_ROUTE_TEXT.search(line)
+            if not m:
+                continue
+            rec = {
+                "mac": str(m.group(1).lower() or "").strip().lower(),
+                "vni": vni_i,
+                "route_type": "2",
+                "node": node,
+            }
+            if not rec["mac"]:
+                continue
+            records.append(rec)
+    except Exception as e:
+        parse_error = f"text_parse={e}"
+
+    return Observation(
+        kind=req.kind,
+        data={"records": records, "parse_error": parse_error},
+        evidence={
+            "cmd": "vtysh -c 'show bgp l2vpn evpn route'",
+            "excerpt": str(out or "")[:_EVPN_TEXT_EXCERPT_CHARS],
+            "returncode": rc,
+        },
+    )
+
+
+# -------------------------
 # OSPF collection handler (WI-C3e, REQ-45b-4)
 # -------------------------
 # The declared expected FSM state is an expectation, not an observation --
@@ -1387,6 +1468,7 @@ _COLLECT_HANDLERS = {
     "evpn_mac_route_present": _collect_evpn_routes,
     "evpn_mac_route_absent": _collect_evpn_routes,
     "evpn_vni_route_present": _collect_evpn_routes,
+    "evpn_mac_route_text": _collect_evpn_routes_text,
     "ospf_neighbor_up": _collect_ospf_neighbors,
     "bgp_neighbor": _collect_bgp_neighbor,
 }
@@ -1430,6 +1512,9 @@ _FRR_CAPABILITIES: dict[str, CapabilityDisposition] = {
     # observation seam -- test/step kinds routed through the same seam
     "bgp_neighbor": impl(),
     "route_prefix": impl(),
+    # supplementary EVPN text leg (§4.5-c WI-7, REQ-45C-14) -- not a
+    # model-validated invariant kind; issued core-side after the JSON leg
+    "evpn_mac_route_text": impl(),
     # operational legs shipped by §4.5-b
     "status_bgp_summary": impl(),
     "status_routes": impl(),

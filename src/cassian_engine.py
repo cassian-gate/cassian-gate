@@ -6549,25 +6549,46 @@ def cmd_test(args: argparse.Namespace) -> None:
                 raise SystemExit(2)
 
             if not present and inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent"):
-                cp_text = rt.exec(
-                    lab,
-                    src,
-                    ["vtysh", "-c", "show bgp l2vpn evpn route"],
-                    check=False,
-                    capture_output=True,
-                )
+                # Supplementary text-mode leg (REQ-45C-14, LD-45C-1 ruled shape):
+                # a SECOND ObservationRequest of a distinct kind, issued only
+                # after the JSON leg returned no matching route. The provider
+                # parses and returns; core keeps every decision -- the
+                # evidence_entries/present composition, the parse_error merge,
+                # and the rc-gated misuse exit below. The Observation's
+                # `excerpt` is deliberately NOT promoted into record_fn: the
+                # authoritative record surface is frozen (REQ-45C-19, §7
+                # outputs; founder ruling 2026-08-20).
+                try:
+                    _sup = _nos_collect(
+                        rt, lab, src, _nos_ntype(topo, src),
+                        ObservationRequest(kind="evpn_mac_route_text", params={"vni_i": vni_i}),
+                        "cmd_test supplementary EVPN collection",
+                    )
+                except NosCapabilityUnsupported:
+                    record_fn(
+                        name=test_name,
+                        kind="invariant",
+                        src=src,
+                        dst="",
+                        expected=expected,
+                        observed="fail",
+                        verdict="fail",
+                        duration_ms=0,
+                        error="unsupported EVPN VNI/MAC-route evidence provider capability",
+                        evidence={
+                            "cmd": "vtysh -c 'show bgp l2vpn evpn route'",
+                            "rc": None,
+                        },
+                        meta={
+                            "type": inv_type,
+                            "mac": mac,
+                            "vni": vni_i,
+                            "misuse": True,
+                        },
+                    )
+                    raise SystemExit(2)
 
-                if isinstance(cp_text, str):
-                    out_text = cp_text
-                    rc_text = None
-                else:
-                    out_text = getattr(cp_text, "stdout", "") or getattr(cp_text, "output", "") or ""
-                    if isinstance(out_text, (bytes, bytearray)):
-                        try:
-                            out_text = out_text.decode("utf-8", errors="replace")
-                        except Exception:
-                            out_text = str(out_text)
-                    rc_text = getattr(cp_text, "returncode", None)
+                rc_text = _sup.evidence.get("returncode")
 
                 if rc_text not in (0, None):
                     record_fn(
@@ -6594,31 +6615,17 @@ def cmd_test(args: argparse.Namespace) -> None:
                     )
                     raise SystemExit(2)
 
-                try:
-                    import re as _re
-
-                    text = str(out_text or "")
-                    for line in text.splitlines():
-                        m = _re.search(r"\[2\]:\[0\]:\[48\]:\[([0-9a-f:]{17})\]", line, flags=_re.IGNORECASE)
-                        if not m:
-                            continue
-                        mac_val = m.group(1).lower()
-                        rec = {
-                            "mac": str(mac_val or "").strip().lower(),
-                            "vni": vni_i,
-                            "route_type": "2",
-                            "node": src,
-                        }
-                        if not rec["mac"]:
-                            continue
-                        evidence_entries.append(rec)
-                        if rec["mac"] == mac and rec["vni"] == vni_i:
-                            present = True
-                except Exception as e:
+                _sup_parse_error = str(_sup.data.get("parse_error") or "")
+                if _sup_parse_error:
                     if parse_error:
-                        parse_error = f"{parse_error}; text_parse={e}"
+                        parse_error = f"{parse_error}; {_sup_parse_error}"
                     else:
-                        parse_error = f"text_parse={e}"
+                        parse_error = _sup_parse_error
+
+                for rec in list(_sup.data.get("records") or []):
+                    evidence_entries.append(rec)
+                    if rec["mac"] == mac and rec["vni"] == vni_i:
+                        present = True
 
             if parse_error and not evidence_entries:
                 record_fn(

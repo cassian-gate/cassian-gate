@@ -288,6 +288,31 @@ jobs:
           fi
           echo "B-9 OK: observed_state render byte-identical across replay."
 
+      - name: EVPN collection migration differential (§4.5-c WI-7, REQ-45C-14)
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT=/tmp/wi7-postside
+          rm -rf "$OUT"; mkdir -p "$OUT"
+          # Two of the three topologies are by-design authoritative FAILs
+          # (Doctrine §1.8: negative outcomes are first-class), so the verdict
+          # is carried by || true and the proof asserts the ARTIFACT, the way
+          # the B-9 step above asserts the rendered surface rather than the
+          # exit code. results.json absent => the proof hard-fails on it.
+          for PAIR in \
+            "topologies/evpn_mac_route_present.yaml|evpn-mac-route-present" \
+            "topologies/evpn_mac_route_absent_expected_present.yaml|evpn-mac-route-absent-expected-present" \
+            "topologies/evpn_mac_route_absent_expect_fail.yaml|evpn-mac-route-absent-expect-fail" ; do
+            TOPO="${PAIR%%|*}"; LAB="${PAIR##*|}"
+            ./src/cassian.py up "$TOPO" --reconfigure
+            ./src/cassian.py test "$TOPO" || true
+            cp "labs/clab-${LAB}/results.json" "$OUT/${LAB}.results.json"
+            ./src/cassian.py down "$LAB"
+          done
+          # --artifacts discharges §15.2 row 1 as well as rows 2-4. A missing
+          # artifact is a hard fail inside the proof, never a silent skip.
+          python tests/evpn_collection_migration_proof.py --artifacts "$OUT"
+
       - name: Two-run baseline_diff real-run positive + replay (Phase 2 4.4, REQ-44-5)
         shell: bash
         run: |
