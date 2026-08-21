@@ -6163,7 +6163,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported EVPN BGP-session evidence provider capability",
                     evidence={
-                        "cmd": "vtysh -c 'show bgp l2vpn evpn summary json'",
+                        "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn summary json'",
                         "rc": rc,
                     },
                     meta={
@@ -6186,7 +6186,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported EVPN BGP-session evidence normalization",
                     evidence={
-                        "cmd": "vtysh -c 'show bgp l2vpn evpn summary json'",
+                        "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn summary json'",
                         "rc": rc,
                     },
                     meta={
@@ -6233,7 +6233,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 duration_ms=int((time.time() - start) * 1000),
                 error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                 evidence={
-                    "cmd": "vtysh -c 'show bgp l2vpn evpn summary json'",
+                    "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn summary json'",
                     "rc": rc,
                     "neighbors": evidence_entries,
                 },
@@ -6324,7 +6324,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                         duration_ms=0,
                         error="unsupported BGP MED evidence provider capability",
                         evidence={
-                            "cmd": f"vtysh -c 'show ip bgp {norm_prefix} json'",
+                            "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {norm_prefix} json'",
                             "rc": rc,
                         },
                         meta={
@@ -6359,7 +6359,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                         duration_ms=0,
                         error="unsupported BGP MED evidence normalization",
                         evidence={
-                            "cmd": f"vtysh -c 'show ip bgp {norm_prefix} json'",
+                            "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {norm_prefix} json'",
                             "rc": rc,
                             "parse_error": parse_error,
                         },
@@ -6398,7 +6398,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=int((time.time() - start) * 1000),
                     error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                     evidence={
-                        "cmd": f"vtysh -c 'show ip bgp {norm_prefix} json'",
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {norm_prefix} json'",
                         "rc": rc,
                         "prefix": norm_prefix,
                         "med": observed_med,
@@ -6460,7 +6460,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 duration_ms=int((time.time() - start) * 1000),
                 error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                 evidence={
-                    "cmd": "vtysh -c 'show ip route json'",
+                    "cmd": last_evidence.get("cmd") or "vtysh -c 'show ip route json'",
                     "rc": rc,
                 },
                 meta={
@@ -6536,7 +6536,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported EVPN VNI/MAC-route evidence provider capability",
                     evidence={
-                        "cmd": "vtysh -c 'show bgp l2vpn evpn route json'",
+                        "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn route json'",
                         "rc": rc,
                     },
                     meta={
@@ -6576,7 +6576,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                         duration_ms=0,
                         error="unsupported EVPN VNI/MAC-route evidence provider capability",
                         evidence={
-                            "cmd": "vtysh -c 'show bgp l2vpn evpn route'",
+                            "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn route'",
                             "rc": None,
                         },
                         meta={
@@ -6602,7 +6602,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                         duration_ms=0,
                         error="unsupported EVPN VNI/MAC-route evidence provider capability",
                         evidence={
-                            "cmd": "vtysh -c 'show bgp l2vpn evpn route'",
+                            "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn route'",
                             "rc": rc_text,
                             "json_rc": rc,
                         },
@@ -6639,7 +6639,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported EVPN VNI/MAC-route evidence normalization",
                     evidence={
-                        "cmd": "vtysh -c 'show bgp l2vpn evpn route json'",
+                        "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn route json'",
                         "rc": rc,
                     },
                     meta={
@@ -6750,7 +6750,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 duration_ms=int((time.time() - start) * 1000),
                 error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                 evidence={
-                    "cmd": "vtysh -c 'show bgp l2vpn evpn route json'",
+                    "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn route json'",
                     "rc": rc,
                     "routes": evidence_entries,
                 },
@@ -6849,7 +6849,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported route advertisement evidence provider capability",
                     evidence={
-                        "cmd": f"vtysh -c 'show ip bgp neighbor {peer_ips[0]} advertised-routes json'",
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp neighbor {peer_ips[0]} advertised-routes json'",
                         "rc": rc,
                     },
                     meta={
@@ -6873,7 +6873,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported route advertisement evidence normalization",
                     evidence={
-                        "cmd": f"vtysh -c 'show ip bgp neighbor {peer_ips[0]} advertised-routes json'",
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp neighbor {peer_ips[0]} advertised-routes json'",
                         "rc": rc,
                         "parse_error": parse_error,
                     },
@@ -6943,7 +6943,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 duration_ms=int((time.time() - start) * 1000),
                 error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                 evidence={
-                    "cmd": f"vtysh -c 'show ip bgp neighbor {peer_ips[0]} advertised-routes json'",
+                    "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp neighbor {peer_ips[0]} advertised-routes json'",
                     "rc": rc,
                     "prefixes": advertised_prefixes,
                 },
@@ -6984,7 +6984,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported BGP LOCALPREF evidence normalization",
                     evidence={
-                        "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
                         "rc": rc,
                         "parse_error": parse_error,
                     },
@@ -7023,7 +7023,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 duration_ms=int((time.time() - start) * 1000),
                 error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                 evidence={
-                    "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                    "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
                     "rc": rc,
                     "prefix": prefix,
                     "localpref": observed_localpref,
@@ -7066,7 +7066,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported BGP community evidence provider capability",
                     evidence={
-                        "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
                         "rc": rc,
                     },
                     meta={
@@ -7119,7 +7119,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 duration_ms=int((time.time() - start) * 1000),
                 error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                 evidence={
-                    "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                    "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
                     "rc": rc,
                     "prefix": prefix,
                     "communities": sorted(observed_communities),
@@ -7161,7 +7161,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported BGP AS-path evidence provider capability",
                     evidence={
-                        "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
                         "rc": rc,
                     },
                     meta={
@@ -7212,7 +7212,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 duration_ms=int((time.time() - start) * 1000),
                 error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                 evidence={
-                    "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                    "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
                     "rc": rc,
                     "prefix": prefix,
                     "as_path": observed_as_path,
@@ -7330,7 +7330,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             verdict = "pass" if observed == expected else "fail"
 
             evidence = {
-                "cmd": "vtysh -c 'show bgp summary json'",
+                "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp summary json'",
                 "parse_error": parse_error,
             }
             meta = {
@@ -7490,7 +7490,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             verdict = "pass" if observed == expected else "fail"
 
             evidence = {
-                "cmd": "vtysh -c 'show ip ospf neighbor json'",
+                "cmd": last_evidence.get("cmd") or "vtysh -c 'show ip ospf neighbor json'",
                 "parse_error": parse_error,
             }
             meta = {
@@ -7661,7 +7661,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             verdict = "pass" if observed == expected else "fail"
 
             evidence = {
-                "cmd": f"ip -j link show {iface}",
+                "cmd": last_evidence.get("cmd") or f"ip -j link show {iface}",
                 "parse_error": parse_error,
             }
             # REQ-H5-15 / LD-4.c ruling A: meta has exactly 7 keys, NO

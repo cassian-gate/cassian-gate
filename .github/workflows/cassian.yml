@@ -147,6 +147,12 @@ jobs:
           python tests/sonic_provision_readiness_gate_proof.py
           python tests/sonic_nos_ready_proof.py
 
+      - name: cmd evidence derivation differential (§4.5-c WI-8, REQ-45C-36)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/cmd_evidence_derivation_differential_proof.py
+
       - name: User-defined invariant (exec) proof harnesses (§4.7)
         shell: bash
         run: |
