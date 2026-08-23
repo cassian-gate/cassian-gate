@@ -6421,6 +6421,36 @@ def cmd_test(args: argparse.Namespace) -> None:
             present = bool(last_state.get("present"))
             observed_prefixes = list(last_state.get("observed_prefixes") or [])
 
+            if str(last_evidence.get("reason") or "") == "unsupported_provider_capability":
+                # BL-P2-4.5c-44: deny-by-default must not render as a negative
+                # observation. Without this guard the predicate below reads the
+                # unsupported state's absent keys as observed="fail", which
+                # SATISFIES a negative expectation and yields a passing verdict
+                # on a device never queried (Doctrine 1.11: absence must never
+                # imply pass). Shape is the already-ratified UNSUP disposition
+                # shipping at the rc-guard sites (F-45b-C3-1). Founder ruling
+                # 2026-08-22: supersedes option 1b, unreachable once this exits.
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported route evidence evidence provider capability",
+                    evidence={
+                        "cmd": last_evidence.get("cmd") or "vtysh -c 'show ip route json'",
+                        "rc": last_evidence.get("rc"),
+                    },
+                    meta={
+                        "type": inv_type,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
             if inv_type == "route_present":
                 observed = "pass" if present else "fail"
             else:
@@ -7054,6 +7084,36 @@ def cmd_test(args: argparse.Namespace) -> None:
             observed_communities = list(last_state.get("observed_communities") or [])
             empty_first_doc = bool(last_evidence.get("empty_first_doc"))
 
+            if str(last_evidence.get("reason") or "") == "unsupported_provider_capability":
+                # BL-P2-4.5c-44: deny-by-default must not render as a negative
+                # observation. Without this guard the predicate below reads the
+                # unsupported state's absent keys as observed="fail", which
+                # SATISFIES a negative expectation and yields a passing verdict
+                # on a device never queried (Doctrine 1.11: absence must never
+                # imply pass). Shape is the already-ratified UNSUP disposition
+                # shipping at the rc-guard sites (F-45b-C3-1). Founder ruling
+                # 2026-08-22: supersedes option 1b, unreachable once this exits.
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=node,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported BGP community evidence provider capability",
+                    evidence={
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
+                        "rc": last_evidence.get("rc"),
+                    },
+                    meta={
+                        "type": inv_type,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
             if rc not in (0, None):
                 record_fn(
                     name=test_name,
@@ -7148,6 +7208,36 @@ def cmd_test(args: argparse.Namespace) -> None:
             route_present = bool(last_state.get("route_present"))
             observed_as_path = str(last_state.get("observed_as_path") or "")
             empty_first_doc = bool(last_evidence.get("empty_first_doc"))
+
+            if str(last_evidence.get("reason") or "") == "unsupported_provider_capability":
+                # BL-P2-4.5c-44: deny-by-default must not render as a negative
+                # observation. Without this guard the predicate below reads the
+                # unsupported state's absent keys as observed="fail", which
+                # SATISFIES a negative expectation and yields a passing verdict
+                # on a device never queried (Doctrine 1.11: absence must never
+                # imply pass). Shape is the already-ratified UNSUP disposition
+                # shipping at the rc-guard sites (F-45b-C3-1). Founder ruling
+                # 2026-08-22: supersedes option 1b, unreachable once this exits.
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=node,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported BGP AS-path evidence provider capability",
+                    evidence={
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
+                        "rc": last_evidence.get("rc"),
+                    },
+                    meta={
+                        "type": inv_type,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
 
             if rc not in (0, None):
                 record_fn(
@@ -7320,6 +7410,36 @@ def cmd_test(args: argparse.Namespace) -> None:
                 dur_ms = int((time.time() - start) * 1000)
                 ok = ok_a
 
+            if str(last_evidence.get("reason") or "") == "unsupported_provider_capability":
+                # BL-P2-4.5c-44: deny-by-default must not render as a negative
+                # observation. Without this guard the predicate below reads the
+                # unsupported state's absent keys as observed="fail", which
+                # SATISFIES a negative expectation and yields a passing verdict
+                # on a device never queried (Doctrine 1.11: absence must never
+                # imply pass). Shape is the already-ratified UNSUP disposition
+                # shipping at the rc-guard sites (F-45b-C3-1). Founder ruling
+                # 2026-08-22: supersedes option 1b, unreachable once this exits.
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst=neighbor,
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported BGP session-state evidence provider capability",
+                    evidence={
+                        "cmd": last_evidence.get("cmd") or "",
+                        "rc": last_evidence.get("rc"),
+                    },
+                    meta={
+                        "type": inv_type,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
             observed_state_str = str(last_state.get("state") or "Unknown")
             last_error = str(last_state.get("last_error") or "")
             parse_error = str(last_evidence.get("parse_error") or "")
@@ -7480,6 +7600,36 @@ def cmd_test(args: argparse.Namespace) -> None:
                 attempts = 1
                 dur_ms = int((time.time() - start) * 1000)
                 ok = ok_a
+
+            if str(last_evidence.get("reason") or "") == "unsupported_provider_capability":
+                # BL-P2-4.5c-44: deny-by-default must not render as a negative
+                # observation. Without this guard the predicate below reads the
+                # unsupported state's absent keys as observed="fail", which
+                # SATISFIES a negative expectation and yields a passing verdict
+                # on a device never queried (Doctrine 1.11: absence must never
+                # imply pass). Shape is the already-ratified UNSUP disposition
+                # shipping at the rc-guard sites (F-45b-C3-1). Founder ruling
+                # 2026-08-22: supersedes option 1b, unreachable once this exits.
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst=neighbor,
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported OSPF neighbor-state evidence provider capability",
+                    evidence={
+                        "cmd": last_evidence.get("cmd") or "",
+                        "rc": last_evidence.get("rc"),
+                    },
+                    meta={
+                        "type": inv_type,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
 
             observed_state_str = str(last_state.get("state") or "Unknown")
             last_error = str(last_state.get("last_error") or "")
@@ -7647,6 +7797,36 @@ def cmd_test(args: argparse.Namespace) -> None:
                 attempts = 1
                 dur_ms = int((time.time() - start) * 1000)
                 ok = ok_a
+
+            if str(last_evidence.get("reason") or "") == "unsupported_provider_capability":
+                # BL-P2-4.5c-44: deny-by-default must not render as a negative
+                # observation. Without this guard the predicate below reads the
+                # unsupported state's absent keys as observed="fail", which
+                # SATISFIES a negative expectation and yields a passing verdict
+                # on a device never queried (Doctrine 1.11: absence must never
+                # imply pass). Shape is the already-ratified UNSUP disposition
+                # shipping at the rc-guard sites (F-45b-C3-1). Founder ruling
+                # 2026-08-22: supersedes option 1b, unreachable once this exits.
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst=iface,
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported interface-state evidence provider capability",
+                    evidence={
+                        "cmd": last_evidence.get("cmd") or "",
+                        "rc": last_evidence.get("rc"),
+                    },
+                    meta={
+                        "type": inv_type,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
 
             admin_state = str(last_state.get("admin_state") or "unknown")
             operstate = str(last_state.get("operstate") or "UNKNOWN")

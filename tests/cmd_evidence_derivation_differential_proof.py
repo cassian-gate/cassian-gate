@@ -66,7 +66,12 @@ check("run_invariant_test located in engine", _node is not None)
 _body = "\n".join(ast.unparse(s) for s in _node.body)
 
 check("derivation idiom present at record sites",
-      _engine_src.count('last_evidence.get("cmd") or ') == 24)
+      # 24 -> 30 by founder ruling 2026-08-22 (BL-P2-4.5c-44): the six
+      # unsupported-capability guard record sites retain the derivation
+      # idiom so a future provider denial carrying a real cmd is picked
+      # up rather than misreported by a literal. Reachability rows for
+      # the six are filed in the per-site addendum.
+      _engine_src.count('last_evidence.get("cmd") or ') == 30)
 
 _ns = dict(E.__dict__)
 
@@ -160,14 +165,24 @@ EXPECTED = {
         "exit": None
     },
     "as_path/pass/True/unsup": {
-        "verdict": "pass",
-        "rec_verdict": "pass",
-        "exit": None
+        # re-baselined by founder ruling 2026-08-22 (BL-P2-4.5c-44): the
+        # unsupported path now takes the ratified UNSUP disposition
+        # (record verdict=fail, then SystemExit(2)) instead of letting the
+        # predicate read absent keys as a negative observation. Matches the
+        # evpn_sess/*/unsup rows, which were already this shape.
+        "verdict": None,
+        "rec_verdict": "fail",
+        "exit": 2
     },
     "community/pass/True/unsup": {
-        "verdict": "fail",
+        # re-baselined by founder ruling 2026-08-22 (BL-P2-4.5c-44): the
+        # unsupported path now takes the ratified UNSUP disposition
+        # (record verdict=fail, then SystemExit(2)) instead of letting the
+        # predicate read absent keys as a negative observation. Matches the
+        # evpn_sess/*/unsup rows, which were already this shape.
+        "verdict": None,
         "rec_verdict": "fail",
-        "exit": None
+        "exit": 2
     },
     "evpn_sess/pass/True/unsup": {
         "verdict": None,
@@ -190,14 +205,24 @@ EXPECTED = {
         "exit": None
     },
     "as_path/pass/False/unsup": {
-        "verdict": "fail",
+        # re-baselined by founder ruling 2026-08-22 (BL-P2-4.5c-44): the
+        # unsupported path now takes the ratified UNSUP disposition
+        # (record verdict=fail, then SystemExit(2)) instead of letting the
+        # predicate read absent keys as a negative observation. Matches the
+        # evpn_sess/*/unsup rows, which were already this shape.
+        "verdict": None,
         "rec_verdict": "fail",
-        "exit": None
+        "exit": 2
     },
     "community/pass/False/unsup": {
-        "verdict": "fail",
+        # re-baselined by founder ruling 2026-08-22 (BL-P2-4.5c-44): the
+        # unsupported path now takes the ratified UNSUP disposition
+        # (record verdict=fail, then SystemExit(2)) instead of letting the
+        # predicate read absent keys as a negative observation. Matches the
+        # evpn_sess/*/unsup rows, which were already this shape.
+        "verdict": None,
         "rec_verdict": "fail",
-        "exit": None
+        "exit": 2
     },
     "evpn_sess/pass/False/unsup": {
         "verdict": None,
@@ -220,14 +245,24 @@ EXPECTED = {
         "exit": None
     },
     "as_path/fail/True/unsup": {
-        "verdict": "fail",
+        # re-baselined by founder ruling 2026-08-22 (BL-P2-4.5c-44): the
+        # unsupported path now takes the ratified UNSUP disposition
+        # (record verdict=fail, then SystemExit(2)) instead of letting the
+        # predicate read absent keys as a negative observation. Matches the
+        # evpn_sess/*/unsup rows, which were already this shape.
+        "verdict": None,
         "rec_verdict": "fail",
-        "exit": None
+        "exit": 2
     },
     "community/fail/True/unsup": {
-        "verdict": "pass",
-        "rec_verdict": "pass",
-        "exit": None
+        # re-baselined by founder ruling 2026-08-22 (BL-P2-4.5c-44): the
+        # unsupported path now takes the ratified UNSUP disposition
+        # (record verdict=fail, then SystemExit(2)) instead of letting the
+        # predicate read absent keys as a negative observation. Matches the
+        # evpn_sess/*/unsup rows, which were already this shape.
+        "verdict": None,
+        "rec_verdict": "fail",
+        "exit": 2
     },
     "evpn_sess/fail/True/unsup": {
         "verdict": None,
@@ -250,14 +285,24 @@ EXPECTED = {
         "exit": None
     },
     "as_path/fail/False/unsup": {
-        "verdict": "pass",
-        "rec_verdict": "pass",
-        "exit": None
+        # re-baselined by founder ruling 2026-08-22 (BL-P2-4.5c-44): the
+        # unsupported path now takes the ratified UNSUP disposition
+        # (record verdict=fail, then SystemExit(2)) instead of letting the
+        # predicate read absent keys as a negative observation. Matches the
+        # evpn_sess/*/unsup rows, which were already this shape.
+        "verdict": None,
+        "rec_verdict": "fail",
+        "exit": 2
     },
     "community/fail/False/unsup": {
-        "verdict": "pass",
-        "rec_verdict": "pass",
-        "exit": None
+        # re-baselined by founder ruling 2026-08-22 (BL-P2-4.5c-44): the
+        # unsupported path now takes the ratified UNSUP disposition
+        # (record verdict=fail, then SystemExit(2)) instead of letting the
+        # predicate read absent keys as a negative observation. Matches the
+        # evpn_sess/*/unsup rows, which were already this shape.
+        "verdict": None,
+        "rec_verdict": "fail",
+        "exit": 2
     },
     "evpn_sess/fail/False/unsup": {
         "verdict": None,

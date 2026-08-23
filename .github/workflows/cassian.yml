@@ -153,6 +153,12 @@ jobs:
           set -euo pipefail
           python tests/cmd_evidence_derivation_differential_proof.py
 
+      - name: unsupported-capability disposition (§4.5-c BL-P2-4.5c-44)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/sonic_unsupported_capability_disposition_proof.py
+
       - name: User-defined invariant (exec) proof harnesses (§4.7)
         shell: bash
         run: |
