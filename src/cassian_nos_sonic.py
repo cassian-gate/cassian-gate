@@ -32,6 +32,7 @@ implementation of the same leg is not looking at a contradiction.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import shlex
@@ -391,6 +392,81 @@ def _guest_stdout(rt: "Runtime", lab: str, node: str, argv: list,
 # depends on, so the two must never drift into parallel literals.
 _HWSKU_ARGV = ("sonic-cfggen", "-d", "-v", "DEVICE_METADATA.localhost.hwsku")
 
+# REQ-45C-44(b) mode precondition. A SEPARATE single-sourced argv from
+# _HWSKU_ARGV, deliberately: PBE-P2-6 single-sources `nos_ready`'s assertion
+# with the read `probe_facts` depends on, and widening that literal to also
+# carry the mode read would put two unrelated contracts on one string. The
+# read is the measured form -- `-v "DEVICE_METADATA['localhost']"` returns a
+# Python repr of the whole localhost mapping, verified on sonic-vm:202405
+# 2026-08-24 (SONiC.202405.1033627-fecd4ec81):
+#   {'bgp_asn': '65100', 'buffer_model': 'traditional', ..., 'type': 'LeafRouter'}
+_DEVICE_METADATA_ARGV = ("sonic-cfggen", "-d", "-v", "DEVICE_METADATA['localhost']")
+
+# The two keys that switch SONiC's BGP configuration source away from the
+# tables Cassian writes. Named, not pattern-matched (Rule 14 -- enumerate the
+# class). LD-45C-2 chose an OVERLAY to protect platform tables; an overlay is
+# meaningless if the device is reading its routing configuration from
+# somewhere else.
+_FORBIDDEN_MODE_KEYS = ("docker_routing_config_mode", "frr_mgmt_framework_config")
+
+
+def assert_routing_mode_clean(rt: "Runtime", lab: str, node: str) -> None:
+    """REQ-45C-44(b): refuse to provision a guest in a non-default routing mode.
+
+    Cassian's overlay writes BGP state into `config_db`. If the guest declares
+    `docker_routing_config_mode` or `frr_mgmt_framework_config`, its routing
+    configuration is sourced elsewhere and the overlay would be applied but not
+    honoured -- silently. Deny-by-default: fail loud rather than provision into
+    a mode whose semantics §4.5-c has not established.
+
+    STATED COVERAGE LIMIT (PBE-P2-8): this asserts the keys are ABSENT. It does
+    not establish what SONiC does when they are present -- that is unmeasured,
+    and is why the disposition is refusal rather than adaptation.
+
+    §4.5-c writes neither key anywhere (§15.2 negative row); this leg guards
+    against a guest that arrived carrying one, not against Cassian setting it.
+    """
+    raw = _guest_stdout(
+        rt, lab, node, list(_DEVICE_METADATA_ARGV),
+        "the device metadata",
+    )
+    try:
+        meta = ast.literal_eval(raw.strip() or "{}")
+    except (ValueError, SyntaxError):
+        _fail(
+            "SONiC guest device metadata is not parseable",
+            node,
+            "the guest returned a DEVICE_METADATA payload that is not a "
+            "Python literal",
+            "the routing-mode precondition cannot be evaluated, and Cassian "
+            "will not provision into an unverified mode",
+            "report this with the guest's "
+            "`" + " ".join(_DEVICE_METADATA_ARGV) + "` output",
+        )
+        return
+    if not isinstance(meta, dict):
+        _fail(
+            "SONiC guest device metadata has an unexpected shape",
+            node,
+            "expected a mapping, got " + type(meta).__name__,
+            "the routing-mode precondition cannot be evaluated",
+            "report this with the guest's device metadata output",
+        )
+        return
+
+    present = [k for k in _FORBIDDEN_MODE_KEYS if k in meta]
+    if present:
+        _fail(
+            "SONiC guest is in an unsupported routing configuration mode",
+            node,
+            "DEVICE_METADATA.localhost carries " + ", ".join(present),
+            "Cassian supplies BGP state as a config_db overlay; in this mode "
+            "the guest sources its routing configuration elsewhere, so the "
+            "overlay would be applied but not honoured",
+            "use a guest image whose DEVICE_METADATA.localhost sets neither "
+            + " nor ".join(_FORBIDDEN_MODE_KEYS),
+        )
+
 
 def nos_ready(rt: "Runtime", lab: str, node: str) -> None:
     """NOS-readiness leg (design :240 "control-plane responsive").
@@ -488,6 +564,12 @@ def provision(rt: "Runtime", lab: str, node: str, node_d: dict,
     below is byte-identical to that serializer's, and the supply proof asserts
     the equality rather than assuming it.
     """
+    # REQ-45C-44(b): precondition before anything is generated or supplied.
+    # Ordered first deliberately -- probing and generating for a guest we
+    # will refuse to provision wastes two guest reads and reports the
+    # failure later than it is knowable.
+    assert_routing_mode_clean(rt, lab, node)
+
     facts = probe_facts(rt, lab, node)
     out = gen_node_config(node_d, topo, facts)
     if not out:

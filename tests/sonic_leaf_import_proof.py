@@ -74,7 +74,7 @@ check("P-SIMP-1 no runtime import of core/engine/model/runtime from the provider
       not _violations, "violations: %s" % (_violations or "none"))
 
 check("P-SIMP-2 import floor is stdlib + the types leaf",
-      _rt <= {"__future__", "json", "re", "shlex", "sys", "typing",
+      _rt <= {"__future__", "ast", "json", "re", "shlex", "sys", "typing",
               "cassian_nos_types", "cassian_common"},
       "runtime imports: %s" % sorted(_rt))
 
