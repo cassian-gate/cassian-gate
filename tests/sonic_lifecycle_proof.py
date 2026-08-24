@@ -11,14 +11,25 @@ snapshot is v48 == branch `feature/4_5c-sonic-base-lifecycle`; the handover's
 authoring pin was v45 == `b129510`, which the branch has since advanced past.
 
 Lab-free legs run everywhere. VM legs are reported BLOCKED, never silently
-skipped, per Ledger row BL-P2-4.5c-6 -- two founder-owned host blockers on
-`ai-netsim` gate the entire (VM)-tagged 15.2 proof set:
-  (a) F-45C-C3-8  the local image tag is hand-made, not contrib-produced
-  (b) F-45C-C3-13 the runner has no passwordless sudo, so no lab can deploy
-Discharge shape is PBE-P2-5: static backstop + local mechanism proxy now, the
-VM-level observation carried as a LOCK condition, the host gap forwarded --
-not treated as a 4.5-c defect. Founder ruling 2026-08-18 (reading A): the
-blocked legs are enumerated in the file that owns them.
+skipped. Founder ruling 2026-08-18 (reading A): the blocked legs are
+enumerated in the file that owns them.
+
+CITATION CORRECTED (§4.5-c WI-2, founder ruling 2026-08-24, option C). These
+legs previously cited Ledger row BL-P2-4.5c-6 and "two founder-owned host
+blockers on ai-netsim". **BL-P2-4.5c-20 supersedes -6 and BOTH cited blockers
+are discharged**, measured: (a) F-45C-C3-8 is false -- only the stale
+`ghcr.io` tag resolves to `cb884fb5fc9d`; `local/sonic-vm:202405` is
+`ffef3b5662b0`, a contrib-built vrnetlab image, re-measured independently on
+2026-08-24; (b) F-45C-C3-13 is dissolved -- `/etc/sudoers.d/containerlab-runner`
+has granted NOPASSWD containerlab since 2026-07-10 and CI deploys labs. The
+remaining block is different in kind and is stated below per leg. Ledger row
+`BL-P2-4.5c-35` records the correction; §4.8 bars editing -6 in place.
+
+UNBLOCKING IS NOT THIS EDIT. Per the same ruling (option C), WI-2 carries the
+citation correction only; clearing the legs is WI-3's, because legs 1-2 need a
+pre-provisioning observation window that does not exist today -- provisioning
+runs inside `cmd_up` (`src/cassian_engine.py:1317`, host leg `:1398`, provider
+leg `:1435`) and no `--no-provision` path exists.
 
 COVERAGE LIMITS (PBE-P2-8), stated rather than implied:
   * The address sweep tests DECLARED values parsed from YAML -- `links[].ipv4`
@@ -57,6 +68,13 @@ STOCK_RANGES = (
 # Fixtures this handover authored. Authority is this list, not a glob.
 SECTION_45C_FIXTURES = (
     "sonic-base-lifecycle.yaml",
+    # §4.5-c WI-2 endpoint recognition (REQ-45C-6, REQ-45C-7). Registered here
+    # because LEG 2's enumeration-drop guard is an explicit list, not a glob:
+    # an unregistered SONiC fixture FAILS this proof rather than passing
+    # unseen (F-45C-C3-3). Registration also puts both under LEG 1's HALT-2
+    # address sweep.
+    "sonic-mixed-host.yaml",
+    "sonic-mixed-linux.yaml",
 )
 
 # SONiC fixtures inherited from 4.5-a. REQ-45C-5 states these collide with
@@ -180,14 +198,18 @@ else:
 # --- VM legs: BLOCKED, enumerated, never silently absent --------------------
 blocked("REQ-45C-5 pre-provisioning control (S-9): declared address and "
         "router_id/32 ABSENT on a booted, un-provisioned guest",
-        "BL-P2-4.5c-6 (a) F-45C-C3-8 + (b) F-45C-C3-13 -- founder-owned host "
-        "blockers on ai-netsim; PBE-P2-5 discharge shape")
+        "BL-P2-4.5c-35 -- environment binding, NOT a host blocker. §18(1) "
+        "requires every §15 proof green in its bound environment; this proof "
+        "runs in the lab-free CI step. Substantively demonstrated by the "
+        "§18(8) probe. Clearing it needs a pre-provisioning window that does "
+        "not exist (provisioning is inside cmd_up); routed to WI-3")
 blocked("REQ-45C-5 post-provision positive: the address ABSENT in the control "
         "is PRESENT on the expected port",
-        "BL-P2-4.5c-6 -- same host blockers")
+        "BL-P2-4.5c-35 -- same environment binding; routed to WI-3")
 blocked("REQ-45C-22 two-node eBGP pair reaches Established under generated "
         "configuration, with evidence recorded",
-        "BL-P2-4.5c-6 -- same host blockers; fixture not yet authored (WI-3)")
+        "BL-P2-4.5c-35 -- same environment binding, AND the eBGP fixture is "
+        "not yet authored; both are WI-3's")
 
 # --- Report ------------------------------------------------------------------
 _fails = [c for c in _checks if not c[1]]
@@ -203,6 +225,7 @@ print("RESULT: %s -- %d checks passed, %d BLOCKED (WI-1 SONiC base lifecycle)"
 if _fails:
     sys.exit("sonic_lifecycle_proof FAILED (%d check(s))." % len(_fails))
 if _blocked:
-    print("NOTE: %d leg(s) BLOCKED on BL-P2-4.5c-6. A BLOCKED leg is not a "
+    print("NOTE: %d leg(s) BLOCKED on BL-P2-4.5c-35 (BL-P2-4.5c-6 is "
+          "superseded by -20). A BLOCKED leg is not a "
           "pass; the closure report carries it as a condition (PBE-P2-5)."
           % len(_blocked))

@@ -358,6 +358,29 @@ jobs:
           ./src/cassian.py test vm-assertion-smoke
           ./src/cassian.py down vm-assertion-smoke
 
+      - name: SONiC endpoint recognition — mixed host/linux (§4.5-c WI-2, REQ-45C-6/-7)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # (VM) proof per §15.2. Artifacts are copied aside BEFORE `down`,
+          # following tests/two_run_real_run_positive_proof.py's shape earlier
+          # in this workflow — the proof must not depend on what `down` leaves.
+          rm -rf /tmp/wi2_host /tmp/wi2_linux
+
+          ./src/cassian.py validate topologies/sonic-mixed-host.yaml
+          ./src/cassian.py up topologies/sonic-mixed-host.yaml --reconfigure
+          ./src/cassian.py test sonic-mixed-host
+          cp -r labs/clab-sonic-mixed-host /tmp/wi2_host
+          ./src/cassian.py down sonic-mixed-host
+
+          ./src/cassian.py validate topologies/sonic-mixed-linux.yaml
+          ./src/cassian.py up topologies/sonic-mixed-linux.yaml --reconfigure
+          ./src/cassian.py test sonic-mixed-linux
+          cp -r labs/clab-sonic-mixed-linux /tmp/wi2_linux
+          ./src/cassian.py down sonic-mixed-linux
+
+          python tests/sonic_endpoint_recognition_proof.py /tmp/wi2_host /tmp/wi2_linux
+
       - name: Upload artifacts (always; bounded on success)
         if: always()
         uses: actions/upload-artifact@v4
