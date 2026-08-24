@@ -50,6 +50,26 @@ COVERAGE LIMITS  (PBE-P2-8)
   4. Row 1 proves the migrated path executed and produced no verdict delta.
      It does not prove FRR's response to the command string beyond what the
      corpus exercises.
+  5. ROW 1 IS TIMING-COUPLED TO LAB CONVERGENCE, AND THIS PROOF DOES NOT GATE
+     ON IT. The post side is a LIVE run: the CI step deploys all three
+     topologies, so row 1 inherits whatever the convergence gate delivers.
+     That gate polls a PROXY condition and then sleeps a constant for the real
+     one -- `cassian_engine.py:10215` waits via `wait_for_bgp(require_evpn=True)`,
+     whose EVPN leg polls `show bgp l2vpn evpn summary json` for peer
+     `state == "established"` (BGP SESSION state, not MAC-route propagation),
+     and `cassian_engine.py:10217` then sleeps a fixed 10s. Nothing polls for
+     the declared MAC routes. Measured: run 32739772409 on 7c4c9a2, attempt 1
+     GREEN, attempt 2 RED, attempt 3 GREEN -- identical bytes. Attempt 2 began
+     1m43s after attempt 1 finished and observed one of two declared MACs;
+     R1-DECLARED, R1-VERDICT, R1-NONVACUITY and R1-13C all failed from that one
+     absence, while every structural leg (rows 2/3/4, baseline
+     self-consistency) passed. A RED here is therefore NOT self-evidently a
+     migration defect: check R1-DECLARED first, and if a declared MAC is
+     missing the finding is convergence, not this row's subject. Recorded as
+     `BL-P2-4.5c-53`, routed to §4.5-e with a PBE-P2-11 obligation on whoever
+     performs the FRR EVPN hardening to replace the fixed sleep with a wait on
+     the declared condition. Until then, step 28's replay-determinism
+     obligation under v3.4-CI §2 is NOT DISCHARGED.
 
 Reports only; writes nothing. Exit 0 = GREEN, 1 = RED.
 """
