@@ -56,7 +56,7 @@ FORK_BASELINE = {
     "src/cassian_cli.py": "9234f3fdb76b5432bac8bf22a9807f234da9dff3a72d7c334ed9e2508183898a",
     "src/cassian_import.py": "604c8d8ff2bc461f8b43d7e5be6f63bd00f653ce6f83b64ffff9cf90450cf71c",  # §4.14 new module, enforced (LD-8/LD-9)
     "src/cassian_nos_frr.py": "0b48fba120ca67edd35d0379a906cb82b726da75d7ba5f88908bd6f07a5c2756",  # re-baselined from 898eb296 (§4.5-c WI-7: supplementary EVPN text collect leg, REQ-45C-14); §4.5-b new module (WI-B NOS provider structure); enforced (REQ-45b-13; LD-9)
-    "src/cassian_nos_sonic.py": "d4e1cabd56a60fba22500705c506b821dc748a6bcc1a24ec743ccfa6f87a84ba",  # re-baselined from 673179d6 (BL-P2-4.5c-29 part (b): nos_ready single-shot ratchet + PBE-P2-6 argv single-source); §4.5-c new module (WI-1 SONiC provider); enforced (REQ-45C-39; LD-9)
+    "src/cassian_nos_sonic.py": "02944c5f40095188d50112b2abf433dc8270d0d74aab350a41bd13769b827418",  # re-baselined from d4e1cabd (WI-1 packet 3a: REQ-45C-44(b) routing-mode precondition; ast import + assert_routing_mode_clean); §4.5-c new module (WI-1 SONiC provider); enforced (REQ-45C-39; LD-9)
     "src/cassian_nos_types.py": "fc04876a3850df098dc500c7f70c55e54b06279b792c13fadf424bc25a08f85c",  # §4.5-b new module (WI-B NOS provider structure); enforced (REQ-45b-13; LD-9)
     "src/cassian_common.py": "0f5a326f3407811ba9afa8c449a15a9526e101a0ba258998b29bd633e48223bb",  # re-baselined from a0469a2a (phase2 §4.5-b WI-C1/C2 NOS-neutral re-homes + A-S6 provenance comment); orig a0469a2a
     "src/cassian_runtime_container.py": "6c323e7980d44a88cd80324b6bda74210134c906d465bf670e9a83470b46d7f1",  # re-baselined from b3e45fa2 (phase2 §4.5-b WI-C1 _normalize_prefix shim + WI-F ensure_ip_tools removal); orig b2a493f9
