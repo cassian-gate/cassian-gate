@@ -245,6 +245,64 @@ if set(_found) == _wanted:
           not _is_node({"name": "h1", "type": "host", "asn": 65001})
           and not _is_peer({"name": "h1", "type": "host", "asn": 65001}))
 
+# --- REQ-45C-2 / BR-2: provision reconciles the daemon after applying ---------
+# BR-2 requires that provisioning's generated config converges a declared eBGP
+# pair to Established. Measured 2026-08-25: `config load` writes ConfigDB and
+# bgpcfgd REFUSES the update path -- ERR on an existing peer, silent no-op on
+# DEVICE_METADATA.localhost.bgp_asn, WARNING on the set-src template. A restart
+# rebuilds FRR from ConfigDB through the ADD path, which works.
+_prov_src = ast.parse(io.open(
+    os.path.join(_ROOT, "src", "cassian_nos_sonic.py"), encoding="utf-8").read())
+_fns = {n.name: n for n in ast.walk(_prov_src) if isinstance(n, ast.FunctionDef)}
+
+check("REQ-45C-2 provision has a reconcile step at all",
+      "_reconcile_bgp" in _fns,
+      "without it the overlay reaches ConfigDB and never reaches FRR")
+check("REQ-45C-2 the reconcile argv is single-sourced (PBE-P2-6)",
+      S._BGP_RECONCILE_ARGV == ("sudo", "systemctl", "restart", "bgp"),
+      "the proof imports the tuple rather than restating the command")
+
+# ORDER MATTERS: reconciling before the overlay is merged rebuilds from stale
+# ConfigDB and looks identical to success.
+_prov_body = ast.dump(_fns["provision"]) if "provision" in _fns else ""
+_i_load = _prov_body.find("'load'")
+_i_rec = _prov_body.find("_reconcile_bgp")
+check("REQ-45C-2 reconcile is called AFTER `config load`, not before",
+      _i_load != -1 and _i_rec != -1 and _i_load < _i_rec,
+      "a rebuild from stale ConfigDB would look exactly like success")
+
+# --- NON-VACUITY: the reconcile fails LOUD, never silently ------------------
+_rc_loud = False
+try:
+    S._reconcile_bgp(_Rt([("", 1)]), "lab", "s1")
+except SystemExit as _e:
+    _rc_loud = (_e.code == 2)
+check("REQ-45C-2 NON-VACUITY: a failed reconcile exits 2, never silence",
+      _rc_loud,
+      "Doctrine 1.11 -- a merged overlay that never reached FRR must not read clean")
+
+_rc_ok = True
+_rt_rec = _Rt([("", 0)])
+try:
+    S._reconcile_bgp(_rt_rec, "lab", "s1")
+except SystemExit:
+    _rc_ok = False
+check("REQ-45C-2 a successful reconcile returns quietly", _rc_ok)
+check("REQ-45C-2 the reconcile reaches the guest via the single-sourced argv",
+      _rt_rec.calls and _rt_rec.calls[0] == S._BGP_RECONCILE_ARGV,
+      "calls: %s" % (_rt_rec.calls[:1],))
+
+# --- the ruled shape: NO readiness wait here (founder ruling 2026-08-25) -----
+check("REQ-45C-29 reconcile does NOT re-poll for readiness",
+      "_CONVERGENCE_POLL_INTERVAL_S" not in ast.dump(_fns["_reconcile_bgp"]),
+      "nos_ready assigns bgp readiness to convergence_wait; re-polling here "
+      "would wait for something already waited for")
+check("REQ-45C-2 the during-boot limit is stated in-file, not implied",
+      "DURING-BOOT RESTART IS UNMEASURED" in (_fns["_reconcile_bgp"].body[0].value.value
+                                              if isinstance(_fns["_reconcile_bgp"].body[0], ast.Expr)
+                                              else ""),
+      "PBE-P2-8: bgp arrives up to ~90s after CONFIG_DB and provision runs earlier")
+
 # --- Report -----------------------------------------------------------------
 _failed = [c for c in _checks if not c[1]]
 for _name, _ok2, _detail in _checks:

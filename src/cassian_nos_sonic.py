@@ -597,6 +597,76 @@ def nos_ready(rt: "Runtime", lab: str, node: str) -> None:
     )
 
 
+# REQ-45C-2 / BR-2 reconcile. Single-sourced argv (PBE-P2-6): the proof imports
+# THIS tuple rather than restating the command.
+_BGP_RECONCILE_ARGV = ("sudo", "systemctl", "restart", "bgp")
+
+
+def _reconcile_bgp(rt: "Runtime", lab: str, node: str) -> None:
+    """Make the applied overlay effective in the routing daemon.
+
+    WHY THIS EXISTS. `config load` writes ConfigDB and `bgpcfgd` reacts within
+    milliseconds -- measured 2026-08-25 -- but it REFUSES most of what Cassian
+    writes, and the three surfaces fail in three different ways:
+
+      BGP_NEIGHBOR, key already known
+        ERR "Can't update the peer. Only 'admin_status' attribute is supported"
+      DEVICE_METADATA.localhost.bgp_asn
+        accepted with NO error and NO effect -- FRR kept the stock ASN
+      router_id / set-src template
+        WARNING "Update command is not supported for set src templates"
+
+    The silent middle case is the dangerous one and it cannot be fixed by
+    writing differently: `DEVICE_METADATA.localhost` ALWAYS pre-exists, so its
+    write is ALWAYS an update. A restart rebuilds FRR from ConfigDB through the
+    ADD path, which is the path that works -- measured: ASN, router-id and the
+    declared peer all crossed into FRR after one.
+
+    BR-2 requires the outcome: *"provisioning applies declared addresses ... and
+    generated config converges a correctly-declared eBGP pair to Established."*
+    Without this step that rule is unsatisfied and nothing reports it
+    (BL-P2-4.5c-58).
+
+    NO READINESS WAIT HERE, deliberately. `nos_ready`'s coverage limit assigns
+    bgp readiness to the legs that need it -- *"Legs needing those conditions
+    poll for them themselves (REQ-45C-8/-29 precheck; convergence_wait)"* -- and
+    `convergence_wait` above polls on a bounded loop treating a not-yet-serving
+    read as NOT-YET rather than a verdict. Re-polling here would wait for
+    something already waited for, which is `nos_ready`'s own stated reason for
+    being single-shot. Founder ruling 2026-08-25.
+
+    COVERAGE LIMITS (PBE-P2-8), stated rather than implied:
+      1. DURING-BOOT RESTART IS UNMEASURED. `nos_ready` records that bgp arrives
+         up to ~90s after CONFIG_DB, and `provision` runs as soon as CONFIG_DB
+         serves -- so this may restart a container that is still STARTING. The
+         2026-08-25 measurement was taken on a settled guest, minutes after
+         `up`. A bgp that does not come back is caught by `convergence_wait`'s
+         bounded timeout with per-neighbour evidence, loudly; it is not caught
+         here.
+      2. A NON-ZERO rc IS NOT SWALLOWED, but a zero rc proves only that
+         systemctl accepted the request -- not that bgpcfgd rebuilt anything.
+         What proves that is the convergence read.
+      3. `bgpcfgd` logs `Runner::commit was unsuccessful` on every reconcile
+         against a stock guest, because the image ships a BGP_NEIGHBOR entry for
+         its own management address. Measured non-blocking: a write issued after
+         that failure was processed normally (BL-P2-4.5c-61).
+    """
+    cp = rt.exec(lab, node, list(_BGP_RECONCILE_ARGV), check=False,
+                 capture_output=True)
+    if getattr(cp, "returncode", 1) != 0:
+        _fail(
+            "SONiC routing daemon could not be reconciled",
+            node,
+            f"`{' '.join(_BGP_RECONCILE_ARGV)}` exited "
+            f"{getattr(cp, 'returncode', '?')}",
+            "the overlay was merged into ConfigDB but the routing daemon was "
+            "not rebuilt from it; `bgpcfgd` refuses updates to an existing peer "
+            "and silently ignores a changed local ASN, so the declared BGP "
+            "configuration would be absent from FRR while the run looked clean",
+            "report this with the guest's `systemctl status bgp` output",
+        )
+
+
 # REQ-45C-8/-29 convergence read. Single-sourced argv (PBE-P2-6): the proof
 # imports THIS tuple rather than restating the command.
 _BGP_SUMMARY_ARGV = ("vtysh", "-c", "show bgp summary json")
@@ -812,6 +882,11 @@ def provision(rt: "Runtime", lab: str, node: str, node_d: dict,
             "the node's declared addressing is therefore absent",
             "report this with the staged overlay and the command output",
         )
+
+    # REQ-45C-2 / BR-2: ConfigDB is written, but `bgpcfgd` refuses most of it on
+    # the update path. Rebuild FRR from ConfigDB so the declared configuration is
+    # actually in force (BL-P2-4.5c-58, founder ruling 2026-08-25).
+    _reconcile_bgp(rt, lab, node)
 
     return out
 
