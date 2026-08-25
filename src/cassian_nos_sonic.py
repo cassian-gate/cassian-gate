@@ -37,6 +37,7 @@ import json
 import re
 import shlex
 import sys
+import time
 from typing import TYPE_CHECKING, Any, Mapping
 
 from cassian_nos_types import (
@@ -596,6 +597,117 @@ def nos_ready(rt: "Runtime", lab: str, node: str) -> None:
     )
 
 
+# REQ-45C-8/-29 convergence read. Single-sourced argv (PBE-P2-6): the proof
+# imports THIS tuple rather than restating the command.
+_BGP_SUMMARY_ARGV = ("vtysh", "-c", "show bgp summary json")
+
+# FRR's inline leg polls at a 1s interval (`cassian_tests.py:620`). REQ-45C-29
+# binds SONiC to the SAME bounds, interval and timeout semantics.
+_CONVERGENCE_POLL_INTERVAL_S = 1
+
+
+def _peers_from_summary(raw: str) -> "dict[str, str]":
+    """Extract {peer_ip: state} from `show bgp summary json` output.
+
+    Returns {} for anything unparseable -- during convergence the bgp container
+    may not be serving yet, and an empty read is NOT-YET, never a verdict.
+
+    SHAPE COVERAGE LIMIT (PBE-P2-8): the `peers` mapping is read at the top
+    level OR one level down, because FRR nests it under an address-family key
+    (`ipv4Unicast`) in some builds. The shape recorded for this image is
+    `peers` keyed by peer IP with a `state` field (continuation rider rev 11 §2,
+    measured session 8). That measurement is INHERITED, not re-taken here.
+    """
+    try:
+        data = json.loads((raw or "").strip())
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    candidates = []
+    if isinstance(data.get("peers"), dict):
+        candidates.append(data["peers"])
+    for value in data.values():
+        if isinstance(value, dict) and isinstance(value.get("peers"), dict):
+            candidates.append(value["peers"])
+    out: "dict[str, str]" = {}
+    for peers in candidates:
+        for peer_ip, meta in peers.items():
+            if isinstance(meta, dict):
+                out.setdefault(str(peer_ip), str(meta.get("state", "")))
+    return out
+
+
+def convergence_wait(rt: "Runtime", lab: str, node: str, timeout: int,
+                     expected_peers: "tuple[str, ...]") -> None:
+    """Bounded wait until every DECLARED peer reads Established.
+
+    Scoped to `expected_peers` -- the declared set core supplies through the
+    widened contract (founder ruling 2026-08-25). Stock images ship BGP
+    neighbours Cassian never declared and never removes (BL-P2-4.5c-9); an
+    all-peers wait could never pass, which is why REQ-45C-8's positive leg
+    needs the declared set. REQ-45C-24's "UNDECLARED-neighbor asymmetry"
+    presupposes exactly this scoping.
+
+    POSITIVE TEST, deliberately: a peer counts only when its state reads
+    `Established`. Non-established states are NEVER enumerated -- the same
+    guest was measured reading `Active` in the text table and `Connect` in
+    JSON minutes apart, because the FSM oscillates while nothing answers
+    (continuation rider rev 11 §2).
+
+    REQ-45C-29: bounds, interval and timeout semantics match the FRR leg; a
+    timeout is a deterministic §13-grade FAIL naming EVERY non-established
+    declared peer with the state it last read -- never a hang, never silence
+    (Doctrine §1.11).
+
+    COVERAGE LIMIT (PBE-P2-8): this asserts the DECLARED peers reach
+    Established. It asserts nothing about the stock peers, which remain in the
+    device's own tables; how declared state relates to stock state is routed
+    to §4.5-d (BL-P2-4.5c-9).
+    """
+    declared = tuple(str(p).strip() for p in (expected_peers or ()) if str(p).strip())
+    if not declared:
+        _fail(
+            "SONiC convergence wait received no declared peers",
+            node,
+            "the expected-peer set supplied by core is empty",
+            "a bounded wait with no target would return success without "
+            "observing anything, which Doctrine 1.11 forbids",
+            "declare `bgp.neighbors` on this node, or remove it from the "
+            "control-plane precheck",
+        )
+
+    deadline = time.time() + max(int(timeout), 0)
+    observed: "dict[str, str]" = {}
+    while True:
+        # STDOUT ONLY (F-45C-C3-20): the guest's SSH banner lands on stderr and
+        # merging it breaks every parse. `check=False` deliberately -- a
+        # non-zero rc while the bgp container is still starting is NOT-YET, not
+        # a fault, and must not short-circuit the bounded wait.
+        cp = rt.exec(lab, node, list(_BGP_SUMMARY_ARGV), check=False,
+                     capture_output=True)
+        observed = _peers_from_summary(cp.stdout or "")
+        if all(observed.get(p, "") == "Established" for p in declared):
+            return
+        if time.time() >= deadline:
+            break
+        time.sleep(_CONVERGENCE_POLL_INTERVAL_S)
+
+    detail = "; ".join(
+        "%s:%s" % (p, observed.get(p) or "not-present")
+        for p in declared
+        if observed.get(p, "") != "Established"
+    )
+    _fail(
+        "SONiC BGP did not converge",
+        node,
+        f"declared peers not Established within {int(timeout)}s",
+        f"per-neighbour state at timeout: {detail}",
+        "check the peer's declaration and reachability, or raise the "
+        "convergence timeout for this lab",
+    )
+
+
 def probe_facts(rt: "Runtime", lab: str, node: str) -> "dict[str, Any]":
     """Observe the device facts generation needs (R-C3-13).
 
@@ -718,7 +830,7 @@ SONIC_PROVIDER = NosProvider(
     # before closure by the convergence leg. Provider-scoped, per the HALT-1
     # note above.
     nos_ready=nos_ready,
-    convergence_wait=deferred_leg("convergence_wait", "§4.5-c convergence leg"),
+    convergence_wait=convergence_wait,
     # -- validation seam: SONiC collection lands at §4.5-d/-e --
     collect=deferred_leg("collect", "§4.5-d/-e"),
     # -- change workflow: §4.5-f (BL-P2-4.5b-2 shape) --

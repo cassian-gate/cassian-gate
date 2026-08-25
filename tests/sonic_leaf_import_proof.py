@@ -73,10 +73,27 @@ _violations = sorted(_rt & FORBIDDEN)
 check("P-SIMP-1 no runtime import of core/engine/model/runtime from the provider",
       not _violations, "violations: %s" % (_violations or "none"))
 
+# `time` added §4.5-c WI-3 packet 3, FOUNDER RULING 2026-08-25. REQ-45C-29
+# binds `convergence_wait` to an FRR-identical bounded poll, which needs a
+# clock; `cassian_common` homes none and the runtime layer is forbidden by
+# P-SIMP-1. `time` is STDLIB, so it is already admitted by this check's own
+# label and by the ratified leaf-import constraint
+# (nos-expansion-structure-design-RATIFIED.md:112). The enumerated set is a
+# DRIFT WITNESS, narrower than the contract it witnesses -- extending it to a
+# design-admissible stdlib module widens no contract. P-SIMP-1's
+# core/engine/model/runtime prohibition is untouched.
 check("P-SIMP-2 import floor is stdlib + the types leaf",
-      _rt <= {"__future__", "ast", "json", "re", "shlex", "sys", "typing",
-              "cassian_nos_types", "cassian_common"},
+      _rt <= {"__future__", "ast", "json", "re", "shlex", "sys", "time",
+              "typing", "cassian_nos_types", "cassian_common"},
       "runtime imports: %s" % sorted(_rt))
+
+# NON-VACUITY for the extension: the set must still EXCLUDE something the
+# provider could plausibly reach for. A witness that admits everything is not
+# a witness.
+check("P-SIMP-2 NON-VACUITY: the floor still excludes non-admitted modules",
+      not ({"subprocess", "os", "pathlib", "yaml"} <= _rt)
+      and "cassian_runtime_vm" not in _rt,
+      "proves the extension is bounded, not a blanket widening")
 
 # NON-VACUITY: the detector must be able to see a forbidden import.
 _synthetic = _rt | {"cassian_engine"}
