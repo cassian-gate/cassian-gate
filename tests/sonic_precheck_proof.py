@@ -303,6 +303,108 @@ check("REQ-45C-2 the during-boot limit is stated in-file, not implied",
                                               else ""),
       "PBE-P2-8: bgp arrives up to ~90s after CONFIG_DB and provision runs earlier")
 
+# --- REQ-45C-24: undeclared-neighbor asymmetry, named never silent ----------
+# CORE-side, founder ruling 2026-08-25: the asymmetry is a TOPOLOGY property and
+# the provider seam carries only `expected_peer_ips`, a tuple of IP strings with
+# no notion of the far node's declaration (cassian_nos_types.py:215). The three
+# closures are AST-extracted from the shipped engine and bound, the pattern the
+# four-quadrant proofs use, so this proves the SHIPPED code and not a copy.
+_eng_src = io.open(os.path.join(_ROOT, "src", "cassian_engine.py"),
+                   encoding="utf-8").read()
+_eng_tree = ast.parse(_eng_src)
+_want24 = {"_declared_neighbor_names", "_declaration_asymmetries", "_is_bgp_peer"}
+_f24 = {n.name: n for n in ast.walk(_eng_tree)
+        if isinstance(n, ast.FunctionDef) and n.name in _want24}
+
+check("REQ-45C-24 the asymmetry detector exists in the engine",
+      set(_f24) == _want24, "found: %s" % sorted(_f24))
+
+if set(_f24) == _want24:
+    _ns = {"NOS_PROVIDERS": {"frr": object(), "sonic-vm": object()}}
+    for _n in ("_is_bgp_peer", "_declared_neighbor_names"):
+        exec(compile(ast.Module(body=[_f24[_n]], type_ignores=[]), "<engine>", "exec"), _ns)
+    _decl = _ns["_declared_neighbor_names"]
+
+    check("REQ-45C-24 declared names are read from bgp.neighbors[].peer",
+          _decl({"bgp": {"neighbors": [{"peer": "s2"}, {"peer": "s3"}]}}) == {"s2", "s3"},
+          "cassian_model.py:1697 binds peer_name from nbr['peer']")
+    check("REQ-45C-24 a node declaring nothing yields the empty set",
+          _decl({"name": "s2", "asn": 65002}) == set()
+          and _decl({"bgp": {}}) == set() and _decl(None) == set())
+
+    # Bind the detector against the SHIPPED fixture, with the engine's own
+    # closure variables supplied exactly as cmd_test builds them.
+    def _asym(topo):
+        nodes = topo["nodes"]
+        ns = dict(_ns)
+        ns["nodes_by_name"] = {n["name"]: n for n in nodes}
+        ns["bgp_speakers"] = [n for n in nodes
+                              if str(n.get("type") or "") in ns["NOS_PROVIDERS"]
+                              and "asn" in n]
+        lbn = {}
+        for l in topo.get("links") or []:
+            eps, ips = l["endpoints"], l["ipv4"]
+            (n1, i1), (n2, i2) = [(e.split(":", 1)[0], p.split("/")[0])
+                                  for e, p in zip(eps, ips)]
+            lbn.setdefault(n1, []).append({"peer": n2, "peer_ip": i2})
+            lbn.setdefault(n2, []).append({"peer": n1, "peer_ip": i1})
+        ns["links_by_node"] = lbn
+        ns["_is_bgp_peer"] = _ns["_is_bgp_peer"]
+        ns["_declared_neighbor_names"] = _decl
+        exec(compile(ast.Module(body=[_f24["_declaration_asymmetries"]], type_ignores=[]),
+                     "<engine>", "exec"), ns)
+        return ns["_declaration_asymmetries"]()
+
+    _fx = os.path.join(_ROOT, "topologies", "sonic-bgp-asymmetric.yaml")
+    check("REQ-45C-24 the negative fixture is present", os.path.isfile(_fx))
+
+    _ASYM = {"nodes": [
+        {"name": "s1", "type": "sonic-vm", "asn": 65001,
+         "bgp": {"neighbors": [{"peer": "s2", "remote_as": 65002}]}},
+        {"name": "s2", "type": "sonic-vm", "asn": 65002}],
+        "links": [{"endpoints": ["s1:eth1", "s2:eth1"],
+                   "ipv4": ["198.51.100.4/31", "198.51.100.5/31"]}]}
+    check("REQ-45C-24 a one-sided declaration IS named, with both parties",
+          _asym(_ASYM) == [("s1", "s2")],
+          "got %s -- §19.1's evidence shape: 'A declares B; B declares no "
+          "matching neighbor'" % (_asym(_ASYM),))
+
+    _SYM = {"nodes": [
+        {"name": "s1", "type": "sonic-vm", "asn": 65001,
+         "bgp": {"neighbors": [{"peer": "s2", "remote_as": 65002}]}},
+        {"name": "s2", "type": "sonic-vm", "asn": 65002,
+         "bgp": {"neighbors": [{"peer": "s1", "remote_as": 65001}]}}],
+        "links": [{"endpoints": ["s1:eth1", "s2:eth1"],
+                   "ipv4": ["198.51.100.0/31", "198.51.100.1/31"]}]}
+    check("REQ-45C-24 NON-VACUITY: a SYMMETRIC pair is NOT named",
+          _asym(_SYM) == [],
+          "a detector that fires on everything names nothing")
+
+    _NEITHER = {"nodes": [
+        {"name": "s1", "type": "sonic-vm", "asn": 65001},
+        {"name": "s2", "type": "sonic-vm", "asn": 65002}],
+        "links": _SYM["links"]}
+    check("REQ-45C-24 neither-declares is NOT an asymmetry (stated limit)",
+          _asym(_NEITHER) == [],
+          "REQ-45C-24's case is 'one side declares... the other does not'")
+
+    _REV = {"nodes": [_ASYM["nodes"][1], _ASYM["nodes"][0]], "links": _ASYM["links"]}
+    check("REQ-45C-24 the pair is DIRECTIONAL and node-order independent",
+          _asym(_REV) == [("s1", "s2")],
+          "the declarer is named first regardless of iteration order")
+
+    check("REQ-45C-24 a non-speaker peer is not named",
+          _asym({"nodes": [_ASYM["nodes"][0], {"name": "s2", "type": "host"}],
+                 "links": _ASYM["links"]}) == [],
+          "_is_bgp_peer gates it -- an unlinked or non-speaking peer is a "
+          "different defect class")
+
+# The corrected docstring, pinned so the defect cannot silently return.
+check("REQ-45C-24 _expected_peer_ips no longer claims to return DECLARED peers",
+      "Peer IPs of the LINKED BGP speakers" in _eng_src
+      and '"""Declared peer IPs for `node_name`, deterministic order.' not in _eng_src,
+      "corrected in packet 4a; the linked/declared divergence IS REQ-45C-24")
+
 # --- Report -----------------------------------------------------------------
 _failed = [c for c in _checks if not c[1]]
 for _name, _ok2, _detail in _checks:

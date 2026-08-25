@@ -10228,7 +10228,16 @@ def cmd_test(args: argparse.Namespace) -> None:
         return out
 
     def _expected_peer_ips(node_name: str) -> "tuple[str, ...]":
-        """Declared peer IPs for `node_name`, deterministic order.
+        """Peer IPs of the LINKED BGP speakers for `node_name`, sorted.
+
+        CORRECTED (§4.5-c WI-3 packet 4a). This was documented as "declared
+        peer IPs" at `d00de88`; it is not. `expected_bgp_peers` iterates
+        `links_by_node` and admits any far end passing `_is_bgp_peer` -- it
+        never consults this node's own `bgp.neighbors`. On a symmetric topology
+        linked and declared coincide; on an ASYMMETRIC one they diverge, and
+        that divergence is exactly REQ-45C-24's subject. Behaviour unchanged:
+        a precheck reasonably waits on every linked speaker. Only the
+        description was wrong.
 
         The channel the widened `convergence_wait` contract carries (founder
         ruling 2026-08-25). Opaque to the provider contract: peer-IP strings
@@ -10239,6 +10248,85 @@ def cmd_test(args: argparse.Namespace) -> None:
             for l in expected_bgp_peers(node_name)
             if str(l.get("peer_ip") or "").strip()
         ))
+
+    def _declared_neighbor_names(node: object) -> "set[str]":
+        """Peer NODE NAMES this node declares under `bgp.neighbors`.
+
+        The declaration names its peer by node name -- `cassian_model.py:1697`
+        binds `peer_name` from `nbr["peer"]` and matches it against
+        `build_node_links`' `l["peer"]`. This is the DECLARED set, as against
+        `expected_bgp_peers`' LINKED set.
+        """
+        if not isinstance(node, dict):
+            return set()
+        bgp = node.get("bgp")
+        if not isinstance(bgp, dict):
+            return set()
+        nbrs = bgp.get("neighbors")
+        if not isinstance(nbrs, list):
+            return set()
+        out: "set[str]" = set()
+        for nbr in nbrs:
+            if isinstance(nbr, dict):
+                name = str(nbr.get("peer") or "").strip()
+                if name:
+                    out.add(name)
+        return out
+
+    def _declaration_asymmetries() -> "list[tuple[str, str]]":
+        """(declarer, silent_peer) for every one-sided BGP declaration.
+
+        REQ-45C-24: "Undeclared-neighbor asymmetry (one side declares a
+        neighbor the other does not) surfaces in precheck output as named
+        evidence -- never silence." Doctrine §1.11.
+
+        A TOPOLOGY property, computed at precheck ENTRY from the resolved
+        topology -- no device, no polling, no NOS. Core owns it because core is
+        the only place holding BOTH sides: the provider seam carries
+        `expected_peer_ips`, a tuple of IP strings with no notion of the far
+        node's declaration (`cassian_nos_types.py:215`). Founder ruling
+        2026-08-25.
+
+        Emitted at ENTRY rather than on the timeout path deliberately: an
+        asymmetric pair never converges, so a timeout message would arrive
+        after the full precheck bound and only if the poll is reached at all.
+        Naming it up front is the reading of §19.1 that does not depend on
+        failing first.
+
+        COVERAGE LIMIT (PBE-P2-8): this names a one-sided declaration between
+        two LINKED BGP speakers. It does NOT name a neighbour declared against
+        a node with no link (the FRR leg already drops those -- no `link_match`
+        at `cassian_model.py:1705`), nor a pair where NEITHER side declares.
+        Neither is REQ-45C-24's stated case.
+        """
+        seen: "set[tuple[str, str]]" = set()
+        out: "list[tuple[str, str]]" = []
+        for n in bgp_speakers:
+            a = str(n.get("name") or "")
+            a_decl = _declared_neighbor_names(n)
+            for l in links_by_node.get(a, []) or []:
+                b = str(l.get("peer") or "")
+                peer = nodes_by_name.get(b)
+                if not b or not _is_bgp_peer(peer):
+                    continue
+                b_decl = _declared_neighbor_names(peer)
+                if (a in b_decl) == (b in a_decl):
+                    continue
+                pair = (a, b) if b in a_decl else (b, a)
+                if pair not in seen:
+                    seen.add(pair)
+                    out.append(pair)
+        return sorted(out)
+
+    _asymmetries = _declaration_asymmetries()
+    if _asymmetries:
+        # REQ-45C-24: named evidence, never silence (Doctrine §1.11).
+        print("Precheck: undeclared-neighbor asymmetry (REQ-45C-24)")
+        for _a, _b in _asymmetries:
+            print(f"  {_a} declares {_b}; {_b} declares no matching neighbor")
+    results["summary"]["precheck_declaration_asymmetries"] = [
+        {"declares": a, "silent": b} for a, b in _asymmetries
+    ]
 
     bgp_participants: list[dict] = []
     for n in bgp_speakers:

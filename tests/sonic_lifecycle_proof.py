@@ -90,6 +90,14 @@ SECTION_45C_FIXTURES = (
     # to establish. It is committed because git is the transport to ai-netsim
     # (founder ruling 2026-08-25, superseding the no-Touch-Matrix clause).
     "probe-sonic-bgp-pair.yaml",
+    # §4.5-c WI-3 packet 4a — REQ-45C-24 negative fixture. One-sided BGP
+    # declaration; both nodes are speakers and linked, so both enter the
+    # participant set. CANNOT converge, by design. Registered in the SAME
+    # commit that adds it so CI never sees an unregistered SONiC fixture
+    # (F-45C-C3-3), which also puts its four addresses under LEG 1's HALT-2
+    # sweep — confirmed outside 10.0.0.0/26 and 10.1.0.0/24 before delivery,
+    # with a non-vacuity control on the detector.
+    "sonic-bgp-asymmetric.yaml",
 )
 
 # SONiC fixtures inherited from 4.5-a. REQ-45C-5 states these collide with
