@@ -5,16 +5,34 @@ Req-IDs: REQ-45C-20 (byte-deterministic generation via write_json_canonical)
          REQ-45C-44(a) (overlay authors no platform-owned data)
          REQ-45C-5  (eth<N> -> platform port mapping; HALT-2 address discipline)
          REQ-45C-1  (routing-neutral baseline: hostname, interfaces, loopback)
+         REQ-45C-2  (PARTIAL -- core only: declared `asn` and `bgp.neighbors`;
+                     see coverage limit 2)
+         REQ-45C-23 (no new topology keys: the declaration surface read here is
+                     identical to the FRR leg's)
+
+The §6.7.2 assignment for this file is [2, 3, 20, 21, 25]; the declared set
+above is [1, 2, 5, 20, 23, 44a]. The divergence is recorded at BL-P2-4.5c-51
+and is NOT closed here -- REQ-45C-3 and REQ-45C-21/-25 have no assertions in
+this file.
 
 Host-independent. No lab, no containerlab, no Docker.
 
-Coverage limit (PBE-P2-8), stated rather than implied:
-  This proof exercises OFFLINE generation only. It cannot verify that vrnetlab
-  attaches container `eth<N>` to the N-th platform port -- that positional
-  contract is settled by the REQ-45C-5 provisioning proof (declare a non-stock
-  address, provision, read it back from the expected port), which is VM-bound.
-  What is proven here: given the mapping, generation is deterministic, correctly
-  ordered, platform-clean, and rejects what it should reject.
+Coverage limits (PBE-P2-8), stated rather than implied:
+  1. This proof exercises OFFLINE generation only. It cannot verify that
+     vrnetlab attaches container `eth<N>` to the N-th platform port -- that
+     positional contract is settled by the REQ-45C-5 provisioning proof
+     (declare a non-stock address, provision, read it back from the expected
+     port), which is VM-bound. What is proven here: given the mapping,
+     generation is deterministic, correctly ordered, platform-clean, and
+     rejects what it should reject.
+  2. REQ-45C-2 is covered here only for `asn` and `bgp.neighbors`. Its
+     `router_id` and `networks` clauses and REQ-45C-3 are NOT asserted:
+     `networks` and route-maps have no measured rendering target on
+     sonic-vm:202405, and the `router_id` clause's disposition is
+     founder-reserved. REQ-45C-2 does not discharge on this file alone.
+  3. Rendering is proven; ACCEPTANCE by the guest is not. That a SONiC device
+     ingests BGP_NEIGHBOR as written and reaches Established is REQ-45C-22,
+     which is VM-bound and travels with WI-3.
 """
 import io
 import json
@@ -222,6 +240,95 @@ except SystemExit as _e:
     _caught_set = (_e.code == 2)
 check("REQ-45C-5 NON-VACUITY: a different guest port set is caught, exit 2",
       _caught_set)
+
+# --- REQ-45C-2 core: declared asn + bgp.neighbors render --------------------
+# A SECOND fixture. TOPO/NODE above declare no BGP and must stay routing-neutral
+# -- that is the discriminator for the REQ-45C-1 case above, so it is not edited.
+# Addresses stay in TEST-NET-1, outside the stock canned ranges (HALT-2).
+BGP_TOPO = {
+    "name": "sonic-bgp-gen-proof",
+    "nodes": [{
+        "name": "s1",
+        "type": "sonic-vm",
+        "router_id": "192.0.2.11",
+        "asn": 65001,
+        "bgp": {"neighbors": [
+            {"peer": "r2", "remote_as": 65003},
+            {"peer": "r1", "remote_as": 65002},
+            {"peer": "ghost", "remote_as": 65999},
+        ]},
+        "networks": ["192.0.2.128/25"],
+    }],
+    "links": [
+        {"endpoints": ["s1:eth1", "r1:eth1"], "ipv4": ["192.0.2.0/31", "192.0.2.1/31"]},
+        {"endpoints": ["s1:eth2", "r2:eth1"], "ipv4": ["192.0.2.4/31", "192.0.2.5/31"]},
+    ],
+}
+BGP_NODE = BGP_TOPO["nodes"][0]
+bov = S.gen_node_config(BGP_NODE, BGP_TOPO, FACTS)["config_db.json"]
+_bl = bov.get("DEVICE_METADATA", {}).get("localhost", {})
+_bn = bov.get("BGP_NEIGHBOR", {})
+
+check("REQ-45C-2 declared asn renders to DEVICE_METADATA.localhost.bgp_asn",
+      _bl.get("bgp_asn") == "65001",
+      "measured target on sonic-vm:202405 build fecd4ec81; BGP_GLOBALS absent")
+check("REQ-45C-2 bgp_asn is a STRING, matching the measured table shape",
+      isinstance(_bl.get("bgp_asn"), str))
+check("REQ-45C-2 BGP_NEIGHBOR is keyed by PEER IP, mask stripped",
+      sorted(_bn) == ["192.0.2.1", "192.0.2.5"], "keys: %s" % sorted(_bn))
+check("REQ-45C-2 r1 neighbour carries remote_as, local_addr and peer name",
+      _bn.get("192.0.2.1") == {"asn": "65002", "local_addr": "192.0.2.0", "name": "r1"})
+check("REQ-45C-2 r2 neighbour resolves through its OWN link, not the first",
+      _bn.get("192.0.2.5") == {"asn": "65003", "local_addr": "192.0.2.4", "name": "r2"},
+      "declaration order r2-then-r1 is deliberately not link order")
+check("REQ-45C-2 every BGP_NEIGHBOR value is a string",
+      all(isinstance(v, str) for e in _bn.values() for v in e.values()))
+check("REQ-45C-2 NON-VACUITY: a neighbour with no matching link is not rendered",
+      not any(e.get("name") == "ghost" for e in _bn.values()),
+      "mirrors the FRR leg, which skips a neighbour with no link_match")
+check("REQ-45C-2 NON-VACUITY: the routing-neutral fixture stays BGP-free",
+      "BGP_NEIGHBOR" not in overlay
+      and "bgp_asn" not in overlay.get("DEVICE_METADATA", {}).get("localhost", {}),
+      "proves rendering is declaration-driven, not unconditional")
+check("REQ-45C-2 UNCOVERED: declared `networks` is not rendered anywhere",
+      not any("192.0.2.128" in json.dumps(v) for v in bov.values()),
+      "no measured target on this image; carved to a founder-reserved question")
+check("REQ-45C-44a BGP rendering authors no platform-owned key",
+      "PORT" not in bov and not any(k in _bl for k in ("hwsku", "platform", "mac")))
+check("REQ-45C-1 baseline survives BGP rendering (hostname, loopback, ifaces)",
+      _bl.get("hostname") == "s1"
+      and "Loopback0|192.0.2.11/32" in bov.get("LOOPBACK_INTERFACE", {})
+      and "Ethernet0|192.0.2.0/31" in bov.get("INTERFACE", {}))
+check("REQ-45C-20 BGP generation is byte-deterministic across two calls",
+      json.dumps(S.gen_node_config(BGP_NODE, BGP_TOPO, FACTS)["config_db.json"],
+                 sort_keys=True)
+      == json.dumps(bov, sort_keys=True))
+
+_bad_asn = False
+try:
+    S.gen_node_config(
+        {"name": "s1", "type": "sonic-vm", "asn": "six-five-thousand"},
+        {"links": []}, FACTS)
+except SystemExit as _e:
+    _bad_asn = (_e.code == 2)
+check("REQ-45C-2 NON-VACUITY: a non-integer asn fails loud, exit 2",
+      _bad_asn, "never rendered as a silent empty string")
+
+# REQ-45C-23: the SONiC leg reads only keys the FRR declaration surface has.
+# Behavioural, not declarative: seed keys FRR does not define and assert the
+# generated overlay is byte-unchanged. A leg that read a SONiC-only key would
+# diverge here. Limit: this discriminates against the seeded names, not against
+# every possible one.
+_probe_topo = json.loads(json.dumps(BGP_TOPO))
+_probe_node = _probe_topo["nodes"][0]
+_probe_node["sonic_only_key"] = "x"
+_probe_node["bgp"]["sonic_bgp_key"] = "x"
+_probe_node["bgp"]["neighbors"][0]["sonic_nbr_key"] = "x"
+check("REQ-45C-23 NON-VACUITY: undeclared keys leave the overlay byte-unchanged",
+      json.dumps(S.gen_node_config(_probe_node, _probe_topo, FACTS)["config_db.json"],
+                 sort_keys=True) == json.dumps(bov, sort_keys=True),
+      "cassian_model.py binds asn :1613, router_id :1562, bgp.neighbors :1614, "
+      "networks :1730 -- the SONiC leg reads that set and no more")
 
 # --- Report -----------------------------------------------------------------
 _failed = [c for c in _checks if not c[1]]

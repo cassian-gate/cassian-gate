@@ -266,6 +266,40 @@ def _links_for_node(node_name: str, topo: dict) -> list[tuple[str, str]]:
     return out
 
 
+def _bgp_link_ips_for_node(node_name: str, topo: dict) -> dict[str, tuple[str, str]]:
+    """Return {peer_node_name: (local_ip, peer_ip)} for this node's links.
+
+    Deliberately re-derived from `topo["links"]` rather than importing the
+    model's `build_node_links` -- provider -> model is forbidden (design §3.2)
+    and `cassian_common` is outside §14.4's approved paths. Founder ruling
+    2026-08-24. Semantics match that helper: the address with its prefix length
+    stripped, and the FIRST declaration winning, which is the FRR leg's
+    break-on-first-match over `node_links`. Cross-NOS parity is proven, not
+    co-located (BL-P2-4.5c-54).
+    """
+    out: dict[str, tuple[str, str]] = {}
+    for link in topo.get("links") or []:
+        if not isinstance(link, dict):
+            continue
+        eps = link.get("endpoints") or []
+        ips = link.get("ipv4") or []
+        if len(eps) != 2 or len(ips) != 2:
+            continue
+        ends: list[tuple[str, str]] = []
+        for ep, ip in zip(eps, ips):
+            if not isinstance(ep, str) or ":" not in ep:
+                break
+            ends.append((ep.split(":", 1)[0], str(ip).split("/")[0]))
+        if len(ends) != 2:
+            continue
+        (n1, ip1), (n2, ip2) = ends
+        if n1 == node_name:
+            out.setdefault(n2, (ip1, ip2))
+        if n2 == node_name:
+            out.setdefault(n1, (ip2, ip1))
+    return out
+
+
 def gen_node_config(
     node: dict, topo: dict, facts: "Mapping[str, Any] | None" = None
 ) -> "dict[str, Any] | None":
@@ -275,8 +309,12 @@ def gen_node_config(
     WRITES NOTHING: core serializes through `write_json_canonical`
     (REQ-45C-20/-42; design §:254).
 
-    Routing-neutral baseline only at this leg (REQ-45C-1): hostname,
-    interfaces, loopback. BGP rendering lands at REQ-45C-2/-3.
+    Routing-neutral baseline (REQ-45C-1): hostname, interfaces, loopback --
+    rendered for every node, and the ONLY tables a node that declares no BGP
+    receives. REQ-45C-2 core adds DEVICE_METADATA.localhost.bgp_asn and
+    BGP_NEIGHBOR when the node declares `asn` / `bgp.neighbors`. REQ-45C-2's
+    `networks` clause and REQ-45C-3 do NOT land here -- neither has a measured
+    rendering target on sonic-vm:202405.
 
     Overlay discipline (REQ-45C-44a): carries ONLY Cassian-declared tables and
     NEVER authors `PORT`, `hwsku`, `platform` or `mac` -- those originate in the
@@ -325,6 +363,56 @@ def gen_node_config(
             "Loopback0": {},
             f"Loopback0|{rid}/32": {},
         }
+
+    # REQ-45C-2 core: declared `asn` and `bgp.neighbors` render here. The
+    # targets are MEASURED on sonic-vm:202405 build fecd4ec81 -- `BGP_GLOBALS`
+    # does not exist on this image; the ASN lives in
+    # DEVICE_METADATA.localhost.bgp_asn and neighbours in BGP_NEIGHBOR keyed by
+    # peer IP with string values. `networks` and `route_maps` are NOT rendered
+    # here: neither has a measured target on this image, and both are carved to
+    # a founder-reserved question (route-maps: BL-P2-4.5c-55).
+    asn_raw = node.get("asn")
+    if asn_raw is not None:
+        try:
+            asn_text = str(int(asn_raw))
+        except (TypeError, ValueError):
+            asn_text = ""
+        if not asn_text:
+            _fail(
+                "SONiC BGP generation requires an integer ASN",
+                name,
+                f"declared 'asn' is not an integer: {asn_raw!r}",
+                "DEVICE_METADATA.localhost.bgp_asn is a string field on this "
+                "image, but its value must be a decimal AS number",
+                "set an integer 'asn' on this node, or remove the key",
+            )
+        overlay["DEVICE_METADATA"]["localhost"]["bgp_asn"] = asn_text
+
+    bgp = node.get("bgp") if isinstance(node.get("bgp"), dict) else {}
+    declared = bgp.get("neighbors") if isinstance(bgp.get("neighbors"), list) else []
+    link_ips = _bgp_link_ips_for_node(name, topo)
+    peers: dict[str, dict] = {}
+    for nbr in declared:
+        if not isinstance(nbr, dict):
+            continue
+        peer_name = str(nbr.get("peer") or "").strip()
+        if not peer_name or peer_name not in link_ips:
+            continue
+        try:
+            remote_as = str(int(nbr.get("remote_as")))
+        except (TypeError, ValueError):
+            continue
+        local_ip, peer_ip = link_ips[peer_name]
+        # Only declaration-derived fields are authored. The image's own
+        # holdtime/keepalive/nhopself/rrclient defaults are left to the image
+        # -- the declaration surface carries no such keys (REQ-45C-23).
+        peers[peer_ip] = {
+            "asn": remote_as,
+            "local_addr": local_ip,
+            "name": peer_name,
+        }
+    if peers:
+        overlay["BGP_NEIGHBOR"] = peers
 
     _assert_overlay_platform_clean(overlay, name)
     return {"config_db.json": overlay}
