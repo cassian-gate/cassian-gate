@@ -75,6 +75,21 @@ SECTION_45C_FIXTURES = (
     # address sweep.
     "sonic-mixed-host.yaml",
     "sonic-mixed-linux.yaml",
+    # §4.5-c WI-3 convergence probe (founder ruling 2026-08-25). A two-node
+    # sonic-vm eBGP pair -- the shape §15.2's REQ-45C-22 row requires and the
+    # first SONiC fixture in the tree to declare `asn` / `bgp.neighbors`.
+    # Registered in the SAME commit that adds it, so CI never sees an
+    # unregistered SONiC fixture (F-45C-C3-3): the guard below is an explicit
+    # list, not a glob, and an unregistered fixture FAILS rather than passing
+    # unseen. Registration also puts its six declared addresses under LEG 1's
+    # HALT-2 sweep -- confirmed outside 10.0.0.0/26 and 10.1.0.0/24 before
+    # delivery, with a non-vacuity control on the detector.
+    #
+    # PROBE ARTIFACT, disposition OPEN: whether this becomes packet 4's
+    # permanent fixture depends on the probe's result, which is what it exists
+    # to establish. It is committed because git is the transport to ai-netsim
+    # (founder ruling 2026-08-25, superseding the no-Touch-Matrix clause).
+    "probe-sonic-bgp-pair.yaml",
 )
 
 # SONiC fixtures inherited from 4.5-a. REQ-45C-5 states these collide with
