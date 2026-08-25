@@ -10183,7 +10183,39 @@ def cmd_test(args: argparse.Namespace) -> None:
     # =============================================================================
     # 3) Optional control-plane checks (FRR/BGP)
     # =============================================================================
-    frr_nodes = [n for n in nodes if n.get("type") == "frr"]
+    # §4.5-c WI-3 (REQ-45C-8). BGP participation is a property of the
+    # DECLARATION -- a node with a registered NOS provider that declares `asn`
+    # -- not of the node being FRR. Both predicates below read `frr` only
+    # incidentally: Cassian authored FRR's config, so "FRR node" and "Cassian-
+    # managed BGP speaker" happened to coincide. `sonic-vm` is where that stops.
+    # NG-9 is preserved by the DISPATCH below, not by these predicates: FRR
+    # still takes the inline `wait_for_bgp` and its provider placeholder stays
+    # a placeholder.
+    #
+    # ZERO BEHAVIOURAL DELTA FOR FRR, deliberately asymmetric:
+    #   node side -- `frr` short-circuits True, reproducing the previous
+    #     `[n for n in nodes if n.get("type") == "frr"]` exactly. The prior code
+    #     applied no node-level `asn` test, and adding one would change which
+    #     FRR nodes are participants.
+    #   peer side -- `"frr" in NOS_PROVIDERS` holds, so the previous
+    #     `peer.get("type") == "frr" and "asn" in peer` is a strict subset of
+    #     the new test. An all-FRR topology selects the identical peer set.
+    def _is_bgp_node(n: object) -> bool:
+        if not isinstance(n, dict):
+            return False
+        ntype = str(n.get("type") or "")
+        if ntype == "frr":
+            return True
+        return ntype in NOS_PROVIDERS and "asn" in n
+
+    def _is_bgp_peer(p: object) -> bool:
+        return bool(
+            isinstance(p, dict)
+            and str(p.get("type") or "") in NOS_PROVIDERS
+            and "asn" in p
+        )
+
+    bgp_speakers = [n for n in nodes if _is_bgp_node(n)]
     links_by_node = build_node_links(topo)
 
     def expected_bgp_peers(node_name: str) -> list[dict]:
@@ -10191,12 +10223,25 @@ def cmd_test(args: argparse.Namespace) -> None:
         for l in links_by_node.get(node_name, []) or []:
             peer_name = l.get("peer")
             peer = nodes_by_name.get(peer_name)
-            if peer and peer.get("type") == "frr" and "asn" in peer:
+            if peer and _is_bgp_peer(peer):
                 out.append(l)
         return out
 
+    def _expected_peer_ips(node_name: str) -> "tuple[str, ...]":
+        """Declared peer IPs for `node_name`, deterministic order.
+
+        The channel the widened `convergence_wait` contract carries (founder
+        ruling 2026-08-25). Opaque to the provider contract: peer-IP strings
+        only, no NOS vocabulary.
+        """
+        return tuple(sorted(
+            str(l.get("peer_ip") or "").strip()
+            for l in expected_bgp_peers(node_name)
+            if str(l.get("peer_ip") or "").strip()
+        ))
+
     bgp_participants: list[dict] = []
-    for n in frr_nodes:
+    for n in bgp_speakers:
         if expected_bgp_peers(n["name"]):
             bgp_participants.append(n)
 
@@ -10213,7 +10258,23 @@ def cmd_test(args: argparse.Namespace) -> None:
             precheck_timeout = 60 if (require_evpn_bgp and is_replay_lab) else 30
             post_precheck_sleep = 15 if (require_evpn_bgp and is_replay_lab) else (10 if require_evpn_bgp else 5)
             for n in bgp_participants:
-                wait_for_bgp(rt, lab, n["name"], timeout=precheck_timeout, require_evpn=require_evpn_bgp)
+                # §4.5-c WI-3 (REQ-45C-8): precheck dispatched through the
+                # provider seam. NG-9: FRR keeps the inline wait and its
+                # `convergence_wait` placeholder stays a placeholder -- the
+                # bounds, interval and timeout it is given are unchanged
+                # (REQ-45C-29). A non-FRR participant takes its provider leg;
+                # if that leg is still `deferred_leg`, the placeholder fails
+                # LOUD and §13-grade (cassian_nos_types.py:250) rather than
+                # being handed FRR's vtysh path, which would reach the vrnetlab
+                # launcher on a vm-runtime node, not the NOS.
+                _ntype = str(n.get("type") or "")
+                _prov = NOS_PROVIDERS.get(_ntype)
+                if _ntype == "frr" or _prov is None:
+                    wait_for_bgp(rt, lab, n["name"], timeout=precheck_timeout, require_evpn=require_evpn_bgp)
+                else:
+                    _prov.convergence_wait(
+                        rt, lab, n["name"], precheck_timeout, _expected_peer_ips(n["name"])
+                    )
             time.sleep(post_precheck_sleep)
         except SystemExit:
             results["result"] = "fail"
