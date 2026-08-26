@@ -1,0 +1,47 @@
+name: sonic-control-unprovisioned
+
+# §4.5-c WI-3 packet 4b-i — REQ-45C-5's pre-provisioning control, IMAGE-SCOPED.
+#
+# Founder ruling 2026-08-26: REQ-45C-5's control row — "on a booted,
+# un-provisioned sonic-vm guest, assert the fixture's declared data address
+# and router_id/32 are ABSENT" — is IMAGE-scoped. "Un-provisioned" means a
+# booted guest of this image carrying no Cassian provisioning, not this guest
+# instance before its own provisioning. That reading is what makes the control
+# reachable at all: `cmd_up` (cassian_engine.py:1317) calls
+# `_provision_nos_providers` (:1435) unconditionally and NO `--no-provision`
+# flag exists anywhere in cassian_engine.py, cassian_cli.py or cassian.py.
+#
+# WHAT THIS FIXTURE IS FOR: boot a guest of local/sonic-vm:202405 that
+# declares NONE of the addresses the §4.5-c fixtures declare, then assert
+# those addresses are ABSENT (`ip -o -4 addr show`). Their PRESENCE after a
+# real fixture's provisioning is then attributable to Cassian and not to the
+# image's canned config — surface S-9, "without it a green is unattributable".
+#
+# WHY IT DECLARES NOTHING: the sonic node carries no `router_id` and the link
+# carries no `ipv4`, so Cassian applies no address to this guest.
+#
+# SHAPE MEASURED, NOT ASSUMED: a single node with no `links` is REJECTED by
+# `ensure_valid_topology` — "Missing required key: 'links'", exit 2. The
+# two-node form below, with a link carrying no `ipv4`, PASSES. Both were run
+# against the real validator before this fixture was authored. The far end is
+# an frr node, following topologies/sonic-base-lifecycle.yaml's shape.
+#
+# HALT-2 (founder ruling 2026-08-15, surface S-9): this fixture declares no
+# addresses at all, so LEG 1's stock-range sweep passes over it VACUOUSLY.
+# That is expected and is stated rather than left implicit — LEG 1's
+# discrimination is proven by its own non-vacuity control against
+# vm-assertion-smoke.yaml, not by this fixture.
+#
+# Image resolves from the contrib-owned local tag (REQ-45C-11, REQ-45C-32).
+
+nodes:
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+
+  - name: r1
+    type: frr
+
+links:
+  - endpoints: ["s1:eth1", "r1:eth1"]

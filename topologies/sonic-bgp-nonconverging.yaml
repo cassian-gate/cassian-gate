@@ -1,0 +1,66 @@
+name: sonic-bgp-nonconverging
+
+# §4.5-c WI-3 packet 4b-i — REQ-45C-29 negative fixture.
+#
+# A SYMMETRIC non-converging pair. Both nodes are BGP speakers, both are
+# linked, and BOTH DECLARE EACH OTHER BY NAME — so this fixture produces ZERO
+# declaration asymmetry. `_declaration_asymmetries` (cassian_engine.py:10276)
+# matches on peer NODE NAME via `_declared_neighbor_names` (:10252) and never
+# reads `remote_as`, so the mismatch below is invisible to it.
+#
+# WHY THAT MATTERS (founder ruling 2026-08-26, two fixtures not one):
+# `sonic-bgp-asymmetric.yaml` also cannot converge, so one fixture could serve
+# REQ-45C-24 and REQ-45C-29 today. But that would make -29's timeout evidence
+# CAUSALLY DEPENDENT on asymmetry: if a later change made asymmetry fail early
+# rather than poll to timeout, the shared fixture would stop reaching the
+# timeout path and -29 would go vacuous WITHOUT going red. A control that was
+# never reached is indistinguishable from a control that passed.
+#
+# NON-CONVERGENCE MECHANISM: each side declares its peer with a `remote_as`
+# that does not match the peer's actual `asn` (s2 is 65002, s1 declares 65098;
+# s1 is 65001, s2 declares 65099). Both sides reject the peer's OPEN. This is
+# a configuration-level cause, deterministic and independent of timing or
+# reachability — no session can establish, so the precheck must reach its
+# bound and produce a deterministic FAIL naming every non-Established
+# neighbour (REQ-45C-29), with no hang.
+#
+# HALT-2 address discipline (founder ruling 2026-08-15, surface S-9): every
+# §4.5-c-authored SONiC fixture declares data addresses OUTSIDE the stock
+# canned ranges of sonic-vm:202405 — Ethernet0..124 at 10.0.0.0/31..
+# 10.0.0.62/31, Loopback0 at 10.1.0.1/32, eth0 management at 10.0.0.15/24.
+# The addresses below are RFC 5737 TEST-NET-1 / TEST-NET-2, provably outside
+# both. The ranges themselves are named in tests/sonic_lifecycle_proof.py, not
+# here — a guard whose constants live in the file it guards is not a guard.
+#
+# ASNs deliberately avoid 65100, the stock DEVICE_METADATA.localhost.bgp_asn,
+# so rendering cannot be confused with the factory default.
+#
+# Image resolves from the contrib-owned local tag (REQ-45C-11, REQ-45C-32).
+# Declaration surface is FRR's, key for key (REQ-45C-23).
+
+nodes:
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    asn: 65001
+    router_id: 192.0.2.31
+    bgp:
+      neighbors:
+        - peer: s2
+          remote_as: 65098
+
+  - name: s2
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    asn: 65002
+    router_id: 192.0.2.32
+    bgp:
+      neighbors:
+        - peer: s1
+          remote_as: 65099
+
+links:
+  - endpoints: ["s1:eth1", "s2:eth1"]
+    ipv4: ["198.51.100.8/31", "198.51.100.9/31"]

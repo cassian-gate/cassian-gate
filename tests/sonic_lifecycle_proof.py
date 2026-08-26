@@ -98,6 +98,24 @@ SECTION_45C_FIXTURES = (
     # sweep — confirmed outside 10.0.0.0/26 and 10.1.0.0/24 before delivery,
     # with a non-vacuity control on the detector.
     "sonic-bgp-asymmetric.yaml",
+    # §4.5-c WI-3 packet 4b-i — REQ-45C-29's SYMMETRIC non-converging pair.
+    # Founder ruling 2026-08-26 (two fixtures, not one): -29 gets its own
+    # fixture so its timeout evidence is not causally dependent on asymmetry.
+    # Both nodes declare each other BY NAME, so `_declaration_asymmetries`
+    # (engine :10276, matching on node name via `_declared_neighbor_names`
+    # :10252) returns EMPTY here; non-convergence comes from mismatched
+    # `remote_as` on both sides. Registered in the SAME commit that adds it
+    # (F-45C-C3-3), which also puts its four addresses under LEG 1's HALT-2
+    # sweep.
+    "sonic-bgp-nonconverging.yaml",
+    # §4.5-c WI-3 packet 4b-i — REQ-45C-5's IMAGE-SCOPED control boot.
+    # Founder ruling 2026-08-26: "a booted, un-provisioned sonic-vm guest" is
+    # image-scoped, so the control is a same-image boot carrying none of the
+    # addresses the 4b fixtures declare. It declares NO addresses at all, so
+    # LEG 1's stock-range sweep passes over it vacuously — that is expected,
+    # and LEG 1's non-vacuity control (vm-assertion-smoke.yaml) is what proves
+    # the sweep discriminates. Registered same-commit (F-45C-C3-3).
+    "sonic-control-unprovisioned.yaml",
 )
 
 # SONiC fixtures inherited from 4.5-a. REQ-45C-5 states these collide with
