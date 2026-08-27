@@ -129,7 +129,9 @@ for _p in ("sonic_leaf_import_proof.py", "sonic_configgen_determinism_proof.py",
            "cmd_evidence_derivation_differential_proof.py",
            "sonic_unsupported_capability_disposition_proof.py",
            "sonic_endpoint_recognition_proof.py",
-           "sonic_routing_mode_precondition_proof.py"):
+           "sonic_routing_mode_precondition_proof.py",
+           # §4.5-c WI-3 packet 4b-iii: CI-wired by the (VM) steps.
+           "sonic_precheck_proof.py"):
     check(f"§4.5-c proof is CI-wired: {_p} present in the gate", _p in gate)
 
 fails = [n for n, ok in checks if not ok]

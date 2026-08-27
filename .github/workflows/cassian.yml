@@ -382,6 +382,113 @@ jobs:
 
           python tests/sonic_endpoint_recognition_proof.py /tmp/wi2_host /tmp/wi2_linux
 
+      # === §4.5-c WI-3 packet 4b-iii — (VM) legs ==========================
+      # Four cycles, no sharing (founder ruling 2026-08-26): each requirement
+      # gets its own fixture and its own up/test/down, so no leg's evidence
+      # depends on another leg's fixture. `if: success() || failure()` on every
+      # step per BL-P2-4.5c-62 — a skipped step is neither pass nor fail, it is
+      # no evidence (Doctrine §1.11).
+
+      # --- Cycle A: converging pair. Proofs run BETWEEN up and down: these are
+      # live-device reads through the product's runtime seam (LD-45C-R1).
+      - name: SONiC precheck (VM) — converging pair, REQ-45C-8 (§4.5-c WI-3)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          ./src/cassian.py up topologies/probe-sonic-bgp-pair.yaml --reconfigure
+          ./src/cassian.py test probe-sonic-bgp-pair
+          python tests/sonic_precheck_proof.py req8 \
+            topologies/probe-sonic-bgp-pair.yaml probe-sonic-bgp-pair
+
+      - name: SONiC rendering-to-acceptance (VM) — REQ-45C-22 (§4.5-c WI-3)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/sonic_lifecycle_proof.py req22 \
+            topologies/probe-sonic-bgp-pair.yaml probe-sonic-bgp-pair
+          ./src/cassian.py down probe-sonic-bgp-pair
+
+      # --- Cycle B: asymmetric declaration. `test` is EXPECTED to fail — the
+      # far node's expected peer set is link-derived (engine:10221-10228), so it
+      # polls and times out too. Capture the rc rather than let pipefail kill
+      # the step before the proof runs.
+      - name: SONiC precheck (VM) — asymmetric declaration, REQ-45C-24 (§4.5-c WI-3)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/wi3_asym
+          ./src/cassian.py up topologies/sonic-bgp-asymmetric.yaml --reconfigure
+          set +e
+          ./src/cassian.py test sonic-bgp-asymmetric > /tmp/wi3_asym.out 2>&1
+          echo "cassian test rc=$? (a FAIL here is expected: the pair cannot converge)"
+          set -e
+          cp -r labs/clab-sonic-bgp-asymmetric /tmp/wi3_asym
+          ./src/cassian.py down sonic-bgp-asymmetric
+          python tests/sonic_precheck_proof.py req24 /tmp/wi3_asym/results.json
+
+      # --- Cycle C: symmetric non-converging. Same capture discipline. The
+      # evidence is the §13-grade timeout text (cassian_nos_sonic.py:767-778),
+      # which lives only in the run's output.
+      - name: SONiC precheck (VM) — symmetric non-converging, REQ-45C-29 (§4.5-c WI-3)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          ./src/cassian.py up topologies/sonic-bgp-nonconverging.yaml --reconfigure
+          set +e
+          ./src/cassian.py test sonic-bgp-nonconverging > /tmp/wi3_nonconv.out 2>&1
+          echo "cassian test rc=$? (a FAIL here is expected: REQ-45C-29)"
+          set -e
+          ./src/cassian.py down sonic-bgp-nonconverging
+          python tests/sonic_precheck_proof.py req29 /tmp/wi3_nonconv.out
+
+      # --- Cycle D: REQ-45C-5 control + positive. Founder ruling 2026-08-26
+      # option 1 — BOTH labs up CONCURRENTLY, so the proof reads both guests in
+      # one invocation and §15.2's "the same address that was ABSENT in the
+      # control is now PRESENT" is structural, not dependent on CI pairing them.
+      # Lab names differ, so containerlab namespaces them separately. This is
+      # the first concurrent-lab step in this workflow.
+      - name: SONiC address control (VM) — REQ-45C-5 control + positive (§4.5-c WI-3)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          ./src/cassian.py up topologies/sonic-control-unprovisioned.yaml --reconfigure
+          ./src/cassian.py up topologies/sonic-base-lifecycle.yaml --reconfigure
+          python tests/sonic_lifecycle_proof.py req5 \
+            topologies/sonic-control-unprovisioned.yaml sonic-control-unprovisioned \
+            topologies/sonic-base-lifecycle.yaml sonic-base-lifecycle
+          ./src/cassian.py down sonic-base-lifecycle
+          ./src/cassian.py down sonic-control-unprovisioned
+
+      # --- Teardown sweep. Any cycle that failed mid-step leaves a lab behind;
+      # a leaked lab poisons the next run rather than the one that caused it.
+      # `|| true` per lab: this step must not itself become a failure source.
+      - name: SONiC (VM) teardown sweep (§4.5-c WI-3)
+        if: always()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          ./src/cassian.py down probe-sonic-bgp-pair || true
+          ./src/cassian.py down sonic-bgp-asymmetric || true
+          ./src/cassian.py down sonic-bgp-nonconverging || true
+          ./src/cassian.py down sonic-base-lifecycle || true
+          ./src/cassian.py down sonic-control-unprovisioned || true
+
       - name: Upload artifacts (always; bounded on success)
         if: always()
         uses: actions/upload-artifact@v4
