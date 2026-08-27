@@ -290,13 +290,50 @@ def _guest_v4(rt, lab, node):
     return sorted(set(found))
 
 
+def _sonic_own_addresses(doc):
+    """Addresses a topology declares FOR ITS sonic-vm nodes, and only those.
+
+    Each sonic-vm node's own `router_id`, plus its own INDEXED end of every
+    link it terminates -- `endpoints[i]` pairs with `ipv4[i]`. A peer's
+    router_id and the far end of a link belong to the peer and are never
+    provisioned onto the SONiC guest.
+    """
+    names = set(_sonic_nodes(doc))
+    out = set()
+    for n in doc.get("nodes") or []:
+        if not isinstance(n, dict) or n.get("name") not in names:
+            continue
+        if n.get("router_id"):
+            out.add(str(n["router_id"]).split("/")[0])
+    for link in doc.get("links") or []:
+        if not isinstance(link, dict):
+            continue
+        eps = [str(e).split(":")[0] for e in (link.get("endpoints") or [])]
+        ips = [str(i).split("/")[0] for i in (link.get("ipv4") or [])]
+        for i, ep in enumerate(eps):
+            if ep in names and i < len(ips):
+                out.add(ips[i])
+    return sorted(out)
+
+
 def _leg_req5(ctrl_topo, ctrl_lab, subj_topo, subj_lab):
     ctrl_doc = yaml.safe_load(io.open(ctrl_topo, encoding="utf-8").read()) or {}
     subj_doc = yaml.safe_load(io.open(subj_topo, encoding="utf-8").read()) or {}
-    subject_addrs = sorted({a for _w, a in _declared_addresses(subj_topo)})
+    # NARROWED TO THE SONiC NODE'S OWN ADDRESSES (packet 4b-iv). The first
+    # authoring took EVERY address in the subject topology, which on a
+    # sonic-vm/FRR pair includes the FRR node's router_id and the far end of
+    # the link. Run 33041629461 failed demanding r1's 192.0.2.21 and
+    # 198.51.100.1 on the SONiC guest. Derived from the DECLARATION, never
+    # from the guest -- narrowing to what the device happens to carry would
+    # make the leg unfalsifiable.
+    _all_declared = sorted({a for _w, a in _declared_addresses(subj_topo)})
+    subject_addrs = _sonic_own_addresses(subj_doc)
     check("REQ-45C-5 (VM) NON-VACUITY: the subject fixture declares at least "
-          "one address to assert on",
-          bool(subject_addrs), "subject declares: %s" % subject_addrs)
+          "one address FOR ITS sonic-vm node(s) to assert on",
+          bool(subject_addrs),
+          "sonic-owned: %s; whole topology declares: %s (the difference "
+          "belongs to non-SONiC peers and is never provisioned onto the "
+          "guest)" % (subject_addrs, _all_declared))
     if not subject_addrs:
         return
     ctrl_nodes = _sonic_nodes(ctrl_doc)

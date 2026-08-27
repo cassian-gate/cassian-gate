@@ -524,9 +524,20 @@ def _leg_req24(results_path):
     if not present:
         return
     entries = doc["summary"][key]
+    # SHAPE READ FROM SOURCE, NOT INFERRED (packet 4b-iv). The engine builds
+    # `[{"declares": a, "silent": b} for a, b in _asymmetries]` at
+    # cassian_engine.py:10327-10329. The first authoring of this leg asserted
+    # a list of STRINGS because "named evidence" sounded like prose; run
+    # 33041629461 reported [{'declares': 's1', 'silent': 's2'}] and failed on
+    # correct evidence.
+    _shaped = (isinstance(entries, list) and len(entries) > 0
+               and all(isinstance(e, dict)
+                       and str(e.get("declares") or "").strip()
+                       and str(e.get("silent") or "").strip()
+                       for e in entries))
     check("REQ-45C-24 (VM) asymmetry surfaces as NAMED evidence, not silence",
-          isinstance(entries, list) and len(entries) > 0
-          and all(isinstance(e, str) and e.strip() for e in entries),
+          _shaped,
+          "each entry names BOTH parties -- engine:10327-10329; "
           "entries: %r" % (entries,))
 
 
