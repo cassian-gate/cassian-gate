@@ -237,20 +237,201 @@ else:
           "fixture absent: topologies/sonic-base-lifecycle.yaml")
 
 # --- VM legs: BLOCKED, enumerated, never silently absent --------------------
-blocked("REQ-45C-5 pre-provisioning control (S-9): declared address and "
-        "router_id/32 ABSENT on a booted, un-provisioned guest",
-        "BL-P2-4.5c-35 -- environment binding, NOT a host blocker. §18(1) "
-        "requires every §15 proof green in its bound environment; this proof "
-        "runs in the lab-free CI step. Substantively demonstrated by the "
-        "§18(8) probe. Clearing it needs a pre-provisioning window that does "
-        "not exist (provisioning is inside cmd_up); routed to WI-3")
-blocked("REQ-45C-5 post-provision positive: the address ABSENT in the control "
-        "is PRESENT on the expected port",
-        "BL-P2-4.5c-35 -- same environment binding; routed to WI-3")
-blocked("REQ-45C-22 two-node eBGP pair reaches Established under generated "
-        "configuration, with evidence recorded",
-        "BL-P2-4.5c-35 -- same environment binding, AND the eBGP fixture is "
-        "not yet authored; both are WI-3's")
+# --- (VM) legs (BL-P2-4.5c-35) ----------------------------------------------
+# LD-45C-R1 (2026-08-26, `e8da5c4`), extended generally the same day: a (VM)
+# leg observes the device through the product's runtime seam. Nothing is
+# recorded by the product and nothing in src/ changes.
+#
+# usage:
+#   sonic_lifecycle_proof.py
+#       -> lab-free only; the three legs below report BLOCKED; exit 0
+#   sonic_lifecycle_proof.py req5 <control-topo> <control-lab> <subject-topo> <subject-lab>
+#       -> BOTH REQ-45C-5 legs in one invocation. §15.2's positive row is
+#          defined by reference to the control ("the same address that was
+#          ABSENT in the control is now PRESENT"), so pairing them here makes
+#          that structural instead of dependent on CI wiring.
+#   sonic_lifecycle_proof.py req22 <topo> <lab>
+
+try:
+    import cassian_runtime_vm as _RV  # noqa: E402
+    _rv_err = ""
+except Exception as _e:  # pragma: no cover
+    _RV = None
+    _rv_err = repr(_e)
+
+check("(VM) seam: cassian_runtime_vm.build_runtime is callable",
+      _RV is not None and callable(getattr(_RV, "build_runtime", None)),
+      _rv_err or "cassian_runtime_vm.py:406")
+check("(VM) seam: cassian_nos_sonic._guest_stdout is callable",
+      callable(getattr(S, "_guest_stdout", None)),
+      "cassian_nos_sonic.py:457 -- stdout only; the guest SSH banner lands on "
+      "stderr (F-45C-C3-20)")
+
+
+def _sonic_nodes(doc):
+    return [n.get("name") for n in (doc.get("nodes") or [])
+            if isinstance(n, dict)
+            and str(n.get("type") or "").strip().lower() == "sonic-vm"]
+
+
+def _guest_v4(rt, lab, node):
+    """Addresses present on the guest, via `ip -o -4 addr show`.
+
+    REQ-45C-5's control row names this command. Parsed from column 4 of
+    ip's one-line-per-address form.
+    """
+    out = S._guest_stdout(rt, lab, node, ["ip", "-o", "-4", "addr", "show"],
+                          "REQ-45C-5 (VM) guest address read")
+    found = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 4 and parts[2] == "inet":
+            found.append(parts[3].split("/")[0])
+    return sorted(set(found))
+
+
+def _leg_req5(ctrl_topo, ctrl_lab, subj_topo, subj_lab):
+    ctrl_doc = yaml.safe_load(io.open(ctrl_topo, encoding="utf-8").read()) or {}
+    subj_doc = yaml.safe_load(io.open(subj_topo, encoding="utf-8").read()) or {}
+    subject_addrs = sorted({a for _w, a in _declared_addresses(subj_topo)})
+    check("REQ-45C-5 (VM) NON-VACUITY: the subject fixture declares at least "
+          "one address to assert on",
+          bool(subject_addrs), "subject declares: %s" % subject_addrs)
+    if not subject_addrs:
+        return
+    ctrl_nodes = _sonic_nodes(ctrl_doc)
+    subj_nodes = _sonic_nodes(subj_doc)
+    check("REQ-45C-5 (VM) NON-VACUITY: both fixtures carry a sonic-vm node",
+          bool(ctrl_nodes) and bool(subj_nodes),
+          "control: %s  subject: %s" % (ctrl_nodes, subj_nodes))
+    if not ctrl_nodes or not subj_nodes:
+        return
+
+    rt_c = _RV.build_runtime(ctrl_doc)
+    present_on_control = set()
+    for node in ctrl_nodes:
+        present_on_control |= set(_guest_v4(rt_c, ctrl_lab, node))
+    collide = sorted(set(subject_addrs) & present_on_control)
+    check("REQ-45C-5 (VM) pre-provisioning control (S-9): the subject's "
+          "declared addresses are ABSENT on a booted, un-provisioned guest "
+          "of this image",
+          not collide,
+          "subject declares %s; control guest carries %s; overlap %s"
+          % (subject_addrs, sorted(present_on_control), collide or "none"))
+
+    rt_s = _RV.build_runtime(subj_doc)
+    present_on_subject = set()
+    for node in subj_nodes:
+        present_on_subject |= set(_guest_v4(rt_s, subj_lab, node))
+    missing = sorted(set(subject_addrs) - present_on_subject)
+    check("REQ-45C-5 (VM) post-provision positive: the address ABSENT in the "
+          "control is PRESENT after provisioning",
+          not missing,
+          "expected %s; subject guest carries %s; missing %s"
+          % (subject_addrs, sorted(present_on_subject), missing or "none"))
+
+
+def _declared_peer_ips(doc):
+    """{node: peer_ip} for every peer DECLARED under bgp.neighbors.
+
+    Link-derived resolution of the declared peer NAME to the far end's ipv4,
+    matching `_declaration_asymmetries`' reading that a declaration names its
+    peer by node name (`cassian_engine.py:10252`).
+
+    NEAR-DUPLICATE, DECLARED RATHER THAN HIDDEN: sonic_precheck_proof.py's
+    `_declared_peers` computes the same relation in list form for REQ-45C-8.
+    Two proof-local copies is not PBE-1b-9's subject (validate/exec-shared
+    product helpers), but it is duplication and a consolidation candidate.
+    Recorded here so a later reader meets it rather than discovering it.
+    """
+    by_pair = {}
+    for link in doc.get("links") or []:
+        if not isinstance(link, dict):
+            continue
+        eps = [str(e).split(":")[0] for e in (link.get("endpoints") or [])]
+        ips = [str(i).split("/")[0] for i in (link.get("ipv4") or [])]
+        if len(eps) == 2 and len(ips) == 2:
+            by_pair[(eps[0], eps[1])] = ips[1]
+            by_pair[(eps[1], eps[0])] = ips[0]
+    out = {}
+    for n in doc.get("nodes") or []:
+        if not isinstance(n, dict):
+            continue
+        bgp = n.get("bgp") if isinstance(n.get("bgp"), dict) else {}
+        for nbr in bgp.get("neighbors") or []:
+            if not isinstance(nbr, dict):
+                continue
+            ip = by_pair.get((n.get("name"), nbr.get("peer")))
+            if ip:
+                out[n.get("name")] = ip
+    return out
+
+
+def _leg_req22(topo_path, lab):
+    doc = yaml.safe_load(io.open(topo_path, encoding="utf-8").read()) or {}
+    nodes = _sonic_nodes(doc)
+    check("REQ-45C-22 (VM) NON-VACUITY: the fixture carries sonic-vm nodes",
+          len(nodes) >= 2, "sonic-vm nodes: %s" % nodes)
+    if len(nodes) < 2:
+        return
+    declared = _declared_peer_ips(doc)
+    # The stock image ships 31-32 canned BGP_NEIGHBOR entries. Asserting that
+    # SOME peer is Established would pass on those and prove nothing about
+    # Cassian's rendering, which is what REQ-45C-22 is about. Each node's
+    # DECLARED peer IP is the subject, matched exactly.
+    missing_decl = sorted(n for n in nodes if n not in declared)
+    check("REQ-45C-22 (VM) NON-VACUITY: every sonic-vm node declares a "
+          "resolvable peer",
+          not missing_decl,
+          "declared peer IPs: %s; unresolved: %s"
+          % (declared, missing_decl or "none"))
+    if missing_decl:
+        return
+    states = {}
+    rt = _RV.build_runtime(doc)
+    for node in nodes:
+        peer_ip = declared[node]
+        out = S._guest_stdout(rt, lab, node,
+                              ["vtysh", "-c", "show bgp summary"],
+                              "REQ-45C-22 (VM) session state")
+        state = ""
+        for line in out.splitlines():
+            parts = line.split()
+            if parts and parts[0] == peer_ip and len(parts) >= 10:
+                state = parts[9]
+                break
+        states[node] = (peer_ip, state)
+
+    def _up(s):
+        return bool(s) and (s.isdigit() or s.lower() == "established")
+
+    not_up = sorted("%s->%s:%s" % (n, ip, st or "(absent)")
+                    for n, (ip, st) in states.items() if not _up(st))
+    check("REQ-45C-22 (VM) the DECLARED peer is Established on every node, in "
+          "both directions, under Cassian-generated configuration",
+          not not_up,
+          "per-node declared-peer state: " + "; ".join(
+              "%s->%s:%s" % (n, ip, st or "(absent)")
+              for n, (ip, st) in sorted(states.items())))
+
+
+_vm_args = sys.argv[1:]
+if not _vm_args:
+    blocked("REQ-45C-5 (VM) pre-provisioning control (S-9) + post-provision "
+            "positive",
+            "no (VM) argv supplied; run: req5 <control-topo> <control-lab> "
+            "<subject-topo> <subject-lab>. Wired at 4b-iii")
+    blocked("REQ-45C-22 (VM) two-node eBGP pair reaches Established under "
+            "generated configuration",
+            "no (VM) argv supplied; run: req22 <topo> <lab>. Wired at 4b-iii")
+elif _vm_args[0] == "req5" and len(_vm_args) == 5:
+    _leg_req5(_vm_args[1], _vm_args[2], _vm_args[3], _vm_args[4])
+elif _vm_args[0] == "req22" and len(_vm_args) == 3:
+    _leg_req22(_vm_args[1], _vm_args[2])
+else:
+    sys.exit("usage: sonic_lifecycle_proof.py "
+             "[req5 <control-topo> <control-lab> <subject-topo> <subject-lab> "
+             "| req22 <topo> <lab>]  (no argv = lab-free legs only)")
 
 # --- Report ------------------------------------------------------------------
 _fails = [c for c in _checks if not c[1]]
