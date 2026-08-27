@@ -405,12 +405,181 @@ check("REQ-45C-24 _expected_peer_ips no longer claims to return DECLARED peers",
       and '"""Declared peer IPs for `node_name`, deterministic order.' not in _eng_src,
       "corrected in packet 4a; the linked/declared divergence IS REQ-45C-24")
 
+# --- Seam symbols the (VM) legs use, asserted LAB-FREE ----------------------
+# Rule 16: the (VM) path cannot run on the dev side, so a wrong symbol name
+# would pass here and RED in CI mid-lab on ai-netsim. Assert the names now.
+
+try:
+    import cassian_runtime_vm as _RV  # noqa: E402
+    _rv_err = ""
+except Exception as _e:  # pragma: no cover - import failure is the finding
+    _RV = None
+    _rv_err = repr(_e)
+
+check("(VM) seam: cassian_runtime_vm.build_runtime is callable",
+      _RV is not None and callable(getattr(_RV, "build_runtime", None)),
+      _rv_err or "cassian_runtime_vm.py:406")
+check("(VM) seam: cassian_nos_sonic._guest_stdout is callable",
+      callable(getattr(S, "_guest_stdout", None)),
+      "cassian_nos_sonic.py:457 -- stdout only; the guest SSH banner lands on "
+      "stderr (F-45C-C3-20) and merging it breaks every parse")
+
+
+# --- (VM) legs --------------------------------------------------------------
+# Founder ruling LD-45C-R1 (2026-08-26, `e8da5c4`), extended GENERALLY the same
+# day: a (VM) leg observes the device itself through the product's runtime
+# seam. The product records nothing on the success path and is not changed.
+#
+# The three legs do NOT share an evidence channel:
+#   req8  -> live device via rt.exec
+#   req24 -> results.json summary.precheck_declaration_asymmetries
+#   req29 -> the §13-grade timeout text from the run's captured output
+#
+# usage, one leg per invocation so each CI sub-step is attributable:
+#   sonic_precheck_proof.py                      -> lab-free only, 3 BLOCKED, exit 0
+#   sonic_precheck_proof.py req8  <topology> <lab>
+#   sonic_precheck_proof.py req24 <results.json>
+#   sonic_precheck_proof.py req29 <captured-output-file>
+
+_blocked = []
+
+
+def blocked(name, reason):
+    _blocked.append((name, reason))
+
+
+def _declared_peers(topo_path):
+    """[(node, peer_ip)] declared under bgp.neighbors, matched to link ipv4.
+
+    Read from the topology, not from the device: the point of REQ-45C-8 is
+    that every DECLARED peer reached Established, so the declared set is the
+    subject and the device is the observation.
+    """
+    import yaml
+    doc = yaml.safe_load(io.open(topo_path, encoding="utf-8").read()) or {}
+    by_pair = {}
+    for link in doc.get("links") or []:
+        if not isinstance(link, dict):
+            continue
+        eps = [str(e).split(":")[0] for e in (link.get("endpoints") or [])]
+        ips = [str(i).split("/")[0] for i in (link.get("ipv4") or [])]
+        if len(eps) == 2 and len(ips) == 2:
+            by_pair[(eps[0], eps[1])] = ips[1]
+            by_pair[(eps[1], eps[0])] = ips[0]
+    out = []
+    for n in doc.get("nodes") or []:
+        if not isinstance(n, dict):
+            continue
+        name = n.get("name")
+        bgp = n.get("bgp") if isinstance(n.get("bgp"), dict) else {}
+        for nbr in bgp.get("neighbors") or []:
+            if not isinstance(nbr, dict):
+                continue
+            ip = by_pair.get((name, nbr.get("peer")))
+            if ip:
+                out.append((name, ip))
+    return sorted(out)
+
+
+def _leg_req8(topo_path, lab):
+    """LIVE DEVICE. Every declared peer Established, states printed."""
+    import yaml
+    doc = yaml.safe_load(io.open(topo_path, encoding="utf-8").read()) or {}
+    declared = _declared_peers(topo_path)
+    check("REQ-45C-8 (VM) NON-VACUITY: the topology declares at least one peer",
+          bool(declared), "declared: %r" % (declared,))
+    if not declared:
+        return
+    rt = _RV.build_runtime(doc)
+    observed = {}
+    for node, peer_ip in declared:
+        out = S._guest_stdout(rt, lab, node, ["vtysh", "-c", "show bgp summary"],
+                              "REQ-45C-8 (VM) per-neighbour state")
+        state = ""
+        for line in out.splitlines():
+            parts = line.split()
+            if parts and parts[0] == peer_ip and len(parts) >= 10:
+                state = parts[9]
+                break
+        observed[(node, peer_ip)] = state
+    def _up(s):
+        return bool(s) and (s.isdigit() or s.lower() == "established")
+    not_up = sorted("%s->%s:%s" % (n, p, st or "(absent)")
+                    for (n, p), st in observed.items() if not _up(st))
+    check("REQ-45C-8 (VM) every DECLARED peer is Established",
+          not not_up,
+          "per-neighbour states: " + "; ".join(
+              "%s->%s:%s" % (n, p, st or "(absent)")
+              for (n, p), st in sorted(observed.items())))
+
+
+def _leg_req24(results_path):
+    """ARTIFACT. Named asymmetry evidence in results.json, not silence."""
+    import json
+    doc = json.loads(io.open(results_path, encoding="utf-8").read())
+    key = "precheck_declaration_asymmetries"
+    present = key in (doc.get("summary") or {})
+    check("REQ-45C-24 (VM) results.json carries %s" % key, present,
+          "cassian_engine.py:10327, landed packet 4a")
+    if not present:
+        return
+    entries = doc["summary"][key]
+    check("REQ-45C-24 (VM) asymmetry surfaces as NAMED evidence, not silence",
+          isinstance(entries, list) and len(entries) > 0
+          and all(isinstance(e, str) and e.strip() for e in entries),
+          "entries: %r" % (entries,))
+
+
+def _leg_req29(capture_path):
+    """CAPTURED OUTPUT. Deterministic timeout FAIL naming every non-up peer."""
+    text = io.open(capture_path, encoding="utf-8", errors="replace").read()
+    marker = "per-neighbour state at timeout"
+    check("REQ-45C-29 (VM) timeout produced the §13-grade per-neighbour text",
+          marker in text,
+          "cassian_nos_sonic.py:767-778; searched %s" % capture_path)
+    check("REQ-45C-29 (VM) no hang: the run terminated and produced output",
+          bool(text.strip()),
+          "an empty capture is a claim about the capture, not the run")
+    if marker in text:
+        seg = text.split(marker, 1)[1].splitlines()[0]
+        check("REQ-45C-29 (VM) the timeout text names at least one peer state",
+              ":" in seg, "segment: %s" % seg.strip()[:160])
+
+
+_vm_args = sys.argv[1:]
+if not _vm_args:
+    blocked("REQ-45C-8 (VM) converging pair -> precheck PASS with per-neighbor "
+            "states",
+            "no (VM) argv supplied; run: req8 <topology> <lab>. Wired at 4b-iii")
+    blocked("REQ-45C-24 (VM) asymmetric declaration -> named evidence in "
+            "precheck output",
+            "no (VM) argv supplied; run: req24 <results.json>. Wired at 4b-iii")
+    blocked("REQ-45C-29 (VM) non-converging pair -> deterministic timeout FAIL",
+            "no (VM) argv supplied; run: req29 <captured-output>. Wired at 4b-iii")
+elif _vm_args[0] == "req8" and len(_vm_args) == 3:
+    _leg_req8(_vm_args[1], _vm_args[2])
+elif _vm_args[0] == "req24" and len(_vm_args) == 2:
+    _leg_req24(_vm_args[1])
+elif _vm_args[0] == "req29" and len(_vm_args) == 2:
+    _leg_req29(_vm_args[1])
+else:
+    sys.exit("usage: sonic_precheck_proof.py [req8 <topology> <lab> | "
+             "req24 <results.json> | req29 <captured-output>]  "
+             "(no argv = lab-free legs only)")
+
+
 # --- Report -----------------------------------------------------------------
 _failed = [c for c in _checks if not c[1]]
 for _name, _ok2, _detail in _checks:
     print("%-4s %s%s" % ("PASS" if _ok2 else "FAIL", _name,
                          ("  [%s]" % _detail) if _detail else ""))
+for _bn, _br in _blocked:
+    print("BLOCKED %s  [%s]" % (_bn, _br))
 print("=" * 60)
-print("RESULT: %s -- %d checks (WI-3 SONiC precheck, lab-free legs)"
-      % ("PASS" if not _failed else "FAIL", len(_checks)))
+print("RESULT: %s -- %d checks, %d BLOCKED (WI-3 SONiC precheck%s)"
+      % ("PASS" if not _failed else "FAIL", len(_checks), len(_blocked),
+         "" if _vm_args else ", lab-free legs"))
+if _blocked:
+    print("NOTE: %d (VM) leg(s) BLOCKED. A BLOCKED leg is not a pass; the "
+          "closure report carries it as a condition (PBE-P2-8)." % len(_blocked))
 sys.exit(1 if _failed else 0)
