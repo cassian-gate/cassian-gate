@@ -7,15 +7,23 @@ Req-IDs: REQ-45C-8  (BGP convergence precheck dispatched through the provider
                      deterministic timeout FAIL with per-neighbour evidence;
                      never a hang)
 
-The §6.7.2 assignment for this file is [8, 9, 24, 29]. THIS PACKET LANDS THE
-LAB-FREE LEGS ONLY. REQ-45C-9 (--precheck-controlplane) and REQ-45C-24
-(undeclared-neighbour asymmetry) have NO assertions here yet and travel with
-packets 4-5; the file is born early by founder-ratified amendment so that the
-engine dispatch and the provider leg ship with a proof rather than without one.
+The §6.7.2 assignment for this file is [8, 9, 24, 29]. All four now carry
+assertions. The docstring this replaces claimed LAB-FREE LEGS ONLY and that
+REQ-45C-9 and REQ-45C-24 had no assertions here; that was true at the file's
+birth and became stale at 4b-iii (req24) and at this packet (req9). Corrected
+under founder ruling LD-45C-R3 (2026-08-27) R5.
 
-Host-independent. No lab, no containerlab, no Docker. The provider seam is
-driven through a stub `rt` whose `exec` returns canned `show bgp summary json`
-payloads, the pattern the four-quadrant proofs use.
+TWO MODES. With no argv the lab-free legs run: the provider seam is driven
+through a stub `rt` whose `exec` returns canned `show bgp summary json`
+payloads, the pattern the four-quadrant proofs use. With a subcommand the (VM)
+legs run against a real guest through the product's own runtime seam.
+
+req9 MUTATES GUEST STATE -- it stops and restarts the `bgp` service. Founder
+ruling LD-45C-R5 (2026-08-27) R1/R3: the stop lives in the proof rather than in
+CI, no `ssh`/`systemctl` enters the workflow, restoration is structural
+(try/finally) and is asserted on the restart's OWN verdict rather than on the
+absence of an error. That last clause is Rule 13: a control that was never
+reached is indistinguishable from a control that passed.
 
 Coverage limits (PBE-P2-8), stated rather than implied:
   1. The stub returns payloads in the shape continuation rider rev 11 §2
@@ -88,6 +96,9 @@ check("NG-9 the read argv is single-sourced (PBE-P2-6)",
 check("REQ-45C-29 poll interval matches the FRR leg's 1s sleep",
       S._CONVERGENCE_POLL_INTERVAL_S == 1,
       "cassian_tests.py wait_for_bgp sleeps 1s per iteration")
+check("NG-9 the REQ-45C-9 daemon-observation argv is single-sourced (PBE-P2-6)",
+      S._BGP_IS_ACTIVE_ARGV == ("sudo", "systemctl", "is-active", "bgp"),
+      "the proof imports the tuple rather than restating the command")
 
 # --- positive: every declared peer Established -> returns --------------------
 _rt = _Rt([(_summary({"192.0.2.1": "Established", "192.0.2.5": "Established"}), 0)])
@@ -448,6 +459,21 @@ def blocked(name, reason):
     _blocked.append((name, reason))
 
 
+# Harness-only argvs. LD-45C-R5 R5 as NARROWED by the founder ruling of
+# 2026-08-27 ("product only"): PBE-P2-6 single-sourcing binds the PRODUCT argv
+# -- S._BGP_IS_ACTIVE_ARGV, imported and identity-asserted above. The stop/start
+# pair has NO product source to follow, because the product never stops a
+# daemon, so it lives here rather than putting harness-only code in a shipping
+# module.
+_STOP_BGP_ARGV = ("sudo", "systemctl", "stop", "bgp")
+_START_BGP_ARGV = ("sudo", "systemctl", "start", "bgp")
+
+# Measured 2026-08-27 on SONiC.202405.1033627-fecd4ec81: after `systemctl start
+# bgp`, a 20s settle returned is-active=active and a full 13867-byte summary.
+# One observation, not a bound (LD-45C-R4 §8).
+_RESTORE_SETTLE_S = 20
+
+
 def _declared_peers(topo_path):
     """[(node, peer_ip)] declared under bgp.neighbors, matched to link ipv4.
 
@@ -513,6 +539,90 @@ def _leg_req8(topo_path, lab):
               for (n, p), st in sorted(observed.items())))
 
 
+def _leg_req9(topo_path, lab):
+    """LIVE DEVICE, MUTATING. REQ-45C-9 positive + negative.
+
+    Founder rulings: LD-45C-R3 (homing -- the named-daemon observation lives on
+    convergence_wait's timeout path), LD-45C-R4 (shape -- an EMPTY convergence
+    read gates ONE `systemctl is-active bgp`), LD-45C-R5 (harness -- the stop
+    lives here, not in CI; restoration is structural and asserted).
+
+    WHY stderr IS CAPTURED: `_fail` writes the §13-grade message to stderr and
+    then raises SystemExit(2) (cassian_nos_sonic.py `_fail`). The message is NOT
+    carried on the exception -- str(e) is "2". Asserting the daemon name against
+    the exception would be vacuous, so the assertion reads the captured stream.
+    """
+    import contextlib
+    import time as _time
+    import yaml
+    doc = yaml.safe_load(io.open(topo_path, encoding="utf-8").read()) or {}
+    declared = _declared_peers(topo_path)
+    check("REQ-45C-9 (VM) NON-VACUITY: the topology declares at least one peer",
+          bool(declared), "declared: %r" % (declared,))
+    if not declared:
+        return
+    rt = _RV.build_runtime(doc)
+    node = declared[0][0]
+    peers = tuple(p for (n, p) in declared if n == node)
+
+    def _is_active():
+        cp = rt.exec(lab, node, list(S._BGP_IS_ACTIVE_ARGV),
+                     check=False, capture_output=True)
+        return (getattr(cp, "stdout", "") or "").strip()
+
+    def _wait(timeout):
+        """-> (raised, stderr_text). Never lets SystemExit escape the leg."""
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(buf):
+                S.convergence_wait(rt, lab, node, timeout, peers)
+        except SystemExit:
+            return True, buf.getvalue()
+        return False, buf.getvalue()
+
+    # --- POSITIVE: healthy control plane passes ------------------------------
+    check("REQ-45C-9 (VM) POSITIVE precondition: bgp reports active",
+          _is_active() == "active", "is-active: %r" % _is_active())
+    _raised, _ = _wait(60)
+    check("REQ-45C-9 (VM) POSITIVE healthy control plane -> precheck passes",
+          not _raised, "convergence_wait raised on a healthy guest")
+
+    # --- NEGATIVE: downed daemon fails NAMED --------------------------------
+    # LD-45C-R5 R3: the restart is paired in finally so it runs even if an
+    # assertion raises, and RESTORE asserts on is-active's own verdict.
+    _stopped = False
+    try:
+        _cp = rt.exec(lab, node, list(_STOP_BGP_ARGV),
+                      check=False, capture_output=True)
+        _stopped = True
+        check("REQ-45C-9 (VM) NEGATIVE the stop was accepted",
+              getattr(_cp, "returncode", None) == 0,
+              "stop rc: %r" % (getattr(_cp, "returncode", None),))
+        _state = _is_active()
+        check("REQ-45C-9 (VM) NEGATIVE NON-VACUITY: bgp is no longer active",
+              _state != "active", "is-active: %r" % _state)
+        _raised, _text = _wait(10)
+        check("REQ-45C-9 (VM) NEGATIVE downed daemon -> deterministic FAIL",
+              _raised, "convergence_wait returned instead of failing")
+        check("REQ-45C-9 (VM) NEGATIVE the failure NAMES the daemon (16 row 4)",
+              "`bgp`" in _text and "not serving" in _text,
+              "stderr: %s" % _text.replace("\n", " | ")[:300])
+        check("REQ-45C-9 (VM) NEGATIVE the failure is §13-grade "
+              "(reason/detail/required all present)",
+              all(k in _text for k in ("reason:", "detail:", "required:")),
+              "stderr: %s" % _text.replace("\n", " | ")[:300])
+    finally:
+        if _stopped:
+            rt.exec(lab, node, list(_START_BGP_ARGV),
+                    check=False, capture_output=True)
+            _time.sleep(_RESTORE_SETTLE_S)
+            _restored = _is_active()
+            check("REQ-45C-9 (VM) RESTORE bgp reports active again "
+                  "(asserted on the restart's own verdict, not on absence "
+                  "of error -- Rule 13)",
+                  _restored == "active", "is-active: %r" % _restored)
+
+
 def _leg_req24(results_path):
     """ARTIFACT. Named asymmetry evidence in results.json, not silence."""
     import json
@@ -567,16 +677,22 @@ if not _vm_args:
             "no (VM) argv supplied; run: req24 <results.json>. Wired at 4b-iii")
     blocked("REQ-45C-29 (VM) non-converging pair -> deterministic timeout FAIL",
             "no (VM) argv supplied; run: req29 <captured-output>. Wired at 4b-iii")
+    blocked("REQ-45C-9 (VM) healthy control plane passes; downed daemon fails "
+            "named",
+            "no (VM) argv supplied; run: req9 <topology> <lab>. Wired at "
+            "Unit A packet 2")
 elif _vm_args[0] == "req8" and len(_vm_args) == 3:
     _leg_req8(_vm_args[1], _vm_args[2])
+elif _vm_args[0] == "req9" and len(_vm_args) == 3:
+    _leg_req9(_vm_args[1], _vm_args[2])
 elif _vm_args[0] == "req24" and len(_vm_args) == 2:
     _leg_req24(_vm_args[1])
 elif _vm_args[0] == "req29" and len(_vm_args) == 2:
     _leg_req29(_vm_args[1])
 else:
     sys.exit("usage: sonic_precheck_proof.py [req8 <topology> <lab> | "
-             "req24 <results.json> | req29 <captured-output>]  "
-             "(no argv = lab-free legs only)")
+             "req9 <topology> <lab> | req24 <results.json> | "
+             "req29 <captured-output>]  (no argv = lab-free legs only)")
 
 
 # --- Report -----------------------------------------------------------------

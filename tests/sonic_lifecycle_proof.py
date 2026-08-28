@@ -116,6 +116,8 @@ SECTION_45C_FIXTURES = (
     # and LEG 1's non-vacuity control (vm-assertion-smoke.yaml) is what proves
     # the sweep discriminates. Registered same-commit (F-45C-C3-3).
     "sonic-control-unprovisioned.yaml",
+    # §4.5-c WI-3 Unit A packet 2: REQ-45C-9 downed-daemon leg (LD-45C-R5).
+    "sonic-bgp-daemon-stop.yaml",
 )
 
 # SONiC fixtures inherited from 4.5-a. REQ-45C-5 states these collide with
