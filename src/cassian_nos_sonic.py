@@ -675,6 +675,13 @@ _BGP_SUMMARY_ARGV = ("vtysh", "-c", "show bgp summary json")
 # binds SONiC to the SAME bounds, interval and timeout semantics.
 _CONVERGENCE_POLL_INTERVAL_S = 1
 
+# REQ-45C-9 daemon observation. Single-sourced argv (PBE-P2-6): the proof
+# imports THIS tuple rather than restating the command. Issued ONLY on
+# `convergence_wait`'s timeout path, and only when the convergence read
+# returned nothing -- founder ruling LD-45C-R4 (2026-08-27) R1. Never on a
+# healthy path: Doctrine 1.14 is demand-led and 16 row 4 is the demand.
+_BGP_IS_ACTIVE_ARGV = ("sudo", "systemctl", "is-active", "bgp")
+
 
 def _peers_from_summary(raw: str) -> "dict[str, str]":
     """Extract {peer_ip: state} from `show bgp summary json` output.
@@ -768,13 +775,51 @@ def convergence_wait(rt: "Runtime", lab: str, node: str, timeout: int,
         for p in declared
         if observed.get(p, "") != "Established"
     )
+    # REQ-45C-9 (16 row 4: "names the down daemon"). The FREE signal first: an
+    # EMPTY stdout on the final read means the guest did not answer. MEASURED
+    # 2026-08-27 on SONiC.202405.1033627-fecd4ec81 -- bgp active: rc=0, 13898 B
+    # stdout, 0 B stderr; bgp stopped: rc=1, 0 B stdout, and stderr naming a
+    # CONTAINER ID, never the daemon. Emptiness discriminates, and the response
+    # carries no daemon identity -- so LD-45C-R4 R1 gates ONE deliberate
+    # observation on it. A non-empty read means the daemon answered and the
+    # per-neighbour line above is already the correct diagnosis, left unchanged.
+    #
+    # EMPTY vs NON-EMPTY, never a byte count (LD-45C-R4 R4): the restore read
+    # measured 13867 B against the control's 13898 B, cause unexplained. stdout
+    # length is not stable across reads.
+    #
+    # WORDING BOUND (LD-45C-R4 R3): an empty read means the guest DID NOT
+    # ANSWER, never that the daemon "was stopped" -- a STARTING container also
+    # returns non-zero (see the check=False note in the loop above) and was
+    # never measured. `active` with an empty read is its own diagnosis.
+    daemon = ""
+    remedy = ("check the peer's declaration and reachability, or raise the "
+              "convergence timeout for this lab")
+    if not (getattr(cp, "stdout", "") or "").strip():
+        probe = rt.exec(lab, node, list(_BGP_IS_ACTIVE_ARGV), check=False,
+                        capture_output=True)
+        state = (getattr(probe, "stdout", "") or "").strip() or "no answer"
+        if state == "active":
+            daemon = ("; the convergence read returned nothing while the `bgp` "
+                      "service reports active -- the daemon is running but did "
+                      "not answer")
+            remedy = ("report this with the guest's `systemctl status bgp` and "
+                      "`vtysh -c \"show bgp summary json\"` output; the service "
+                      "is up but the read is empty")
+        else:
+            daemon = ("; the convergence read returned nothing and the `bgp` "
+                      f"service reports {state} -- the routing daemon is not "
+                      "serving")
+            remedy = ("start the guest's `bgp` service and re-run; the routing "
+                      "daemon was not serving, so no declared peer could reach "
+                      "Established regardless of its declaration")
+
     _fail(
         "SONiC BGP did not converge",
         node,
         f"declared peers not Established within {int(timeout)}s",
-        f"per-neighbour state at timeout: {detail}",
-        "check the peer's declaration and reachability, or raise the "
-        "convergence timeout for this lab",
+        f"per-neighbour state at timeout: {detail}{daemon}",
+        remedy,
     )
 
 
