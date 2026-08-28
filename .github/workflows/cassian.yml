@@ -469,11 +469,14 @@ jobs:
           # req9 MUTATES the guest: it stops and restarts `bgp` through the
           # product's own runtime seam (LD-45C-R5 R1 -- no ssh/systemctl enters
           # this workflow). Restoration is structural inside the proof and is
-          # asserted on the restart's own verdict; the teardown sweep below
-          # destroys the lab regardless (LD-45C-R5 R4).
+          # asserted on the restart's own verdict. This step DOWNS ITS OWN LAB,
+          # matching every sibling (VM) step -- :415, :435, :453, :490-491. The
+          # teardown sweep below is the if:always() safety net for a step that
+          # dies mid-way (LD-45C-R5 R4), NOT the primary cleanup.
           ./src/cassian.py up topologies/sonic-bgp-daemon-stop.yaml --reconfigure
           python tests/sonic_precheck_proof.py req9 \
             topologies/sonic-bgp-daemon-stop.yaml sonic-bgp-daemon-stop
+          ./src/cassian.py down sonic-bgp-daemon-stop
 
       - name: SONiC address control (VM) — REQ-45C-5 control + positive (§4.5-c WI-3)
         if: success() || failure()
