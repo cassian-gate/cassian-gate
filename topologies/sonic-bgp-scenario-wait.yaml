@@ -1,0 +1,83 @@
+name: sonic-bgp-scenario-wait
+
+# §4.5-c WI-3 Unit B, REQ-45C-10/-30: the SCENARIO `wait_for_bgp` action
+# dispatched through the provider seam for a sonic-vm node. Founder rulings
+# LD-45C-R2 R1 (engine dispatch), LD-45C-R12 R1/R4 (this fixture),
+# LD-45C-R13 R1 (proof home), LD-45C-R14 (CI wiring), LD-45C-R15 (non-vacuity).
+#
+# ITS OWN FIXTURE, NOT SHARED. `sonic-bgp-daemon-stop.yaml` is the only other
+# converging sonic-vm pair in the tree and its own header reserves it: req9 is
+# the only leg that MUTATES guest state, and sharing a lab with a non-mutating
+# leg would couple them through the guest. `probe-sonic-bgp-pair.yaml` carries
+# a "DO NOT COMMIT" marker whose disposition is founder-reserved (rev 14 §4
+# item 7), so building on it would settle that question by use.
+#
+# CONVERGING BY CONSTRUCTION: each side declares the other by NAME and each
+# `remote_as` matches the peer's actual `asn` (s1 65041 <- s2 declares 65041;
+# s2 65042 <- s1 declares 65042). Contrast `sonic-bgp-nonconverging.yaml`,
+# which mismatches them deliberately. Both nodes declare each other, so
+# `_declaration_asymmetries` (cassian_engine.py:10276) returns EMPTY here --
+# this fixture carries no asymmetry and is not a REQ-45C-24 surface.
+#
+# WHY THE DECLARED-PEER SCOPING MATTERS. `sonic-guest-probe-reference.md` §4.2
+# measures the stock guest at AS 65100 with 31 neighbours (ARISTA01T2 ..
+# ARISTA16T0), none Established on an un-provisioned guest, and states the
+# consequence: any convergence wait requiring *every* neighbour Established can
+# never pass on SONiC. Scope to declared peers. The provider leg receives the
+# declared peer IPs via `_expected_peer_ips` (engine :10230) -- that is the
+# remedy the reference prescribes, and it is why this pair can pass at all.
+#
+# HALT-2 address discipline (founder ruling 2026-08-15, surface S-9): every
+# §4.5-c-authored SONiC fixture declares data addresses OUTSIDE the stock
+# canned ranges of sonic-vm:202405 -- Ethernet0..124 at 10.0.0.0/31 ..
+# 10.0.0.62/31, Loopback0 at 10.1.0.1/32, eth0 management at 10.0.0.15/24
+# (probe-reference §4.1). The addresses below are RFC 5737 TEST-NET-1
+# (192.0.2.0/24) and TEST-NET-2 (198.51.100.0/24), provably outside both. The
+# ranges themselves are named in tests/sonic_lifecycle_proof.py, not here -- a
+# guard whose constants live in the file it guards is not a guard.
+#
+# COLLISION CHECK, measured rather than assumed (LD-45C-R12 R4): every address
+# below was checked against every SONiC fixture in the tree. In use already --
+# links 198.51.100.0/31, .4/31, .8/31 and 203.0.113.0/31; router_ids
+# 192.0.2.11, .12, .14, .15, .21, .22, .24, .25, .31, .32; ASNs 65001, 65002,
+# 65011, 65012 with declared remote_as 65098, 65099. This fixture collides with
+# none of them. Recorded as hygiene, NOT as an existing invariant: two link
+# subnets are already shared between fixture pairs in this tree.
+#
+# ASNs deliberately avoid 65100, the stock DEVICE_METADATA.localhost.bgp_asn
+# measured on the un-provisioned guest, so rendering cannot be confused with
+# the factory default.
+#
+# Image resolves from the contrib-owned local tag (REQ-45C-11, REQ-45C-32).
+# No registry pull. Declaration surface is FRR's, key for key (REQ-45C-23).
+
+nodes:
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    asn: 65041
+    router_id: 192.0.2.41
+    networks:
+      - 192.0.2.41/32
+    bgp:
+      neighbors:
+        - peer: s2
+          remote_as: 65042
+
+  - name: s2
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    asn: 65042
+    router_id: 192.0.2.42
+    networks:
+      - 192.0.2.42/32
+    bgp:
+      neighbors:
+        - peer: s1
+          remote_as: 65041
+
+links:
+  - endpoints: ["s1:eth1", "s2:eth1"]
+    ipv4: ["198.51.100.12/31", "198.51.100.13/31"]

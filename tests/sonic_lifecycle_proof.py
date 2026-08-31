@@ -118,6 +118,17 @@ SECTION_45C_FIXTURES = (
     "sonic-control-unprovisioned.yaml",
     # §4.5-c WI-3 Unit A packet 2: REQ-45C-9 downed-daemon leg (LD-45C-R5).
     "sonic-bgp-daemon-stop.yaml",
+    # §4.5-c WI-3 Unit B packet 5a: REQ-45C-10/-30's CONVERGING pair for
+    # the scenario `wait_for_bgp` positive leg (LD-45C-R12 R1). Its own
+    # fixture, not shared -- daemon-stop is reserved by its mutating leg.
+    # Registered in the SAME commit that adds it so CI never sees an
+    # unregistered SONiC fixture (F-45C-C3-3): LEG 2 below is an explicit
+    # list, not a glob, and an unregistered fixture FAILS rather than
+    # passing unseen. Registration also puts its six declared addresses
+    # under LEG 1's HALT-2 sweep -- confirmed outside 10.0.0.0/26 and
+    # 10.1.0.0/24 before delivery, with a non-vacuity control on the
+    # detector.
+    "sonic-bgp-scenario-wait.yaml",
 )
 
 # SONiC fixtures inherited from 4.5-a. REQ-45C-5 states these collide with
