@@ -22,7 +22,7 @@ V9 = {
     "src/cassian_runtime_container.py": "6c323e7980d44a88cd80324b6bda74210134c906d465bf670e9a83470b46d7f1",  # re-baselined from b3e45fa2 (phase2 §4.5-b WI-C1 _normalize_prefix shim + WI-F ensure_ip_tools removal); orig b2a493f9
     "src/cassian_runtime_vm.py": "3832ad07ef6e9ce483bc0fe0f017df4584b15bf6c3a90c55fbb0b2b14f84f494",  # re-baselined from 865545e4 (phase2 §4.5-b WI-D2 node_runtime_map model-homing); orig 865545e4
     "src/cassian_state.py":             "aec4d412ee53555156cb5275c5d7a1329f54aaef298d4409feebcad2c198a9d6",
-    "src/cassian_tests.py":             "b8dc85343fd4cbff537add7d103cd75cf838434064a6a3503c76fa8305e32ee6",  # re-baselined from dd56046b (phase2 §4.5-b WI-C1 parse-family relocation shims); orig ba0a1f36
+    "src/cassian_tests.py":             "d977b4b1318266d6eea1360295b716db6d757ff1eb98f781f29c37f1e509a920",  # re-baselined from b8dc8534 (phase2 §4.5-c Unit B: wait_for_bgp gate predicate + LD-45C-R10 header import; LD-45C-R9/R10/R11); prior dd56046b; orig ba0a1f36
     "src/cassian_two_run.py":           "a6432665dbfee699713fe60c2e42d427c3c3fd9f82be7ec0ab65caa8b34c3ed9",  # re-baselined from cfafdfa6 (phase2 4.4 F-1 canonical serializer); orig 694f4e0d
     "src/cassian.py":                   "2da8db410415bb4e77fc6da1e944ff0919a5b6c03e1e630d42a99e5e10cbc664",  # re-baselined from 588fbed5 (phase2 §4.5-b WI-F dead-code sweep (ensure_ip_tools import) + guardrail comment correction); orig cbc931d2
 }

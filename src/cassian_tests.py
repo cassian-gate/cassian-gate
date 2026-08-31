@@ -23,6 +23,9 @@ from cassian_runtime_container import (
     scenario_clear_fault_state,
 )
 
+# LD-45C-R10 R1/R2: one bounded header-import line, one symbol, one module.
+from cassian_model import nos_wait_for_bgp_rejection
+
 def ensure_nc(rt: Runtime, lab: str, node: str) -> None:
     cp = rt.exec(
         lab,
@@ -1991,8 +1994,9 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                     die(f"{sctx}.wait_for_bgp.node: unknown node '{node}'")
 
                 nt = nrec.get("type") or nrec.get("kind")
-                if nt != "frr":
-                    die(f"{sctx}.wait_for_bgp.node: node '{node}' is not type/kind 'frr' (got {nt!r})")
+                _why = nos_wait_for_bgp_rejection(str(nt or ""))
+                if _why is not None:
+                    die(f"{sctx}.wait_for_bgp.node: node '{node}' {_why}")
 
 def build_test_index(topo: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """

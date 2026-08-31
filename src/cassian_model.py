@@ -32,6 +32,7 @@ from cassian_nos_types import (
     CandidateSpec,
     NosProvider,
     deferred_leg,
+    is_deferred,
     validate_provider,
 )
 from cassian_nos_frr import FRR_PROVIDER
@@ -190,6 +191,51 @@ def nos_provider_for(ntype: str, seam: str) -> NosProvider:
             code=2,
         )
     return p
+
+
+# -------------------------
+# `wait_for_bgp` scenario-step admissibility (REQ-45C-10/-30; LD-45C-R11)
+# -------------------------
+# Registry-derived, deny-by-default. One source (NOS_PROVIDERS), one reader.
+#
+# LD-45C-R11 R3 -- `frr` is admissible although FRR's provider binds
+# `convergence_wait` to a deliberate placeholder (`cassian_nos_frr.py:1703`):
+# the engine serves FRR through the inline wait and keeps that leg deferred
+# by design (NG-9 note, `cassian_engine.py:10349-10357`). The placeholder is
+# a statement about the LEG, not about the capability.
+#
+# REMOVAL CONDITION (LD-45C-R11 R3): when §4.5-d/-f wires FRR's
+# `convergence_wait`, delete `_INLINE_BGP_WAIT` and its use below -- the
+# placeholder test then admits `frr` unaided. Nothing enforces that
+# deletion automatically (LD-45C-R11 §9).
+#
+# PBE-P2-6 exposure -- a second site holding "frr"; the engine holds the
+# first at `cassian_engine.py:10360` -- recorded at LD-45C-R11 R6(a).
+_INLINE_BGP_WAIT = ("frr",)
+
+
+def nos_wait_for_bgp_rejection(ntype: str) -> "str | None":
+    """Reason a `wait_for_bgp` scenario step may not name `ntype`, or None.
+
+    Deny-by-default (LD-45C-R11 R2): a type absent from `NOS_PROVIDERS` --
+    which includes the empty string the caller passes for a missing
+    type/kind -- is inadmissible.
+
+    Returns the DC v2.1 §13 reason clause ONLY; the caller supplies its own
+    context prefix so the caller's `die` stays the single rejection point
+    (LD-45C-R11 R5). The admissible set is enumerated per §13(c)(i) and
+    sorted for determinism (Doctrine §1.4).
+    """
+    admissible = tuple(sorted(
+        _t for _t, _p in NOS_PROVIDERS.items()
+        if _t in _INLINE_BGP_WAIT or not is_deferred(_p.convergence_wait)
+    ))
+    if ntype in admissible:
+        return None
+    return (
+        f"is type/kind {ntype!r}, which has no BGP convergence support. "
+        f"Supported: {', '.join(admissible)}."
+    )
 
 
 # -------------------------
