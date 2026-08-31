@@ -9497,7 +9497,28 @@ def cmd_test(args: argparse.Namespace) -> None:
                 _sv(f"[scenario {sid}] {step_idx:02d}. wait_for_bgp node={node} timeout={timeout}")
 
                 try:
-                    wait_for_bgp(rt, lab, node, timeout=timeout)
+                    # §4.5-c WI-3 (REQ-45C-10/-30; LD-45C-R2 R1): the
+                    # scenario dispatch mirrors the ratified precheck
+                    # branch at `:10358-10365`, which is NOT edited --
+                    # FRR's path stays byte-unchanged. FRR keeps the
+                    # inline wait (NG-9); a registered non-FRR provider
+                    # takes its `convergence_wait` leg, which carries the
+                    # DECLARED peer IPs. That scoping is load-bearing:
+                    # stock SONiC ships 31 neighbours that never
+                    # establish, so a wait scoped to all peers could
+                    # never pass (`sonic-guest-probe-reference.md` §4.2).
+                    # `type` only, mirroring the precheck branch: the
+                    # resolver reads `n["type"]` as a hard subscript, and
+                    # the `kind` it writes belongs to the containerlab
+                    # topology, never to `topo["nodes"]`.
+                    _ntype = str((nodes_by_name.get(node) or {}).get("type") or "")
+                    _prov = NOS_PROVIDERS.get(_ntype)
+                    if _ntype == "frr" or _prov is None:
+                        wait_for_bgp(rt, lab, node, timeout=timeout)
+                    else:
+                        _prov.convergence_wait(
+                            rt, lab, node, timeout, _expected_peer_ips(node)
+                        )
 
                     dur_ms = int((time.time() - step_started) * 1000)
                     meta = {"node": node, "timeout_s": timeout}
