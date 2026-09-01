@@ -620,7 +620,7 @@ def cmd_validate(args: argparse.Namespace) -> None:
         topo = load_yaml(topo_path)
         ensure_valid_topology(topo)
 
-        resolved = resolve_topology(topo)
+        resolved = resolve_topology(topo, topo_path=topo_path)
         validate_scenarios(resolved)
 
         # Advisory-only coverage model (declared-only, resolve-time)
@@ -850,7 +850,7 @@ def cmd_preflight(args: argparse.Namespace) -> None:
         topo = load_yaml(topo_path)
         ensure_valid_topology(topo)
 
-        resolved = resolve_topology(topo)
+        resolved = resolve_topology(topo, topo_path=topo_path)
         validate_scenarios(resolved)
 
         # Declared-only coverage model (authoritative dependency; still advisory output)
@@ -1329,7 +1329,7 @@ def cmd_up(args: argparse.Namespace) -> None:
     if is_resolved_input:
         resolved_preview = topo_preview
     else:
-        resolved_preview = resolve_topology(topo_preview)
+        resolved_preview = resolve_topology(topo_preview, topo_path=topo_path)
 
     validate_scenarios(resolved_preview)
 
@@ -3610,7 +3610,9 @@ def cmd_test(args: argparse.Namespace) -> None:
         try:
             topo_preview = load_yaml(topo_gate_path)
             ensure_valid_topology(topo_preview)
-            resolved_preview = resolve_topology(topo_preview)
+            resolved_preview = resolve_topology(
+                topo_preview, topo_path=topo_gate_path
+            )
             validate_scenarios(resolved_preview)
         except SystemExit as e:
             raw_code = getattr(e, "code", 1)

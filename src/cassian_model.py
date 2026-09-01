@@ -12,6 +12,9 @@ import shlex
 import ipaddress
 import yaml
 
+import cassian_common  # LD-45C-R17/-R21: model-homed errors are read back
+                       # through cassian_common.LAST_ERROR_MSG by the
+                       # §4.5-c preconfigured proof; §14.4 unrestricted.
 from cassian_common import (
     DEFAULT_IMAGES,
     assert_vm_runtime_supported,
@@ -2077,7 +2080,7 @@ def _compile_frr_as_path_regex(pattern):
     return re.compile(translated)
 
 
-def resolve_topology(topo: dict) -> dict:
+def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
     """
     Return a copy of topo with missing link IPv4 addresses allocated.
     For now: allocate /31s sequentially from 10.0.0.0/16 in link order.
@@ -2113,6 +2116,117 @@ def resolve_topology(topo: dict) -> dict:
 
         n["runtime"] = rt
         n["_runtime"] = rt
+
+        # ----------------------------
+        # 0b) SONiC provisioning mode (REQ-45C-4/-26/-27).
+        # LD-45C-R17 R1: two keys only -- sonic_mode is an enum defaulting to
+        # `generated` and visible in the resolved output exactly as runtime is
+        # above; sonic_config_db is required iff preconfigured and rejected
+        # otherwise. LD-45C-R21 R1/R3: a relative value resolves against the
+        # TOPOLOGY FILE'S directory, never the process CWD, and is refused
+        # where no topology path is available.
+        #
+        # Every die() below passes code=2 EXPLICITLY. die()'s default is 1
+        # (cassian_common.py:137) and REQ-45C-27 requires exit 2; the frr_mode
+        # parity block at topo_to_containerlab() passes no code, so copying it
+        # verbatim would ship the anti-requirement.
+        # ----------------------------
+        if ntype == "sonic-vm":
+            _sm_raw = n.get("sonic_mode")
+            sonic_mode = str(_sm_raw or "generated").strip().lower()
+            if sonic_mode not in ("generated", "preconfigured"):
+                die(
+                    f"Topology invalid: node '{n.get('name')}': "
+                    f"sonic_mode must be 'generated' or 'preconfigured' "
+                    f"(got {_sm_raw!r})",
+                    code=2,
+                )
+            n["sonic_mode"] = sonic_mode
+
+            _cfg_raw = n.get("sonic_config_db")
+            _cfg_declared = _cfg_raw is not None and str(_cfg_raw).strip() != ""
+
+            if sonic_mode != "preconfigured":
+                if _cfg_declared:
+                    die(
+                        f"Topology invalid: node '{n.get('name')}': "
+                        f"sonic_config_db is declared but sonic_mode is "
+                        f"'{sonic_mode}'. Either set sonic_mode: preconfigured "
+                        f"to supply that artifact, or remove sonic_config_db.",
+                        code=2,
+                    )
+            else:
+                if not _cfg_declared:
+                    die(
+                        f"Topology invalid: node '{n.get('name')}': "
+                        f"sonic_mode is 'preconfigured' but sonic_config_db is "
+                        f"not declared. Either supply sonic_config_db naming a "
+                        f"complete config_db.json, or set sonic_mode: generated.",
+                        code=2,
+                    )
+
+                _p = Path(str(_cfg_raw).strip()).expanduser()
+                if not _p.is_absolute():
+                    if topo_path is None:
+                        die(
+                            f"Topology invalid: node '{n.get('name')}': "
+                            f"sonic_config_db {str(_cfg_raw)!r} is relative and "
+                            f"no topology file path is available to resolve it "
+                            f"against. A relative value is never resolved "
+                            f"against the working directory. Either supply an "
+                            f"absolute path, or run this against a topology "
+                            f"file on disk.",
+                            code=2,
+                        )
+                    _base = Path(str(topo_path)).expanduser()
+                    if not _base.is_absolute():
+                        _base = _base.resolve()
+                    _p = _base.parent / _p
+
+                if not _p.is_file():
+                    die(
+                        f"Topology invalid: node '{n.get('name')}': "
+                        f"sonic_mode is 'preconfigured' and sonic_config_db "
+                        f"names {str(_p)}, which does not exist. Either supply "
+                        f"the artifact at that path, or set sonic_mode: "
+                        f"generated to have Cassian generate the configuration.",
+                        code=2,
+                    )
+
+                # LD-45C-R17 R9: completeness precondition, host-side, before
+                # any guest is touched. Parses as JSON, and carries PORT and
+                # DEVICE_METADATA. Named by measurement, not by a schema.
+                try:
+                    _cfg = json.loads(_p.read_text(encoding="utf-8"))
+                except (ValueError, OSError) as _e:
+                    die(
+                        f"Topology invalid: node '{n.get('name')}': "
+                        f"sonic_config_db {str(_p)} is not readable as JSON "
+                        f"({_e}). Supply a complete config_db.json, or set "
+                        f"sonic_mode: generated.",
+                        code=2,
+                    )
+                    _cfg = None
+                if not isinstance(_cfg, dict):
+                    die(
+                        f"Topology invalid: node '{n.get('name')}': "
+                        f"sonic_config_db {str(_p)} does not contain a JSON "
+                        f"object. Supply a complete config_db.json, or set "
+                        f"sonic_mode: generated.",
+                        code=2,
+                    )
+                for _tbl in ("PORT", "DEVICE_METADATA"):
+                    if _tbl not in _cfg:
+                        die(
+                            f"Topology invalid: node '{n.get('name')}': "
+                            f"sonic_config_db {str(_p)} is missing the "
+                            f"{_tbl} table. A complete config_db.json carries "
+                            f"both PORT and DEVICE_METADATA. Supply a complete "
+                            f"artifact, or set sonic_mode: generated.",
+                            code=2,
+                        )
+
+                n["sonic_config_db"] = str(_p)
 
     # ----------------------------
     # 0c) §4.10 GEN-2 (Amendment A1): route-map set.community syntax validation.
