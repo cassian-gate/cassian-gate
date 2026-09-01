@@ -493,6 +493,64 @@ jobs:
           ./src/cassian.py down sonic-base-lifecycle
           ./src/cassian.py down sonic-control-unprovisioned
 
+
+      # --- Cycle E: the SCENARIO wait_for_bgp action (REQ-45C-10 / REQ-45C-30).
+      # LD-45C-R12 fixtures · R13 proof home · R14 this wiring · R15 positive
+      # non-vacuity · R16 negative two-surface assertion. Each lab-bearing step
+      # DOWNS ITS OWN LAB (R14 R2); the sweep below is the if:always() safety
+      # net for a step that dies mid-way, NOT the primary cleanup.
+      - name: SONiC scenario wait_for_bgp (VM) — converging pair, REQ-45C-10 (§4.5-c WI-3)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/wi3_wfb_pos
+          ./src/cassian.py up topologies/sonic-bgp-scenario-wait.yaml --reconfigure
+          ./src/cassian.py test sonic-bgp-scenario-wait --scenario sonic_wait_for_bgp_positive
+          cp -r labs/clab-sonic-bgp-scenario-wait /tmp/wi3_wfb_pos
+          ./src/cassian.py down sonic-bgp-scenario-wait
+          python tests/sonic_wait_for_bgp_proof.py req10 /tmp/wi3_wfb_pos/results.json
+
+      # `--scenario` by NAME, never `--all-scenarios` (founder ruling, session 13
+      # R3): a scenario added to either fixture later cannot then enter this leg
+      # silently. It also keeps this step off REQ-45C-29's surface -- with
+      # scenarios requested the global control-plane precheck does not run, and
+      # declared tests are skipped, so the two legs share a fixture and share no
+      # evidence.
+      - name: SONiC scenario wait_for_bgp (VM) — non-converging timeout, REQ-45C-10 (§4.5-c WI-3)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/wi3_wfb_neg
+          ./src/cassian.py up topologies/sonic-bgp-nonconverging.yaml --reconfigure
+          set +e
+          ./src/cassian.py test sonic-bgp-nonconverging --scenario sonic_wait_for_bgp_negative > /tmp/wi3_wfb_neg.out 2>&1
+          echo "cassian test rc=$? (a FAIL here is expected: REQ-45C-10 negative leg)"
+          set -e
+          cp -r labs/clab-sonic-bgp-nonconverging /tmp/wi3_wfb_neg
+          ./src/cassian.py down sonic-bgp-nonconverging
+          python tests/sonic_wait_for_bgp_proof.py req10neg \
+            /tmp/wi3_wfb_neg/results.json /tmp/wi3_wfb_neg.out
+
+      # LD-45C-R16 R5: this leg carries its OWN capture path. It does not reuse
+      # /tmp/wi3_nonconv.out and does not share the REQ-45C-29 step -- R14 R5's
+      # no-step-sharing half survives R16 and is honoured here.
+
+      # LD-45C-R14 R6: the lab-free schema leg stands up nothing, so it takes no
+      # up/down and is NOT added to the teardown sweep.
+      - name: SONiC scenario wait_for_bgp — schema regression, REQ-45C-30 (§4.5-c WI-3)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/sonic_wait_for_bgp_proof.py schema
       # --- Teardown sweep. Any cycle that failed mid-step leaves a lab behind;
       # a leaked lab poisons the next run rather than the one that caused it.
       # `|| true` per lab: this step must not itself become a failure source.
@@ -508,6 +566,7 @@ jobs:
           ./src/cassian.py down sonic-base-lifecycle || true
           ./src/cassian.py down sonic-control-unprovisioned || true
           ./src/cassian.py down sonic-bgp-daemon-stop || true
+          ./src/cassian.py down sonic-bgp-scenario-wait || true
 
       - name: Upload artifacts (always; bounded on success)
         if: always()

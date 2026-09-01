@@ -81,3 +81,27 @@ nodes:
 links:
   - endpoints: ["s1:eth1", "s2:eth1"]
     ipv4: ["198.51.100.12/31", "198.51.100.13/31"]
+
+# SCENARIO DECLARATION (founder ruling, session 13). LD-45C-R12 R1 fixed this
+# fixture by its BGP properties and is silent on a scenario; without one there
+# is no `wait_for_bgp` step for the engine to dispatch (cassian_engine.py's
+# scenario loop reaches the action only via `if "wait_for_bgp" in step`), so
+# 15.2 :463 could not run. `--scenario` selects `scenarios[*].id` from the
+# topology; no CLI route supplies a scenario from outside it.
+#
+# `node: s1` -- either side would do; s1 is named so the (VM) leg asserts on a
+# single record (Rule 19) rather than on whichever of two arrived first.
+#
+# `timeout: 180` is set by PROPERTY, not by proof: the closed reconciliation
+# finding measured Established at 25-51s on a two-node SONiC pair, and
+# `nos_ready` records bgp arriving up to ~90s after CONFIG_DB. 180 clears both
+# without asserting a bound -- no timing bound has ever been established. No
+# proof depends on this number: the positive leg's assertion reads
+# `meta.timeout_s` out of the record and compares against it.
+scenarios:
+  - id: sonic_wait_for_bgp_positive
+    description: "REQ-45C-10 (15.2 :463): scenario wait_for_bgp on a converging sonic-vm pair -- waits, proceeds."
+    steps:
+      - wait_for_bgp:
+          node: s1
+          timeout: 180

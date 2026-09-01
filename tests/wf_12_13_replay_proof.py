@@ -131,7 +131,11 @@ for _p in ("sonic_leaf_import_proof.py", "sonic_configgen_determinism_proof.py",
            "sonic_endpoint_recognition_proof.py",
            "sonic_routing_mode_precondition_proof.py",
            # §4.5-c WI-3 packet 4b-iii: CI-wired by the (VM) steps.
-           "sonic_precheck_proof.py"):
+           "sonic_precheck_proof.py",
+           # §4.5-c WI-3 packet 5b: the scenario wait_for_bgp legs
+           # (REQ-45C-10/-30), CI-wired by the (VM) steps.
+           # LD-45C-R14 R4, §14.4 conditional lockstep.
+           "sonic_wait_for_bgp_proof.py"):
     check(f"§4.5-c proof is CI-wired: {_p} present in the gate", _p in gate)
 
 fails = [n for n, ok in checks if not ok]

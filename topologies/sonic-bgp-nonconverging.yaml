@@ -64,3 +64,27 @@ nodes:
 links:
   - endpoints: ["s1:eth1", "s2:eth1"]
     ipv4: ["198.51.100.8/31", "198.51.100.9/31"]
+
+# SCENARIO DECLARATION (founder ruling, session 13). LD-45C-R12 R2 reuses this
+# fixture for 15.2 :464 conditional on R3's shape assertion; R2 is silent on a
+# scenario, and without one there is no `wait_for_bgp` step to dispatch.
+#
+# INERT FOR REQ-45C-29, measured rather than assumed: the ratified REQ-45C-29
+# step runs a bare `cassian test`, and `want_scenarios = bool(scenario_id or
+# all_scenarios)` (cassian_engine.py) is False without `--scenario` /
+# `--all-scenarios`. That step therefore never evaluates this block. The
+# 2026-08-26 two-fixtures ruling recorded in the header above guards EVIDENCE
+# coupling between legs; the flag keeps the two surfaces separate here.
+#
+# `timeout: 60` is set by PROPERTY, not by proof: long enough to be a genuine
+# poll to the bound rather than an early failure -- which is what LD-45C-R12 R3
+# exists to detect -- and short enough not to dominate (VM) job duration
+# (LD-45C-R14 D-1). No proof depends on the number: LD-45C-R16 R3's floor is
+# self-relative, reading `meta.timeout_s` out of the record.
+scenarios:
+  - id: sonic_wait_for_bgp_negative
+    description: "REQ-45C-10 (15.2 :464): scenario wait_for_bgp on a pair that cannot converge -- deterministic timeout inside the scenario record."
+    steps:
+      - wait_for_bgp:
+          node: s1
+          timeout: 60
