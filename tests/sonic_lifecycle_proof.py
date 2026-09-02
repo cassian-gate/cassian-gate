@@ -140,6 +140,22 @@ SECTION_45C_FIXTURES = (
     # of which cares whether a fixture is ever brought up. An un-deployed
     # fixture is still a §4.5-c-authored SONiC fixture and is NOT exempt.
     "sonic-mode-mixed.yaml",
+    # §4.5-c WI-1 packet 2, §15.2 row 26 (REQ-45C-26): the preconfigured-boot
+    # fixture. ONE sonic-vm guest carrying the operator's complete
+    # config_db.json, plus an frr node so the topology has a `links` entry --
+    # `ensure_valid_topology` rejects a topology without one.
+    #
+    # DEPLOYED, unlike sonic-mode-mixed.yaml. Its evidence is what the guest
+    # holds after `config reload -y -f` (LD-45C-R17 R3), so its CI step takes
+    # up/down and joins the if:always() sweep (LD-45C-R14 R2/R3).
+    #
+    # Its declared addresses -- 192.0.2.61 and 198.51.100.24/31 -- come under
+    # LEG 1's HALT-2 sweep by this registration. The operator artifact beside
+    # it carries the same two addresses in INTERFACE and LOOPBACK_INTERFACE;
+    # LEG 1 sweeps the TOPOLOGY file, so the artifact's addresses are checked
+    # by tests/sonic_preconfigured_proof.py req26 instead. Stated because the
+    # division is not obvious from either file alone.
+    "sonic-preconfigured-boot.yaml",
 )
 
 # SONiC fixtures inherited from 4.5-a. REQ-45C-5 states these collide with

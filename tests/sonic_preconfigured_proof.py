@@ -356,6 +356,154 @@ def _leg_mode4_controls(declared):
           and m2.get("s2") == "preconfigured", repr(m2))
 
 
+def _leg_req26(topo_path, lab):
+    """LEG 11 -- §15.2 row 26 (`:452`): the guest boots carrying the OPERATOR'S
+    config, and no generation produced it.
+
+    LIVE DEVICE. This leg runs only on `ai-netsim-runner`, after `cassian up`
+    has deployed the lab; there is no stub anywhere in it.
+
+    HOW ZERO-GENERATION IS EVIDENCED HERE, and how it differs from LEG 6:
+    LEG 6 counts calls to `probe_facts` and `gen_node_config` against a stub
+    and proves the branch does not INVOKE generation. That is a lab-free
+    property. This leg proves the complementary one at the artifact level --
+    what the device ended up holding is byte-for-byte the operator's file, so
+    nothing derived it. Neither implies the other and §15.2 row 26 needs the
+    device-side half.
+
+    THE `mac` IS THE DISCRIMINATOR, not a nuisance. `LD-45C-R17` §8 records
+    that `mac` is per-boot on this image, and the probe reference bears it out
+    across two measurements a week apart. The declared artifact carries a
+    FIXTURE constant instead. So if `config reload -y -f` had not applied,
+    the guest would report a per-boot value and (26f) would red. That is what
+    makes the read-back non-vacuous rather than a comparison of a value
+    against itself.
+
+    STATED COVERAGE LIMIT (PBE-P2-8): (26i) asserts the ABSENCE of the two
+    forbidden mode keys, and an empty mapping has no keys at all -- so (26i)
+    passes vacuously whenever the guest read fails. It is meaningful only
+    when (26g) is green. Measured with no `docker` present: the leg reports
+    9 failures including (26g), and (26i) shows `ok` beside them. The failing
+    (26g) is what makes that vacuity visible rather than silent; (26i) is not
+    independent evidence and must not be read as such.
+    """
+    import ast
+    import cassian_runtime_vm as _RV
+
+    print("=== tests/sonic_preconfigured_proof.py req26 (§15.2 row 26) ===")
+    doc = yaml.safe_load(Path(topo_path).read_text(encoding="utf-8")) or {}
+    node = None
+    for n in doc.get("nodes", []) or []:
+        if isinstance(n, dict) and str(n.get("sonic_mode") or "") == "preconfigured":
+            node = n
+            break
+    check("(26a) the topology declares a preconfigured sonic-vm node",
+          node is not None, repr([n.get("name") for n in doc.get("nodes", []) or []]))
+    if node is None:
+        return
+    name = str(node.get("name"))
+
+    art = Path(topo_path).resolve().parent / str(node.get("sonic_config_db"))
+    check("(26b) the operator artifact is readable beside the topology",
+          art.is_file(), str(art))
+    if not art.is_file():
+        return
+    declared = json.loads(art.read_text(encoding="utf-8"))
+
+    # HALT-2 for the ARTIFACT. LEG 1 of sonic_lifecycle_proof.py sweeps the
+    # topology file; nothing sweeps the JSON, and the JSON is what reaches the
+    # device. The ranges are restated here rather than imported: importing
+    # that module EXECUTES it -- measured, it runs its own argv dispatch and
+    # exits -- so a cross-proof import is not available. Restatement is the
+    # cost; the two copies are pinned to the same founder ruling of
+    # 2026-08-15 and to sonic_lifecycle_proof.py's STOCK_RANGES.
+    import ipaddress
+    stock = (ipaddress.ip_network("10.0.0.0/26"),
+             ipaddress.ip_network("10.1.0.0/24"))
+    art_addrs = [k.split("|", 1)[1]
+                 for tbl in ("INTERFACE", "LOOPBACK_INTERFACE")
+                 for k in (declared.get(tbl) or {}) if "|" in k]
+    in_stock = [a for a in art_addrs
+                if any(ipaddress.ip_interface(a).ip in nw for nw in stock)]
+    check("(26c) the ARTIFACT declares no address inside the stock ranges "
+          "(HALT-2; LEG 1 sweeps the topology, not the JSON)",
+          art_addrs and not in_stock,
+          "declared=%r in-stock=%r" % (art_addrs, in_stock))
+
+    # What the engine actually wrote for this node. `_provision_nos_providers`
+    # writes one file per key `provision` returns, through
+    # `write_json_canonical` (cassian_engine.py:290-296).
+    applied = (Path("labs") / ("clab-" + str(lab)) / "nodes" / name
+               / "config_db.json")
+    check("(26d) the run wrote a config_db.json for the preconfigured node",
+          applied.is_file(), str(applied))
+    if applied.is_file():
+        check("(26e) ZERO GENERATION: what was applied IS the operator's "
+              "artifact, not a re-derivation",
+              json.loads(applied.read_text(encoding="utf-8")) == declared,
+              "applied tables=%r declared tables=%r"
+              % (sorted(json.loads(applied.read_text(encoding='utf-8'))),
+                 sorted(declared)))
+
+    # --- Read the device back (LD-45C-R17 R11) ------------------------------
+    # A read that cannot be made is a RESULT, not a crash. Measured: with no
+    # `docker` on PATH the runtime raises FileNotFoundError and the traceback
+    # takes the summary with it, so the checks tally is lost and the step's
+    # red says nothing about the device. `_guest_stdout` can also exit via
+    # `_fail`. Both are captured and recorded as failures with their detail.
+    rt = _RV.build_runtime(doc)
+
+    def _read(argv, purpose):
+        try:
+            return S._guest_stdout(rt, lab, name, list(argv), purpose), ""
+        except SystemExit as exc:
+            return "", "guest read refused: %s" % exc
+        except Exception as exc:  # noqa: BLE001 - a failed read is a result
+            return "", "%s: %s" % (type(exc).__name__, exc)
+
+    meta_raw, meta_err = _read(S._DEVICE_METADATA_ARGV,
+                               "REQ-45C-26 (VM) read-back: DEVICE_METADATA")
+    check("(26f) the DEVICE_METADATA read reached the guest", not meta_err,
+          meta_err or "ok")
+    try:
+        meta = ast.literal_eval(meta_raw.strip()) if meta_raw.strip() else {}
+    except (ValueError, SyntaxError) as exc:
+        meta = {}
+        print("  note: DEVICE_METADATA did not parse: %s" % exc)
+    check("(26g) NON-VACUITY: the guest read returned a non-empty mapping, so "
+          "an empty read cannot pass as a match",
+          isinstance(meta, dict) and bool(meta), repr(meta_raw[:200]))
+
+    want = declared.get("DEVICE_METADATA", {}).get("localhost", {})
+    for field in ("hwsku", "platform", "mac"):
+        check("(26h) R11 read-back: DEVICE_METADATA.localhost.%s matches the "
+              "declared artifact%s" % (field, "  <-- the per-boot discriminator"
+                                       if field == "mac" else ""),
+              str(meta.get(field) or "") == str(want.get(field) or ""),
+              "guest=%r declared=%r" % (meta.get(field), want.get(field)))
+
+    check("(26i) LD-45C-R22 R1: neither forbidden mode key is present after "
+          "the apply",
+          not any(k in meta for k in S._FORBIDDEN_MODE_KEYS),
+          "present: %r" % [k for k in S._FORBIDDEN_MODE_KEYS if k in meta])
+
+    port_raw, port_err = _read(["sonic-cfggen", "-d", "--var-json", "PORT"],
+                               "REQ-45C-26 (VM) read-back: PORT")
+    check("(26j) the PORT read reached the guest", not port_err,
+          port_err or "ok")
+    try:
+        guest_port = json.loads(port_raw) if port_raw.strip() else {}
+    except ValueError:
+        guest_port = {}
+    check("(26k) R11 read-back: PORT key count matches the declared artifact",
+          len(guest_port) == len(declared.get("PORT") or {}),
+          "guest=%d declared=%d" % (len(guest_port),
+                                    len(declared.get("PORT") or {})))
+    check("(26l) NON-VACUITY: the PORT read is non-empty, so a failed read "
+          "cannot satisfy (26k) by matching zero against zero",
+          bool(guest_port), repr(port_raw[:160]))
+
+
 def main():
     print("=== tests/sonic_preconfigured_proof.py (lab-free) ===")
     tmp = Path(tempfile.mkdtemp(prefix="s45c-precfg-"))
@@ -611,6 +759,10 @@ if __name__ == "__main__":
     elif _args[0] == "mode4" and len(_args) == 1:
         _leg_mode4()
         sys.exit(_finish())
+    elif _args[0] == "req26" and len(_args) == 3:
+        _leg_req26(_args[1], _args[2])
+        sys.exit(_finish())
     else:
-        sys.exit("usage: sonic_preconfigured_proof.py [mode4]"
+        sys.exit("usage: sonic_preconfigured_proof.py "
+                 "[mode4 | req26 <topology> <lab>]"
                  "  (no argv = lab-free LEGs 1-9)")
