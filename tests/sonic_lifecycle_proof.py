@@ -129,6 +129,17 @@ SECTION_45C_FIXTURES = (
     # 10.1.0.0/24 before delivery, with a non-vacuity control on the
     # detector.
     "sonic-bgp-scenario-wait.yaml",
+    # §4.5-c WI-1 packet 2, §15.2 row 4 (REQ-45C-4): the mixed-MODE fixture.
+    # Two sonic-vm nodes whose sonic_mode values differ, so the per-node
+    # resolution REQ-45C-4 requires is demonstrable at all.
+    #
+    # ⚑ NEVER DEPLOYED (LD-45C-R29 R1/R2). Its evidence is
+    # topology.resolved.yaml, written before deploy, so the single-SONiC-node
+    # CI ceiling is not engaged. It is registered here anyway: registration is
+    # about the HALT-2 address sweep and the enumeration-drop guard, neither
+    # of which cares whether a fixture is ever brought up. An un-deployed
+    # fixture is still a §4.5-c-authored SONiC fixture and is NOT exempt.
+    "sonic-mode-mixed.yaml",
 )
 
 # SONiC fixtures inherited from 4.5-a. REQ-45C-5 states these collide with
