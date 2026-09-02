@@ -19,9 +19,29 @@ WHAT THIS COVERS -- §15.2's two preconfigured rows, and which is NOT here:
                           the ZERO-GENERATION property lab-free by call
                           count; it does not establish that a guest boots.
 
-LAB-FREE by construction. No guest is contacted. It reports no BLOCKED legs:
-a (VM) row is not claimed by a lab-free proof, which is the defect
-BL-P2-4.5c-35 records.
+TWO MODES (LD-45C-R30 R1). With no argv, LEGs 1-9 run and NO guest is
+contacted -- that half is lab-free by construction, as it was in packet 1.
+With a subcommand, a (VM) leg runs in its bound environment on
+`ai-netsim-runner`: `mode4` for §15.2 row 4 (`:451`).
+
+  CORRECTED HERE (LD-45C-R30 R4). Packet 1's header read "LAB-FREE by
+  construction. No guest is contacted." LD-45C-R20 R2 creates this file in
+  packet 1 and EXTENDS it in packet 2 with the two (VM) legs, which
+  falsifies that sentence the moment the extension lands. The correction is
+  bounded to this paragraph; no assertion, ordering or text of LEGs 1-9
+  moves (LD-45C-R30 R1, LD-45C-R26 R3, LD-45C-R23 R1).
+
+  NOT REPAIRED HERE, and named so a reader has a path to it: packet 1's
+  same paragraph glossed `BL-P2-4.5c-35` as recording that "a (VM) row is
+  not claimed by a lab-free proof". `-35`'s primary records a superseded
+  row citation and an unmet §18(1) BOUND-ENVIRONMENT condition, not that.
+  That gloss is `BL-P2-4.5c-121`'s subject and is outside LD-45C-R30 R4;
+  it is dropped here rather than carried forward, and `-121` stays open.
+
+  `mode4` DEPLOYS NOTHING. LD-45C-R29 R1: row 4's evidence is
+  `topology.resolved.yaml`, written before deploy. R3: the row is (VM) by
+  BOUND ENVIRONMENT, not by booting. LD-45C-R14 R6 is why its CI step takes
+  no `up`/`down` and is not added to the if:always() teardown sweep.
 
 STATED COVERAGE LIMITS (PBE-P2-8):
   * LEG 6 counts calls to `probe_facts` and `gen_node_config` through
@@ -40,9 +60,12 @@ STATED COVERAGE LIMITS (PBE-P2-8):
 """
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -146,6 +169,191 @@ def _guest_metadata():
     Mirrors the declared artifact's three read-back fields so R11 reconciles.
     """
     return dict(_complete_cfg()["DEVICE_METADATA"]["localhost"])
+
+
+def _repo_root():
+    """The repository root, derived from THIS FILE, never from the CWD.
+
+    The (VM) legs below run `cassian gen` from a temporary workspace, so the
+    CWD is deliberately not the repository. Deriving the root from `__file__`
+    is what lets that be true.
+    """
+    return Path(__file__).resolve().parent.parent
+
+
+def _finish():
+    """Summary + exit code for the subcommand arms.
+
+    `main()` carries its own copy of this tail. It is NOT refactored to share
+    this one: LD-45C-R30 R1 requires `main()` and LEGs 1-9 byte-identical, and
+    a shared helper would edit `main()`. The duplication is the ruling's cost,
+    recorded rather than optimised away.
+    """
+    print("\n%d checks, %d failures" % (CHECKS, len(FAILURES)))
+    if FAILURES:
+        for f in FAILURES:
+            print("  FAILED: %s" % f)
+        return 1
+    return 0
+
+
+def _run_gen(topo_path, lab_name, workspace):
+    """Run the SHIPPED `cassian gen` as a subprocess, with `workspace` as CWD.
+
+    LD-45C-R15 R4: evaluate the shipped behaviour, never assert it from code
+    structure. This invokes the real CLI entry point rather than reaching into
+    the engine, so what is measured is what ships.
+
+    WHY A TEMPORARY WORKSPACE, measured not assumed: `cassian_cli.py:386-388`
+    binds the labs directory to `Path.cwd()` for every command
+    `_command_uses_workspace_labs` admits, and `cassian_engine.py:239-251`
+    admits "gen". So the artifact lands under `workspace`, never in the
+    repository -- and because `workspace` is NOT the topology's directory,
+    the same run exercises LD-45C-R21 R1's cwd-independent `sonic_config_db`
+    resolution instead of needing a separate control for it.
+
+    Returns (CompletedProcess, Path-to-topology.resolved.yaml). The lab
+    directory is `clab-<topology name>` (`cassian_artifacts.py:15-16`), which
+    is the topology's `name` KEY and not its filename -- the control below
+    renames one and would silently look in the wrong place otherwise.
+    """
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(_repo_root() / "src")
+    proc = subprocess.run(
+        [sys.executable, str(_repo_root() / "src" / "cassian.py"),
+         "gen", str(topo_path)],
+        cwd=str(workspace), env=env, capture_output=True, text=True)
+    resolved = (Path(workspace) / "labs" / ("clab-" + lab_name)
+                / "topology.resolved.yaml")
+    return proc, resolved
+
+
+def _modes_of(doc):
+    """name -> sonic_mode, for whatever `nodes` the document carries."""
+    return {n.get("name"): n.get("sonic_mode")
+            for n in (doc or {}).get("nodes", []) or []
+            if isinstance(n, dict)}
+
+
+def _leg_mode4():
+    """LEG 10 -- §15.2 row 4 (`:451`): mixed-mode resolves PER NODE, visibly.
+
+    Expected column: "Modes visible per-node". The anti-requirement REQ-45C-4
+    guards is a mode that is NOT per-node in mixed topologies, so the leg
+    asserts the two nodes' modes DIFFER and then shows that assertion is
+    capable of failing.
+
+    NO GUEST, NO DEPLOY. LD-45C-R29 R1/R3.
+    """
+    print("=== tests/sonic_preconfigured_proof.py mode4 (§15.2 row 4) ===")
+    root = _repo_root()
+    topo = root / "topologies" / "sonic-mode-mixed.yaml"
+    check("(10a) the row-4 fixture is present", topo.is_file(), str(topo))
+    if not topo.is_file():
+        return
+
+    declared = yaml.safe_load(topo.read_text(encoding="utf-8"))
+    src_modes = _modes_of(declared)
+    check("(10b) s1 declares NO sonic_mode, so a resolved `generated` can "
+          "only have been SUPPLIED by resolve", src_modes.get("s1") is None,
+          repr(src_modes))
+    check("(10c) s2 declares `preconfigured` in the source",
+          src_modes.get("s2") == "preconfigured", repr(src_modes))
+
+    ws = Path(tempfile.mkdtemp(prefix="s45c-mode4-"))
+    # Decoy: if `sonic_config_db` resolved against the CWD rather than the
+    # topology's directory, (10i) would find THIS path and fail. Without it
+    # (10i) passes whether resolution is cwd-independent or merely lucky.
+    (ws / "sonic-mode-mixed-config-db.json").write_text(
+        json.dumps({"DECOY": True}), encoding="utf-8")
+
+    proc, resolved = _run_gen(topo, "sonic-mode-mixed", ws)
+    check("(10d) `cassian gen` exits 0 on the mixed fixture",
+          proc.returncode == 0,
+          "rc=%d stderr=%s" % (proc.returncode, proc.stderr[-400:]))
+    check("(10e) the resolved artifact is written, with NO deploy and no "
+          "containerlab", resolved.is_file(), str(resolved))
+    if not resolved.is_file():
+        return
+
+    got = yaml.safe_load(resolved.read_text(encoding="utf-8"))
+    modes = _modes_of(got)
+    check("(10f) s1 resolves to `generated` -- SUPPLIED by resolve, never "
+          "declared", modes.get("s1") == "generated", repr(modes))
+    check("(10g) s2 resolves to `preconfigured`",
+          modes.get("s2") == "preconfigured", repr(modes))
+    check("(10h) the two modes DIFFER -- the per-node property REQ-45C-4's "
+          "anti-requirement guards",
+          modes.get("s1") != modes.get("s2"), repr(modes))
+
+    cfgdb = {n.get("name"): n.get("sonic_config_db")
+             for n in got.get("nodes", []) or [] if isinstance(n, dict)}
+    want = str((topo.parent / "sonic-mode-mixed-config-db.json").resolve())
+    check("(10i) LD-45C-R21 R1: `sonic_config_db` resolved against the "
+          "TOPOLOGY directory from a different cwd carrying a decoy of the "
+          "same name", cfgdb.get("s2") == want,
+          "cwd=%s got=%r want=%r" % (ws, cfgdb.get("s2"), want))
+
+    _leg_mode4_controls(declared)
+
+
+def _leg_mode4_controls(declared):
+    """NON-VACUITY for (10f), (10g) and (10h), each shown capable of failing.
+
+    Per-guard, and on the negative path as well as the positive one. Two
+    controls, because one is not enough: an all-defaulted variant shows the
+    DISTINCTNESS assertion can fail, and an all-preconfigured variant shows
+    `generated` is not what resolve writes unconditionally. Without the
+    second, (10f) would pass against a resolver that hardcoded the first
+    node's mode.
+    """
+    import copy
+
+    def _variant(name, mutate, artifact=False):
+        d = copy.deepcopy(declared)
+        d["name"] = name
+        for n in d.get("nodes", []) or []:
+            if isinstance(n, dict):
+                mutate(n)
+        vdir = Path(tempfile.mkdtemp(prefix="s45c-%s-" % name))
+        if artifact:
+            (vdir / "cfg.json").write_text(json.dumps(_complete_cfg()),
+                                           encoding="utf-8")
+        vpath = vdir / (name + ".yaml")
+        vpath.write_text(yaml.safe_dump(d, sort_keys=False), encoding="utf-8")
+        vws = Path(tempfile.mkdtemp(prefix="s45c-%s-ws-" % name))
+        vproc, vres = _run_gen(vpath, name, vws)
+        return vproc, vres
+
+    def _defaulted(n):
+        n.pop("sonic_mode", None)
+        n.pop("sonic_config_db", None)
+
+    def _preconfigured(n):
+        n["sonic_mode"] = "preconfigured"
+        n["sonic_config_db"] = "cfg.json"
+
+    p1, r1 = _variant("mode4ctl-defaulted", _defaulted)
+    check("(10j) control A gen exits 0", p1.returncode == 0,
+          "rc=%d stderr=%s" % (p1.returncode, p1.stderr[-400:]))
+    m1 = _modes_of(yaml.safe_load(r1.read_text(encoding="utf-8"))) \
+        if r1.is_file() else {}
+    check("(10k) NON-VACUITY for (10h): with NO node declaring a mode both "
+          "resolve to `generated` and are EQUAL, so (10h)'s distinctness "
+          "assertion is capable of failing",
+          m1.get("s1") == "generated" and m1.get("s2") == "generated"
+          and m1.get("s1") == m1.get("s2"), repr(m1))
+
+    p2, r2 = _variant("mode4ctl-preconfigured", _preconfigured, artifact=True)
+    check("(10l) control B gen exits 0", p2.returncode == 0,
+          "rc=%d stderr=%s" % (p2.returncode, p2.stderr[-400:]))
+    m2 = _modes_of(yaml.safe_load(r2.read_text(encoding="utf-8"))) \
+        if r2.is_file() else {}
+    check("(10m) NON-VACUITY for (10f)/(10g), NEGATIVE PATH: with BOTH nodes "
+          "declaring `preconfigured`, s1 resolves to `preconfigured` -- so "
+          "`generated` is read from the declaration's absence, not written "
+          "unconditionally", m2.get("s1") == "preconfigured"
+          and m2.get("s2") == "preconfigured", repr(m2))
 
 
 def main():
@@ -393,4 +601,16 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # LD-45C-R30 R1 -- two-mode dispatch, confined to this block. No argv is
+    # packet 1's behaviour, byte-for-byte. `req26` is C1c's and is not
+    # authored here; an unknown subcommand is a usage error, never a silent
+    # no-op that would let a mis-wired CI step pass unseen (F-45C-C3-3).
+    _args = sys.argv[1:]
+    if not _args:
+        sys.exit(main())
+    elif _args[0] == "mode4" and len(_args) == 1:
+        _leg_mode4()
+        sys.exit(_finish())
+    else:
+        sys.exit("usage: sonic_preconfigured_proof.py [mode4]"
+                 "  (no argv = lab-free LEGs 1-9)")
