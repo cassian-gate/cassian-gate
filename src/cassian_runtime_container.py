@@ -893,7 +893,7 @@ def write_containerlab_file(topo_path: Path) -> Path:
         write_file(lab_dir(resolved["name"]) / "topology.yaml", yaml.safe_dump(resolved, sort_keys=False))
         write_file(lab_dir(resolved["name"]) / "topology.resolved.yaml", yaml.safe_dump(resolved, sort_keys=False))
     else:
-        resolved = resolve_topology(topo)
+        resolved = resolve_topology(topo, topo_path=topo_path)
         validate_scenarios(resolved)
 
         # Advisory-only coverage model (declared-only, resolve-time)

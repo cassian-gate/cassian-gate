@@ -56,10 +56,10 @@ FORK_BASELINE = {
     "src/cassian_cli.py": "9234f3fdb76b5432bac8bf22a9807f234da9dff3a72d7c334ed9e2508183898a",
     "src/cassian_import.py": "604c8d8ff2bc461f8b43d7e5be6f63bd00f653ce6f83b64ffff9cf90450cf71c",  # §4.14 new module, enforced (LD-8/LD-9)
     "src/cassian_nos_frr.py": "0b48fba120ca67edd35d0379a906cb82b726da75d7ba5f88908bd6f07a5c2756",  # re-baselined from 898eb296 (§4.5-c WI-7: supplementary EVPN text collect leg, REQ-45C-14); §4.5-b new module (WI-B NOS provider structure); enforced (REQ-45b-13; LD-9)
-    "src/cassian_nos_sonic.py": "64757ef468a42a7da883c963a0fa5b3260bbadbc944ecc5c063381cff73ffcf6",  # re-baselined from 44aae825 (WI-3 REQ-45C-9: gated daemon observation on convergence_wait's timeout path; LD-45C-R4); §4.5-c new module (WI-1 SONiC provider); enforced (REQ-45C-39; LD-9)
+    "src/cassian_nos_sonic.py": "0cd5bc21b068562e924dcd4900267417789bf9cef0034d843fb57177ed34b72d",  # re-baselined from 44aae825 (WI-3 REQ-45C-9: gated daemon observation on convergence_wait's timeout path; LD-45C-R4); §4.5-c new module (WI-1 SONiC provider); enforced (REQ-45C-39; LD-9)
     "src/cassian_nos_types.py": "470ea87fa0cb3bfae6eec450ef95ed970ab9a0415866df1875a2b43d1db5a72f",  # §4.5-b new module (WI-B NOS provider structure); enforced (REQ-45b-13; LD-9)
     "src/cassian_common.py": "0f5a326f3407811ba9afa8c449a15a9526e101a0ba258998b29bd633e48223bb",  # re-baselined from a0469a2a (phase2 §4.5-b WI-C1/C2 NOS-neutral re-homes + A-S6 provenance comment); orig a0469a2a
-    "src/cassian_runtime_container.py": "6c323e7980d44a88cd80324b6bda74210134c906d465bf670e9a83470b46d7f1",  # re-baselined from b3e45fa2 (phase2 §4.5-b WI-C1 _normalize_prefix shim + WI-F ensure_ip_tools removal); orig b2a493f9
+    "src/cassian_runtime_container.py": "1863184e7d739b4faf2749fa3e133824851b7fe05a1b80025fc7806e24d7309f",  # re-baselined from b3e45fa2 (phase2 §4.5-b WI-C1 _normalize_prefix shim + WI-F ensure_ip_tools removal); orig b2a493f9
     "src/cassian_runtime_vm.py": "3832ad07ef6e9ce483bc0fe0f017df4584b15bf6c3a90c55fbb0b2b14f84f494",  # re-baselined from 865545e4 (phase2 §4.5-b WI-D2 node_runtime_map model-homing); orig 865545e4
     "src/cassian_state.py": "aec4d412ee53555156cb5275c5d7a1329f54aaef298d4409feebcad2c198a9d6",
     "src/cassian_tests.py": "d977b4b1318266d6eea1360295b716db6d757ff1eb98f781f29c37f1e509a920",  # re-baselined from b8dc8534 (phase2 §4.5-c Unit B: wait_for_bgp gate predicate + LD-45C-R10 header import; LD-45C-R9/R10/R11); prior dd56046b; orig ba0a1f36

@@ -453,6 +453,12 @@ def _assert_overlay_platform_clean(overlay: dict, node: str) -> None:
 # no-persistence property (`/etc/sonic/config_db.json` is never rewritten).
 _OVERLAY_GUEST_PATH = "/tmp/cassian-overlay.json"
 
+# Guest-side staging path for preconfigured mode (REQ-45C-4). Distinct from the
+# overlay path deliberately: LD-45C-R17 D-7 keeps the two operations distinct,
+# and a shared path would let a reader -- or a later edit -- conflate a
+# field-level merge with a wholesale replacement.
+_PRECONFIGURED_GUEST_PATH = "/tmp/cassian-config-db.json"
+
 
 def _guest_stdout(rt: "Runtime", lab: str, node: str, argv: list,
                   what: str) -> str:
@@ -502,11 +508,28 @@ _FORBIDDEN_MODE_KEYS = ("docker_routing_config_mode", "frr_mgmt_framework_config
 def assert_routing_mode_clean(rt: "Runtime", lab: str, node: str) -> None:
     """REQ-45C-44(b): refuse to provision a guest in a non-default routing mode.
 
-    Cassian's overlay writes BGP state into `config_db`. If the guest declares
-    `docker_routing_config_mode` or `frr_mgmt_framework_config`, its routing
-    configuration is sourced elsewhere and the overlay would be applied but not
-    honoured -- silently. Deny-by-default: fail loud rather than provision into
-    a mode whose semantics §4.5-c has not established.
+    LD-45C-R22 R1/R2: this is a LIFECYCLE precondition, not a generation
+    precondition, and it runs unconditionally for both `sonic_mode` values.
+    The justification below is re-anchored accordingly -- the earlier text
+    grounded it in "Cassian's overlay writes BGP state into config_db", which
+    is false for the preconfigured path and would read as licensing a skip.
+
+    If the guest declares `docker_routing_config_mode` or
+    `frr_mgmt_framework_config`, its routing configuration is sourced from
+    somewhere other than the tables the declared configuration lands in, and
+    the configuration would be applied but not honoured -- silently. Absent
+    this assertion a run can go GREEN while the declared BGP configuration was
+    never applied: prechecks are opt-in (§6.5) and a topology may declare BGP
+    without BGP-dependent invariants, so absence would imply pass. Doctrine
+    §1.11 forbids that (`:259` silence/omission/absence cannot be misread as
+    success; `:267` absence must never imply pass). Amendment A-H6 is the
+    scoping act. Deny-by-default: fail loud rather than provision into a mode
+    whose semantics §4.5-c has not established.
+
+    The exposure is not smaller under preconfigured mode. `config reload -y -f`
+    is wholesale replacement (LD-45C-R17 R3), not a field-level merge, so an
+    operator's complete artifact is equally unhonoured by a guest reading its
+    routing configuration elsewhere.
 
     STATED COVERAGE LIMIT (PBE-P2-8): this asserts the keys are ABSENT. It does
     not establish what SONiC does when they are present -- that is unmeasured,
@@ -858,12 +881,243 @@ def probe_facts(rt: "Runtime", lab: str, node: str) -> "dict[str, Any]":
     return {"hwsku": hwsku, "port_order": order}
 
 
+def _verify_preconfigured_applied(rt: "Runtime", lab: str, node: str,
+                                  declared: dict) -> None:
+    """LD-45C-R17 R11: verify the apply by reading the database back.
+
+    R5 forces this. `config reload`'s exit code discriminates applied from
+    not-applied in NEITHER direction -- measured 0 applying a complete file, 0
+    against a path that does not exist having applied nothing, and 1 when monit
+    was transiently unavailable having applied nothing. The database is
+    therefore the only evidence that the artifact took effect.
+
+    Both reads are taken in ONE lab cycle. `mac` is per-boot (R17 §8), so a
+    comparison spanning a reboot would compare values never meant to match.
+
+    R12 (later-wins, measured): where the operator's file and the image's
+    `init_cfg.json` both declare a field, the operator's value survives;
+    `init_cfg` supplies only what the operator omits. A field the operator did
+    not declare is therefore skipped rather than compared.
+
+    STATED COVERAGE LIMIT (PBE-P2-8): the minimum set R11 names is the PORT key
+    count plus `DEVICE_METADATA.localhost.{hwsku, platform, mac}`. This is a
+    tripwire for "nothing was applied", NOT a full-artifact differential and
+    NOT a proof that everything was applied. A guest that applied part of the
+    artifact and reported these four values correctly would pass.
+    """
+    raw_ports = _guest_stdout(
+        rt, lab, node, ["sonic-cfggen", "-d", "--var-json", "PORT"],
+        "the PORT table",
+    )
+    try:
+        guest_ports = json.loads(raw_ports.strip() or "{}")
+    except ValueError:
+        _fail(
+            "SONiC guest PORT table is not parseable after apply",
+            node,
+            "the read-back returned a PORT payload that is not JSON",
+            "the apply cannot be verified, and `config reload`'s exit code is "
+            "not a success signal (LD-45C-R17 R5)",
+            "report this with the guest's "
+            "`sonic-cfggen -d --var-json PORT` output",
+        )
+        return
+    declared_ports = declared.get("PORT") or {}
+    if len(guest_ports) != len(declared_ports):
+        _fail(
+            "SONiC preconfigured apply did not take effect",
+            node,
+            f"the guest reports {len(guest_ports)} PORT entries; the declared "
+            f"artifact carries {len(declared_ports)}",
+            "`config reload` returns 0 whether or not it applied anything, so "
+            "the database read is the only evidence; the counts disagree, so "
+            "the declared configuration is not in force",
+            "confirm the artifact is a complete config_db.json for this "
+            "platform, then re-run",
+        )
+        return
+
+    raw_meta = _guest_stdout(
+        rt, lab, node, list(_DEVICE_METADATA_ARGV), "the device metadata",
+    )
+    try:
+        guest_meta = ast.literal_eval(raw_meta.strip() or "{}")
+    except (ValueError, SyntaxError):
+        _fail(
+            "SONiC guest device metadata is not parseable after apply",
+            node,
+            "the read-back returned a DEVICE_METADATA payload that is not a "
+            "Python literal",
+            "the apply cannot be verified, and the reload exit code is not a "
+            "success signal (LD-45C-R17 R5)",
+            "report this with the guest's "
+            "`" + " ".join(_DEVICE_METADATA_ARGV) + "` output",
+        )
+        return
+    if not isinstance(guest_meta, dict):
+        _fail(
+            "SONiC guest device metadata has an unexpected shape after apply",
+            node,
+            "expected a mapping, got " + type(guest_meta).__name__,
+            "the apply cannot be verified against a payload of this shape",
+            "report this with the guest's "
+            "`" + " ".join(_DEVICE_METADATA_ARGV) + "` output",
+        )
+        return
+
+    declared_meta = (declared.get("DEVICE_METADATA") or {}).get("localhost") or {}
+    for field in ("hwsku", "platform", "mac"):
+        want = declared_meta.get(field)
+        if want is None:
+            continue  # R12: undeclared fields fall through to init_cfg
+        got = guest_meta.get(field)
+        if str(got) != str(want):
+            _fail(
+                "SONiC preconfigured apply did not take effect",
+                node,
+                f"the guest reports {field}={got!r}; the declared artifact "
+                f"carries {want!r}",
+                "R12 measured that the operator's value survives a reload, so "
+                "a disagreement means the artifact was not applied; the reload "
+                "exit code cannot report this (LD-45C-R17 R5)",
+                "confirm the artifact declares this platform's values, then "
+                "re-run",
+            )
+            return
+
+
+def _provision_preconfigured(rt: "Runtime", lab: str, node: str,
+                             node_d: dict) -> "dict[str, Any] | None":
+    """Apply the operator's complete `config_db.json` (REQ-45C-4/-26/-27).
+
+    NO GENERATION IS INVOKED (REQ-45C-26). Neither `probe_facts` nor
+    `gen_node_config` is called on this path. That is asserted by CALL COUNT
+    rather than by absence of an error, with a non-vacuity control proving the
+    generated path does invoke both.
+
+    RE-READ, NOT A CARRIED OBJECT. `resolve_topology` parses and validates the
+    artifact at resolve time (LD-45C-R17 R9) but carries only the resolved PATH
+    into the node -- the parsed mapping is local to that block and is
+    discarded. This function re-reads the file. An artifact removed or
+    corrupted between resolve and provision therefore fails loud HERE; that
+    window is unmeasured (LD-45C-R22 §8) and is refused rather than navigated.
+
+    APPLY MECHANISM: `sudo config reload -y -f <path>` (LD-45C-R17 R3). NOT
+    `config load`, which merges at field level and so cannot deliver a complete
+    file. NOT `-l/--load-sysinfo` (R10): under R7 an omitted table is a
+    DEFECTIVE OPERATOR FILE, and `-l` would repair it invisibly, converting a
+    detectable fault into a silent one. R9 catches it loudly instead.
+
+    TRANSPORT IS NOT THE ARTIFACT. The staged text is the operator's own file
+    with line endings normalised; the authoritative artifact is this function's
+    return value, which core serializes through `write_json_canonical`
+    (PBE-P2-7, REQ-45C-42). No serialization is authored here.
+
+    RETURN VALUE (LD-45C-R24 R1/R2): `{"config_db.json": <the operator's
+    artifact>}`. `cassian_engine.py:290-296` writes one file per key, so the
+    run directory carries what was applied, exactly as for a generated node.
+    Returning None would leave the directory silent about a node that WAS
+    provisioned -- absence implying pass, which Doctrine §1.11 `:267` forbids.
+    """
+    declared_path = str(node_d.get("sonic_config_db") or "")
+    if not declared_path:
+        _fail(
+            "SONiC preconfigured node carries no resolved artifact path",
+            node,
+            "sonic_mode is 'preconfigured' but the resolved node has no "
+            "sonic_config_db value",
+            "resolve-time validation sets this path (LD-45C-R17 R1); its "
+            "absence means the node reached provisioning unresolved",
+            "report this with the topology that produced it",
+        )
+        return None
+
+    try:
+        with open(declared_path, encoding="utf-8") as fh:
+            raw_text = fh.read()
+    except OSError as exc:
+        _fail(
+            "SONiC preconfigured artifact is not readable at provision time",
+            node,
+            f"{declared_path} could not be read ({exc})",
+            "the artifact satisfied the completeness precondition at resolve "
+            "time and is unreadable now; applying a partial configuration is "
+            "not offered",
+            "restore the artifact at that path, or set sonic_mode: generated",
+        )
+        return None
+
+    try:
+        declared = json.loads(raw_text)
+    except ValueError as exc:
+        _fail(
+            "SONiC preconfigured artifact is no longer valid JSON",
+            node,
+            f"{declared_path} did not parse ({exc})",
+            "the artifact parsed at resolve time and does not now; the "
+            "declared configuration cannot be applied",
+            "restore the artifact at that path, or set sonic_mode: generated",
+        )
+        return None
+
+    if not isinstance(declared, dict):
+        _fail(
+            "SONiC preconfigured artifact is not a JSON object",
+            node,
+            f"{declared_path} parsed as {type(declared).__name__}, not a "
+            "mapping",
+            "config_db.json is a table-keyed object; a non-object carries no "
+            "tables to apply",
+            "supply a complete config_db.json, or set sonic_mode: generated",
+        )
+        return None
+
+    payload = raw_text.replace("\r\n", "\n").replace("\r", "\n")
+    payload = payload.rstrip("\n") + "\n"
+    write_cmd = ("printf '%s' " + shlex.quote(payload) + " > "
+                 + shlex.quote(_PRECONFIGURED_GUEST_PATH))
+    cp = rt.exec(lab, node, ["sh", "-c", write_cmd], check=False,
+                 capture_output=True)
+    if getattr(cp, "returncode", 1) != 0:
+        _fail(
+            "SONiC preconfigured artifact could not be staged on the guest",
+            node,
+            f"writing {_PRECONFIGURED_GUEST_PATH} exited "
+            f"{getattr(cp, 'returncode', '?')}",
+            "the artifact is supplied through the exec verb; without the "
+            "staged file `config reload -f` has nothing to apply",
+            "confirm the guest filesystem is writable at /tmp and re-run",
+        )
+        return None
+
+    # LD-45C-R17 R3/R10: `config reload -y -f`, never `-l`, never `config load`.
+    # LD-45C-R17 R5: the returncode is deliberately NOT consulted -- it
+    # discriminates applied from not-applied in neither direction. The
+    # read-back below is the check.
+    rt.exec(lab, node,
+            ["sudo", "config", "reload", "-y", "-f",
+             _PRECONFIGURED_GUEST_PATH],
+            check=False, capture_output=True)
+
+    _verify_preconfigured_applied(rt, lab, node, declared)
+
+    return {"config_db.json": declared}
+
+
 def provision(rt: "Runtime", lab: str, node: str, node_d: dict,
               topo: dict) -> "dict[str, Any] | None":
     """Probe, generate, supply, and return what was applied (R-C3-12/-14).
 
-    SUPPLY PATH (R-C3-12, founder ruling): the overlay reaches the guest
-    through the supported `exec` verb -- write, then `config load -y`, which
+    TWO PATHS (LD-45C-R17 R1; LD-45C-R20 R1). A `sonic-vm` node declares
+    `sonic_mode: generated` (the default) or `sonic_mode: preconfigured`. The
+    routing-mode precondition below runs for BOTH -- it is a lifecycle
+    precondition, not a generation one (LD-45C-R22 R1) -- and the fork is taken
+    after it. Everything from SUPPLY PATH down describes the GENERATED path
+    ONLY; `_provision_preconfigured` documents the other.
+
+    SUPPLY PATH -- GENERATED PATH ONLY (R-C3-12, founder ruling): the overlay
+    reaches the guest through the supported `exec` verb -- write, then
+    `config load -y`, which
     dispatches to `sonic-cfggen --write-to-db` and MERGES at field level.
     Measured 2026-08-18 on sonic-vm:202405: PORT 32 -> 32, hwsku/platform/mac
     intact, `/etc/sonic/config_db.json` md5 unchanged. The containerlab boot
@@ -884,6 +1138,11 @@ def provision(rt: "Runtime", lab: str, node: str, node_d: dict,
     # will refuse to provision wastes two guest reads and reports the
     # failure later than it is knowable.
     assert_routing_mode_clean(rt, lab, node)
+
+    # LD-45C-R22 R1: the fork lands AFTER the precondition, never before.
+    # LD-45C-R20 R1 places the preconfigured branch in packet 1.
+    if str(node_d.get("sonic_mode") or "generated") == "preconfigured":
+        return _provision_preconfigured(rt, lab, node, node_d)
 
     facts = probe_facts(rt, lab, node)
     out = gen_node_config(node_d, topo, facts)
