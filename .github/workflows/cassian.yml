@@ -147,6 +147,11 @@ jobs:
           python tests/reconfigure_clean_state_proof.py
           python tests/sonic_provision_readiness_gate_proof.py
           python tests/sonic_nos_ready_proof.py
+          # §4.5-c WI-1 packet 2 C2, entry 1 of 3 (LD-45C-R30 R2). No argv =
+          # LEGs 1-9, lab-free, byte-identical to what packet 1 landed. The
+          # file's two (VM) arms take their own steps below; LD-45C-R27 R1's
+          # "single CI entry" is one EDIT OCCASION, not one step (R30 §5).
+          python tests/sonic_preconfigured_proof.py
 
       - name: cmd evidence derivation differential (§4.5-c WI-8, REQ-45C-36)
         shell: bash
@@ -554,6 +559,40 @@ jobs:
       # --- Teardown sweep. Any cycle that failed mid-step leaves a lab behind;
       # a leaked lab poisons the next run rather than the one that caused it.
       # `|| true` per lab: this step must not itself become a failure source.
+      # --- Cycle F: §4.5-c WI-1 packet 2 — the two preconfigured-mode (VM)
+      # rows. LD-45C-R30 R2 fixes the shape of both steps. They differ, and
+      # the difference is the point:
+      #   row 4  — resolve-time evidence, DEPLOYS NOTHING (LD-45C-R29 R1/R3),
+      #            so no up/down and NOT in the sweep below (LD-45C-R14 R6).
+      #   row 26 — boots one guest, so it DOWNS ITS OWN LAB as its last action
+      #            (R14 R2) and IS in the sweep (R14 R3).
+      # LD-45C-R20 R5: neither discharges REQ-45C-4/-26/-27 until both packets
+      # have landed and these legs are green.
+
+      - name: SONiC mixed-mode resolution (VM) — REQ-45C-4 row 4 (§4.5-c WI-1)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          # No `up` and no `down`: the leg runs `cassian gen` in a temporary
+          # workspace and asserts on topology.resolved.yaml, written before
+          # deploy. A step that deploys nothing takes no up/down (R14 R6).
+          python tests/sonic_preconfigured_proof.py mode4
+
+      - name: SONiC preconfigured boot (VM) — REQ-45C-26 row 26 (§4.5-c WI-1)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          ./src/cassian.py up topologies/sonic-preconfigured-boot.yaml --reconfigure
+          python tests/sonic_preconfigured_proof.py req26 \
+            topologies/sonic-preconfigured-boot.yaml sonic-preconfigured-boot
+          ./src/cassian.py down sonic-preconfigured-boot
+
       - name: SONiC (VM) teardown sweep (§4.5-c WI-3)
         if: always()
         env:
@@ -567,6 +606,10 @@ jobs:
           ./src/cassian.py down sonic-control-unprovisioned || true
           ./src/cassian.py down sonic-bgp-daemon-stop || true
           ./src/cassian.py down sonic-bgp-scenario-wait || true
+          # §4.5-c WI-1 packet 2: row 26's lab only. sonic-mode-mixed is NOT
+          # here and must not be added -- it is never deployed, so there is
+          # nothing to leak (LD-45C-R14 R6, LD-45C-R29 R1).
+          ./src/cassian.py down sonic-preconfigured-boot || true
 
       - name: Upload artifacts (always; bounded on success)
         if: always()

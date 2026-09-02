@@ -135,7 +135,15 @@ for _p in ("sonic_leaf_import_proof.py", "sonic_configgen_determinism_proof.py",
            # §4.5-c WI-3 packet 5b: the scenario wait_for_bgp legs
            # (REQ-45C-10/-30), CI-wired by the (VM) steps.
            # LD-45C-R14 R4, §14.4 conditional lockstep.
-           "sonic_wait_for_bgp_proof.py"):
+           "sonic_wait_for_bgp_proof.py",
+           # §4.5-c WI-1 packet 2 C2: the preconfigured-mode proof. Created in
+           # packet 1 and left unwired (BL-P2-4.5c-109); LD-45C-R27 R1 assigns
+           # the wiring to packet 2 and R2 requires this lockstep entry as its
+           # price. Three cassian.yml steps run it -- the lab-free harness, the
+           # row-4 mode4 arm and the row-26 req26 arm (LD-45C-R30 R2) -- and
+           # this substring test proves only that the NAME appears, per the
+           # coverage limit stated above.
+           "sonic_preconfigured_proof.py"):
     check(f"§4.5-c proof is CI-wired: {_p} present in the gate", _p in gate)
 
 fails = [n for n, ok in checks if not ok]
