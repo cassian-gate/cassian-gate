@@ -72,6 +72,40 @@ jobs:
             python -m pip install .
           fi
 
+      - name: Install dependencies into the guard-matrix interpreters
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The step above installs into the PINNED interpreter only. The guard
+          # matrix runs "python$v" for 3.10/3.11/3.12, and REQ-45C-33's
+          # import-clean leg imports product modules carrying a third-party
+          # dependency -- src/cassian_model.py:13 is `import yaml`. Run
+          # 33860280463 measured tests/sonic_leaf_import_proof.py failing at
+          # python3.10 with ModuleNotFoundError: No module named 'yaml'.
+          # LD-45C-R33 R2 surfaced it; BL-P2-4.5c-140 records it.
+          #
+          # 3.11 is INCLUDED, not skipped: nothing measured establishes that
+          # "python3.11" is the interpreter the pinned step installed into, and
+          # the matrix never reached 3.11 before failing at 3.10. Assuming they
+          # are the same would be the inference this failure punished.
+          #
+          # LD-UN-1 C1 Option B: provisioning the runner is in scope for a
+          # runner-setup step; a fall back to single-version is forbidden.
+          for v in 3.10 3.11 3.12; do
+            "python$v" -m pip install --upgrade pip
+            if [ -f requirements.txt ]; then
+              "python$v" -m pip install -r requirements.txt
+            else
+              "python$v" -m pip install .
+            fi
+          done
+          # Assert the install TOOK, per interpreter. A silent pip failure would
+          # otherwise resurface later as the same ModuleNotFoundError, which is
+          # the shape this step exists to close.
+          for v in 3.10 3.11 3.12; do
+            "python$v" -c "import sys, yaml; print('python%d.%d PyYAML %s' % (sys.version_info[0], sys.version_info[1], yaml.__version__))"
+          done
+
       - name: Syntax sanity (fast)
         shell: bash
         run: |
