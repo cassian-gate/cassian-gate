@@ -98,6 +98,10 @@ jobs:
             "python$v" tests/name_resolution_guard.py --selftest
             echo "=== python$v gate (REQ-UNDEF-12) ==="
             "python$v" tests/name_resolution_guard.py
+            echo "=== python$v import-clean (LD-45C-R33 R2, REQ-45C-33) ==="
+            "python$v" tests/wheel_import_proof.py
+            "python$v" tests/nos_leaf_import_proof.py
+            "python$v" tests/sonic_leaf_import_proof.py
           done
           echo "=== replay determinism (DS-1; MS amendment A1) ==="
           python3.11 tests/name_resolution_guard.py > "$RUNNER_TEMP/nrg1.txt"
@@ -593,6 +597,18 @@ jobs:
             topologies/sonic-preconfigured-boot.yaml sonic-preconfigured-boot
           ./src/cassian.py down sonic-preconfigured-boot
 
+      - name: SONiC image lifecycle (VM) — REQ-45C-11 row 11 (§4.5-c WI-4)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          ./src/cassian.py up topologies/vm-assertion-smoke.yaml --reconfigure
+          python tests/sonic_image_lifecycle_proof.py req11 \
+            topologies/vm-assertion-smoke.yaml vm-assertion-smoke
+          ./src/cassian.py down vm-assertion-smoke
+
       - name: SONiC (VM) teardown sweep (§4.5-c WI-3)
         if: always()
         env:
@@ -610,6 +626,9 @@ jobs:
           # here and must not be added -- it is never deployed, so there is
           # nothing to leak (LD-45C-R14 R6, LD-45C-R29 R1).
           ./src/cassian.py down sonic-preconfigured-boot || true
+          # §4.5-c WI-4 piece A: row 11's lab. Deployed by the step above,
+          # so it can leak; LD-45C-R30 R3 puts a deployed lab in the sweep.
+          ./src/cassian.py down vm-assertion-smoke || true
 
       - name: Upload artifacts (always; bounded on success)
         if: always()

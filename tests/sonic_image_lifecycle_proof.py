@@ -16,7 +16,7 @@ Coverage limit (PBE-P2-8), stated rather than implied:
   accident: it asserts a deliberately unresolvable reference is REJECTED with
   the exact required elements.
 
-Host-independent. No lab, no containerlab, no Docker image required.
+Lab-free by default; the `req11` subcommand is a (VM) leg on a booted guest.
 """
 import io
 import os
@@ -73,6 +73,14 @@ check("REQ-45C-11 vm-assertion-smoke step still present in cassian.yml",
       "vm-assertion-smoke" in _wf_txt,
       "guards against the step being deleted rather than corrected")
 
+# Positive control for leg 2: the pull detector fires on a synthetic line.
+# LD-45C-R34 R3 -- Leg 2 shipped without one while legs 1 and 3 had theirs;
+# BL-P2-4.5c-136 records the same shape in sonic_lifecycle_proof.py LEG 2.
+check("REQ-45C-11 pull-detector non-vacuity (fires on a synthetic hit)",
+      bool(re.search(r"^\s*docker\s+pull\s+ghcr\.io/cassian-gate/sonic-vm",
+                     "          docker pull ghcr.io/cassian-gate/sonic-vm:202405")),
+      "control")
+
 # --- Leg 3 (REQ-45C-31): missing image -> exit 2 with elements (a)/(b)/(c) ---
 import cassian_engine as E  # noqa: E402
 
@@ -109,12 +117,108 @@ except SystemExit:
 check("REQ-45C-31 non-vacuity: imageless node is not rejected", _ok,
       "proves the gate discriminates rather than always failing")
 
+# --- Leg 4 (REQ-45C-11, (VM)): §15.2 row 11 `:466` ---------------------------
+def _leg_req11(topo_path, lab):
+    """§15.2 row 11 (`:466`): CI resolves + boots the image via the contrib
+    path, with zero registry interaction.
+
+    LIVE DEVICE. Runs only on `ai-netsim-runner`, after `cassian up` has
+    deployed the lab. There is no stub anywhere in it.
+
+    WHY THE DEPLOYED IMAGE AND NOT THE DECLARED ONE. Leg 1 already sweeps
+    `topologies/` for `ghcr.io` and Leg 2 sweeps the workflow. Reading the
+    topology's own `image:` here would re-assert what Leg 1 established and
+    would stay green even if the guest had booted from something else. The
+    discriminating read is what the RUNNING container reports; it is
+    independent of both file sweeps.
+
+    STATED COVERAGE LIMIT (PBE-P2-8): this leg establishes that the reference
+    the container actually runs carries no registry host and matches the
+    declared local tag. It does NOT observe the network. That no packet
+    reached a registry is INFERRED from the reference's shape, not measured.
+    The file-level limit above also carries: provenance of the local tag --
+    contrib-built versus hand-tagged -- is an operator responsibility.
+    """
+    import subprocess
+    import yaml
+    import cassian_runtime_vm as _RV
+
+    print("=== tests/sonic_image_lifecycle_proof.py req11 (§15.2 row 11) ===")
+    doc = yaml.safe_load(io.open(topo_path, encoding="utf-8").read()) or {}
+    node = None
+    for n in doc.get("nodes", []) or []:
+        if isinstance(n, dict) and str(n.get("type") or "") == "sonic-vm":
+            node = n
+            break
+    check("(11a) the topology declares a sonic-vm node", node is not None,
+          repr([n.get("name") for n in doc.get("nodes", []) or []]))
+    if node is None:
+        return
+    name = str(node.get("name"))
+    declared = str(node.get("image") or "")
+
+    rt = _RV.build_runtime(doc)
+    try:
+        running = rt.is_running(lab, name)
+        run_err = ""
+    except Exception as exc:  # noqa: BLE001 - a failed read is a result
+        running, run_err = False, "%s: %s" % (type(exc).__name__, exc)
+    check("(11b) the node is running after `cassian up`", running,
+          run_err or "node=%s lab=%s" % (name, lab))
+
+    cid = rt.node_id(lab, name)
+    try:
+        cp = subprocess.run(
+            ["docker", "inspect", "-f", "{{.Config.Image}}", cid],
+            check=False, capture_output=True, text=True)
+        deployed = cp.stdout.strip()
+        insp_err = "" if cp.returncode == 0 else cp.stderr.strip()
+    except Exception as exc:  # noqa: BLE001
+        deployed, insp_err = "", "%s: %s" % (type(exc).__name__, exc)
+
+    check("(11c) NON-VACUITY: the deployed-image read returned a non-empty "
+          "reference, so an empty read cannot pass as a match",
+          bool(deployed), insp_err or repr(deployed))
+
+    def _has_registry_host(ref):
+        head = ref.split("/")[0]
+        return "/" in ref and ("." in head or ":" in head or head == "localhost")
+
+    check("(11d) the DEPLOYED image carries no registry host",
+          bool(deployed) and not _has_registry_host(deployed), repr(deployed))
+    check("(11e) the deployed image is the declared contrib-owned local tag",
+          bool(deployed) and deployed == declared,
+          "deployed=%r declared=%r" % (deployed, declared))
+    check("(11f) NON-VACUITY: the registry-host detector fires on a synthetic "
+          "ghcr.io reference",
+          _has_registry_host("ghcr.io/cassian-gate/sonic-vm:202405"), "control")
+
+
 # --- Report -----------------------------------------------------------------
-_failed = [c for c in _checks if not c[1]]
-for _name, _ok, _detail in _checks:
-    print("%-4s %s%s" % ("PASS" if _ok else "FAIL", _name,
-                         ("  [%s]" % _detail) if _detail else ""))
-print("=" * 60)
-print("RESULT: %s -- %d checks (WI-4 image lifecycle, B-8)"
-      % ("PASS" if not _failed else "FAIL", len(_checks)))
-sys.exit(1 if _failed else 0)
+def _finish():
+    _failed = [c for c in _checks if not c[1]]
+    for _name, _ok, _detail in _checks:
+        print("%-4s %s%s" % ("PASS" if _ok else "FAIL", _name,
+                             ("  [%s]" % _detail) if _detail else ""))
+    print("=" * 60)
+    print("RESULT: %s -- %d checks (WI-4 image lifecycle, B-8)"
+          % ("PASS" if not _failed else "FAIL", len(_checks)))
+    return 1 if _failed else 0
+
+
+if __name__ == "__main__":
+    # LD-45C-R34 R2 -- dispatch confined to this block. Legs 1-3 are top-level
+    # and have already executed by the time control reaches here, so no argv is
+    # today's behaviour byte-for-byte. An unknown subcommand is a usage error,
+    # never a silent no-op that would let a mis-wired CI step pass unseen
+    # (F-45C-C3-3, via LD-45C-R30 R1).
+    _args = sys.argv[1:]
+    if not _args:
+        sys.exit(_finish())
+    elif _args[0] == "req11" and len(_args) == 3:
+        _leg_req11(_args[1], _args[2])
+        sys.exit(_finish())
+    else:
+        sys.stderr.write(
+            "usage: sonic_image_lifecycle_proof.py [req11 <topology> <lab>]\n")
+        sys.exit(2)
