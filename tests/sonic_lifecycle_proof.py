@@ -492,6 +492,59 @@ def _leg_req22(topo_path, lab):
               for n, (ip, st) in sorted(states.items())))
 
 
+
+def _leg_req1(topo_path, lab):
+    """REQ-45C-1 (VM), §15.2 `:441` -- the GENERATED baseline is applied.
+
+    Subject: the overlay `gen_node_config` authors, observed on the device
+    through the product's runtime seam (`LD-45C-R1`). DISTINCT from
+    `_leg_req5`, whose subject is the DECLARATION's attribution against a
+    control -- this leg asserts that what generation authored actually landed.
+    Expectations are derived from generation at run time, never from literals:
+    a guard whose constants live beside it is not a guard.
+
+    `:441`'s "no engine-side generation" is §15.2 `:442`'s NEGATIVE row, a
+    source grep. `LD-45C-R1` fixes a (VM) leg as observing the device, so that
+    property is not asserted here and this leg does not claim it.
+    """
+    doc = yaml.safe_load(io.open(topo_path, encoding="utf-8").read()) or {}
+    nodes = _sonic_nodes(doc)
+    check("REQ-45C-1 (VM) NON-VACUITY: one-node SONiC topology, as :441 names",
+          len(nodes) == 1, "sonic-vm nodes: %s" % nodes)
+    if len(nodes) != 1:
+        return
+    name = nodes[0]
+    node = [n for n in doc["nodes"] if n.get("name") == name][0]
+    _ov = S.gen_node_config(
+        node, doc,
+        {"hwsku": "Force10-S6000",
+         "port_order": S._SONIC_PORT_MAPS["Force10-S6000"]},
+    )["config_db.json"]
+    _gen = sorted({k.split("|", 1)[1].split("/")[0]
+                   for _sect in ("INTERFACE", "LOOPBACK_INTERFACE")
+                   for k in (_ov.get(_sect) or {}) if "|" in k})
+    check("REQ-45C-1 (VM) NON-VACUITY: generation authored addressed INTERFACE "
+          "and LOOPBACK_INTERFACE entries for the device read to find",
+          bool(_ov.get("INTERFACE")) and bool(_ov.get("LOOPBACK_INTERFACE"))
+          and len(_gen) >= 2,
+          "generated addresses: %s" % _gen)
+    if len(_gen) < 2:
+        return
+    _on_device = _guest_v4(_RV.build_runtime(doc), lab, name)
+    _missing = sorted(a for a in _gen if a not in _on_device)
+    check("REQ-45C-1 (VM) provisioning applies: every GENERATED address is "
+          "present on the device; steady state reached",
+          not _missing,
+          "generated: %s; on device: %s; missing: %s"
+          % (_gen, _on_device, _missing or "none"))
+    _probe = "203.0.113.254"
+    check("REQ-45C-1 (VM) NON-VACUITY: the device read DISCRIMINATES -- an "
+          "address generation did not author is ABSENT from the device",
+          _probe not in _gen and _probe not in _on_device,
+          "probe %s; generated: %s; on device: %s"
+          % (_probe, _gen, _on_device))
+
+
 _vm_args = sys.argv[1:]
 if not _vm_args:
     blocked("REQ-45C-5 (VM) pre-provisioning control (S-9) + post-provision "
@@ -501,14 +554,20 @@ if not _vm_args:
     blocked("REQ-45C-22 (VM) two-node eBGP pair reaches Established under "
             "generated configuration",
             "no (VM) argv supplied; run: req22 <topo> <lab>. Wired at 4b-iii")
+    blocked("REQ-45C-1 (VM) one-node SONiC boot; provisioning applies; "
+            "steady state",
+            "no (VM) argv supplied; run: req1 <topo> <lab>")
 elif _vm_args[0] == "req5" and len(_vm_args) == 5:
     _leg_req5(_vm_args[1], _vm_args[2], _vm_args[3], _vm_args[4])
 elif _vm_args[0] == "req22" and len(_vm_args) == 3:
     _leg_req22(_vm_args[1], _vm_args[2])
+elif _vm_args[0] == "req1" and len(_vm_args) == 3:
+    _leg_req1(_vm_args[1], _vm_args[2])
 else:
     sys.exit("usage: sonic_lifecycle_proof.py "
              "[req5 <control-topo> <control-lab> <subject-topo> <subject-lab> "
-             "| req22 <topo> <lab>]  (no argv = lab-free legs only)")
+             "| req22 <topo> <lab> | req1 <topo> <lab>]  "
+             "(no argv = lab-free legs only)")
 
 # --- Report ------------------------------------------------------------------
 _fails = [c for c in _checks if not c[1]]
