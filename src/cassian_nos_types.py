@@ -192,10 +192,48 @@ class NosProvider:
     runtime_requirement: str | None
     capabilities: Mapping[str, CapabilityDisposition]
 
-    gen_node_config: Callable[[dict, dict], "dict[str, str] | None"]
-    provision: Callable[["Runtime", str, str, dict, dict], None]
+    # `gen_node_config` carries a third argument and `provision` returns the
+    # mapping it applied, beyond ratified design `:144`/`:147`. Founder ruling
+    # (§4.5-c Chat 3, orchestration shape): SONiC's generated overlay depends
+    # on device facts that exist only after boot, so `provision` probes,
+    # generates THROUGH this leg, supplies, and returns what it applied; core
+    # serializes that return value via `write_json_canonical` (PBE-P2-7,
+    # REQ-45C-20/-42). Providers still author no artifact.
+    #
+    # Generation stays a PURE function of its arguments -- observed facts are
+    # passed in, never fetched here -- so REQ-45C-20's determinism property is
+    # checkable without a runtime. The facts mapping is OPAQUE to core: core
+    # passes it through and never interprets it, keeping NOS vocabulary out of
+    # the contract (design `:244` (i)).
+    #
+    # Design `:147`'s `cfg_artifacts` parameter was never implemented in any
+    # shipped version (the fifth argument has always been `topo`, preceded by
+    # `node_d`); it is amended forward, not restored.
+    gen_node_config: Callable[[dict, dict, "Mapping[str, Any] | None"], "dict[str, Any] | None"]
+    provision: Callable[["Runtime", str, str, dict, dict], "dict[str, Any] | None"]
     nos_ready: Callable[["Runtime", str, str], None]
-    convergence_wait: Callable[["Runtime", str, str, int], None]
+
+    # `convergence_wait` carries a fifth argument beyond ratified design `:154`
+    # (`(rt, lab, node, timeout_s)`). Founder ruling (§4.5-c Chat 3, 2026-08-25;
+    # escalated under §14.1's `cassian_nos_types.py` row): a convergence wait
+    # cannot know which peers it is waiting for. FRR is exempt only INCIDENTALLY
+    # -- Cassian authored FRR's config, so "every peer on the guest" happened to
+    # equal "every declared peer". `sonic-vm:202405` ships stock BGP neighbours
+    # Cassian never declared and never removes (BL-P2-4.5c-9), so that
+    # equivalence fails and REQ-45C-8's positive leg is unprovable without the
+    # declared set. Core already computes it -- `cassian_engine.py:10189`
+    # `expected_bgp_peers`, whose entries carry `peer_ip` from
+    # `cassian_model.py:1512` `build_node_links`; only the channel was missing.
+    #
+    # The peer set is OPAQUE to the contract: a tuple of peer-IP strings, no NOS
+    # vocabulary (design `:244` (i)). REQ-45C-24 ("UNDECLARED-neighbor
+    # asymmetry") presupposes this scoping; REQ-45C-29 binds polling bounds,
+    # interval and timeout semantics -- NOT neighbour scope.
+    #
+    # Widened, not restored: at the ruling no implementation and no caller
+    # existed. Every binding was `deferred_leg` (`:257`, `*args/**kwargs`) and
+    # the completeness check (`:288-291`) tests callability, never arity.
+    convergence_wait: Callable[["Runtime", str, str, int, "tuple[str, ...]"], None]
 
     # ---- validation ----
     collect: Callable[["Runtime", str, str, ObservationRequest], Observation]

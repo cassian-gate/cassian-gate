@@ -113,6 +113,39 @@ for _p in ("nos_leaf_import_proof.py", "nos_deny_by_default_proof.py",
            "nos_census_instrument.py"):
     check(f"§4.5-b proof is CI-wired: {_p} present in the gate", _p in gate)
 
+# §4.5-c (§14.4 conditional lockstep; Ledger BL-P2-4.5c-11): the four lab-free
+# SONiC base-lifecycle proofs are gate-wired in lockstep with the cassian.yml
+# step that runs them. A proof that never gates enforces nothing.
+# Coverage limit (PBE-P2-8), stated rather than implied: this is a substring test
+# over cassian.yml. It proves each proof is NAMED in the gate. It does NOT prove
+# the step executes, that the runner reaches it, or that the proof passes.
+for _p in ("sonic_leaf_import_proof.py", "sonic_configgen_determinism_proof.py",
+           "sonic_provision_supply_proof.py", "sonic_image_lifecycle_proof.py",
+           "sonic_lifecycle_proof.py", "sonic_status_probe_sequence_proof.py",
+           "wheel_import_proof.py", "reconfigure_clean_state_proof.py",
+           "sonic_provision_readiness_gate_proof.py",
+           "sonic_nos_ready_proof.py",
+           "evpn_collection_migration_proof.py",
+           "cmd_evidence_derivation_differential_proof.py",
+           "sonic_unsupported_capability_disposition_proof.py",
+           "sonic_endpoint_recognition_proof.py",
+           "sonic_routing_mode_precondition_proof.py",
+           # §4.5-c WI-3 packet 4b-iii: CI-wired by the (VM) steps.
+           "sonic_precheck_proof.py",
+           # §4.5-c WI-3 packet 5b: the scenario wait_for_bgp legs
+           # (REQ-45C-10/-30), CI-wired by the (VM) steps.
+           # LD-45C-R14 R4, §14.4 conditional lockstep.
+           "sonic_wait_for_bgp_proof.py",
+           # §4.5-c WI-1 packet 2 C2: the preconfigured-mode proof. Created in
+           # packet 1 and left unwired (BL-P2-4.5c-109); LD-45C-R27 R1 assigns
+           # the wiring to packet 2 and R2 requires this lockstep entry as its
+           # price. Three cassian.yml steps run it -- the lab-free harness, the
+           # row-4 mode4 arm and the row-26 req26 arm (LD-45C-R30 R2) -- and
+           # this substring test proves only that the NAME appears, per the
+           # coverage limit stated above.
+           "sonic_preconfigured_proof.py"):
+    check(f"§4.5-c proof is CI-wired: {_p} present in the gate", _p in gate)
+
 fails = [n for n, ok in checks if not ok]
 print(f"PO-B3-fold (WF-12/13 replay): {len(checks) - len(fails)}/{len(checks)} checks passed.")
 for n, ok in checks:

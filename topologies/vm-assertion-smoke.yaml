@@ -2,14 +2,15 @@ name: vm-assertion-smoke
 
 # §4.5-a assertion leg (REQ-45a-5): one ping from the sonic-vm guest to a
 # directly-connected FRR peer's dataplane IP. Single hop (/31), no routing
-# required. Fresh boot per run (REQ-45a-13). The ghcr tag is pinned directly
-# and pulled by the CI step itself (no local-retag dependency; B-8 stays backlog).
+# required. Fresh boot per run (REQ-45a-13). The image resolves from the
+# contrib-owned local tag (REQ-45C-11/-32); build it via
+# contrib/sonic-image-build/build.sh. No registry pull.
 
 nodes:
   - name: s1
     type: sonic-vm
     runtime: vm
-    image: ghcr.io/cassian-gate/sonic-vm:202405
+    image: local/sonic-vm:202405
 
   - name: r1
     type: frr

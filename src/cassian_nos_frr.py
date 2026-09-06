@@ -1196,6 +1196,87 @@ def _collect_evpn_routes(rt, lab, node, req: ObservationRequest) -> Observation:
 
 
 # -------------------------
+# Supplementary EVPN text-mode collection handler (§4.5-c WI-7, REQ-45C-14)
+# -------------------------
+# Migrated out of `run_invariant_test` under the LD-45C-1 ruling: a second
+# ObservationRequest of a distinct kind, issued core-side only when the JSON
+# leg yields no matching route. Composition and the misuse exit stay core.
+
+_EVPN_TEXT_EXCERPT_CHARS = 2000
+
+_RE_EVPN_MAC_ROUTE_TEXT = re.compile(
+    r"\[2\]:\[0\]:\[48\]:\[([0-9a-f:]{17})\]", re.IGNORECASE
+)
+
+
+def _collect_evpn_routes_text(rt, lab, node, req: ObservationRequest) -> Observation:
+    """Supplementary text-mode EVPN MAC-route probe (REQ-45C-14, LD-45C-1).
+
+    Issued core-side only when the JSON leg yields no matching route. Parses
+    the text form into NOS-neutral records and decides nothing: composition of
+    `evidence_entries` / `present`, the `parse_error` merge, and the rc-gated
+    misuse exit all stay core (design §5). The probe returncode travels in
+    `evidence`; this leg raises no control-flow exit.
+
+    Coverage limit (PBE-P2-8): the pattern recognises EVPN route-type 2 (MAC)
+    entries only. Route-type 3/5 text forms are not parsed here, and
+    `evpn_vni_route_present` does not route to this leg -- it has no text
+    fallback, matching the pre-migration core block, which gated on
+    `inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent")`.
+    """
+    vni_i = req.params.get("vni_i")
+    cp = rt.exec(
+        lab,
+        node,
+        ["vtysh", "-c", "show bgp l2vpn evpn route"],
+        check=False,
+        capture_output=True,
+    )
+
+    if isinstance(cp, str):
+        out = cp
+        rc = None
+    else:
+        out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
+        if isinstance(out, (bytes, bytearray)):
+            try:
+                out = out.decode("utf-8", errors="replace")
+            except Exception:
+                out = str(out)
+        rc = getattr(cp, "returncode", None)
+
+    records: list[dict] = []
+    parse_error = ""
+    try:
+        text = str(out or "")
+        for line in text.splitlines():
+            m = _RE_EVPN_MAC_ROUTE_TEXT.search(line)
+            if not m:
+                continue
+            rec = {
+                "mac": str(m.group(1).lower() or "").strip().lower(),
+                "vni": vni_i,
+                "route_type": "2",
+                "node": node,
+            }
+            if not rec["mac"]:
+                continue
+            records.append(rec)
+    except Exception as e:
+        parse_error = f"text_parse={e}"
+
+    return Observation(
+        kind=req.kind,
+        data={"records": records, "parse_error": parse_error},
+        evidence={
+            "cmd": "vtysh -c 'show bgp l2vpn evpn route'",
+            "excerpt": str(out or "")[:_EVPN_TEXT_EXCERPT_CHARS],
+            "returncode": rc,
+        },
+    )
+
+
+# -------------------------
 # OSPF collection handler (WI-C3e, REQ-45b-4)
 # -------------------------
 # The declared expected FSM state is an expectation, not an observation --
@@ -1387,6 +1468,7 @@ _COLLECT_HANDLERS = {
     "evpn_mac_route_present": _collect_evpn_routes,
     "evpn_mac_route_absent": _collect_evpn_routes,
     "evpn_vni_route_present": _collect_evpn_routes,
+    "evpn_mac_route_text": _collect_evpn_routes_text,
     "ospf_neighbor_up": _collect_ospf_neighbors,
     "bgp_neighbor": _collect_bgp_neighbor,
 }
@@ -1430,6 +1512,9 @@ _FRR_CAPABILITIES: dict[str, CapabilityDisposition] = {
     # observation seam -- test/step kinds routed through the same seam
     "bgp_neighbor": impl(),
     "route_prefix": impl(),
+    # supplementary EVPN text leg (§4.5-c WI-7, REQ-45C-14) -- not a
+    # model-validated invariant kind; issued core-side after the JSON leg
+    "evpn_mac_route_text": impl(),
     # operational legs shipped by §4.5-b
     "status_bgp_summary": impl(),
     "status_routes": impl(),
@@ -1536,11 +1621,13 @@ FRR_COLLECT_TARGETS = (
 # check=False/capture_output=True, bytes-decoded, stripped) so the probe
 # sequence and the strings fed to the parsers are unchanged.
 #
-# Probe sequence is preserved per mode, including the shipped double-fetch that
-# text-mode + want_raw performs (json, text, text again). The routes block does
-# NOT double-fetch -- it derives raw text from data already returned -- and that
-# asymmetry is preserved as-is (REQ-45b-P2: a delta is a HALT, never a
-# fix-in-place). Recorded as a finding for later deliberate repair.
+# Probe sequence per mode is 1/2/2/2 (REQ-45C-16). The double-fetch that
+# text-mode + want_raw formerly performed (json, text, text again) is repaired
+# by reuse: when the text fallback already ran, its output IS the raw text.
+# The routes block never double-fetched -- it derives raw text from data already
+# returned -- and the summary leg now mirrors it, closing the asymmetry §4.5-b
+# preserved and recorded for later deliberate repair (REQ-45b-P2). Counts are
+# enforced by tests/sonic_status_probe_sequence_proof.py, not by this comment.
 
 
 def _node_exec(rt, lab, node, cmd: list) -> str:
@@ -1553,6 +1640,7 @@ def _status_bgp_summary(rt, lab, node, want_raw: bool = False) -> StatusObservat
     """BGP summary status leg. `want_raw` is the ratified §3.3 extension."""
     out_json = _node_exec(rt, lab, node, ["vtysh", "-c", "show bgp summary json"])
     observed = parse_frr_bgp_summary_neighbors_json(out_json)
+    out_text = None
     if observed:
         parser_mode = "json"
     else:
@@ -1562,7 +1650,11 @@ def _status_bgp_summary(rt, lab, node, want_raw: bool = False) -> StatusObservat
 
     raw_text = None
     if want_raw:
-        raw_text = _node_exec(rt, lab, node, ["vtysh", "-c", "show bgp summary"])
+        # REQ-45C-16 reuse: the text fallback already fetched this exact
+        # command, so re-issuing it would be a second probe for the same bytes.
+        raw_text = (out_text if out_text is not None
+                    else _node_exec(rt, lab, node,
+                                    ["vtysh", "-c", "show bgp summary"]))
 
     return StatusObservation(
         returncode=None,

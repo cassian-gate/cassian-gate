@@ -1,0 +1,63 @@
+name: sonic-preconfigured-boot
+
+# §4.5-c WI-1 packet 2 — §15.2 row 26 (`:452`, positive (VM)):
+# "Preconfigured node boots with supplied config; probe-sequence evidence",
+# expected "Zero generation probes". REQ-45C-26, REQ-45C-4.
+#
+# THIS FIXTURE IS DEPLOYED. Unlike sonic-mode-mixed.yaml (row 4, resolved and
+# never brought up per LD-45C-R29 R1), row 26's evidence is what the GUEST
+# holds after `config reload -y -f` applies the operator's artifact. It boots
+# ONE sonic-vm guest, which keeps it inside the single-SONiC-node ceiling
+# docs/vm-runtime-capabilities.md records. Its CI step therefore DOES take
+# up/down and IS added to the if:always() teardown sweep (LD-45C-R14 R2/R3) --
+# the opposite of row 4's step, which is R6's shape.
+#
+# WHY AN frr NODE IS PRESENT: a topology with no `links` is REJECTED by
+# `ensure_valid_topology` -- "Missing required key: 'links'", exit 2, as
+# topologies/sonic-control-unprovisioned.yaml records. r1 exists to give the
+# link a far end. It is an frr node rather than a second sonic-vm precisely
+# so only one guest boots; sonic-control-unprovisioned.yaml and
+# sonic-mixed-linux.yaml both use that shape already.
+#
+# NO BGP IS DECLARED. Row 26 is about boot-with-supplied-config and probe
+# evidence, not convergence. Declaring peers would add a convergence
+# dependency the row does not ask for and would couple this fixture to the
+# precheck legs' surface.
+#
+# HALT-2 address discipline (founder ruling 2026-08-15, surface S-9): every
+# address below and every address in the operator artifact is RFC 5737,
+# outside the stock canned ranges 10.0.0.0/26 and 10.1.0.0/24. Enumerated
+# against all 91 fixtures in topologies/ before selection and colliding with
+# none -- 192.0.2.{11,12,14,15,21,22,24,25,31,32,41,42,51,52,99} and
+# 198.51.100.{0,1,4,5,6,7,8,9,12,13,20,21} were in use; .61 and .24/.25 were
+# not. The ranges themselves are named in tests/sonic_lifecycle_proof.py, not
+# here: a guard whose constants live in the file it guards is not a guard.
+#
+# REGISTERED in SECTION_45C_FIXTURES (tests/sonic_lifecycle_proof.py) in the
+# SAME commit that adds this file. LD-45C-R12 R5: registration is ENFORCED,
+# not conventional -- LEG 2's enumeration-drop guard is an explicit list, not
+# a glob, and an unregistered SONiC fixture FAILS rather than passing unseen
+# (F-45C-C3-3).
+#
+# `sonic_config_db` is RELATIVE and resolves against THIS FILE'S directory,
+# never the process CWD (LD-45C-R21 R1). Measured cwd-independently by row
+# 4's leg at tests/sonic_preconfigured_proof.py mode4, check (10i).
+#
+# Image resolves from the contrib-owned local tag (REQ-45C-11, REQ-45C-32);
+# build it via contrib/sonic-image-build/build.sh. No registry pull.
+
+nodes:
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    router_id: 192.0.2.61
+    sonic_mode: preconfigured
+    sonic_config_db: sonic-preconfigured-boot-config-db.json
+
+  - name: r1
+    type: frr
+
+links:
+  - endpoints: ["s1:eth1", "r1:eth1"]
+    ipv4: ["198.51.100.24/31", "198.51.100.25/31"]

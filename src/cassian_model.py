@@ -12,6 +12,9 @@ import shlex
 import ipaddress
 import yaml
 
+import cassian_common  # LD-45C-R17/-R21: model-homed errors are read back
+                       # through cassian_common.LAST_ERROR_MSG by the
+                       # §4.5-c preconfigured proof; §14.4 unrestricted.
 from cassian_common import (
     DEFAULT_IMAGES,
     assert_vm_runtime_supported,
@@ -32,9 +35,11 @@ from cassian_nos_types import (
     CandidateSpec,
     NosProvider,
     deferred_leg,
+    is_deferred,
     validate_provider,
 )
 from cassian_nos_frr import FRR_PROVIDER
+from cassian_nos_sonic import SONIC_PROVIDER
 
 # -------------------------
 # NOS provider registry (Phase 2 §4.5-b, REQ-45b-1; design §3.3)
@@ -81,6 +86,10 @@ _NFT_FW_PROVIDER = NosProvider(
 NOS_PROVIDERS = MappingProxyType({
     "frr": FRR_PROVIDER,
     "nft-fw": _NFT_FW_PROVIDER,
+    # §4.5-c REQ-45C-1: SONiC provider leaf. Registration is inert for
+    # dispatch -- no decision site calls gen_node_config/provision yet
+    # (LD-H2 point 2); it wires identity, default_image and capabilities.
+    "sonic-vm": SONIC_PROVIDER,
 })
 
 # Import-time completeness + key coherence (B10): every registered provider
@@ -185,6 +194,51 @@ def nos_provider_for(ntype: str, seam: str) -> NosProvider:
             code=2,
         )
     return p
+
+
+# -------------------------
+# `wait_for_bgp` scenario-step admissibility (REQ-45C-10/-30; LD-45C-R11)
+# -------------------------
+# Registry-derived, deny-by-default. One source (NOS_PROVIDERS), one reader.
+#
+# LD-45C-R11 R3 -- `frr` is admissible although FRR's provider binds
+# `convergence_wait` to a deliberate placeholder (`cassian_nos_frr.py:1703`):
+# the engine serves FRR through the inline wait and keeps that leg deferred
+# by design (NG-9 note, `cassian_engine.py:10349-10357`). The placeholder is
+# a statement about the LEG, not about the capability.
+#
+# REMOVAL CONDITION (LD-45C-R11 R3): when §4.5-d/-f wires FRR's
+# `convergence_wait`, delete `_INLINE_BGP_WAIT` and its use below -- the
+# placeholder test then admits `frr` unaided. Nothing enforces that
+# deletion automatically (LD-45C-R11 §9).
+#
+# PBE-P2-6 exposure -- a second site holding "frr"; the engine holds the
+# first at `cassian_engine.py:10360` -- recorded at LD-45C-R11 R6(a).
+_INLINE_BGP_WAIT = ("frr",)
+
+
+def nos_wait_for_bgp_rejection(ntype: str) -> "str | None":
+    """Reason a `wait_for_bgp` scenario step may not name `ntype`, or None.
+
+    Deny-by-default (LD-45C-R11 R2): a type absent from `NOS_PROVIDERS` --
+    which includes the empty string the caller passes for a missing
+    type/kind -- is inadmissible.
+
+    Returns the DC v2.1 §13 reason clause ONLY; the caller supplies its own
+    context prefix so the caller's `die` stays the single rejection point
+    (LD-45C-R11 R5). The admissible set is enumerated per §13(c)(i) and
+    sorted for determinism (Doctrine §1.4).
+    """
+    admissible = tuple(sorted(
+        _t for _t, _p in NOS_PROVIDERS.items()
+        if _t in _INLINE_BGP_WAIT or not is_deferred(_p.convergence_wait)
+    ))
+    if ntype in admissible:
+        return None
+    return (
+        f"is type/kind {ntype!r}, which has no BGP convergence support. "
+        f"Supported: {', '.join(admissible)}."
+    )
 
 
 # -------------------------
@@ -1821,6 +1875,8 @@ def topo_to_containerlab(topo: dict) -> dict:
         # REQ-45b-11: registry-derived from the FRR provider's default_image.
         # Non-frr entries are untouched (P5).
         "frr": nos_default_image("frr"),
+        # §4.5-c REQ-45C-1: registry-derived, mirroring the FRR shape.
+        "sonic-vm": nos_default_image("sonic-vm"),
     }
 
     evpn = _validate_fabric_evpn_presence_only(topo)
@@ -2024,7 +2080,7 @@ def _compile_frr_as_path_regex(pattern):
     return re.compile(translated)
 
 
-def resolve_topology(topo: dict) -> dict:
+def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
     """
     Return a copy of topo with missing link IPv4 addresses allocated.
     For now: allocate /31s sequentially from 10.0.0.0/16 in link order.
@@ -2060,6 +2116,117 @@ def resolve_topology(topo: dict) -> dict:
 
         n["runtime"] = rt
         n["_runtime"] = rt
+
+        # ----------------------------
+        # 0b) SONiC provisioning mode (REQ-45C-4/-26/-27).
+        # LD-45C-R17 R1: two keys only -- sonic_mode is an enum defaulting to
+        # `generated` and visible in the resolved output exactly as runtime is
+        # above; sonic_config_db is required iff preconfigured and rejected
+        # otherwise. LD-45C-R21 R1/R3: a relative value resolves against the
+        # TOPOLOGY FILE'S directory, never the process CWD, and is refused
+        # where no topology path is available.
+        #
+        # Every die() below passes code=2 EXPLICITLY. die()'s default is 1
+        # (cassian_common.py:137) and REQ-45C-27 requires exit 2; the frr_mode
+        # parity block at topo_to_containerlab() passes no code, so copying it
+        # verbatim would ship the anti-requirement.
+        # ----------------------------
+        if ntype == "sonic-vm":
+            _sm_raw = n.get("sonic_mode")
+            sonic_mode = str(_sm_raw or "generated").strip().lower()
+            if sonic_mode not in ("generated", "preconfigured"):
+                die(
+                    f"Topology invalid: node '{n.get('name')}': "
+                    f"sonic_mode must be 'generated' or 'preconfigured' "
+                    f"(got {_sm_raw!r})",
+                    code=2,
+                )
+            n["sonic_mode"] = sonic_mode
+
+            _cfg_raw = n.get("sonic_config_db")
+            _cfg_declared = _cfg_raw is not None and str(_cfg_raw).strip() != ""
+
+            if sonic_mode != "preconfigured":
+                if _cfg_declared:
+                    die(
+                        f"Topology invalid: node '{n.get('name')}': "
+                        f"sonic_config_db is declared but sonic_mode is "
+                        f"'{sonic_mode}'. Either set sonic_mode: preconfigured "
+                        f"to supply that artifact, or remove sonic_config_db.",
+                        code=2,
+                    )
+            else:
+                if not _cfg_declared:
+                    die(
+                        f"Topology invalid: node '{n.get('name')}': "
+                        f"sonic_mode is 'preconfigured' but sonic_config_db is "
+                        f"not declared. Either supply sonic_config_db naming a "
+                        f"complete config_db.json, or set sonic_mode: generated.",
+                        code=2,
+                    )
+
+                _p = Path(str(_cfg_raw).strip()).expanduser()
+                if not _p.is_absolute():
+                    if topo_path is None:
+                        die(
+                            f"Topology invalid: node '{n.get('name')}': "
+                            f"sonic_config_db {str(_cfg_raw)!r} is relative and "
+                            f"no topology file path is available to resolve it "
+                            f"against. A relative value is never resolved "
+                            f"against the working directory. Either supply an "
+                            f"absolute path, or run this against a topology "
+                            f"file on disk.",
+                            code=2,
+                        )
+                    _base = Path(str(topo_path)).expanduser()
+                    if not _base.is_absolute():
+                        _base = _base.resolve()
+                    _p = _base.parent / _p
+
+                if not _p.is_file():
+                    die(
+                        f"Topology invalid: node '{n.get('name')}': "
+                        f"sonic_mode is 'preconfigured' and sonic_config_db "
+                        f"names {str(_p)}, which does not exist. Either supply "
+                        f"the artifact at that path, or set sonic_mode: "
+                        f"generated to have Cassian generate the configuration.",
+                        code=2,
+                    )
+
+                # LD-45C-R17 R9: completeness precondition, host-side, before
+                # any guest is touched. Parses as JSON, and carries PORT and
+                # DEVICE_METADATA. Named by measurement, not by a schema.
+                try:
+                    _cfg = json.loads(_p.read_text(encoding="utf-8"))
+                except (ValueError, OSError) as _e:
+                    die(
+                        f"Topology invalid: node '{n.get('name')}': "
+                        f"sonic_config_db {str(_p)} is not readable as JSON "
+                        f"({_e}). Supply a complete config_db.json, or set "
+                        f"sonic_mode: generated.",
+                        code=2,
+                    )
+                    _cfg = None
+                if not isinstance(_cfg, dict):
+                    die(
+                        f"Topology invalid: node '{n.get('name')}': "
+                        f"sonic_config_db {str(_p)} does not contain a JSON "
+                        f"object. Supply a complete config_db.json, or set "
+                        f"sonic_mode: generated.",
+                        code=2,
+                    )
+                for _tbl in ("PORT", "DEVICE_METADATA"):
+                    if _tbl not in _cfg:
+                        die(
+                            f"Topology invalid: node '{n.get('name')}': "
+                            f"sonic_config_db {str(_p)} is missing the "
+                            f"{_tbl} table. A complete config_db.json carries "
+                            f"both PORT and DEVICE_METADATA. Supply a complete "
+                            f"artifact, or set sonic_mode: generated.",
+                            code=2,
+                        )
+
+                n["sonic_config_db"] = str(_p)
 
     # ----------------------------
     # 0c) §4.10 GEN-2 (Amendment A1): route-map set.community syntax validation.
