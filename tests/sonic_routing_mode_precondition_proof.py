@@ -15,13 +15,14 @@ WHAT THIS COVERS -- §15.2's four REQ-45C-44 rows, and which are NOT here:
                         -> LEG 1/2 prove the PREDICATE lab-free. The seeded
                            REAL guest half is NOT here; it needs guest
                            mutation and is packet 3b's.
-  :490  positive (VM)   post-apply device read vs pre-apply
-                        -> NOT here; needs the pre/post window (BL-P2-4.5c-35)
+  :490  positive (VM)   post-apply device read vs the image's own
+                        persisted declaration, same boot
+                        -> LEG 7, under `req44pos` (LD-45C-R35 R1)
 
-LAB-FREE by construction. The guest read is replayed through a fake runtime,
-so this proves the predicate's behaviour, not the device's. It reports no
-BLOCKED legs: a (VM) row is not claimed by a lab-free proof, which is the
-defect BL-P2-4.5c-35 records.
+TWO MODES. With no argv the six lab-free legs run and the (VM) leg reports
+BLOCKED; `req44pos <topo> <lab>` additionally runs LEG 7 against a real
+guest. The lab-free legs replay their guest read through a fake runtime,
+so they prove the predicate's behaviour, not the device's.
 
 STATED COVERAGE LIMITS (PBE-P2-8):
   * The replayed payloads are the MEASURED shape from sonic-vm:202405
@@ -175,17 +176,120 @@ check("leaf-import constraint: provider does not import cassian_model",
       "import cassian_model" not in mod_src
       and "from cassian_model" not in mod_src)
 
-# --- report -------------------------------------------------------------------
+# --- LEG 7: the (VM) leg ------------------------------------------------------
+
+_blocked = []
+
+
+def blocked(name, reason):
+    _blocked.append((name, reason))
+
+
+def _leg_req44_positive(topo_path, lab):
+    """REQ-45C-44(a) (VM), §15.2 `:490` -- platform-owned values unaltered.
+
+    The baseline is the guest's OWN persisted declaration at
+    `/etc/sonic/config_db.json`, read in the SAME BOOT as the running-database
+    read (`LD-45C-R35` R1). `mac` is per-boot (`LD-45C-R17` §8, re-measured
+    session 21: two boots returned `22:88:e7:2a:db:59` and
+    `22:b2:35:0e:d7:fd`), so a comparison spanning two boots or two labs would
+    compare values never meant to match.
+
+    The device is observed through the product's runtime seam and nothing is
+    driven (`LD-45C-R1`). Imports are function-local because the module's
+    import block sits inside the region `LD-45C-R35` R4 freezes.
+
+    STATED COVERAGE LIMITS (PBE-P2-8): the staging-path control below
+    establishes where the overlay IS written, not that nothing else writes
+    under `/etc/sonic`. The persisted-vs-running comparison covers the four
+    values `:490` names and is not a full-artifact differential. Measured on
+    one image, one fixture, one boot.
+    """
+    import ast
+    import json
+
+    import yaml
+
+    import cassian_runtime_vm as _RV
+
+    doc = yaml.safe_load(open(topo_path, encoding="utf-8").read()) or {}
+    names = [n.get("name") for n in (doc.get("nodes") or [])
+             if isinstance(n, dict)
+             and str(n.get("type") or "").strip().lower() == "sonic-vm"]
+    check("REQ-45C-44 (VM) NON-VACUITY: fixture carries exactly one sonic-vm "
+          "node", len(names) == 1, "sonic-vm nodes: %s" % names)
+    if len(names) != 1:
+        return
+    node = names[0]
+
+    check("REQ-45C-44 (VM) NON-VACUITY: the provider stages its overlay "
+          "outside /etc/sonic, so the persisted declaration is not its target "
+          "(LD-45C-R35 R2)",
+          str(S._OVERLAY_GUEST_PATH).startswith("/tmp/"),
+          "_OVERLAY_GUEST_PATH=%r" % (S._OVERLAY_GUEST_PATH,))
+
+    rt = _RV.build_runtime(doc)
+    disk = json.loads(S._guest_stdout(
+        rt, lab, node, ["cat", "/etc/sonic/config_db.json"],
+        "the persisted image declaration").strip() or "{}")
+    run_meta = ast.literal_eval(S._guest_stdout(
+        rt, lab, node, list(S._DEVICE_METADATA_ARGV),
+        "the running device metadata").strip() or "{}")
+    run_ports = json.loads(S._guest_stdout(
+        rt, lab, node, ["sonic-cfggen", "-d", "--var-json", "PORT"],
+        "the running PORT table").strip() or "{}")
+    run_if = json.loads(S._guest_stdout(
+        rt, lab, node, ["sonic-cfggen", "-d", "--var-json", "INTERFACE"],
+        "the running INTERFACE table").strip() or "{}")
+
+    _disk_if = len(disk.get("INTERFACE") or {})
+    check("REQ-45C-44 (VM) NON-VACUITY: the persisted declaration and the "
+          "running database are DISTINCT -- the overlay is visible in one and "
+          "not the other, so the comparison is not one source read twice",
+          _disk_if != len(run_if),
+          "persisted INTERFACE %d; running INTERFACE %d"
+          % (_disk_if, len(run_if)))
+
+    _disk_meta = (disk.get("DEVICE_METADATA") or {}).get("localhost") or {}
+    check("REQ-45C-44 (VM) :490 PORT key count unaltered by the apply",
+          len(disk.get("PORT") or {}) == len(run_ports),
+          "persisted %d; running %d"
+          % (len(disk.get("PORT") or {}), len(run_ports)))
+    for _f in ("hwsku", "platform", "mac"):
+        check("REQ-45C-44 (VM) :490 %s unaltered by the apply" % _f,
+              _f in _disk_meta
+              and str(_disk_meta.get(_f)) == str(run_meta.get(_f)),
+              "persisted %r; running %r"
+              % (_disk_meta.get(_f), run_meta.get(_f)))
+
+
+# --- dispatch + report --------------------------------------------------------
+
+_vm_args = sys.argv[1:]
+if not _vm_args:
+    blocked("REQ-45C-44 (VM) :490 platform-owned values unaltered by the apply",
+            "no (VM) argv supplied; run: req44pos <topo> <lab>")
+elif _vm_args[0] == "req44pos" and len(_vm_args) == 3:
+    _leg_req44_positive(_vm_args[1], _vm_args[2])
+else:
+    sys.exit("usage: sonic_routing_mode_precondition_proof.py "
+             "[req44pos <topo> <lab>]  (no argv = lab-free legs only)")
 
 fails = [c for c in _checks if not c[1]]
 for name, ok, detail in _checks:
     print("%s %s%s" % ("PASS" if ok else "FAIL", name,
                        ("  [%s]" % detail) if detail else ""))
+for name, reason in _blocked:
+    print("BLOCKED %s  [%s]" % (name, reason))
 print("=" * 60)
-print("RESULT: %s -- %d/%d checks passed (REQ-45C-44(b) mode precondition, "
+print("RESULT: %s -- %d/%d checks passed%s (REQ-45C-44 mode precondition, "
       "BL-P2-4.5c-50)"
       % ("PASS" if not fails else "FAIL", len(_checks) - len(fails),
-         len(_checks)))
+         len(_checks),
+         ", %d BLOCKED" % len(_blocked) if _blocked else ""))
+if _blocked:
+    print("NOTE: a BLOCKED leg is not a pass; the closure report carries it as "
+          "a condition (PBE-P2-5).")
 if fails:
     sys.exit("sonic_routing_mode_precondition_proof FAILED (%d check(s))."
              % len(fails))

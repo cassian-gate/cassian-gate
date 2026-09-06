@@ -548,6 +548,18 @@ jobs:
             topologies/sonic-base-lifecycle.yaml sonic-base-lifecycle
           ./src/cassian.py down sonic-base-lifecycle
 
+      - name: SONiC platform-key preservation (VM) — REQ-45C-44 row 44 (§4.5-c WI-1)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          ./src/cassian.py up topologies/sonic-base-lifecycle.yaml --reconfigure
+          python tests/sonic_routing_mode_precondition_proof.py req44pos \
+            topologies/sonic-base-lifecycle.yaml sonic-base-lifecycle
+          ./src/cassian.py down sonic-base-lifecycle
+
 
       # --- Cycle E: the SCENARIO wait_for_bgp action (REQ-45C-10 / REQ-45C-30).
       # LD-45C-R12 fixtures · R13 proof home · R14 this wiring · R15 positive
