@@ -49,6 +49,7 @@ import io
 import ipaddress
 import os
 import sys
+import time
 
 import yaml
 
@@ -493,6 +494,10 @@ def _leg_req22(topo_path, lab):
 
 
 
+_REQ1_SETTLE_BUDGET_S = 120
+_REQ1_POLL_INTERVAL_S = 3
+
+
 def _leg_req1(topo_path, lab):
     """REQ-45C-1 (VM), §15.2 `:441` -- the GENERATED baseline is applied.
 
@@ -530,13 +535,49 @@ def _leg_req1(topo_path, lab):
           "generated addresses: %s" % _gen)
     if len(_gen) < 2:
         return
-    _on_device = _guest_v4(_RV.build_runtime(doc), lab, name)
-    _missing = sorted(a for a in _gen if a not in _on_device)
+    # Steady state is WAITED FOR, not assumed. A single read taken straight
+    # after `up` can land while SONiC is still bringing up Ethernet* and
+    # Loopback0 -- observed returning only lo/eth0/docker0, reporting a false
+    # FAIL against correctly-applied configuration. The budget is generous
+    # because the settle window is unmeasured; a settled device satisfies the
+    # first read and pays nothing.
+    _rt = _RV.build_runtime(doc)
+    _deadline = time.monotonic() + _REQ1_SETTLE_BUDGET_S
+    _sizes = []
+    while True:
+        _on_device = _guest_v4(_rt, lab, name)
+        _sizes.append(len(_on_device))
+        _missing = sorted(a for a in _gen if a not in _on_device)
+        if not _missing or time.monotonic() >= _deadline:
+            break
+        time.sleep(_REQ1_POLL_INTERVAL_S)
     check("REQ-45C-1 (VM) provisioning applies: every GENERATED address is "
           "present on the device; steady state reached",
           not _missing,
-          "generated: %s; on device: %s; missing: %s"
-          % (_gen, _on_device, _missing or "none"))
+          "generated: %s; on device: %s; missing: %s; reads: %s (sizes %s, "
+          "budget %ss)"
+          % (_gen, _on_device, _missing or "none", len(_sizes), _sizes,
+             _REQ1_SETTLE_BUDGET_S))
+    # The `_probe` discriminator below guards the false-POSITIVE direction --
+    # an address generation did not author is absent. It passes just as
+    # happily on a 3-address read as on a complete one, so it could NOT have
+    # caught the false FAIL above. This control guards the other direction:
+    # that the comparison NAMES an authored address when one is absent.
+    # Its subject is a synthetic complete observation, so it is INDEPENDENT
+    # of device state -- a control that failed whenever the check above
+    # failed would be that check again, not a control.
+    _synth = sorted(set(_on_device) | set(_gen))
+    _withheld = _gen[0]
+    _short = [a for a in _synth if a != _withheld]
+    check("REQ-45C-1 (VM) NON-VACUITY: an INCOMPLETE observation is DETECTED "
+          "-- withholding one generated address from a complete set names "
+          "exactly that address missing",
+          sorted(a for a in _gen if a not in _short) == [_withheld]
+          and not [a for a in _gen if a not in _synth],
+          "withheld %s from a %s-address synthetic complete set; named "
+          "missing: %s"
+          % (_withheld, len(_synth),
+             sorted(a for a in _gen if a not in _short)))
     _probe = "203.0.113.254"
     check("REQ-45C-1 (VM) NON-VACUITY: the device read DISCRIMINATES -- an "
           "address generation did not author is ABSENT from the device",
