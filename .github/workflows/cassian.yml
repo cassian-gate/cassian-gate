@@ -403,6 +403,7 @@ jobs:
           ./src/cassian.py down vm-assertion-smoke
 
       - name: SONiC endpoint recognition — mixed host/linux (§4.5-c WI-2, REQ-45C-6/-7)
+        if: success() || failure()
         shell: bash
         run: |
           set -euo pipefail
