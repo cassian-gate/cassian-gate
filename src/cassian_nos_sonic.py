@@ -571,7 +571,8 @@ def assert_routing_mode_clean(rt: "Runtime", lab: str, node: str) -> None:
         _fail(
             "SONiC guest is in an unsupported routing configuration mode",
             node,
-            "DEVICE_METADATA.localhost carries " + ", ".join(present),
+            "DEVICE_METADATA.localhost carries "
+            + ", ".join("%s=%r" % (k, meta[k]) for k in present),
             "Cassian supplies BGP state as a config_db overlay; in this mode "
             "the guest sources its routing configuration elsewhere, so the "
             "overlay would be applied but not honoured",

@@ -12,17 +12,18 @@ WHAT THIS COVERS -- §15.2's four REQ-45C-44 rows, and which are NOT here:
   :492  negative        §4.5-c writes neither mode key anywhere
                         -> LEG 3 below
   :491  negative (VM)   clean guest passes; SEEDED guest fails loud
-                        -> LEG 1/2 prove the PREDICATE lab-free. The seeded
-                           REAL guest half is NOT here; it needs guest
-                           mutation and is packet 3b's.
+                        -> LEG 1/2 prove the PREDICATE lab-free; LEG 8, under
+                           `req44neg`, proves it on a REAL guest that this leg
+                           seeds (LD-45C-R36 R1).
   :490  positive (VM)   post-apply device read vs the image's own
                         persisted declaration, same boot
                         -> LEG 7, under `req44pos` (LD-45C-R35 R1)
 
-TWO MODES. With no argv the six lab-free legs run and the (VM) leg reports
-BLOCKED; `req44pos <topo> <lab>` additionally runs LEG 7 against a real
-guest. The lab-free legs replay their guest read through a fake runtime,
-so they prove the predicate's behaviour, not the device's.
+THREE MODES. With no argv the six lab-free legs run and both (VM) legs
+report BLOCKED; `req44pos <topo> <lab>` additionally runs LEG 7 and
+`req44neg <topo> <lab>` LEG 8, each against a real guest. The lab-free
+legs replay their guest read through a fake runtime, so they prove the
+predicate's behaviour, not the device's.
 
 STATED COVERAGE LIMITS (PBE-P2-8):
   * The replayed payloads are the MEASURED shape from sonic-vm:202405
@@ -263,17 +264,130 @@ def _leg_req44_positive(topo_path, lab):
               % (_disk_meta.get(_f), run_meta.get(_f)))
 
 
+def _leg_req44_negative(topo_path, lab):
+    """REQ-45C-44(b) (VM), §15.2 `:491` -- the guard refuses a seeded guest.
+
+    `LD-45C-R36` R1: the abort message names the offending key AND its value.
+    A negative test asserting only that `SystemExit` was raised is not a
+    negative test -- session 21 recorded three controls logged as fired that
+    had fired as a DIFFERENT guard or not at all. Every assertion below
+    therefore reads the message and requires it to name the guard under test.
+
+    ORDER IS FORCED. The clean-guest control runs BEFORE any seed, because
+    removing a field once written is unmeasured (`sonic-db-cli HDEL` has never
+    been run against this image) and `up --reconfigure` destroys the lab
+    unconditionally (`cassian_engine.py:1337`, `:1351`; Doctrine §1.9), so it
+    cannot restore a clean guest without wiping the seed. After the first seed
+    the guest stays dirty for the rest of the leg; the lab is torn down by the
+    CI step that owns it.
+
+    THE SEEDED VALUES ARE SENTINELS, deliberately. The guard's predicate is a
+    membership test over `_FORBIDDEN_MODE_KEYS`, so it is value-independent and
+    realism buys nothing; a sentinel buys provenance -- a value that appears in
+    the abort message can only have been read from the device, which is the
+    property `LD-45C-R36` R1 exists to establish.
+
+    Imports are function-local because the module's import block sits inside
+    the region `LD-45C-R35` R4 freezes.
+
+    STATED COVERAGE LIMITS (PBE-P2-8): this establishes that the guard refuses
+    and names what it found. It does NOT establish what SONiC does in these
+    modes -- unmeasured, and the reason the disposition is refusal rather than
+    adaptation. The values seeded are sentinels, so nothing here establishes
+    behaviour against a production value. One image, one fixture, one boot.
+    """
+    import contextlib
+    import io as _io
+
+    import yaml
+
+    import cassian_runtime_vm as _RV
+
+    doc = yaml.safe_load(open(topo_path, encoding="utf-8").read()) or {}
+    names = [n.get("name") for n in (doc.get("nodes") or [])
+             if isinstance(n, dict)
+             and str(n.get("type") or "").strip().lower() == "sonic-vm"]
+    check("REQ-45C-44(b) (VM) NON-VACUITY: fixture carries exactly one "
+          "sonic-vm node", len(names) == 1, "sonic-vm nodes: %s" % names)
+    if len(names) != 1:
+        return
+    node = names[0]
+    rt = _RV.build_runtime(doc)
+
+    # --- control: the guard PASSES before anything is seeded ------------------
+    # Without this the seeded assertions below would also pass against a guard
+    # that refuses unconditionally.
+    _clean = True
+    try:
+        S.assert_routing_mode_clean(rt, lab, node)
+    except SystemExit:
+        _clean = False
+    check("REQ-45C-44(b) :491 CONTROL: the provisioned guest is clean and the "
+          "guard passes on it", _clean)
+    if not _clean:
+        return
+
+    _seen = []
+    for _key, _value in (("docker_routing_config_mode", "unified-45cR36"),
+                         ("frr_mgmt_framework_config", "true-45cR36")):
+        _ack = S._guest_stdout(
+            rt, lab, node,
+            ["sonic-db-cli", "CONFIG_DB", "HSET",
+             "DEVICE_METADATA|localhost", _key, _value],
+            "the HSET acknowledgement for %s" % _key).strip()
+        check("REQ-45C-44(b) :491 seed of `%s` reports the field CREATED "
+              "(HSET -> 1), so the guest state actually changed" % _key,
+              _ack == "1", "HSET returned %r" % _ack)
+
+        _buf = _io.StringIO()
+        _code = None
+        with contextlib.redirect_stderr(_buf):
+            try:
+                S.assert_routing_mode_clean(rt, lab, node)
+            except SystemExit as _exc:
+                _code = _exc.code
+        _msg = _buf.getvalue()
+
+        check("REQ-45C-44(b) :491 seeded `%s`: the guard fails loud, exit 2"
+              % _key, _code == 2, "exit=%r" % _code)
+        check("REQ-45C-44(b) :491 seeded `%s`: the abort names THE GUARD UNDER "
+              "TEST, not some other failure" % _key,
+              "unsupported routing configuration mode" in _msg,
+              "message=%r" % _msg[:200])
+        check("REQ-45C-44(b) :491 seeded `%s`: the abort names the KEY" % _key,
+              _key in _msg)
+        _pair = "%s=%r" % (_key, _value)
+        check("REQ-45C-44(b) :491 seeded `%s`: the abort names the VALUE -- a "
+              "sentinel, so it can only have come from the device (R36 R1)"
+              % _key, _pair in _msg, "expected %r in the abort" % _pair)
+        check("REQ-45C-44(b) :491 seeded `%s`: §13-grade -- the abort also "
+              "carries what would be valid" % _key,
+              "sets neither" in _msg)
+
+        _seen.append(_pair)
+        _absent = [p for p in _seen if p not in _msg]
+        check("REQ-45C-44(b) :491 NON-VACUITY: the abort names EVERY key "
+              "seeded so far (%d), so the message tracks device state rather "
+              "than reporting a constant" % len(_seen),
+              not _absent, "missing from the abort: %s" % _absent)
+
+
 # --- dispatch + report --------------------------------------------------------
 
 _vm_args = sys.argv[1:]
 if not _vm_args:
     blocked("REQ-45C-44 (VM) :490 platform-owned values unaltered by the apply",
             "no (VM) argv supplied; run: req44pos <topo> <lab>")
+    blocked("REQ-45C-44(b) (VM) :491 seeded guest fails loud naming key/value",
+            "no (VM) argv supplied; run: req44neg <topo> <lab>")
 elif _vm_args[0] == "req44pos" and len(_vm_args) == 3:
     _leg_req44_positive(_vm_args[1], _vm_args[2])
+elif _vm_args[0] == "req44neg" and len(_vm_args) == 3:
+    _leg_req44_negative(_vm_args[1], _vm_args[2])
 else:
     sys.exit("usage: sonic_routing_mode_precondition_proof.py "
-             "[req44pos <topo> <lab>]  (no argv = lab-free legs only)")
+             "[req44pos <topo> <lab> | req44neg <topo> <lab>]  "
+             "(no argv = lab-free legs only)")
 
 fails = [c for c in _checks if not c[1]]
 for name, ok, detail in _checks:
