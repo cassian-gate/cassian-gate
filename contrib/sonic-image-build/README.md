@@ -60,9 +60,9 @@ between a built image and its source.
 ## Build
 
 ```bash
-# 1. obtain a SONiC qcow2 (see caveats above) and place it here as sonic-vm.qcow2
-# 2. run the build helper
-./build.sh sonic-vm.qcow2 202405
+# 1. obtain a SONiC qcow2 (see the sourcing caveats above, and the filename trap below)
+# 2. run the build helper from the repository root
+./contrib/sonic-image-build/build.sh <your-sonic-vm.qcow2> 202405
 ```
 
 The helper clones vrnetlab, stages the qcow2 into its `sonic` build context, runs

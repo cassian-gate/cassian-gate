@@ -104,8 +104,17 @@ check("REQ-45C-31 exit code is 2 (not 1)", _code == 2, "got: %r" % (_code,))
 check("REQ-45C-31 (a) names the unresolved image reference", _BOGUS in _msg)
 check("REQ-45C-31 (b) states the contrib-owned-local-path reason",
       "not present at the contrib-owned local path" in _msg)
-check("REQ-45C-31 (c) gives the exact contrib invocation",
-      "contrib/sonic-image-build/build.sh" in _msg)
+_INVOCATION_L3 = "./contrib/sonic-image-build/build.sh <your-sonic-vm.qcow2> 0"
+check("REQ-45C-31 (c) gives the full build invocation, version rendered from "
+      "the declared tag",
+      _INVOCATION_L3 in _msg, "expected: %s" % _INVOCATION_L3)
+# Session-31 injection, run in-file. The previous predicate was the path
+# substring "contrib/sonic-image-build/build.sh", which the bare path alone
+# satisfies. The strengthened predicate must reject exactly that.
+check("REQ-45C-31 (c) non-vacuity: the strengthened predicate REJECTS the "
+      "bare path that the previous substring predicate accepted",
+      _INVOCATION_L3 not in "  ./contrib/sonic-image-build/build.sh\n",
+      "control")
 check("REQ-45C-31 names the offending node", "node: s1" in _msg)
 
 # Non-vacuity control: a node with no image declared must NOT be rejected.
@@ -116,6 +125,87 @@ except SystemExit:
     _ok = False
 check("REQ-45C-31 non-vacuity: imageless node is not rejected", _ok,
       "proves the gate discriminates rather than always failing")
+
+# --- Leg 5 (REQ-45C-11, -31): the two operator-facing surfaces agree --------
+# Chat-4 pre-LOCK condition, session 31. The engine's missing-image error text
+# and the contrib README must carry the SAME build invocation. A reader who
+# follows one and then the other must not be handed two different commands.
+#
+# BOTH SIDES ARE READ FROM DISK. The engine side is the string the engine
+# actually renders, captured from _assert_vm_images_present -- not a constant
+# this file owns. The README side is parsed out of the shipped file. Neither is
+# a literal maintained here, so a later edit to either surface moves this leg.
+#
+# STATED COVERAGE LIMIT (PBE-P2-8): agreement is verified AT THE DEFAULT
+# VERSION ONLY. cassian_engine.py:703 derives the version field from the
+# declared image reference's own tag and falls back to the literal default when
+# the reference carries none; the README carries that default as a literal. A
+# tagged reference therefore renders its own tag and diverges from the README by
+# construction. This leg drives the engine with an UNTAGGED reference so the
+# default path is the one compared. The uncovered residual -- agreement at a
+# non-default version -- is not defended by this guard's existence. It cannot
+# hold, and it is documented here rather than asserted away.
+#
+# This leg makes divergence DETECTED, not impossible. The stronger fix -- one
+# composed string both surfaces read -- needs a generator or templating step and
+# is out of scope (Doctrine 1.14). This limit is additive to the file-level
+# provenance limit in the module docstring and to the engine's own limit at
+# cassian_engine.py:680-684.
+
+_UNTAGGED = "local/sonic-vm-does-not-exist-45c"
+_err5 = io.StringIO()
+try:
+    _stderr5, sys.stderr = sys.stderr, _err5
+    try:
+        E._assert_vm_images_present([{"name": "s5", "image": _UNTAGGED}])
+    finally:
+        sys.stderr = _stderr5
+except SystemExit:
+    pass
+_msg5 = _err5.getvalue()
+
+
+def _invocation_from(text):
+    """Return the single line carrying the build-helper invocation, stripped.
+
+    Leading indentation is presentation -- the engine indents its invocation by
+    two spaces inside the message body, the README does not -- and is
+    normalised. Every other byte is compared. Returns "" when no such line is
+    present, which the non-vacuity checks below turn into a failure rather than
+    an empty-equals-empty pass.
+    """
+    for _l in text.split("\n"):
+        _s = _l.strip()
+        if _s.startswith("./contrib/sonic-image-build/build.sh"):
+            return _s
+    return ""
+
+
+_eng_inv = _invocation_from(_msg5)
+_readme_path = os.path.join(_ROOT, "contrib", "sonic-image-build", "README.md")
+_readme_txt = io.open(_readme_path, encoding="utf-8", errors="replace").read()
+_doc_inv = _invocation_from(_readme_txt)
+
+check("(5a) NON-VACUITY: the engine side is non-empty, so an empty-equals-empty "
+      "comparison cannot pass", bool(_eng_inv), repr(_eng_inv))
+check("(5b) NON-VACUITY: the README side is non-empty", bool(_doc_inv),
+      repr(_doc_inv))
+check("(5c) an untagged reference renders the DEFAULT version, which is the "
+      "only version this leg covers",
+      _eng_inv.endswith(" 202405"), repr(_eng_inv))
+check("(5d) engine error text and contrib README carry the same build "
+      "invocation at the default version",
+      bool(_eng_inv) and _eng_inv == _doc_inv,
+      "engine=%r readme=%r" % (_eng_inv, _doc_inv))
+check("(5e) NON-VACUITY: the equality REDS on a divergent VERSION field",
+      _eng_inv != _invocation_from(
+          "./contrib/sonic-image-build/build.sh <your-sonic-vm.qcow2> 999999"),
+      "control")
+check("(5f) NON-VACUITY: the equality REDS on a divergent ARGUMENT field, "
+      "which is the field the pre-repair README diverged on",
+      _eng_inv != _invocation_from(
+          "./contrib/sonic-image-build/build.sh sonic-vm.qcow2 202405"),
+      "control")
 
 # --- Leg 4 (REQ-45C-11, (VM)): §15.2 row 11 `:466` ---------------------------
 def _leg_req11(topo_path, lab):
