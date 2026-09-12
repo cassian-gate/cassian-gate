@@ -79,7 +79,7 @@ import ipaddress
 import time
 
 from cassian_common import fail, is_ip_literal, validate_ip_literal
-from cassian_artifacts import write_json_canonical
+from cassian_artifacts import write_json_canonical, node_cfg_dir
 from cassian_state import (
     _state_capture_expand_plan_or_die,
     _state_capture_run_plan,
@@ -93,7 +93,7 @@ from cassian_candidate import (
     _write_candidate_apply_artifact,
 )
 from cassian_two_run import _cmd_test_two_run
-from cassian_runtime_container import _normalize_prefix, verify_lab_ready
+from cassian_runtime_container import _normalize_prefix, verify_lab_ready, verify_sonic_vm_ready
 from cassian_model import build_node_links
 from cassian_tests import (
     ensure_nc,
@@ -249,6 +249,52 @@ def _command_uses_workspace_labs(cmd: str) -> bool:
         "gen",
         "cleanup",
     }
+
+def _provision_nos_providers(rt, lab_name: str, topo: dict) -> None:
+    """Dispatch `provision` for every node whose provider wires it.
+
+    Deferred legs are skipped by inspecting the LD-H2 placeholder marker, so an
+    unwired provider is never invoked and never fails loud for merely existing.
+    """
+    for n in topo.get("nodes", []) or []:
+        if not isinstance(n, dict):
+            continue
+        prov = NOS_PROVIDERS.get(n.get("type"))
+        if prov is None:
+            continue
+        if getattr(prov.provision, "cassian_deferred_leg", None) is not None:
+            continue
+        name = str(n.get("name") or "").strip()
+        if not name:
+            continue
+        # Reachability gate before any provider dispatch. Runtime-layer
+        # concern per the ratified NOS design's readiness split: substrate and
+        # transport are core's, NOS readiness is the provider's. `cmd_up` has
+        # no lab-wide reachability gate, and `verify_lab_ready` cannot serve as
+        # one -- `verify_host_ready` and `verify_frr_ready` require provisioning
+        # `cmd_up` has not yet performed. Scoped here to VM-runtime provider
+        # nodes; the host/nft-fw/frr residual is a routed backlog row.
+        if getattr(prov, "runtime_requirement", None) == "vm":
+            verify_sonic_vm_ready(rt, lab_name, name)
+
+        # NOS-readiness leg at the engine -> adapter boundary (design :188).
+        # Marker-guarded exactly as `provision` is above: a provider whose
+        # `nos_ready` is still a deferred placeholder is SKIPPED, never
+        # invoked. The guard is forward-looking -- today the `provision`
+        # skip already excludes FRR and nft-fw, whose `provision` legs are
+        # themselves deferred -- and becomes load-bearing the moment a
+        # provider lands `provision` without `nos_ready`.
+        if getattr(prov.nos_ready, "cassian_deferred_leg", None) is None:
+            prov.nos_ready(rt, lab_name, name)
+
+        applied = prov.provision(rt, lab_name, name, n, topo)
+        if not applied:
+            continue
+        for fname, content in applied.items():
+            out_path = node_cfg_dir(lab_name, name) / str(fname)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            write_json_canonical(out_path, content)
+
 
 def _bind_workspace_labs_dir(workspace: Path) -> None:
     labs_dir = Path(workspace) / "labs"
@@ -574,7 +620,7 @@ def cmd_validate(args: argparse.Namespace) -> None:
         topo = load_yaml(topo_path)
         ensure_valid_topology(topo)
 
-        resolved = resolve_topology(topo)
+        resolved = resolve_topology(topo, topo_path=topo_path)
         validate_scenarios(resolved)
 
         # Advisory-only coverage model (declared-only, resolve-time)
@@ -622,6 +668,53 @@ def cmd_validate(args: argparse.Namespace) -> None:
 
     finally:
         cassian_common._QUIET_DIE = prev_quiet
+
+def _assert_vm_images_present(vm_nodes: list[dict]) -> None:
+    """
+    Fail-fast image gate for VM-runtime nodes (REQ-45C-31).
+
+    Cassian Gate does not distribute NOS images. A VM node's image is produced by
+    contrib/sonic-image-build/ and resolved from the local Docker image store; no
+    registry pull is performed here or in CI (REQ-45C-11).
+
+    Coverage limit (PBE-P2-8): this asserts that the reference resolves in the
+    local image store. It does not, and cannot, distinguish an image produced by
+    contrib/sonic-image-build/ from one tagged by hand -- the vrnetlab build
+    label is byte-identical in both cases. Provenance of the local tag is an
+    operator responsibility, not a property this gate can verify.
+    """
+    for _n in vm_nodes:
+        image = str(_n.get("image") or "").strip()
+        node = str(_n.get("name") or "<unnamed>").strip()
+        if not image:
+            continue
+        try:
+            _p = subprocess.run(
+                ["docker", "image", "inspect", image],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            present = _p.returncode == 0
+        except Exception:
+            present = False
+        if present:
+            continue
+        _tail = image.rsplit("/", 1)[-1]
+        version = _tail.rsplit(":", 1)[1] if ":" in _tail else "202405"
+        die(
+            "VM image contract violation\n"
+            f"node: {node}\n"
+            f"reason: image reference did not resolve: {image}\n"
+            "detail: not present at the contrib-owned local path (no local Docker "
+            "image carries this reference); Cassian Gate does not distribute NOS "
+            "images and performs no registry pull\n"
+            "required: build it with the contrib path, then re-run:\n"
+            f"  ./contrib/sonic-image-build/build.sh <your-sonic-vm.qcow2> {version}\n"
+            "notes: see contrib/sonic-image-build/README.md for qcow2 sourcing "
+            "(bring-your-own NOS).",
+            code=2,
+        )
+
 
 def cmd_doctor(args: argparse.Namespace) -> None:
     """
@@ -757,7 +850,7 @@ def cmd_preflight(args: argparse.Namespace) -> None:
         topo = load_yaml(topo_path)
         ensure_valid_topology(topo)
 
-        resolved = resolve_topology(topo)
+        resolved = resolve_topology(topo, topo_path=topo_path)
         validate_scenarios(resolved)
 
         # Declared-only coverage model (authoritative dependency; still advisory output)
@@ -1236,7 +1329,7 @@ def cmd_up(args: argparse.Namespace) -> None:
     if is_resolved_input:
         resolved_preview = topo_preview
     else:
-        resolved_preview = resolve_topology(topo_preview)
+        resolved_preview = resolve_topology(topo_preview, topo_path=topo_path)
 
     validate_scenarios(resolved_preview)
 
@@ -1254,8 +1347,19 @@ def cmd_up(args: argparse.Namespace) -> None:
         if isinstance(lab_name, str) and lab_name.strip():
             lab_name = lab_name.strip()
             existing_clab = LABS_DIR / f"{lab_name}.clab.yaml"
-            if existing_clab.exists():
-                _run_containerlab(["sudo", "containerlab", "destroy", "-t", str(existing_clab)], check=False)
+            if not existing_clab.exists():
+                # Doctrine §1.9: the destroy is unconditional under --reconfigure.
+                # The topology file is workspace state; the containers it must
+                # remove are daemon state. Gating the destroy on the file made the
+                # gate skip teardown whenever the file was absent (CI wipes `labs/`
+                # every run), which is the silent conditional behaviour §1.4 forbids.
+                # Materialise the file so the destroy always has a target; it lands
+                # at LABS_DIR/<lab>.clab.yaml, a SIBLING of lab_dir(), so neither
+                # the destroy nor the rm -rf below removes it. Lab-directory
+                # artifacts are still generated after cleanup (see below) -- that
+                # ordering is load-bearing and unchanged.
+                existing_clab = write_containerlab_file(topo_path)
+            _run_containerlab(["sudo", "containerlab", "destroy", "-t", str(existing_clab)], check=False)
             run(["sudo", "rm", "-rf", str(lab_dir(lab_name))], check=False)
 
     # Generate AFTER destroy/cleanup
@@ -1270,6 +1374,7 @@ def cmd_up(args: argparse.Namespace) -> None:
         first_vm = vm_nodes[0]
         first_name = str(first_vm.get("name") or "<unnamed>").strip()
         assert_vm_runtime_supported(first_name)
+        _assert_vm_images_present(vm_nodes)
     _maybe_print_privilege_notice("A")
     _run_containerlab(["sudo", "containerlab", "deploy", "-t", str(out)], check=True)
 
@@ -1321,6 +1426,13 @@ def cmd_up(args: argparse.Namespace) -> None:
 
     # 5) FRR provisioning
     configure_frr_interfaces_from_topology(rt, lab_name, topo)
+
+    # 5b) NOS-provider provisioning (§4.5-c REQ-45C-1). Providers own the NOS
+    # mechanics; core owns orchestration and artifact recording. Per R-C3-14
+    # `provision` returns the mapping it applied and core serializes it here
+    # through `write_json_canonical` (PBE-P2-7) as run-directory evidence --
+    # LD-45C-2 gives it no directory contract, so nothing consumes the path.
+    _provision_nos_providers(rt, lab_name, topo)
     evpn_leaf_setup_vxlan_from_topology(rt, lab_name, topo)
 
     # Deterministic EVPN host-attachment stimulation for MAC learning
@@ -3312,10 +3424,9 @@ def _fail_fast_drops(declared_tests, from_idx):
     return out
 
 
-from cassian_common import _BGP_COMMUNITY_CANON, _canonical_community_token  # re-homed to cassian_common (§4.5-b A-H3); shim owed removal at §4.5-c (BL-P2-4.5b-3)
+from cassian_common import _canonical_community_token  # common-homed (§4.5-b A-H3); live import, used below
 
 
-from cassian_nos_frr import _route_communities  # relocated to the FRR provider (§4.5-b F-45b-C3b-1, founder ruling B'); shim owed removal at §4.5-c (BL-P2-4.5b-3)
 
 
 def _bgp_community_observed(expected, match, observed_canon):
@@ -3332,7 +3443,6 @@ def _bgp_community_observed(expected, match, observed_canon):
     return "pass" if ok else "fail"
 
 
-from cassian_nos_frr import _route_as_path  # relocated to the FRR provider (§4.5-b F-45b-C3b-1, founder ruling B'); shim owed removal at §4.5-c (BL-P2-4.5b-3)
 
 
 def _bgp_as_path_observed(pattern, observed_path):
@@ -3500,7 +3610,9 @@ def cmd_test(args: argparse.Namespace) -> None:
         try:
             topo_preview = load_yaml(topo_gate_path)
             ensure_valid_topology(topo_preview)
-            resolved_preview = resolve_topology(topo_preview)
+            resolved_preview = resolve_topology(
+                topo_preview, topo_path=topo_gate_path
+            )
             validate_scenarios(resolved_preview)
         except SystemExit as e:
             raw_code = getattr(e, "code", 1)
@@ -6053,7 +6165,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported EVPN BGP-session evidence provider capability",
                     evidence={
-                        "cmd": "vtysh -c 'show bgp l2vpn evpn summary json'",
+                        "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn summary json'",
                         "rc": rc,
                     },
                     meta={
@@ -6076,7 +6188,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported EVPN BGP-session evidence normalization",
                     evidence={
-                        "cmd": "vtysh -c 'show bgp l2vpn evpn summary json'",
+                        "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn summary json'",
                         "rc": rc,
                     },
                     meta={
@@ -6123,7 +6235,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 duration_ms=int((time.time() - start) * 1000),
                 error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                 evidence={
-                    "cmd": "vtysh -c 'show bgp l2vpn evpn summary json'",
+                    "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn summary json'",
                     "rc": rc,
                     "neighbors": evidence_entries,
                 },
@@ -6214,7 +6326,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                         duration_ms=0,
                         error="unsupported BGP MED evidence provider capability",
                         evidence={
-                            "cmd": f"vtysh -c 'show ip bgp {norm_prefix} json'",
+                            "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {norm_prefix} json'",
                             "rc": rc,
                         },
                         meta={
@@ -6249,7 +6361,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                         duration_ms=0,
                         error="unsupported BGP MED evidence normalization",
                         evidence={
-                            "cmd": f"vtysh -c 'show ip bgp {norm_prefix} json'",
+                            "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {norm_prefix} json'",
                             "rc": rc,
                             "parse_error": parse_error,
                         },
@@ -6288,7 +6400,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=int((time.time() - start) * 1000),
                     error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                     evidence={
-                        "cmd": f"vtysh -c 'show ip bgp {norm_prefix} json'",
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {norm_prefix} json'",
                         "rc": rc,
                         "prefix": norm_prefix,
                         "med": observed_med,
@@ -6310,6 +6422,36 @@ def cmd_test(args: argparse.Namespace) -> None:
             rc = last_evidence.get("rc")
             present = bool(last_state.get("present"))
             observed_prefixes = list(last_state.get("observed_prefixes") or [])
+
+            if str(last_evidence.get("reason") or "") == "unsupported_provider_capability":
+                # BL-P2-4.5c-44: deny-by-default must not render as a negative
+                # observation. Without this guard the predicate below reads the
+                # unsupported state's absent keys as observed="fail", which
+                # SATISFIES a negative expectation and yields a passing verdict
+                # on a device never queried (Doctrine 1.11: absence must never
+                # imply pass). Shape is the already-ratified UNSUP disposition
+                # shipping at the rc-guard sites (F-45b-C3-1). Founder ruling
+                # 2026-08-22: supersedes option 1b, unreachable once this exits.
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported route evidence evidence provider capability",
+                    evidence={
+                        "cmd": last_evidence.get("cmd") or "vtysh -c 'show ip route json'",
+                        "rc": last_evidence.get("rc"),
+                    },
+                    meta={
+                        "type": inv_type,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
 
             if inv_type == "route_present":
                 observed = "pass" if present else "fail"
@@ -6350,7 +6492,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 duration_ms=int((time.time() - start) * 1000),
                 error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                 evidence={
-                    "cmd": "vtysh -c 'show ip route json'",
+                    "cmd": last_evidence.get("cmd") or "vtysh -c 'show ip route json'",
                     "rc": rc,
                 },
                 meta={
@@ -6426,7 +6568,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported EVPN VNI/MAC-route evidence provider capability",
                     evidence={
-                        "cmd": "vtysh -c 'show bgp l2vpn evpn route json'",
+                        "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn route json'",
                         "rc": rc,
                     },
                     meta={
@@ -6439,25 +6581,46 @@ def cmd_test(args: argparse.Namespace) -> None:
                 raise SystemExit(2)
 
             if not present and inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent"):
-                cp_text = rt.exec(
-                    lab,
-                    src,
-                    ["vtysh", "-c", "show bgp l2vpn evpn route"],
-                    check=False,
-                    capture_output=True,
-                )
+                # Supplementary text-mode leg (REQ-45C-14, LD-45C-1 ruled shape):
+                # a SECOND ObservationRequest of a distinct kind, issued only
+                # after the JSON leg returned no matching route. The provider
+                # parses and returns; core keeps every decision -- the
+                # evidence_entries/present composition, the parse_error merge,
+                # and the rc-gated misuse exit below. The Observation's
+                # `excerpt` is deliberately NOT promoted into record_fn: the
+                # authoritative record surface is frozen (REQ-45C-19, §7
+                # outputs; founder ruling 2026-08-20).
+                try:
+                    _sup = _nos_collect(
+                        rt, lab, src, _nos_ntype(topo, src),
+                        ObservationRequest(kind="evpn_mac_route_text", params={"vni_i": vni_i}),
+                        "cmd_test supplementary EVPN collection",
+                    )
+                except NosCapabilityUnsupported:
+                    record_fn(
+                        name=test_name,
+                        kind="invariant",
+                        src=src,
+                        dst="",
+                        expected=expected,
+                        observed="fail",
+                        verdict="fail",
+                        duration_ms=0,
+                        error="unsupported EVPN VNI/MAC-route evidence provider capability",
+                        evidence={
+                            "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn route'",
+                            "rc": None,
+                        },
+                        meta={
+                            "type": inv_type,
+                            "mac": mac,
+                            "vni": vni_i,
+                            "misuse": True,
+                        },
+                    )
+                    raise SystemExit(2)
 
-                if isinstance(cp_text, str):
-                    out_text = cp_text
-                    rc_text = None
-                else:
-                    out_text = getattr(cp_text, "stdout", "") or getattr(cp_text, "output", "") or ""
-                    if isinstance(out_text, (bytes, bytearray)):
-                        try:
-                            out_text = out_text.decode("utf-8", errors="replace")
-                        except Exception:
-                            out_text = str(out_text)
-                    rc_text = getattr(cp_text, "returncode", None)
+                rc_text = _sup.evidence.get("returncode")
 
                 if rc_text not in (0, None):
                     record_fn(
@@ -6471,7 +6634,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                         duration_ms=0,
                         error="unsupported EVPN VNI/MAC-route evidence provider capability",
                         evidence={
-                            "cmd": "vtysh -c 'show bgp l2vpn evpn route'",
+                            "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn route'",
                             "rc": rc_text,
                             "json_rc": rc,
                         },
@@ -6484,31 +6647,17 @@ def cmd_test(args: argparse.Namespace) -> None:
                     )
                     raise SystemExit(2)
 
-                try:
-                    import re as _re
-
-                    text = str(out_text or "")
-                    for line in text.splitlines():
-                        m = _re.search(r"\[2\]:\[0\]:\[48\]:\[([0-9a-f:]{17})\]", line, flags=_re.IGNORECASE)
-                        if not m:
-                            continue
-                        mac_val = m.group(1).lower()
-                        rec = {
-                            "mac": str(mac_val or "").strip().lower(),
-                            "vni": vni_i,
-                            "route_type": "2",
-                            "node": src,
-                        }
-                        if not rec["mac"]:
-                            continue
-                        evidence_entries.append(rec)
-                        if rec["mac"] == mac and rec["vni"] == vni_i:
-                            present = True
-                except Exception as e:
+                _sup_parse_error = str(_sup.data.get("parse_error") or "")
+                if _sup_parse_error:
                     if parse_error:
-                        parse_error = f"{parse_error}; text_parse={e}"
+                        parse_error = f"{parse_error}; {_sup_parse_error}"
                     else:
-                        parse_error = f"text_parse={e}"
+                        parse_error = _sup_parse_error
+
+                for rec in list(_sup.data.get("records") or []):
+                    evidence_entries.append(rec)
+                    if rec["mac"] == mac and rec["vni"] == vni_i:
+                        present = True
 
             if parse_error and not evidence_entries:
                 record_fn(
@@ -6522,7 +6671,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported EVPN VNI/MAC-route evidence normalization",
                     evidence={
-                        "cmd": "vtysh -c 'show bgp l2vpn evpn route json'",
+                        "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn route json'",
                         "rc": rc,
                     },
                     meta={
@@ -6633,7 +6782,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 duration_ms=int((time.time() - start) * 1000),
                 error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                 evidence={
-                    "cmd": "vtysh -c 'show bgp l2vpn evpn route json'",
+                    "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn route json'",
                     "rc": rc,
                     "routes": evidence_entries,
                 },
@@ -6732,7 +6881,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported route advertisement evidence provider capability",
                     evidence={
-                        "cmd": f"vtysh -c 'show ip bgp neighbor {peer_ips[0]} advertised-routes json'",
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp neighbor {peer_ips[0]} advertised-routes json'",
                         "rc": rc,
                     },
                     meta={
@@ -6756,7 +6905,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported route advertisement evidence normalization",
                     evidence={
-                        "cmd": f"vtysh -c 'show ip bgp neighbor {peer_ips[0]} advertised-routes json'",
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp neighbor {peer_ips[0]} advertised-routes json'",
                         "rc": rc,
                         "parse_error": parse_error,
                     },
@@ -6826,7 +6975,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 duration_ms=int((time.time() - start) * 1000),
                 error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                 evidence={
-                    "cmd": f"vtysh -c 'show ip bgp neighbor {peer_ips[0]} advertised-routes json'",
+                    "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp neighbor {peer_ips[0]} advertised-routes json'",
                     "rc": rc,
                     "prefixes": advertised_prefixes,
                 },
@@ -6867,7 +7016,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported BGP LOCALPREF evidence normalization",
                     evidence={
-                        "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
                         "rc": rc,
                         "parse_error": parse_error,
                     },
@@ -6906,7 +7055,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 duration_ms=int((time.time() - start) * 1000),
                 error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                 evidence={
-                    "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                    "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
                     "rc": rc,
                     "prefix": prefix,
                     "localpref": observed_localpref,
@@ -6937,6 +7086,36 @@ def cmd_test(args: argparse.Namespace) -> None:
             observed_communities = list(last_state.get("observed_communities") or [])
             empty_first_doc = bool(last_evidence.get("empty_first_doc"))
 
+            if str(last_evidence.get("reason") or "") == "unsupported_provider_capability":
+                # BL-P2-4.5c-44: deny-by-default must not render as a negative
+                # observation. Without this guard the predicate below reads the
+                # unsupported state's absent keys as observed="fail", which
+                # SATISFIES a negative expectation and yields a passing verdict
+                # on a device never queried (Doctrine 1.11: absence must never
+                # imply pass). Shape is the already-ratified UNSUP disposition
+                # shipping at the rc-guard sites (F-45b-C3-1). Founder ruling
+                # 2026-08-22: supersedes option 1b, unreachable once this exits.
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=node,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported BGP community evidence provider capability",
+                    evidence={
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
+                        "rc": last_evidence.get("rc"),
+                    },
+                    meta={
+                        "type": inv_type,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
             if rc not in (0, None):
                 record_fn(
                     name=test_name,
@@ -6949,7 +7128,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported BGP community evidence provider capability",
                     evidence={
-                        "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
                         "rc": rc,
                     },
                     meta={
@@ -7002,7 +7181,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 duration_ms=int((time.time() - start) * 1000),
                 error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                 evidence={
-                    "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                    "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
                     "rc": rc,
                     "prefix": prefix,
                     "communities": sorted(observed_communities),
@@ -7032,6 +7211,36 @@ def cmd_test(args: argparse.Namespace) -> None:
             observed_as_path = str(last_state.get("observed_as_path") or "")
             empty_first_doc = bool(last_evidence.get("empty_first_doc"))
 
+            if str(last_evidence.get("reason") or "") == "unsupported_provider_capability":
+                # BL-P2-4.5c-44: deny-by-default must not render as a negative
+                # observation. Without this guard the predicate below reads the
+                # unsupported state's absent keys as observed="fail", which
+                # SATISFIES a negative expectation and yields a passing verdict
+                # on a device never queried (Doctrine 1.11: absence must never
+                # imply pass). Shape is the already-ratified UNSUP disposition
+                # shipping at the rc-guard sites (F-45b-C3-1). Founder ruling
+                # 2026-08-22: supersedes option 1b, unreachable once this exits.
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=node,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported BGP AS-path evidence provider capability",
+                    evidence={
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
+                        "rc": last_evidence.get("rc"),
+                    },
+                    meta={
+                        "type": inv_type,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
             if rc not in (0, None):
                 record_fn(
                     name=test_name,
@@ -7044,7 +7253,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported BGP AS-path evidence provider capability",
                     evidence={
-                        "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
                         "rc": rc,
                     },
                     meta={
@@ -7095,7 +7304,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 duration_ms=int((time.time() - start) * 1000),
                 error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                 evidence={
-                    "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                    "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
                     "rc": rc,
                     "prefix": prefix,
                     "as_path": observed_as_path,
@@ -7203,6 +7412,36 @@ def cmd_test(args: argparse.Namespace) -> None:
                 dur_ms = int((time.time() - start) * 1000)
                 ok = ok_a
 
+            if str(last_evidence.get("reason") or "") == "unsupported_provider_capability":
+                # BL-P2-4.5c-44: deny-by-default must not render as a negative
+                # observation. Without this guard the predicate below reads the
+                # unsupported state's absent keys as observed="fail", which
+                # SATISFIES a negative expectation and yields a passing verdict
+                # on a device never queried (Doctrine 1.11: absence must never
+                # imply pass). Shape is the already-ratified UNSUP disposition
+                # shipping at the rc-guard sites (F-45b-C3-1). Founder ruling
+                # 2026-08-22: supersedes option 1b, unreachable once this exits.
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst=neighbor,
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported BGP session-state evidence provider capability",
+                    evidence={
+                        "cmd": last_evidence.get("cmd") or "",
+                        "rc": last_evidence.get("rc"),
+                    },
+                    meta={
+                        "type": inv_type,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
             observed_state_str = str(last_state.get("state") or "Unknown")
             last_error = str(last_state.get("last_error") or "")
             parse_error = str(last_evidence.get("parse_error") or "")
@@ -7213,7 +7452,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             verdict = "pass" if observed == expected else "fail"
 
             evidence = {
-                "cmd": "vtysh -c 'show bgp summary json'",
+                "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp summary json'",
                 "parse_error": parse_error,
             }
             meta = {
@@ -7364,6 +7603,36 @@ def cmd_test(args: argparse.Namespace) -> None:
                 dur_ms = int((time.time() - start) * 1000)
                 ok = ok_a
 
+            if str(last_evidence.get("reason") or "") == "unsupported_provider_capability":
+                # BL-P2-4.5c-44: deny-by-default must not render as a negative
+                # observation. Without this guard the predicate below reads the
+                # unsupported state's absent keys as observed="fail", which
+                # SATISFIES a negative expectation and yields a passing verdict
+                # on a device never queried (Doctrine 1.11: absence must never
+                # imply pass). Shape is the already-ratified UNSUP disposition
+                # shipping at the rc-guard sites (F-45b-C3-1). Founder ruling
+                # 2026-08-22: supersedes option 1b, unreachable once this exits.
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst=neighbor,
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported OSPF neighbor-state evidence provider capability",
+                    evidence={
+                        "cmd": last_evidence.get("cmd") or "",
+                        "rc": last_evidence.get("rc"),
+                    },
+                    meta={
+                        "type": inv_type,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
             observed_state_str = str(last_state.get("state") or "Unknown")
             last_error = str(last_state.get("last_error") or "")
             parse_error = str(last_evidence.get("parse_error") or "")
@@ -7373,7 +7642,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             verdict = "pass" if observed == expected else "fail"
 
             evidence = {
-                "cmd": "vtysh -c 'show ip ospf neighbor json'",
+                "cmd": last_evidence.get("cmd") or "vtysh -c 'show ip ospf neighbor json'",
                 "parse_error": parse_error,
             }
             meta = {
@@ -7531,6 +7800,36 @@ def cmd_test(args: argparse.Namespace) -> None:
                 dur_ms = int((time.time() - start) * 1000)
                 ok = ok_a
 
+            if str(last_evidence.get("reason") or "") == "unsupported_provider_capability":
+                # BL-P2-4.5c-44: deny-by-default must not render as a negative
+                # observation. Without this guard the predicate below reads the
+                # unsupported state's absent keys as observed="fail", which
+                # SATISFIES a negative expectation and yields a passing verdict
+                # on a device never queried (Doctrine 1.11: absence must never
+                # imply pass). Shape is the already-ratified UNSUP disposition
+                # shipping at the rc-guard sites (F-45b-C3-1). Founder ruling
+                # 2026-08-22: supersedes option 1b, unreachable once this exits.
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst=iface,
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported interface-state evidence provider capability",
+                    evidence={
+                        "cmd": last_evidence.get("cmd") or "",
+                        "rc": last_evidence.get("rc"),
+                    },
+                    meta={
+                        "type": inv_type,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
             admin_state = str(last_state.get("admin_state") or "unknown")
             operstate = str(last_state.get("operstate") or "UNKNOWN")
             carrier = str(last_state.get("carrier") or "unknown")
@@ -7544,7 +7843,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             verdict = "pass" if observed == expected else "fail"
 
             evidence = {
-                "cmd": f"ip -j link show {iface}",
+                "cmd": last_evidence.get("cmd") or f"ip -j link show {iface}",
                 "parse_error": parse_error,
             }
             # REQ-H5-15 / LD-4.c ruling A: meta has exactly 7 keys, NO
@@ -9200,7 +9499,28 @@ def cmd_test(args: argparse.Namespace) -> None:
                 _sv(f"[scenario {sid}] {step_idx:02d}. wait_for_bgp node={node} timeout={timeout}")
 
                 try:
-                    wait_for_bgp(rt, lab, node, timeout=timeout)
+                    # §4.5-c WI-3 (REQ-45C-10/-30; LD-45C-R2 R1): the
+                    # scenario dispatch mirrors the ratified precheck
+                    # branch at `:10358-10365`, which is NOT edited --
+                    # FRR's path stays byte-unchanged. FRR keeps the
+                    # inline wait (NG-9); a registered non-FRR provider
+                    # takes its `convergence_wait` leg, which carries the
+                    # DECLARED peer IPs. That scoping is load-bearing:
+                    # stock SONiC ships 31 neighbours that never
+                    # establish, so a wait scoped to all peers could
+                    # never pass (`sonic-guest-probe-reference.md` §4.2).
+                    # `type` only, mirroring the precheck branch: the
+                    # resolver reads `n["type"]` as a hard subscript, and
+                    # the `kind` it writes belongs to the containerlab
+                    # topology, never to `topo["nodes"]`.
+                    _ntype = str((nodes_by_name.get(node) or {}).get("type") or "")
+                    _prov = NOS_PROVIDERS.get(_ntype)
+                    if _ntype == "frr" or _prov is None:
+                        wait_for_bgp(rt, lab, node, timeout=timeout)
+                    else:
+                        _prov.convergence_wait(
+                            rt, lab, node, timeout, _expected_peer_ips(node)
+                        )
 
                     dur_ms = int((time.time() - step_started) * 1000)
                     meta = {"node": node, "timeout_s": timeout}
@@ -9886,7 +10206,39 @@ def cmd_test(args: argparse.Namespace) -> None:
     # =============================================================================
     # 3) Optional control-plane checks (FRR/BGP)
     # =============================================================================
-    frr_nodes = [n for n in nodes if n.get("type") == "frr"]
+    # §4.5-c WI-3 (REQ-45C-8). BGP participation is a property of the
+    # DECLARATION -- a node with a registered NOS provider that declares `asn`
+    # -- not of the node being FRR. Both predicates below read `frr` only
+    # incidentally: Cassian authored FRR's config, so "FRR node" and "Cassian-
+    # managed BGP speaker" happened to coincide. `sonic-vm` is where that stops.
+    # NG-9 is preserved by the DISPATCH below, not by these predicates: FRR
+    # still takes the inline `wait_for_bgp` and its provider placeholder stays
+    # a placeholder.
+    #
+    # ZERO BEHAVIOURAL DELTA FOR FRR, deliberately asymmetric:
+    #   node side -- `frr` short-circuits True, reproducing the previous
+    #     `[n for n in nodes if n.get("type") == "frr"]` exactly. The prior code
+    #     applied no node-level `asn` test, and adding one would change which
+    #     FRR nodes are participants.
+    #   peer side -- `"frr" in NOS_PROVIDERS` holds, so the previous
+    #     `peer.get("type") == "frr" and "asn" in peer` is a strict subset of
+    #     the new test. An all-FRR topology selects the identical peer set.
+    def _is_bgp_node(n: object) -> bool:
+        if not isinstance(n, dict):
+            return False
+        ntype = str(n.get("type") or "")
+        if ntype == "frr":
+            return True
+        return ntype in NOS_PROVIDERS and "asn" in n
+
+    def _is_bgp_peer(p: object) -> bool:
+        return bool(
+            isinstance(p, dict)
+            and str(p.get("type") or "") in NOS_PROVIDERS
+            and "asn" in p
+        )
+
+    bgp_speakers = [n for n in nodes if _is_bgp_node(n)]
     links_by_node = build_node_links(topo)
 
     def expected_bgp_peers(node_name: str) -> list[dict]:
@@ -9894,12 +10246,113 @@ def cmd_test(args: argparse.Namespace) -> None:
         for l in links_by_node.get(node_name, []) or []:
             peer_name = l.get("peer")
             peer = nodes_by_name.get(peer_name)
-            if peer and peer.get("type") == "frr" and "asn" in peer:
+            if peer and _is_bgp_peer(peer):
                 out.append(l)
         return out
 
+    def _expected_peer_ips(node_name: str) -> "tuple[str, ...]":
+        """Peer IPs of the LINKED BGP speakers for `node_name`, sorted.
+
+        CORRECTED (§4.5-c WI-3 packet 4a). This was documented as "declared
+        peer IPs" at `d00de88`; it is not. `expected_bgp_peers` iterates
+        `links_by_node` and admits any far end passing `_is_bgp_peer` -- it
+        never consults this node's own `bgp.neighbors`. On a symmetric topology
+        linked and declared coincide; on an ASYMMETRIC one they diverge, and
+        that divergence is exactly REQ-45C-24's subject. Behaviour unchanged:
+        a precheck reasonably waits on every linked speaker. Only the
+        description was wrong.
+
+        The channel the widened `convergence_wait` contract carries (founder
+        ruling 2026-08-25). Opaque to the provider contract: peer-IP strings
+        only, no NOS vocabulary.
+        """
+        return tuple(sorted(
+            str(l.get("peer_ip") or "").strip()
+            for l in expected_bgp_peers(node_name)
+            if str(l.get("peer_ip") or "").strip()
+        ))
+
+    def _declared_neighbor_names(node: object) -> "set[str]":
+        """Peer NODE NAMES this node declares under `bgp.neighbors`.
+
+        The declaration names its peer by node name -- `cassian_model.py:1697`
+        binds `peer_name` from `nbr["peer"]` and matches it against
+        `build_node_links`' `l["peer"]`. This is the DECLARED set, as against
+        `expected_bgp_peers`' LINKED set.
+        """
+        if not isinstance(node, dict):
+            return set()
+        bgp = node.get("bgp")
+        if not isinstance(bgp, dict):
+            return set()
+        nbrs = bgp.get("neighbors")
+        if not isinstance(nbrs, list):
+            return set()
+        out: "set[str]" = set()
+        for nbr in nbrs:
+            if isinstance(nbr, dict):
+                name = str(nbr.get("peer") or "").strip()
+                if name:
+                    out.add(name)
+        return out
+
+    def _declaration_asymmetries() -> "list[tuple[str, str]]":
+        """(declarer, silent_peer) for every one-sided BGP declaration.
+
+        REQ-45C-24: "Undeclared-neighbor asymmetry (one side declares a
+        neighbor the other does not) surfaces in precheck output as named
+        evidence -- never silence." Doctrine §1.11.
+
+        A TOPOLOGY property, computed at precheck ENTRY from the resolved
+        topology -- no device, no polling, no NOS. Core owns it because core is
+        the only place holding BOTH sides: the provider seam carries
+        `expected_peer_ips`, a tuple of IP strings with no notion of the far
+        node's declaration (`cassian_nos_types.py:215`). Founder ruling
+        2026-08-25.
+
+        Emitted at ENTRY rather than on the timeout path deliberately: an
+        asymmetric pair never converges, so a timeout message would arrive
+        after the full precheck bound and only if the poll is reached at all.
+        Naming it up front is the reading of §19.1 that does not depend on
+        failing first.
+
+        COVERAGE LIMIT (PBE-P2-8): this names a one-sided declaration between
+        two LINKED BGP speakers. It does NOT name a neighbour declared against
+        a node with no link (the FRR leg already drops those -- no `link_match`
+        at `cassian_model.py:1705`), nor a pair where NEITHER side declares.
+        Neither is REQ-45C-24's stated case.
+        """
+        seen: "set[tuple[str, str]]" = set()
+        out: "list[tuple[str, str]]" = []
+        for n in bgp_speakers:
+            a = str(n.get("name") or "")
+            a_decl = _declared_neighbor_names(n)
+            for l in links_by_node.get(a, []) or []:
+                b = str(l.get("peer") or "")
+                peer = nodes_by_name.get(b)
+                if not b or not _is_bgp_peer(peer):
+                    continue
+                b_decl = _declared_neighbor_names(peer)
+                if (a in b_decl) == (b in a_decl):
+                    continue
+                pair = (a, b) if b in a_decl else (b, a)
+                if pair not in seen:
+                    seen.add(pair)
+                    out.append(pair)
+        return sorted(out)
+
+    _asymmetries = _declaration_asymmetries()
+    if _asymmetries:
+        # REQ-45C-24: named evidence, never silence (Doctrine §1.11).
+        print("Precheck: undeclared-neighbor asymmetry (REQ-45C-24)")
+        for _a, _b in _asymmetries:
+            print(f"  {_a} declares {_b}; {_b} declares no matching neighbor")
+    results["summary"]["precheck_declaration_asymmetries"] = [
+        {"declares": a, "silent": b} for a, b in _asymmetries
+    ]
+
     bgp_participants: list[dict] = []
-    for n in frr_nodes:
+    for n in bgp_speakers:
         if expected_bgp_peers(n["name"]):
             bgp_participants.append(n)
 
@@ -9916,7 +10369,23 @@ def cmd_test(args: argparse.Namespace) -> None:
             precheck_timeout = 60 if (require_evpn_bgp and is_replay_lab) else 30
             post_precheck_sleep = 15 if (require_evpn_bgp and is_replay_lab) else (10 if require_evpn_bgp else 5)
             for n in bgp_participants:
-                wait_for_bgp(rt, lab, n["name"], timeout=precheck_timeout, require_evpn=require_evpn_bgp)
+                # §4.5-c WI-3 (REQ-45C-8): precheck dispatched through the
+                # provider seam. NG-9: FRR keeps the inline wait and its
+                # `convergence_wait` placeholder stays a placeholder -- the
+                # bounds, interval and timeout it is given are unchanged
+                # (REQ-45C-29). A non-FRR participant takes its provider leg;
+                # if that leg is still `deferred_leg`, the placeholder fails
+                # LOUD and §13-grade (cassian_nos_types.py:250) rather than
+                # being handed FRR's vtysh path, which would reach the vrnetlab
+                # launcher on a vm-runtime node, not the NOS.
+                _ntype = str(n.get("type") or "")
+                _prov = NOS_PROVIDERS.get(_ntype)
+                if _ntype == "frr" or _prov is None:
+                    wait_for_bgp(rt, lab, n["name"], timeout=precheck_timeout, require_evpn=require_evpn_bgp)
+                else:
+                    _prov.convergence_wait(
+                        rt, lab, n["name"], precheck_timeout, _expected_peer_ips(n["name"])
+                    )
             time.sleep(post_precheck_sleep)
         except SystemExit:
             results["result"] = "fail"

@@ -1,0 +1,33 @@
+name: sonic-base-lifecycle
+
+# 4.5-c WI-1 base lifecycle fixture (REQ-45C-1, REQ-45C-5, REQ-45C-20).
+#
+# One sonic-vm node carrying one addressed data interface and a loopback,
+# paired with an FRR node for the link's far end.
+#
+# HALT-2 address discipline (founder ruling, 2026-08-15), surface S-9:
+# every 4.5-c-authored SONiC fixture declares data addresses OUTSIDE the stock
+# canned ranges of sonic-vm:202405. The image pre-addresses all 32 ports
+# sequentially and carries a stock Loopback0, so a proof using a stock address
+# cannot distinguish Cassian's provisioning from the factory default.
+# The addresses below are RFC 5737 documentation ranges, provably outside both
+# stock ranges. The ranges themselves are named in tests/sonic_lifecycle_proof.py,
+# not here -- a guard whose constants live in the file it guards is not a guard.
+#
+# Image resolves from the contrib-owned local tag (REQ-45C-11, REQ-45C-32);
+# build it via contrib/sonic-image-build/build.sh. No registry pull.
+
+nodes:
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    router_id: 192.0.2.11
+
+  - name: r1
+    type: frr
+    router_id: 192.0.2.21
+
+links:
+  - endpoints: ["s1:eth1", "r1:eth1"]
+    ipv4: ["198.51.100.0/31", "198.51.100.1/31"]

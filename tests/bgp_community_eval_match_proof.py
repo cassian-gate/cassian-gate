@@ -37,6 +37,7 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
 import cassian_engine as E  # noqa: E402
+import cassian_nos_frr as F  # noqa: E402  # §4.5-c WI-5: route extractors are provider-homed (§4.5-b B')
 try:
     import cassian_common as C  # noqa: E402
     if hasattr(C, "_QUIET_DIE"):
@@ -51,7 +52,7 @@ def check(name, cond):
 
 # --- exact eval-branch composition (engine ~L6049), via the module-level helpers ---
 def observed_set(route_obj):
-    return sorted({E._canonical_community_token(t) for t in E._route_communities(route_obj)})
+    return sorted({E._canonical_community_token(t) for t in F._route_communities(route_obj)})
 
 def decide(route_obj, expected, match):
     return E._bgp_community_observed(expected, match, observed_set(route_obj))

@@ -75,7 +75,12 @@ CORE_MODULES = ["cassian.py", "cassian_ai.py", "cassian_artifacts.py",
                 "cassian_engine.py", "cassian_import.py", "cassian_model.py",
                 "cassian_runtime_container.py", "cassian_runtime_vm.py",
                 "cassian_state.py", "cassian_tests.py", "cassian_two_run.py"]
-PROVIDER_MODULES = ["cassian_nos_frr.py", "cassian_nos_types.py"]
+PROVIDER_MODULES = ["cassian_nos_frr.py", "cassian_nos_types.py",
+                    "cassian_nos_sonic.py"]  # §4.5-c D-7: the SONiC provider
+# was outside this list, so "providers never touch the substrate" was
+# un-enforced for it -- a seeded substrate_exec call passed GREEN (BL-P2-4.5c-16).
+# CORE_MODULES is deliberately NOT widened: measurement shows that addition REDs
+# C-2 by filing a provider as a core FRR-content owner.
 
 fails = []
 

@@ -1,0 +1,65 @@
+name: sonic-mixed-host
+
+# §4.5-c WI-2 endpoint recognition, host leg (REQ-45C-6, cell D-012.LIF).
+#
+# The cell's ratified disposition is line-item L1 -- "Node type recognized in
+# topology schema" -- VERIFY, "verify functional in SONiC-containing
+# topologies". Founder interpretive ruling 2026-08-24: the host is verified
+# INSIDE a topology that CONTAINS a sonic-vm node, attached to an already
+# supported peer type. Reachability THROUGH a SONiC node is D-031.VAL /
+# D-032.VAL at line-item V1 and belongs to §4.5-d.
+#
+# ⚑ h1 attaches to r1 (frr), NOT to s1. This is deliberate and is asserted by
+# tests/sonic_endpoint_recognition_proof.py. A host attached directly to a
+# sonic-vm peer is never configured -- `host_configure` is gated on the peer
+# type being one of ("frr", "linux", "nft-fw") at
+# src/cassian_runtime_container.py:1034 / :1046, and "sonic-vm" is absent.
+# Recorded as Ledger row BL-P2-4.5c-47, gated to §4.5-d with a PBE-P2-11
+# named-forward-consumer obligation. Re-wiring h1 onto s1 here would silently
+# de-provision it; the proof fires rather than letting that happen quietly.
+#
+# HALT-2 address discipline (founder ruling, 2026-08-15), surface S-9: every
+# §4.5-c-authored SONiC fixture declares data addresses OUTSIDE the stock
+# canned ranges of sonic-vm:202405. The addresses below are RFC 5737
+# documentation ranges. The ranges themselves are named in
+# tests/sonic_lifecycle_proof.py, not here -- a guard whose constants live in
+# the file it guards is not a guard.
+#
+# Image resolves from the contrib-owned local tag (REQ-45C-11, REQ-45C-32);
+# build it via contrib/sonic-image-build/build.sh. No registry pull.
+
+nodes:
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    router_id: 192.0.2.14
+
+  - name: r1
+    type: frr
+    router_id: 192.0.2.24
+
+  - name: h1
+    type: host
+    mac: "00:11:22:33:45:01"
+
+links:
+  # SONiC guest present in the lab: this is what makes the topology
+  # "SONiC-containing" for the L1 VERIFY disposition.
+  - endpoints: ["s1:eth1", "r1:eth1"]
+    ipv4: ["198.51.100.6/31", "198.51.100.7/31"]
+
+  # Host on a supported peer: IP, MAC and default route are applied by
+  # configure_hosts_from_topology.
+  - endpoints: ["h1:eth1", "r1:eth2"]
+    ipv4: ["203.0.113.10/24", "203.0.113.1/24"]
+
+tests:
+  # Single hop, no routing required. Evidences that the host was provisioned
+  # (address + default route present) while a SONiC guest is up in the lab.
+  - name: h1_to_r1_gateway_ping
+    kind: ping
+    src: h1
+    to: 203.0.113.1
+    expect: pass
+    count: 1
