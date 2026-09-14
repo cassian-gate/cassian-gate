@@ -7,7 +7,7 @@ import sys, os, ast, hashlib
 SRC = os.path.join(os.path.dirname(__file__), "..", "src", "cassian_tests.py")
 
 # v9 baselines (computed from the declared v9 consolidated snapshot).
-WHOLE_MODULE_V9 = "49f484b027c146c3c4f513ef3829e6909b0d142743f3ffdbcdadf3c8751ae2d0"  # re-baselined from dd56046b (phase2 §4.5-b WI-C1 parse-family relocation shims); orig ba0a1f36
+WHOLE_MODULE_V9 = "d977b4b1318266d6eea1360295b716db6d757ff1eb98f781f29c37f1e509a920"  # re-baselined from b8dc8534 (phase2 §4.5-c Unit B: wait_for_bgp gate predicate + LD-45C-R10 header import; LD-45C-R9/R10/R11; LD-45C-R2 D-5, founder ruling D-6, taken only with both seam segment pins PASSING -- re-measured PASSING at apply time 2026-08-31); prior 49f484b0; prior dd56046b; orig ba0a1f36
 SEAM_SEGMENT_V9 = {
     "_format_test_summary":        "2119d19a5667f77168df07ec5edcaa4d3001cdca49386027f1c6186c1f727ffa",
     "write_test_summary_artifact": "ff523b7eb74ebdff684ac8cb179842cd71c099e73913398ed280507343263420",

@@ -37,6 +37,7 @@ from cassian_common import (
     is_ip_literal, validate_ip_literal, classify_invalid_target,
     nodes_by_type,
     assert_vm_runtime_supported,
+    _normalize_prefix,  # §4.5-c WI-5: sourced from its A-H4 home, not the retired runtime-container shim
 )
 
 # ---------------------------------------------------------------------
@@ -65,6 +66,14 @@ from cassian_model import (
     validate_contrib_path,
 )
 
+# §4.5-c WI-5: the FRR parse family is sourced from the provider that owns it
+# (§4.5-b REQ-45b-21), not from the retired cassian_tests re-export shims.
+from cassian_nos_frr import (
+    parse_frr_show_ip_route_prefixes,
+    parse_frr_show_ip_route_prefixes_json,
+    parse_frr_bgp_summary_neighbors_json,
+    parse_frr_bgp_summary_neighbors,
+)
 from cassian_tests import (
     ensure_nc,
     ip_no_mask,
@@ -81,11 +90,7 @@ from cassian_tests import (
     _coverage_scenario_ids,
     _coverage_touch_nodes_from_test,
     derive_expected_routes_for_frr,
-    parse_frr_show_ip_route_prefixes,
-    parse_frr_show_ip_route_prefixes_json,
-    parse_frr_bgp_summary_neighbors_json,
     derive_expected_bgp_neighbors_from_links,
-    parse_frr_bgp_summary_neighbors,
     compare_expected_vs_observed_bgp,
     wait_for_bgp,
     configure_frr_static_routes_from_topology,
@@ -128,7 +133,6 @@ from cassian_runtime_container import (
     build_coverage_model,
     write_coverage_artifact,
     write_containerlab_file,
-    _normalize_prefix,
     compare_expected_vs_observed_prefixes,
     container_name,
     _node_index_by_name,

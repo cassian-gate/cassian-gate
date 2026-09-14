@@ -1,0 +1,60 @@
+name: probe-sonic-bgp-pair
+
+# TEMPORARY PROBE FIXTURE — DO NOT COMMIT.
+#
+# §4.5-c WI-3 convergence probe, founder ruling 2026-08-25. Answers the untested
+# premise every remaining WI-3 packet rests on: does a two-node sonic-vm eBGP
+# pair converge under Cassian-generated configuration (§15.2 REQ-45C-22)?
+#
+# Deliberately NOT placed in the committed fixture set. The ruling holds
+# packets 4-6 unauthored and consumes no Touch Matrix entry before the result
+# is known. Delete after the probe.
+#
+# HALT-2 address discipline (founder ruling 2026-08-15, surface S-9): every
+# §4.5-c SONiC fixture declares data addresses OUTSIDE the stock canned ranges
+# of sonic-vm:202405. Measured stock: Ethernet0..124 carry 10.0.0.0/31 ..
+# 10.0.0.62/31, Loopback0 carries 10.1.0.1/32, eth0 management is 10.0.0.15/24
+# (sonic-guest-probe-reference.md §4.1). The addresses below are RFC 5737
+# TEST-NET-1 / TEST-NET-2, provably outside both stock ranges.
+#
+# ASNs are deliberately NOT 65100 — the stock DEVICE_METADATA.localhost.bgp_asn
+# measured on the un-provisioned guest. A probe using the stock ASN could not
+# distinguish Cassian's rendering from the factory default.
+#
+# Image resolves from the contrib-owned local tag (REQ-45C-11, REQ-45C-32).
+# No registry pull.
+#
+# Declaration surface is FRR's, key for key (REQ-45C-23): asn, router_id,
+# networks, bgp.neighbors[].peer, bgp.neighbors[].remote_as. Modelled on the
+# committed topologies/bgp_as_path.yaml shape.
+
+nodes:
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    asn: 65001
+    router_id: 192.0.2.11
+    networks:
+      - 192.0.2.11/32
+    bgp:
+      neighbors:
+        - peer: s2
+          remote_as: 65002
+
+  - name: s2
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    asn: 65002
+    router_id: 192.0.2.12
+    networks:
+      - 192.0.2.12/32
+    bgp:
+      neighbors:
+        - peer: s1
+          remote_as: 65001
+
+links:
+  - endpoints: ["s1:eth1", "s2:eth1"]
+    ipv4: ["198.51.100.0/31", "198.51.100.1/31"]

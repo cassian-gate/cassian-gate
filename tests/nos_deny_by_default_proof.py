@@ -81,7 +81,7 @@ SEAM = "cmd_test invariant collection"
 EXPECTED_REGISTRY_UNSUP = (
     "ERROR: unsupported node type 'sonic' at cmd_test invariant collection: "
     "no NOS provider is registered for it.\n"
-    "Supported: frr, nft-fw.\n"
+    "Supported: frr, nft-fw, sonic-vm.\n"
     "Next:\n"
     "  Extension route: add src/cassian_nos_<token>.py and register it in NOS_PROVIDERS\n"
     "  (see the NOS expansion structure design)."
@@ -221,10 +221,10 @@ check("P-IMP-6 NON-VACUITY" in r.stdout and "PASS  P-IMP-6" in r.stdout,
 on_disk = {f"src/{n}" for n in os.listdir(SRC) if n.endswith(".py")}
 check(not (on_disk - MODULE_ROSTER) and not (MODULE_ROSTER - on_disk),
       "(iv) shipped tree: on-disk src set == MODULE_ROSTER (currently green)")
-synthetic = on_disk | {"src/cassian_nos_sonic.py"}
+synthetic = on_disk | {"src/cassian_nos_UNREGISTERED_PROBE.py"}
 check(bool(synthetic - MODULE_ROSTER),
       "(iv) NON-VACUITY: an unregistered new module reds the roster predicate (LD-9)")
-check(len(MODULE_ROSTER) == 17, f"(iv) roster denominator is 17 (got {len(MODULE_ROSTER)})")
+check(len(MODULE_ROSTER) == 18, f"(iv) roster denominator is 18 (got {len(MODULE_ROSTER)})")
 
 print("=" * 60)
 if fails:

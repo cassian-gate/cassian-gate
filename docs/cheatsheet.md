@@ -673,6 +673,23 @@ Important current boundary for vendor NOS VM nodes:
 
 Substrate vs NOS (exec target): bare `exec` / `sh` / `copy_*` reach the **guest NOS**; `substrate_exec` / `substrate_sh` / `substrate_copy_from` reach the **vrnetlab substrate** (the wrapper). Default is bare = NOS.
 
+Routing config on `sonic-vm` nodes — two modes, `sonic_mode`:
+
+```yaml
+nodes:
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    sonic_mode: preconfigured        # or: generated (the default)
+    sonic_config_db: ./s1-config-db.json   # required iff preconfigured
+```
+
+- `generated` (default): Cassian Gate writes a `config_db.json` overlay; platform tables are never touched
+- `preconfigured`: you supply the **complete** `config_db.json`; it must carry `PORT` and `DEVICE_METADATA`, and no generation runs
+- a relative `sonic_config_db` resolves against the **topology file's** directory, never the working directory
+- declaring `sonic_config_db` without `sonic_mode: preconfigured` is rejected, exit `2`
+- full field reference: `topology-schema-v1.md` §3.1
+
 File copy on vm nodes: guest `copy_*` is UNSUPPORTED (deferred to §4.5-f); `substrate_copy_from` works; `substrate_copy_to` is intentionally absent (demand-led).
 
 Example of an unsupported test kind (tcp on a vm node):
