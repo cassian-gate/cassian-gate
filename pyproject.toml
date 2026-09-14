@@ -35,6 +35,11 @@ py-modules = [
   "cassian_model",
   "cassian_runtime_container",
   "cassian_tests",
+  "cassian_import",
+  "cassian_nos_types",
+  "cassian_nos_frr",
+  "cassian_nos_sonic",
+  "cassian_runtime_vm",
 ]
 
 [tool.setuptools.package-dir]

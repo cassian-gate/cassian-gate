@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -17,12 +18,86 @@ QUIET_RUN = False
 _QUIET_DIE = False
 
 
+# Shadowed-duplicate provenance (Phase 2 §4.5-b, A-S6): the "frr" entry below
+# is NOT the live source. At resolve time it is shadowed for frr by the model's
+# `hard_defaults` chain (cassian_model resolution order), which derives from the
+# FRR provider's `default_image` (REQ-45b-11). This entry stays because
+# `cassian_common` may not import `cassian_model` under the ruled acyclic order
+# (design §3.2: model -> provider -> common), so it is underivable from the
+# registry here. It is a shadowed duplicate, not a second live reader --
+# REQ-45b-11-ext's "one source, two readers" is scoped to live readers.
 DEFAULT_IMAGES = {
     "frr": "frrouting/frr:latest",
     "linux": "alpine:latest",
     "host": "alpine:latest",
     "nft-fw": "alpine:latest",
 }
+
+# -------------------------
+# NOS-neutral address helpers (Phase 2 §4.5-b re-homes)
+# -------------------------
+# Re-homed to the ruled acyclic floor (design §3.2: model -> provider ->
+# common) so the FRR provider can reach them without a provider->core import
+# (W10/B12). Behaviour byte-identical; one-line re-import shims stand at the
+# original sites and are owed removal at §4.5-c (BL-P2-4.5b-3).
+
+# `_normalize_prefix`: re-homed from cassian_runtime_container:927 (A-H4/A-S4)
+# -- NOS-neutral, census-invisible, dual-consumed by STAYS-core surfaces
+# (engine, cassian_tests, facade) and by the relocated FRR parse family.
+def _normalize_prefix(cidr: str) -> str | None:
+    try:
+        # Accept inputs that may already be parsed (e.g., IPv4Network) by coercing to str.
+        if not isinstance(cidr, str):
+            cidr = str(cidr)
+
+        cidr = cidr.strip()
+        if not cidr:
+            return None
+
+        n = ipaddress.ip_network(cidr, strict=False)
+        if n.version != 4:
+            return None
+        return str(n)
+    except Exception:
+        return None
+
+# `_RE_NEIGH_LINE` / `_RE_IPV4_PREFIX`: re-homed from cassian_tests:373-374
+# per founder ruling (option A, F-45b-C1-1) -- census-invisible module-level
+# data in the W10/B12 closure of the relocated parse family; NOS-neutral IPv4
+# patterns (no FRR token), so common is their home on merit, following the
+# A-H3 `_BGP_COMMUNITY_CANON` module-level-data re-home pattern.
+_RE_NEIGH_LINE = re.compile(r"^\s*(\d{1,3}(?:\.\d{1,3}){3})\s+")
+_RE_IPV4_PREFIX = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3}/\d{1,2})\b")
+
+
+# -------------------------
+# BGP community canonicalization (Phase 2 §4.5-b A-H3/A-S3 re-home)
+# -------------------------
+# Re-homed from cassian_engine L3334-3349. Dual-consumed: the provider's
+# observed-side normalization at the collect seam AND the STAYS-core predicate
+# `_bgp_community_observed` (engine). Provider-only homing would be a W10 split
+# (core->provider import); model-homing (PBE-1b-9) is unavailable because
+# REQ-45b-17 forbids provider<->model imports -- `cassian_common` is the ruled
+# acyclic floor (design §3.2: model -> provider -> common). A one-line
+# re-import shim stands at the engine site, owed removal at §4.5-c
+# (BL-P2-4.5b-3). Behaviour byte-identical.
+
+_BGP_COMMUNITY_CANON = {
+    "no-export": "no-export", "noexport": "no-export",
+    "no-advertise": "no-advertise", "noadvertise": "no-advertise",
+    "local-as": "local-as", "localas": "local-as",
+    "internet": "internet", "0:0": "internet",
+}
+
+
+def _canonical_community_token(token):
+    """Canonicalize one BGP community token for form- and order-insensitive
+    comparison. Maps operator-declared well-known forms (no-export, no-advertise,
+    local-AS, internet) and FRR JSON forms (.list camelCase noExport/noAdvertise/
+    localAs/internet; .string hyphenated; numeric 0:0 for internet) to a single
+    canonical token. AS:VAL literals pass through (lowercased)."""
+    k = str(token).strip().lower()
+    return _BGP_COMMUNITY_CANON.get(k, k)
 
 # -------------------------
 # Shell helpers

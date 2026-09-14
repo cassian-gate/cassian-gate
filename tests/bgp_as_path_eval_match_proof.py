@@ -29,6 +29,7 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
 import cassian_engine as E  # noqa: E402
+import cassian_nos_frr as F  # noqa: E402  # §4.5-c WI-5: route extractors are provider-homed (§4.5-b B')
 try:
     import cassian_common as C  # noqa: E402
     if hasattr(C, "_QUIET_DIE"):
@@ -43,10 +44,10 @@ def check(name, cond):
 
 # --- exact branch composition, via the module-level helpers ---
 def observed_path(route_obj):
-    return E._route_as_path(route_obj)
+    return F._route_as_path(route_obj)
 
 def decide(route_obj, pattern):
-    return E._bgp_as_path_observed(pattern, E._route_as_path(route_obj))
+    return E._bgp_as_path_observed(pattern, F._route_as_path(route_obj))
 
 
 # --- captured live forms (paths[].aspath.string, asplain, path-order) ---

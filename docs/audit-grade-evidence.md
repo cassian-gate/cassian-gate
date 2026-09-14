@@ -11,7 +11,7 @@ A finalized `results.json` carries four audit fields in addition to the usual ve
 - **`release_version`** — the Cassian Gate version that produced the bundle, as an inline string (for example, `"2.1.0"`). It records *which* gate generated the evidence, so a stored `results.json` remains interpretable as tooling evolves.
 - **`tamper_check`** — a self-describing integrity stamp over the authoritative content of the bundle (see below).
 - **`intent`** — the operator's declared purpose for the run, echoed verbatim when supplied (see [Declaring intent](#declaring-intent)).
-- **`baseline_diff`** — reserved supporting evidence describing how this run compares to a baseline. It is written only when a baseline comparison is in scope and is absent on ordinary single runs.
+- **`baseline_diff`** — supporting evidence describing how a change run compares to its baseline. It is populated by `cassian test --two-run` on the change run, and is absent on ordinary single runs.
 
 Because every field is inline and literal, a `results.json` is **self-contained**: it can be interpreted without resolving any external URL, registry, or source file.
 
@@ -59,7 +59,7 @@ When declared, `intent` is echoed verbatim into `results.json`. It is an **input
 
 ## Baseline comparison
 
-`baseline_diff` is reserved for runs where a comparison against a known-good baseline is in scope. On an ordinary single run it is omitted entirely. When written, it is **supporting evidence only** — never verdict-bearing — it is deterministic across repeats, and it is gated on comparability: if the two runs are not comparing like for like (for example, the topology identity differs), the diff records that the comparison is not valid rather than presenting a misleading delta.
+`baseline_diff` is populated by `cassian test --two-run`. After running the baseline and change topologies from clean state, the change run's `results.json` carries a determinism-safe subset of the behavioural comparison — per-test, per-scenario, and per-step `expected`/`observed`/`verdict` deltas plus a comparability record. On an ordinary single run it is omitted entirely. It is **supporting evidence only** — never verdict-bearing — and it is deterministic across repeats: timing and host-specific noise are excluded from the field, so a replay over the same evidence reproduces a byte-identical `baseline_diff`. It is gated on comparability: if the two runs are not comparing like for like (for example, the topology identity differs), the comparison hard-fails and records that it is not valid rather than presenting a misleading delta.
 
 ## Why this matters
 

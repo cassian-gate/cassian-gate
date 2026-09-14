@@ -120,6 +120,11 @@ Behavior:
 
 **Purpose:** Run a vtysh command on an FRR node.
 
+**FRR-only.** `cassian vty` is a vtysh shortcut. If `<node>` resolves to any
+node type other than `frr`, the command exits `2` before running anything and
+redirects you to `cassian exec <lab> <node> "<command>"`, which is NOS-agnostic
+and allow-listed.
+
 Arguments:
 
 * `<lab>`: lab name
@@ -309,6 +314,33 @@ Notes:
 
 * non-zero (other)  
   Hard execution failure (deploy/provision/runtime failure), or strict status failure.
+
+---
+
+## 7) VM-runtime behaviour (partial — completeness closes at §4.5-g)
+
+`sonic-vm` nodes run a SONiC guest inside a vrnetlab wrapper. Two exec-target verb families address the two layers:
+
+* bare `exec` / `sh` / `copy_*` reach the **guest NOS**
+* `substrate_exec` / `substrate_sh` / `substrate_copy_from` reach the **vrnetlab substrate** (the wrapper)
+
+Default is bare = NOS.
+
+Supported surfaces on a vm-runtime node: lifecycle (`up` / `status` / `down`), node readiness, and **ping tests** (executed against the guest). `tcp`, `bgp_neighbor`, `route_prefix`, and invariant kinds are deferred (DC v2.1 §10) and are rejected at validation time with exit code `2`. Guest-file `copy_*` is unsupported (deferred to §4.5-f); `substrate_copy_from` works; `substrate_copy_to` is intentionally absent (demand-led).
+
+Credentials are a boot-time launcher property (`admin` / `admin`; no schema key). See `docs/vm-runtime-capabilities.md` and `contrib/sonic-image-build/`.
+
+## 8) Environment readiness
+
+### `cassian doctor`
+
+Read-only environment readiness checks. Reports gate-critical dependencies (docker, containerlab) and advisory checks. For the VM-runtime path it additionally reports, as advisory:
+
+* sonic-vm image present-or-pullable (`ghcr.io/cassian-gate/sonic-vm:202405`)
+* KVM available (`/dev/kvm`)
+* containerlab version
+
+A missing advisory prerequisite is reported but does not by itself fail the command; gate-critical failures (docker / containerlab absent) do.
 
 ---
 

@@ -23,7 +23,11 @@ from cassian_model import (
     adapt_terraform_plan_json,
     adapt_ansible_rendered_dir,
     _compile_frr_as_path_regex,
+    nos_provider_for,
+    nos_default_image,
+    NOS_PROVIDERS,
 )
+from cassian_nos_types import CAP_UNSUP, Observation, ObservationRequest, capability_for
 from cassian_tests import (
     validate_scenarios,
     _preflight_default_out,
@@ -57,12 +61,12 @@ from cassian_runtime_container import (
     gen_nft_fw_rules,
     nft_fw_apply,
     compare_expected_vs_observed_prefixes,
+    # UNDEF remediation: `vty` was called at cmd_vty but never imported into
+    # cassian_engine, so every `cassian vty` invocation reaching dispatch
+    # raised NameError (REQ-UNDEF-5, -9). vty()'s body is untouched.
+    vty,
 )
 from cassian_tests import (
-    parse_frr_show_ip_route_prefixes,
-    parse_frr_bgp_summary_neighbors,
-    parse_frr_bgp_summary_neighbors_json,
-    parse_frr_show_ip_route_prefixes_json,
     compare_expected_vs_observed_bgp,
     verify_fw_routed_ready,
     derive_expected_bgp_neighbors_from_links,
@@ -75,7 +79,7 @@ import ipaddress
 import time
 
 from cassian_common import fail, is_ip_literal, validate_ip_literal
-from cassian_artifacts import write_json_canonical
+from cassian_artifacts import write_json_canonical, node_cfg_dir
 from cassian_state import (
     _state_capture_expand_plan_or_die,
     _state_capture_run_plan,
@@ -89,7 +93,7 @@ from cassian_candidate import (
     _write_candidate_apply_artifact,
 )
 from cassian_two_run import _cmd_test_two_run
-from cassian_runtime_container import _normalize_prefix, verify_lab_ready
+from cassian_runtime_container import _normalize_prefix, verify_lab_ready, verify_sonic_vm_ready
 from cassian_model import build_node_links
 from cassian_tests import (
     ensure_nc,
@@ -245,6 +249,52 @@ def _command_uses_workspace_labs(cmd: str) -> bool:
         "gen",
         "cleanup",
     }
+
+def _provision_nos_providers(rt, lab_name: str, topo: dict) -> None:
+    """Dispatch `provision` for every node whose provider wires it.
+
+    Deferred legs are skipped by inspecting the LD-H2 placeholder marker, so an
+    unwired provider is never invoked and never fails loud for merely existing.
+    """
+    for n in topo.get("nodes", []) or []:
+        if not isinstance(n, dict):
+            continue
+        prov = NOS_PROVIDERS.get(n.get("type"))
+        if prov is None:
+            continue
+        if getattr(prov.provision, "cassian_deferred_leg", None) is not None:
+            continue
+        name = str(n.get("name") or "").strip()
+        if not name:
+            continue
+        # Reachability gate before any provider dispatch. Runtime-layer
+        # concern per the ratified NOS design's readiness split: substrate and
+        # transport are core's, NOS readiness is the provider's. `cmd_up` has
+        # no lab-wide reachability gate, and `verify_lab_ready` cannot serve as
+        # one -- `verify_host_ready` and `verify_frr_ready` require provisioning
+        # `cmd_up` has not yet performed. Scoped here to VM-runtime provider
+        # nodes; the host/nft-fw/frr residual is a routed backlog row.
+        if getattr(prov, "runtime_requirement", None) == "vm":
+            verify_sonic_vm_ready(rt, lab_name, name)
+
+        # NOS-readiness leg at the engine -> adapter boundary (design :188).
+        # Marker-guarded exactly as `provision` is above: a provider whose
+        # `nos_ready` is still a deferred placeholder is SKIPPED, never
+        # invoked. The guard is forward-looking -- today the `provision`
+        # skip already excludes FRR and nft-fw, whose `provision` legs are
+        # themselves deferred -- and becomes load-bearing the moment a
+        # provider lands `provision` without `nos_ready`.
+        if getattr(prov.nos_ready, "cassian_deferred_leg", None) is None:
+            prov.nos_ready(rt, lab_name, name)
+
+        applied = prov.provision(rt, lab_name, name, n, topo)
+        if not applied:
+            continue
+        for fname, content in applied.items():
+            out_path = node_cfg_dir(lab_name, name) / str(fname)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            write_json_canonical(out_path, content)
+
 
 def _bind_workspace_labs_dir(workspace: Path) -> None:
     labs_dir = Path(workspace) / "labs"
@@ -570,7 +620,7 @@ def cmd_validate(args: argparse.Namespace) -> None:
         topo = load_yaml(topo_path)
         ensure_valid_topology(topo)
 
-        resolved = resolve_topology(topo)
+        resolved = resolve_topology(topo, topo_path=topo_path)
         validate_scenarios(resolved)
 
         # Advisory-only coverage model (declared-only, resolve-time)
@@ -618,6 +668,53 @@ def cmd_validate(args: argparse.Namespace) -> None:
 
     finally:
         cassian_common._QUIET_DIE = prev_quiet
+
+def _assert_vm_images_present(vm_nodes: list[dict]) -> None:
+    """
+    Fail-fast image gate for VM-runtime nodes (REQ-45C-31).
+
+    Cassian Gate does not distribute NOS images. A VM node's image is produced by
+    contrib/sonic-image-build/ and resolved from the local Docker image store; no
+    registry pull is performed here or in CI (REQ-45C-11).
+
+    Coverage limit (PBE-P2-8): this asserts that the reference resolves in the
+    local image store. It does not, and cannot, distinguish an image produced by
+    contrib/sonic-image-build/ from one tagged by hand -- the vrnetlab build
+    label is byte-identical in both cases. Provenance of the local tag is an
+    operator responsibility, not a property this gate can verify.
+    """
+    for _n in vm_nodes:
+        image = str(_n.get("image") or "").strip()
+        node = str(_n.get("name") or "<unnamed>").strip()
+        if not image:
+            continue
+        try:
+            _p = subprocess.run(
+                ["docker", "image", "inspect", image],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            present = _p.returncode == 0
+        except Exception:
+            present = False
+        if present:
+            continue
+        _tail = image.rsplit("/", 1)[-1]
+        version = _tail.rsplit(":", 1)[1] if ":" in _tail else "202405"
+        die(
+            "VM image contract violation\n"
+            f"node: {node}\n"
+            f"reason: image reference did not resolve: {image}\n"
+            "detail: not present at the contrib-owned local path (no local Docker "
+            "image carries this reference); Cassian Gate does not distribute NOS "
+            "images and performs no registry pull\n"
+            "required: build it with the contrib path, then re-run:\n"
+            f"  ./contrib/sonic-image-build/build.sh <your-sonic-vm.qcow2> {version}\n"
+            "notes: see contrib/sonic-image-build/README.md for qcow2 sourcing "
+            "(bring-your-own NOS).",
+            code=2,
+        )
+
 
 def cmd_doctor(args: argparse.Namespace) -> None:
     """
@@ -672,9 +769,11 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     checks.append(("ip -j JSON capability", _ip_json_capable(), "advisory"))
 
     # Non-critical: image presence (report only; do not pull)
-    # These are resolve-time hard defaults in netsim_model.py.
+    # These are resolve-time hard defaults in cassian_model.py. The FRR entry
+    # derives from the provider registry (REQ-45b-11-ext): one source, two
+    # readers -- this and the model's hard_defaults map.
     image_defaults = [
-        ("FRR image present", "frrouting/frr:latest"),
+        ("FRR image present", nos_default_image("frr")),
         ("nft-fw image present", "ghcr.io/cassian-gate/nft-fw:latest"),
         ("host image present", "wbitt/network-multitool:latest"),
     ]
@@ -685,6 +784,16 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     else:
         for label, image in image_defaults:
             checks.append((f"{label} ({image})", False, "advisory"))
+
+    # Advisory: VM-runtime (sonic-vm) environment -- additive, lab-free (REQ-45a-12).
+    # Appear on every host; all ADVISORY (⚠ if absent), never gate-critical: the
+    # image is pullable, and KVM / a recent containerlab matter only for vm-runtime
+    # labs. No new critical check -> exit semantics unchanged. Fixed order.
+    _sonic_vm_image = "ghcr.io/cassian-gate/sonic-vm:202405"
+    _sonic_vm_present = _run_ok(["docker", "image", "inspect", _sonic_vm_image]) if docker_cli else False
+    checks.append((f"sonic-vm image present-or-pullable ({_sonic_vm_image})", _sonic_vm_present, "advisory"))
+    checks.append(("KVM available (/dev/kvm)", _run_ok(["test", "-e", "/dev/kvm"]), "advisory"))
+    checks.append(("containerlab version reports", _run_ok(["containerlab", "version"]) if clab else False, "advisory"))
 
     # Output (deterministic)
     print("Environment readiness:")
@@ -741,7 +850,7 @@ def cmd_preflight(args: argparse.Namespace) -> None:
         topo = load_yaml(topo_path)
         ensure_valid_topology(topo)
 
-        resolved = resolve_topology(topo)
+        resolved = resolve_topology(topo, topo_path=topo_path)
         validate_scenarios(resolved)
 
         # Declared-only coverage model (authoritative dependency; still advisory output)
@@ -1220,7 +1329,7 @@ def cmd_up(args: argparse.Namespace) -> None:
     if is_resolved_input:
         resolved_preview = topo_preview
     else:
-        resolved_preview = resolve_topology(topo_preview)
+        resolved_preview = resolve_topology(topo_preview, topo_path=topo_path)
 
     validate_scenarios(resolved_preview)
 
@@ -1238,8 +1347,19 @@ def cmd_up(args: argparse.Namespace) -> None:
         if isinstance(lab_name, str) and lab_name.strip():
             lab_name = lab_name.strip()
             existing_clab = LABS_DIR / f"{lab_name}.clab.yaml"
-            if existing_clab.exists():
-                _run_containerlab(["sudo", "containerlab", "destroy", "-t", str(existing_clab)], check=False)
+            if not existing_clab.exists():
+                # Doctrine §1.9: the destroy is unconditional under --reconfigure.
+                # The topology file is workspace state; the containers it must
+                # remove are daemon state. Gating the destroy on the file made the
+                # gate skip teardown whenever the file was absent (CI wipes `labs/`
+                # every run), which is the silent conditional behaviour §1.4 forbids.
+                # Materialise the file so the destroy always has a target; it lands
+                # at LABS_DIR/<lab>.clab.yaml, a SIBLING of lab_dir(), so neither
+                # the destroy nor the rm -rf below removes it. Lab-directory
+                # artifacts are still generated after cleanup (see below) -- that
+                # ordering is load-bearing and unchanged.
+                existing_clab = write_containerlab_file(topo_path)
+            _run_containerlab(["sudo", "containerlab", "destroy", "-t", str(existing_clab)], check=False)
             run(["sudo", "rm", "-rf", str(lab_dir(lab_name))], check=False)
 
     # Generate AFTER destroy/cleanup
@@ -1254,6 +1374,7 @@ def cmd_up(args: argparse.Namespace) -> None:
         first_vm = vm_nodes[0]
         first_name = str(first_vm.get("name") or "<unnamed>").strip()
         assert_vm_runtime_supported(first_name)
+        _assert_vm_images_present(vm_nodes)
     _maybe_print_privilege_notice("A")
     _run_containerlab(["sudo", "containerlab", "deploy", "-t", str(out)], check=True)
 
@@ -1305,6 +1426,13 @@ def cmd_up(args: argparse.Namespace) -> None:
 
     # 5) FRR provisioning
     configure_frr_interfaces_from_topology(rt, lab_name, topo)
+
+    # 5b) NOS-provider provisioning (§4.5-c REQ-45C-1). Providers own the NOS
+    # mechanics; core owns orchestration and artifact recording. Per R-C3-14
+    # `provision` returns the mapping it applied and core serializes it here
+    # through `write_json_canonical` (PBE-P2-7) as run-directory evidence --
+    # LD-45C-2 gives it no directory contract, so nothing consumes the path.
+    _provision_nos_providers(rt, lab_name, topo)
     evpn_leaf_setup_vxlan_from_topology(rt, lab_name, topo)
 
     # Deterministic EVPN host-attachment stimulation for MAC learning
@@ -1373,7 +1501,26 @@ def cmd_up(args: argparse.Namespace) -> None:
         print("Next:")
         print(f"  cassian status {lab_name}")
         print(f"  cassian test {lab_name}")
-        print(f"  cassian exec {lab_name} <node>")
+        # UX-1 (R-O1 remediation: d9850b4 + the H-1..H-5 carry-forward note).
+        # For a vm-runtime node `cassian exec` reaches the vrnetlab launcher container
+        # -- a bare Debian shell with no NOS on PATH -- not the guest NOS. Suggesting it
+        # is a first-run trap, so point at the door that actually works. Print
+        # conditionality only: no lifecycle, runtime, or exec behaviour changes here.
+        _vm_nodes = [
+            str(n.get("name") or "").strip()
+            for n in (topo.get("nodes", []) or [])
+            if isinstance(n, dict)
+            and str(n.get("name") or "").strip()
+            and str(n.get("runtime") or "").strip().lower() == "vm"
+        ]
+        if [n for n in node_names if n not in _vm_nodes]:
+            print(f"  cassian exec {lab_name} <node>")
+        for _vm_node in _vm_nodes:
+            print(
+                f"  # {_vm_node} is a VM-runtime node; container exec reaches the "
+                f"launcher, not the NOS."
+            )
+            print(f"  ssh admin@{rt.node_id(lab_name, _vm_node)}")
         print(f"  cassian down {lab_name}")
 
 def cmd_replay(args: argparse.Namespace) -> None:
@@ -2155,6 +2302,37 @@ def cmd_vty(args: argparse.Namespace) -> None:
             code=2,
         )
 
+    # REQ-45b-7 / D-086.OPS: pre-dispatch node-type gate. `cassian vty` is an
+    # FRR vtysh shortcut; a non-FRR node must be told so before vtysh is
+    # reached, not after it fails. Placed BEFORE the vty() call; vty()'s body
+    # is untouched (P7).
+    #
+    # The gate fires only when the type is actually resolvable. If the lab's
+    # resolved topology is absent the antecedent ("resolved type != frr") is
+    # not met, and behaviour falls through unchanged -- calling
+    # _load_resolved_topology unconditionally would die(code=2) with a
+    # lab-artifacts message, adding a SECOND operator-visible delta beyond the
+    # one ruled for this handover.
+    _vty_topo_path = LABS_DIR / f"clab-{lab}" / "topology.resolved.yaml"
+    if _vty_topo_path.is_file():
+        try:
+            _vty_topo = _load_resolved_topology(lab)
+        except SystemExit:
+            raise
+        except Exception:
+            _vty_topo = {}
+        _vty_ntype = _nos_ntype(_vty_topo, node)
+        if _vty_ntype and _vty_ntype != "frr":
+            die(
+                f"ERROR: 'cassian vty' is an FRR vtysh shortcut; node '{node}' "
+                f"is type '{_vty_ntype}', not 'frr'.\n"
+                "Supported: frr nodes only.\n"
+                "Next:\n"
+                f'  Run: cassian exec {lab} {node} "{command}"   '
+                "(NOS-agnostic, allow-listed)",
+                code=2,
+            )
+
     # command is provided as a single string; e.g. "show bgp summary"
     cp = vty(rt, lab, node, command)
 
@@ -2476,14 +2654,12 @@ def cmd_status(args: argparse.Namespace) -> None:
             }
 
             try:
-                out_json = _node_exec(name, ["vtysh", "-c", "show bgp summary json"])
-                observed = parse_frr_bgp_summary_neighbors_json(out_json)
-                if observed:
-                    bgp_rec["parser_mode"] = "json"
-                else:
-                    out_text = _node_exec(name, ["vtysh", "-c", "show bgp summary"])
-                    observed = parse_frr_bgp_summary_neighbors(out_text)
-                    bgp_rec["parser_mode"] = "text"
+                # Provider seam (REQ-45b-5 / B03): probes and FRR parsing are
+                # provider-side; comparison, records and verdicts stay core.
+                _p = nos_provider_for(_nos_ntype(topo, name), "cmd_status bgp summary")
+                _sobs = _p.status_bgp_summary(rt, lab, name, bool(bgp_verbose and not as_json))
+                observed = _sobs.data.get("observed") or {}
+                bgp_rec["parser_mode"] = _sobs.data.get("parser_mode") or "none"
 
                 cmp = compare_expected_vs_observed_bgp(expected, observed)
                 bgp_rec.update(cmp)
@@ -2494,7 +2670,7 @@ def cmd_status(args: argparse.Namespace) -> None:
                     exp_established_peers += len(cmp["established"])
 
                 if bgp_verbose and not as_json:
-                    bgp_rec["raw_text"] = _node_exec(name, ["vtysh", "-c", "show bgp summary"])
+                    bgp_rec["raw_text"] = _sobs.data.get("raw_text")
 
                 if strict and expected and not bgp_rec["ok"]:
                     strict_fail = True
@@ -2523,15 +2699,13 @@ def cmd_status(args: argparse.Namespace) -> None:
             }
 
             try:
-                rt_json = _node_exec(name, ["vtysh", "-c", "show ip route json"])
-                observed = parse_frr_show_ip_route_prefixes_json(rt_json)
-                rt_text = ""
-                if observed:
-                    routes_rec["parser_mode"] = "json"
-                else:
-                    rt_text = _node_exec(name, ["vtysh", "-c", "show ip route"])
-                    observed = parse_frr_show_ip_route_prefixes(rt_text)
-                    routes_rec["parser_mode"] = "text"
+                # Provider seam (REQ-45b-5 / B03).
+                _p = nos_provider_for(_nos_ntype(topo, name), "cmd_status routes")
+                _robs = _p.status_routes(rt, lab, name)
+                observed = _robs.data.get("observed") or set()
+                rt_json = _robs.data.get("rt_json") or ""
+                rt_text = _robs.data.get("rt_text") or ""
+                routes_rec["parser_mode"] = _robs.data.get("parser_mode") or "none"
 
                 cmp = compare_expected_vs_observed_prefixes(expected_routes, observed)
                 routes_rec.update(cmp)
@@ -2772,63 +2946,6 @@ def cmd_collect(args: argparse.Namespace) -> None:
     def write(name: str, content: str) -> None:
         (outdir / name).write_text(content, encoding="utf-8")
 
-    def normalize_bgp_summary(text: str) -> str:
-        """
-        Deterministic BGP neighbor snapshot from `show bgp summary`.
-
-        We intentionally discard volatile counters/timers and keep only:
-        - neighbor address
-        - ASN (best-effort parse)
-        - state (Established vs Idle/Active/etc.)
-
-        Output format (one per neighbor):
-          <NEIGHBOR> AS=<ASN or ?> STATE=<STATE>
-        """
-        lines = (text or "").splitlines()
-        out: list[str] = []
-        in_table = False
-
-        for line in lines:
-            # Detect the table header
-            if ("Neighbor" in line) and ("Up/Down" in line):
-                in_table = True
-                out.append(line.rstrip())
-                continue
-
-            if not in_table:
-                # Keep pre-table lines as-is (usually stable)
-                out.append(line.rstrip())
-                continue
-
-            if not line.strip():
-                out.append("")
-                continue
-
-            parts = line.split()
-            if len(parts) < 2:
-                out.append(line.rstrip())
-                continue
-
-            nbr = parts[0]
-            # Neighbor column must look like an IP (v4/v6) to be a row
-            if not re.match(r"^[0-9A-Fa-f:.]+$", nbr):
-                out.append(line.rstrip())
-                continue
-
-            # Heuristic: AS is the first integer token shortly after the neighbor/V columns
-            asn: str | None = None
-            for tok in parts[1:6]:
-                if tok.isdigit():
-                    asn = tok
-                    break
-
-            # Last token often is State/PfxRcd. If it's numeric => Established.
-            last = parts[-1]
-            state = "Established" if last.isdigit() else last
-
-            out.append(f"{nbr} AS={asn or '?'} STATE={state}")
-
-        return "\n".join(out).rstrip() + "\n"
 
     def scrub_containerlab_inspect_json(raw: str) -> str:
         """
@@ -2914,9 +3031,14 @@ def cmd_collect(args: argparse.Namespace) -> None:
             cp = rt.sh(lab, name, "sysctl -n net.ipv4.ip_forward", check=False, capture_output=True)
             write(f"{name}.ip-forward.txt", (cp.stdout or cp.stderr or "").strip() + "\n")
 
-        if n.get("type") == "frr":
-            cp = rt.exec(lab, name, ["vtysh", "-c", "show bgp summary"], check=False, capture_output=True)
-            write(f"{name}.bgp-summary.txt", normalize_bgp_summary(cp.stdout or cp.stderr or ""))
+        # Provider-dispatched artifact targets (REQ-45b-6). The 4 sh sites above
+        # are NOS-agnostic and stay core; artifact mechanics (name, path, write)
+        # stay core here -- the provider supplies content only.
+        _ntype = str(n.get("type") or "").strip().lower()
+        if _ntype in NOS_PROVIDERS:
+            for _target in NOS_PROVIDERS[_ntype].collect_targets:
+                _sobs = _target.run(rt, lab, name)
+                write(f"{name}.{_target.artifact_name}", _sobs.stdout)
 
         if include_logs:
             # Runtime should own log collection in future; keep docker-less for now.
@@ -3302,54 +3424,9 @@ def _fail_fast_drops(declared_tests, from_idx):
     return out
 
 
-_BGP_COMMUNITY_CANON = {
-    "no-export": "no-export", "noexport": "no-export",
-    "no-advertise": "no-advertise", "noadvertise": "no-advertise",
-    "local-as": "local-as", "localas": "local-as",
-    "internet": "internet", "0:0": "internet",
-}
+from cassian_common import _canonical_community_token  # common-homed (§4.5-b A-H3); live import, used below
 
 
-def _canonical_community_token(token):
-    """Canonicalize one BGP community token for form- and order-insensitive
-    comparison. Maps operator-declared well-known forms (no-export, no-advertise,
-    local-AS, internet) and FRR JSON forms (.list camelCase noExport/noAdvertise/
-    localAs/internet; .string hyphenated; numeric 0:0 for internet) to a single
-    canonical token. AS:VAL literals pass through (lowercased)."""
-    k = str(token).strip().lower()
-    return _BGP_COMMUNITY_CANON.get(k, k)
-
-
-def _route_communities(route_obj):
-    """Extract raw BGP community tokens from a vtysh route object:
-    route_obj['community'] {'list'|'string'} (preferred), else the per-path
-    paths[].community (the FRR per-path location). Returns a list of raw token
-    strings (possibly empty)."""
-    def _from_comm(comm):
-        if isinstance(comm, dict):
-            lst = comm.get("list")
-            if isinstance(lst, list) and lst:
-                return [str(x) for x in lst]
-            s = comm.get("string")
-            if isinstance(s, str) and s.strip():
-                return [tok for tok in s.split() if tok]
-        elif isinstance(comm, str) and comm.strip():
-            return [tok for tok in comm.split() if tok]
-        return []
-
-    if not isinstance(route_obj, dict):
-        return []
-    toks = _from_comm(route_obj.get("community"))
-    if toks:
-        return toks
-    paths = route_obj.get("paths")
-    if isinstance(paths, list):
-        for path in paths:
-            if isinstance(path, dict):
-                toks = _from_comm(path.get("community"))
-                if toks:
-                    return toks
-    return []
 
 
 def _bgp_community_observed(expected, match, observed_canon):
@@ -3366,35 +3443,6 @@ def _bgp_community_observed(expected, match, observed_canon):
     return "pass" if ok else "fail"
 
 
-def _route_as_path(route_obj):
-    """Extract the AS_PATH from a vtysh route object (`show ip bgp <prefix>
-    json`) as a canonical asplain, path-ordered, space-joined string. Read from
-    route_obj['aspath']['string'] (defensive top-level mirror) else the per-path
-    paths[].aspath.string (the FRR per-path location, real-capture confirmed).
-    Returns '' if absent. Order is preserved verbatim -- never sorted (AS_PATH is
-    order-significant)."""
-    def _from_aspath(asp):
-        if isinstance(asp, dict):
-            s = asp.get("string")
-            if isinstance(s, str) and s.strip():
-                return " ".join(tok for tok in s.split() if tok)
-        elif isinstance(asp, str) and asp.strip():
-            return " ".join(tok for tok in asp.split() if tok)
-        return ""
-
-    if not isinstance(route_obj, dict):
-        return ""
-    s = _from_aspath(route_obj.get("aspath"))
-    if s:
-        return s
-    paths = route_obj.get("paths")
-    if isinstance(paths, list):
-        for path in paths:
-            if isinstance(path, dict):
-                s = _from_aspath(path.get("aspath"))
-                if s:
-                    return s
-    return ""
 
 
 def _bgp_as_path_observed(pattern, observed_path):
@@ -3410,6 +3458,52 @@ def _bgp_as_path_observed(pattern, observed_path):
     except Exception:
         return "fail"
     return "pass" if rx.search(observed_path or "") else "fail"
+
+
+class NosCapabilityUnsupported(Exception):
+    """Raised when a provider does not declare the requested observation kind.
+
+    Deny-by-default (design §3.4): the caller turns this into a deterministic
+    UNSUP-fail record in results -- never silence, never an implicit pass
+    (Doctrine §1.11).
+    """
+
+    def __init__(self, ntype: str, kind: str, message: str) -> None:
+        super().__init__(message)
+        self.ntype = ntype
+        self.kind = kind
+        self.message = message
+
+
+def _nos_ntype(topo, name: str) -> str:
+    """Resolve a node's type from the resolved topology, deterministically.
+
+    Module-level (WI-C3f) so every collection caller can reach it, including
+    `run_invariant_test`, whose body the source-validating proofs execute in
+    `cassian_engine.__dict__` where nested helpers do not exist. Same idiom and
+    same result as the pre-hoist nested form; the resolved topology is the
+    single source (DC §1 authoritative input).
+    """
+    for _n in (topo.get("nodes") or []):
+        if isinstance(_n, dict) and _n.get("name") == name:
+            return str(_n.get("type") or "").strip().lower()
+    return ""
+
+
+def _nos_collect(rt, lab, node, ntype, request, seam):
+    """The single core-side entry to provider observation collection.
+
+    Deny-by-default at two levels (B01/B02): an unregistered node type dies
+    with the §6.6 registry UNSUP; a registered provider that does not declare
+    the requested kind raises NosCapabilityUnsupported for the caller to
+    record as an explicit UNSUP-fail. Core never parses NOS output; the
+    provider never decides a verdict (design §5).
+    """
+    provider = nos_provider_for(ntype, seam)
+    disp = capability_for(provider, request.kind)
+    if disp.state == CAP_UNSUP:
+        raise NosCapabilityUnsupported(ntype, request.kind, disp.message or "")
+    return provider.collect(rt, lab, node, request)
 
 
 def cmd_test(args: argparse.Namespace) -> None:
@@ -3516,7 +3610,9 @@ def cmd_test(args: argparse.Namespace) -> None:
         try:
             topo_preview = load_yaml(topo_gate_path)
             ensure_valid_topology(topo_preview)
-            resolved_preview = resolve_topology(topo_preview)
+            resolved_preview = resolve_topology(
+                topo_preview, topo_path=topo_gate_path
+            )
             validate_scenarios(resolved_preview)
         except SystemExit as e:
             raw_code = getattr(e, "code", 1)
@@ -4043,6 +4139,7 @@ def cmd_test(args: argparse.Namespace) -> None:
 
     nodes = topo.get("nodes", []) or []
     nodes_by_name = {n["name"]: n for n in nodes}
+
 
     # Results artifact (written at end, even on failure if possible)
     results: dict = {
@@ -5217,79 +5314,34 @@ def cmd_test(args: argparse.Namespace) -> None:
         interval_s = float(t.get("retry_interval_s") or 1.0)
 
         def attempt():
-            # Prefer JSON for deterministic parsing
-            cp = rt.exec(lab, src, ["vtysh", "-c", "show bgp summary json"], check=False)
-            ok = (getattr(cp, "returncode", 1) == 0)
-            out = (cp.stdout or "") if hasattr(cp, "stdout") else ""
-            return ok, cp, out
+            # Provider seam (REQ-45b-4): the probe and its FRR-JSON parse are
+            # provider-side; the retry driver, verdict and record stay core.
+            _obs = _nos_collect(
+                rt, lab, src, _nos_ntype(topo, src),
+                ObservationRequest(kind="bgp_neighbor", params={"neighbor": neighbor}),
+                "cmd_test bgp_neighbor collection",
+            )
+            return bool(_obs.evidence.get("probe_ok")), _obs
 
         start = time.time()
 
         # Only retry when we expect "up" (deterministic + aligns with readiness semantics)
         if expected == "up" and timeout_s > 0:
             def try_once():
-                ok, cp, out = attempt()
-                return ok, (cp, out)
+                ok, _o = attempt()
+                return ok, _o
 
             ok, last_payload, attempts, dur_ms = retry_until(timeout_s, interval_s, try_once)
-            last_cp, last_out = last_payload
+            last_obs = last_payload
         else:
-            ok, last_cp, last_out = attempt()
+            ok, last_obs = attempt()
             attempts = 1
             dur_ms = int((time.time() - start) * 1000)
 
-        observed = "down"
-        state = None
-        parse_error = ""
+        observed = str(last_obs.data.get("observed") or "down")
+        state = last_obs.data.get("state")
+        parse_error = str(last_obs.evidence.get("parse_error") or "")
 
-        if ok:
-            try:
-                data = json.loads(last_out or "{}")
-
-                def _extract_peers(obj: dict) -> dict | None:
-                    # 1) Some FRR builds: peers at top-level
-                    peers = obj.get("peers")
-                    if isinstance(peers, dict):
-                        return peers
-
-                    # 2) Common FRR: peers under address-family key, e.g. ipv4Unicast.peers
-                    v4u = obj.get("ipv4Unicast")
-                    if isinstance(v4u, dict):
-                        peers = v4u.get("peers")
-                        if isinstance(peers, dict):
-                            return peers
-
-                    # 3) Defensive: scan 1 level deep for any dict that contains a peers dict
-                    for _, v in obj.items():
-                        if isinstance(v, dict):
-                            peers = v.get("peers")
-                            if isinstance(peers, dict):
-                                return peers
-
-                    return None
-
-                peers = _extract_peers(data)
-                if not isinstance(peers, dict):
-                    peers = {}
-                    parse_error = "peers not found in summary"
-
-                p = peers.get(neighbor)
-
-                if isinstance(p, dict):
-                    # FRR fields vary; prefer "state" when present
-                    state = p.get("state") or p.get("bgpState") or p.get("peerState")
-                    st = (state or "").strip().lower()
-                    observed = "up" if st == "established" else "down"
-                else:
-                    observed = "down"
-                    if not parse_error:
-                        parse_error = "neighbor not present in summary"
-
-            except Exception as e:
-                observed = "down"
-                parse_error = f"json parse error: {e.__class__.__name__}"
-        else:
-            parse_error = "vtysh command failed"
 
         verdict = "pass" if observed == expected else "fail"
 
@@ -5299,7 +5351,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             "attempts": attempts,
             "timeout_s": timeout_s,
             "retry_interval_s": interval_s,
-            "last_rc": getattr(last_cp, "returncode", None),
+            "last_rc": last_obs.evidence.get("returncode"),
         }
 
         evidence = {
@@ -5453,949 +5505,392 @@ def cmd_test(args: argparse.Namespace) -> None:
         """
         if inv_type == "bgp_session_up":
             neighbor = str(t.get("dst") or "").strip()
-            cp = rt.exec(lab, src, ["vtysh", "-c", "show bgp summary json"], check=False)
-            vtysh_ok = (getattr(cp, "returncode", 1) == 0)
-            out = (cp.stdout or "") if hasattr(cp, "stdout") else ""
+            # Provider seam (REQ-45b-4): probe + FRR-JSON normalization live in
+            # the NOS provider; predicate evaluation, observed_state and the
+            # verdict stay core (design §5).
+            try:
+                _obs = _nos_collect(
+                    rt, lab, src, _nos_ntype(topo, src),
+                    ObservationRequest(kind="bgp_session_up", params={"neighbor": neighbor}),
+                    "cmd_test invariant collection",
+                )
+            except NosCapabilityUnsupported as _unsup:
+                # Deny-by-default (B02 / design §3.4): a registered provider that
+                # does not declare this (kind, node-type) pair yields a
+                # deterministic UNSUP-fail record -- never silence (Doctrine
+                # §1.11), never an implicit pass. Ratified as a deliberate
+                # operator-visible delta alongside REQ-45b-7 (founder ruling,
+                # F-45b-C3-1); replaces the pre-extraction rendering, which
+                # reported a probe failure for what is a declaration error and
+                # so misrepresented intent (Doctrine §1.6).
+                return (
+                    False,
+                    False,
+                    {
+                        "peer_present": False,
+                        "state": "Unsupported",
+                        "last_error": _unsup.message,
+                    },
+                    {
+                        "cmd": "",
+                        "parse_error": _unsup.message,
+                        "returncode": None,
+                        "reason": "unsupported_provider_capability",
+                        "node_type": _unsup.ntype,
+                    },
+                )
+            vtysh_ok = bool(_obs.evidence.get("probe_ok"))
+            observed_state = dict(_obs.data)
+            evidence = {k: v for k, v in _obs.evidence.items() if k != "probe_ok"}
 
-            observed_state_str: str = "Unknown"
-            last_error: str = ""
-            parse_error: str = ""
-            peer_present: bool = False
+            st_norm = str(observed_state.get("state") or "").strip().lower()
+            predicate_ok = bool(observed_state.get("peer_present") and st_norm == "established")
 
-            if vtysh_ok:
-                try:
-                    data = json.loads(out or "{}")
-                    peers = None
-                    top_peers = data.get("peers")
-                    if isinstance(top_peers, dict):
-                        peers = top_peers
-                    else:
-                        v4u = data.get("ipv4Unicast")
-                        if isinstance(v4u, dict):
-                            inner = v4u.get("peers")
-                            if isinstance(inner, dict):
-                                peers = inner
-                    if peers is None:
-                        for _, v in sorted(data.items()):
-                            if isinstance(v, dict):
-                                inner = v.get("peers")
-                                if isinstance(inner, dict):
-                                    peers = inner
-                                    break
-                    if isinstance(peers, dict):
-                        p = peers.get(neighbor)
-                        if isinstance(p, dict):
-                            peer_present = True
-                            raw_state = p.get("state") or p.get("bgpState") or p.get("peerState")
-                            if raw_state:
-                                observed_state_str = str(raw_state)
-                            reset_reason = p.get("lastResetReason")
-                            if reset_reason:
-                                last_error = str(reset_reason)
-                        else:
-                            observed_state_str = "NotConfigured"
-                            last_error = "neighbor not present in summary"
-                            parse_error = "neighbor not present in summary"
-                    else:
-                        observed_state_str = "Unknown"
-                        last_error = "peers not found in summary"
-                        parse_error = "peers not found in summary"
-                except Exception:
-                    observed_state_str = "Unknown"
-                    last_error = "vtysh output not parseable as JSON"
-                    parse_error = "vtysh output not parseable as JSON"
-            else:
-                observed_state_str = "Unknown"
-                last_error = "vtysh command failed"
-                parse_error = "vtysh command failed"
-
-            st_norm = observed_state_str.strip().lower()
-            predicate_ok = bool(peer_present and st_norm == "established")
-
-            observed_state = {
-                "peer_present": peer_present,
-                "state": observed_state_str,
-                "last_error": last_error,
-            }
-            evidence = {
-                "cmd": "vtysh -c 'show bgp summary json'",
-                "parse_error": parse_error,
-                "returncode": getattr(cp, "returncode", None),
-            }
             return vtysh_ok, predicate_ok, observed_state, evidence
 
         if inv_type == "evpn_bgp_session_up":
             peer = str(t.get("peer") or "").strip()
-            cp = rt.exec(
-                lab,
-                src,
-                ["vtysh", "-c", "show bgp l2vpn evpn summary json"],
-                check=False,
-                capture_output=True,
-            )
-
-            if isinstance(cp, str):
-                out = cp
-                rc = None
-            else:
-                out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
-                if isinstance(out, (bytes, bytearray)):
-                    try:
-                        out = out.decode("utf-8", errors="replace")
-                    except Exception:
-                        out = str(out)
-                rc = getattr(cp, "returncode", None)
-
-            vtysh_ok = (rc in (0, None))
-
-            evidence_entries: list = []
-            parse_error: str = ""
-            present: bool = False
-
+            # Expectation derivation from topology fields stays CORE (design §5,
+            # the invariant side of the split); only NOS-output parsing moves.
+            peer_ips: set = set()
+            for link in (topo.get("links") or []):
+                endpoints = list(link.get("endpoints") or [])
+                if len(endpoints) != 2:
+                    continue
+                try:
+                    a_node, _a_if = str(endpoints[0]).split(":", 1)
+                    b_node, _b_if = str(endpoints[1]).split(":", 1)
+                except Exception:
+                    continue
+                if a_node == src and b_node == peer:
+                    ips = list(link.get("ipv4") or [])
+                    if len(ips) >= 2:
+                        try:
+                            peer_ips.add(str(ipaddress.ip_interface(ips[0]).ip))
+                        except Exception:
+                            pass
+                elif b_node == src and a_node == peer:
+                    ips = list(link.get("ipv4") or [])
+                    if len(ips) >= 2:
+                        try:
+                            peer_ips.add(str(ipaddress.ip_interface(ips[0]).ip))
+                        except Exception:
+                            pass
+            # Provider seam (REQ-45b-4).
             try:
-                doc = json.loads(str(out or "").strip()) if str(out or "").strip() else {}
-                peers = {}
-                if isinstance(doc, dict):
-                    peers = doc.get("peers", {})
-                    if not isinstance(peers, dict):
-                        peers = {}
-                else:
-                    raise ValueError("unexpected_evpn_bgp_summary_json_shape")
+                _obs = _nos_collect(
+                    rt, lab, src, _nos_ntype(topo, src),
+                    ObservationRequest(
+                        kind="evpn_bgp_session_up",
+                        params={"peer": peer, "peer_ips": sorted(peer_ips)},
+                    ),
+                    "cmd_test invariant collection",
+                )
+            except NosCapabilityUnsupported as _unsup:
+                # Deny-by-default (B02 / founder ruling A on F-45b-C3-1).
+                return (
+                    False,
+                    False,
+                    {"peer": peer, "unsupported": True},
+                    {
+                        "cmd": "",
+                        "rc": None,
+                        "parse_error": _unsup.message,
+                        "reason": "unsupported_provider_capability",
+                        "node_type": _unsup.ntype,
+                    },
+                )
+            vtysh_ok = bool(_obs.evidence.get("probe_ok"))
+            observed_state = dict(_obs.data)
+            evidence = {k: v for k, v in _obs.evidence.items() if k != "probe_ok"}
 
-                peer_ips: set = set()
-                for link in (topo.get("links") or []):
-                    endpoints = list(link.get("endpoints") or [])
-                    if len(endpoints) != 2:
-                        continue
-                    try:
-                        a_node, _a_if = str(endpoints[0]).split(":", 1)
-                        b_node, _b_if = str(endpoints[1]).split(":", 1)
-                    except Exception:
-                        continue
-                    if a_node == src and b_node == peer:
-                        ips = list(link.get("ipv4") or [])
-                        if len(ips) >= 2:
-                            try:
-                                peer_ips.add(str(ipaddress.ip_interface(ips[0]).ip))
-                            except Exception:
-                                pass
-                    elif b_node == src and a_node == peer:
-                        ips = list(link.get("ipv4") or [])
-                        if len(ips) >= 2:
-                            try:
-                                peer_ips.add(str(ipaddress.ip_interface(ips[0]).ip))
-                            except Exception:
-                                pass
+            predicate_ok = bool(observed_state.get("present"))
 
-                for nbr_ip, pdata in peers.items():
-                    if not isinstance(pdata, dict):
-                        continue
-                    rec = {
-                        "neighbor": str(nbr_ip or "").strip(),
-                        "peerName": str(pdata.get("peerName") or "").strip(),
-                        "state": str(pdata.get("state") or "").strip(),
-                        "node": src,
-                    }
-                    evidence_entries.append(rec)
-                    if rec["state"].lower() != "established":
-                        continue
-                    if rec["peerName"] == peer:
-                        present = True
-                    elif rec["neighbor"] in peer_ips:
-                        present = True
-            except Exception as e:
-                parse_error = str(e)
-
-            evidence_entries = sorted(
-                evidence_entries,
-                key=lambda x: (
-                    str(x.get("neighbor") or ""),
-                    str(x.get("peerName") or ""),
-                    str(x.get("state") or ""),
-                    str(x.get("node") or ""),
-                ),
-            )
-
-            predicate_ok = bool(present)
-
-            observed_state = {
-                "peer": peer,
-                "present": present,
-                "neighbors": evidence_entries,
-            }
-            evidence = {
-                "cmd": "vtysh -c 'show bgp l2vpn evpn summary json'",
-                "rc": rc,
-                "parse_error": parse_error,
-                "neighbors": evidence_entries,
-            }
             return vtysh_ok, predicate_ok, observed_state, evidence
 
         if inv_type in ("route_present", "route_absent"):
-            norm_prefix = str(t.get("_norm_prefix") or "").strip()
-            cp = rt.exec(
-                lab,
-                src,
-                ["vtysh", "-c", "show ip route json"],
-                check=False,
-                capture_output=True,
-            )
+            _prefix = str(t.get("_norm_prefix") or "").strip()
+            _params = {"prefix": _prefix}
+            _target = src
+            # Provider seam (REQ-45b-4): one observation serves both members of
+            # the pair; the present/absent flip stays a core predicate decision.
+            try:
+                _obs = _nos_collect(
+                    rt, lab, _target, _nos_ntype(topo, _target),
+                    ObservationRequest(kind=inv_type, params=_params),
+                    "cmd_test invariant collection",
+                )
+            except NosCapabilityUnsupported as _unsup:
+                # Deny-by-default (B02 / founder ruling A on F-45b-C3-1).
+                return (
+                    False,
+                    False,
+                    {"norm_prefix": _prefix, "unsupported": True},
+                    {
+                        "cmd": "",
+                        "rc": None,
+                        "parse_error": _unsup.message,
+                        "reason": "unsupported_provider_capability",
+                        "node_type": _unsup.ntype,
+                    },
+                )
+            vtysh_ok = bool(_obs.evidence.get("probe_ok"))
+            observed_state = dict(_obs.data)
+            evidence = {k: v for k, v in _obs.evidence.items() if k != "probe_ok"}
 
-            if isinstance(cp, str):
-                out = cp
-                rc = None
-            else:
-                out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
-                if isinstance(out, (bytes, bytearray)):
-                    try:
-                        out = out.decode("utf-8", errors="replace")
-                    except Exception:
-                        out = str(out)
-                rc = getattr(cp, "returncode", None)
-
-            vtysh_ok = (rc in (0, None))
-
-            observed_prefixes = parse_frr_show_ip_route_prefixes_json(str(out or ""))
-            present = norm_prefix in set(observed_prefixes or [])
-
+            _present = bool(observed_state.get("present"))
             if inv_type == "route_present":
-                predicate_ok = bool(present)
+                predicate_ok = _present
             else:
-                predicate_ok = not bool(present)
+                predicate_ok = not _present
 
-            observed_state = {
-                "norm_prefix": norm_prefix,
-                "present": present,
-                "observed_prefixes": list(observed_prefixes or []),
-            }
-            evidence = {
-                "cmd": "vtysh -c 'show ip route json'",
-                "rc": rc,
-            }
             return vtysh_ok, predicate_ok, observed_state, evidence
 
         if inv_type == "bgp_med_equals":
-            norm_prefix = str(t.get("_norm_prefix") or "").strip()
-            cp = rt.exec(
-                lab,
-                src,
-                ["vtysh", "-c", f"show ip bgp {norm_prefix} json"],
-                check=False,
-                capture_output=True,
-            )
-
-            if isinstance(cp, str):
-                out = cp
-                rc = None
-            else:
-                out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
-                if isinstance(out, (bytes, bytearray)):
-                    try:
-                        out = out.decode("utf-8", errors="replace")
-                    except Exception:
-                        out = str(out)
-                rc = getattr(cp, "returncode", None)
-
-            vtysh_ok = (rc in (0, None))
-
-            parse_error = ""
-            observed_med = None
-            empty_first_doc = (str(out or "").strip() in ("", "{}"))
-
+            _prefix = str(t.get("_norm_prefix") or "").strip()
+            # Provider seam (REQ-45b-4): probe + FRR-JSON normalization are
+            # provider-side; predicate evaluation and the verdict stay core.
             try:
-                doc = json.loads(str(out or "").strip()) if str(out or "").strip() else {}
-                route_obj = None
+                _obs = _nos_collect(
+                    rt, lab, src, _nos_ntype(topo, src),
+                    ObservationRequest(kind="bgp_med_equals", params={"prefix": _prefix}),
+                    "cmd_test invariant collection",
+                )
+            except NosCapabilityUnsupported as _unsup:
+                # Deny-by-default (B02 / founder ruling A on F-45b-C3-1).
+                return (
+                    False,
+                    False,
+                    {"norm_prefix": _prefix, "unsupported": True},
+                    {
+                        "cmd": "",
+                        "rc": None,
+                        "parse_error": _unsup.message,
+                        "reason": "unsupported_provider_capability",
+                        "node_type": _unsup.ntype,
+                    },
+                )
+            vtysh_ok = bool(_obs.evidence.get("probe_ok"))
+            observed_state = dict(_obs.data)
+            evidence = {k: v for k, v in _obs.evidence.items() if k != "probe_ok"}
 
-                if isinstance(doc, dict):
-                    cand = doc.get(norm_prefix)
-                    if isinstance(cand, list) and cand:
-                        route_obj = cand[0]
-                    elif isinstance(cand, dict):
-                        route_obj = cand
-                    elif (
-                        doc.get("prefix") is not None
-                        and (_normalize_prefix(str(doc.get("prefix"))) or str(doc.get("prefix"))) == norm_prefix
-                    ):
-                        route_obj = doc
-                    else:
-                        routes = doc.get("routes")
-                        if isinstance(routes, dict):
-                            cand = routes.get(norm_prefix)
-                            if isinstance(cand, list) and cand:
-                                route_obj = cand[0]
-                            elif isinstance(cand, dict):
-                                route_obj = cand
-                            else:
-                                for k, v in routes.items():
-                                    nk = _normalize_prefix(str(k)) or str(k)
-                                    if nk != norm_prefix:
-                                        continue
-                                    if isinstance(v, list) and v:
-                                        route_obj = v[0]
-                                        break
-                                    if isinstance(v, dict):
-                                        route_obj = v
-                                        break
-                        if route_obj is None:
-                            for k, v in doc.items():
-                                nk = _normalize_prefix(str(k)) or str(k)
-                                if nk != norm_prefix:
-                                    continue
-                                if isinstance(v, list) and v:
-                                    route_obj = v[0]
-                                    break
-                                if isinstance(v, dict):
-                                    route_obj = v
-                                    break
-                else:
-                    raise ValueError("unexpected_bgp_prefix_json_shape")
+            predicate_ok = bool(observed_state.get("observed_med") is not None)
 
-                if not isinstance(route_obj, dict):
-                    parse_error = "prefix not present in bgp json"
-                else:
-                    for key in ("med", "metric"):
-                        val = route_obj.get(key)
-                        if val is None or str(val).strip() == "":
-                            continue
-                        try:
-                            observed_med = int(val)
-                            break
-                        except Exception:
-                            continue
-
-                    if observed_med is None:
-                        paths = route_obj.get("paths")
-                        if isinstance(paths, list):
-                            for path in paths:
-                                if not isinstance(path, dict):
-                                    continue
-                                for key in ("med", "metric"):
-                                    val = path.get(key)
-                                    if val is None or str(val).strip() == "":
-                                        continue
-                                    try:
-                                        observed_med = int(val)
-                                        break
-                                    except Exception:
-                                        continue
-                                if observed_med is not None:
-                                    break
-
-                    if observed_med is None:
-                        parse_error = "med not present in bgp json"
-            except Exception as e:
-                parse_error = str(e)
-
-            predicate_ok = (observed_med is not None)
-
-            observed_state = {
-                "norm_prefix": norm_prefix,
-                "observed_med": observed_med,
-            }
-            evidence = {
-                "cmd": f"vtysh -c 'show ip bgp {norm_prefix} json'",
-                "rc": rc,
-                "parse_error": parse_error,
-                "empty_first_doc": empty_first_doc,
-            }
             return vtysh_ok, predicate_ok, observed_state, evidence
 
         if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent", "evpn_vni_route_present"):
             mac = str(t.get("_mac") or "").strip().lower()
             vni_i = t.get("_vni_i")
-            cp = rt.exec(
-                lab,
-                src,
-                ["vtysh", "-c", "show bgp l2vpn evpn route json"],
-                check=False,
-                capture_output=True,
-            )
-
-            if isinstance(cp, str):
-                out = cp
-                rc = None
-            else:
-                out = getattr(cp, "stdout", "") or getattr(cp, "output", "") or ""
-                if isinstance(out, (bytes, bytearray)):
-                    try:
-                        out = out.decode("utf-8", errors="replace")
-                    except Exception:
-                        out = str(out)
-                rc = getattr(cp, "returncode", None)
-
-            vtysh_ok = (rc in (0, None))
-
-            raw = str(out or "").strip()
-            evidence_entries: list = []
-            present = False
-            parse_error = ""
-
-            def _append_entry(mac_val, vni_val, state_val):
-                nonlocal present
-                rec = {
-                    "mac": str(mac_val or "").strip().lower(),
-                    "vni": vni_val,
-                    "route_type": state_val,
-                    "node": src,
-                }
-                if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent") and not rec["mac"]:
-                    return
-                evidence_entries.append(rec)
-                if inv_type == "evpn_vni_route_present":
-                    if rec["vni"] == vni_i:
-                        present = True
-                else:
-                    if rec["mac"] == mac and rec["vni"] == vni_i:
-                        if state_val is None or str(state_val).lower() in ("2", "2-evpn", "macip", "type2"):
-                            present = True
-
+            # Provider seam (REQ-45b-4): the parse filters by observation kind,
+            # which the request carries.
             try:
-                doc = json.loads(raw) if raw else {}
-                seen = set()
+                _obs = _nos_collect(
+                    rt, lab, src, _nos_ntype(topo, src),
+                    ObservationRequest(kind=inv_type, params={"mac": mac, "vni_i": vni_i}),
+                    "cmd_test invariant collection",
+                )
+            except NosCapabilityUnsupported as _unsup:
+                # Deny-by-default (B02 / founder ruling A on F-45b-C3-1).
+                return (
+                    False,
+                    False,
+                    {"mac": mac, "vni_i": vni_i, "unsupported": True},
+                    {
+                        "cmd": "",
+                        "rc": None,
+                        "parse_error": _unsup.message,
+                        "reason": "unsupported_provider_capability",
+                        "node_type": _unsup.ntype,
+                    },
+                )
+            vtysh_ok = bool(_obs.evidence.get("probe_ok"))
+            observed_state = dict(_obs.data)
+            evidence = {k: v for k, v in _obs.evidence.items() if k != "probe_ok"}
 
-                if isinstance(doc, dict):
-                    for rd_key, rd_val in doc.items():
-                        if rd_key in ("numPrefix", "numPaths"):
-                            continue
-                        if not isinstance(rd_val, dict):
-                            continue
+            predicate_ok = bool(observed_state.get("present"))
 
-                        vni_ctx = None
-                        m_rt = re.search(r"RT:\d+:(\d+)", json.dumps(rd_val), flags=re.IGNORECASE)
-                        if m_rt:
-                            try:
-                                vni_ctx = int(m_rt.group(1))
-                            except Exception:
-                                vni_ctx = None
-
-                        for prefix_key, prefix_val in rd_val.items():
-                            if prefix_key == "rd":
-                                continue
-                            if not isinstance(prefix_val, dict):
-                                continue
-                            for path_group in list(prefix_val.get("paths") or []):
-                                if not isinstance(path_group, list):
-                                    continue
-                                for entry in path_group:
-                                    if not isinstance(entry, dict):
-                                        continue
-
-                                    mac_val = None
-                                    for key in ("mac", "macAddr", "macaddr"):
-                                        val = entry.get(key)
-                                        if isinstance(val, str) and val.strip():
-                                            mac_val = val.strip().lower()
-                                            break
-
-                                    vni_val = None
-                                    for key in ("vni",):
-                                        val = entry.get(key)
-                                        if val is None or str(val).strip() == "":
-                                            continue
-                                        try:
-                                            vni_val = int(val)
-                                            break
-                                        except Exception:
-                                            continue
-                                    if vni_val is None:
-                                        vni_val = vni_ctx
-
-                                    state_val = entry.get("routeType")
-                                    if state_val is None:
-                                        state_val = entry.get("type")
-                                    if isinstance(state_val, str):
-                                        state_val = state_val.strip()
-
-                                    if inv_type == "evpn_vni_route_present" and vni_val is None:
-                                        continue
-                                    if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent") and not mac_val:
-                                        continue
-
-                                    sig = (mac_val, vni_val, state_val, src)
-                                    if sig in seen:
-                                        continue
-                                    seen.add(sig)
-                                    _append_entry(mac_val, vni_val, state_val)
-                else:
-                    raise ValueError("unexpected_evpn_json_shape")
-
-            except Exception as e:
-                parse_error = str(e)
-
-            predicate_ok = bool(present)
-
-            observed_state = {
-                "mac": mac,
-                "vni_i": vni_i,
-                "present": present,
-                "evidence_entries": evidence_entries,
-            }
-            evidence = {
-                "cmd": "vtysh -c 'show bgp l2vpn evpn route json'",
-                "rc": rc,
-                "parse_error": parse_error,
-            }
             return vtysh_ok, predicate_ok, observed_state, evidence
 
         if inv_type in ("route_advertised_to", "route_not_advertised_to"):
             node = str(t.get("node") or "")
-            peer_ip = str(t.get("_peer_ip") or "").strip()
-            prefix = str(t.get("_norm_prefix") or "").strip()
-
-            cp = rt.exec(
-                lab,
-                node,
-                ["vtysh", "-c", f"show ip bgp neighbor {peer_ip} advertised-routes json"],
-                check=False,
-            )
-            out = cp.stdout or ""
-            rc = cp.returncode
-            if isinstance(out, (bytes, bytearray)):
-                try:
-                    out = out.decode("utf-8", errors="replace")
-                except Exception:
-                    out = str(out)
-
-            vtysh_ok = (rc == 0)
-
-            raw = str(out or "").strip()
-            parse_error = ""
-            advertised_prefixes: list = []
-
-            def _collect_adv_prefixes(obj):
-                found = []
-                if isinstance(obj, dict):
-                    for container_key in ("advertisedRoutes", "routes"):
-                        container = obj.get(container_key)
-                        if isinstance(container, dict):
-                            for k, v in container.items():
-                                if isinstance(v, (dict, list)):
-                                    nk = _normalize_prefix(str(k)) or str(k)
-                                    if nk:
-                                        found.append(nk)
-                    for k, v in obj.items():
-                        if isinstance(v, (dict, list)):
-                            nk = _normalize_prefix(str(k)) or str(k)
-                            if nk and "/" in nk:
-                                found.append(nk)
-                    for key in ("prefix", "network"):
-                        val = obj.get(key)
-                        nk = _normalize_prefix(str(val)) or str(val or "")
-                        if nk:
-                            found.append(nk)
-                    paths = obj.get("paths")
-                    if isinstance(paths, list):
-                        for path in paths:
-                            found.extend(_collect_adv_prefixes(path))
-                elif isinstance(obj, list):
-                    for item in obj:
-                        found.extend(_collect_adv_prefixes(item))
-                return found
-
+            _prefix = str(t.get("_norm_prefix") or "").strip()
+            _params = {"prefix": _prefix, "peer_ip": str(t.get("_peer_ip") or "").strip()}
+            _target = node
+            # Provider seam (REQ-45b-4): one observation serves both members of
+            # the pair; the present/absent flip stays a core predicate decision.
             try:
-                doc = json.loads(raw) if raw else {}
-                advertised_prefixes = sorted(set(_collect_adv_prefixes(doc)))
-            except Exception as e:
-                parse_error = str(e)
+                _obs = _nos_collect(
+                    rt, lab, _target, _nos_ntype(topo, _target),
+                    ObservationRequest(kind=inv_type, params=_params),
+                    "cmd_test invariant collection",
+                )
+            except NosCapabilityUnsupported as _unsup:
+                # Deny-by-default (B02 / founder ruling A on F-45b-C3-1).
+                return (
+                    False,
+                    False,
+                    {"norm_prefix": _prefix, "unsupported": True},
+                    {
+                        "cmd": "",
+                        "rc": None,
+                        "parse_error": _unsup.message,
+                        "reason": "unsupported_provider_capability",
+                        "node_type": _unsup.ntype,
+                    },
+                )
+            vtysh_ok = bool(_obs.evidence.get("probe_ok"))
+            observed_state = dict(_obs.data)
+            evidence = {k: v for k, v in _obs.evidence.items() if k != "probe_ok"}
 
-            present = prefix in advertised_prefixes
-
+            _present = bool(observed_state.get("present"))
             if inv_type == "route_advertised_to":
-                predicate_ok = bool(present)
+                predicate_ok = _present
             else:
-                predicate_ok = not bool(present)
+                predicate_ok = not _present
 
-            observed_state = {
-                "norm_prefix": prefix,
-                "present": present,
-                "advertised_prefixes": advertised_prefixes,
-            }
-            evidence = {
-                "cmd": f"vtysh -c 'show ip bgp neighbor {peer_ip} advertised-routes json'",
-                "rc": rc,
-                "parse_error": parse_error,
-            }
             return vtysh_ok, predicate_ok, observed_state, evidence
 
         if inv_type == "bgp_localpref_equals":
             node = str(t.get("node") or "")
-            prefix = str(t.get("_norm_prefix") or "").strip()
-
-            cp = rt.exec(lab, node, ["vtysh", "-c", f"show ip bgp {prefix} json"], check=False)
-            out = cp.stdout or ""
-            rc = cp.returncode
-            if isinstance(out, (bytes, bytearray)):
-                try:
-                    out = out.decode("utf-8", errors="replace")
-                except Exception:
-                    out = str(out)
-
-            vtysh_ok = (rc == 0)
-
-            parse_error = ""
-            observed_localpref = None
+            _prefix = str(t.get("_norm_prefix") or "").strip()
+            # Provider seam (REQ-45b-4): probe + FRR-JSON normalization are
+            # provider-side; predicate evaluation and the verdict stay core.
             try:
-                doc = json.loads(str(out or "").strip()) if str(out or "").strip() else {}
-                route_obj = None
-                if isinstance(doc, dict):
-                    cand = doc.get(prefix)
-                    if isinstance(cand, list) and cand:
-                        route_obj = cand[0]
-                    elif isinstance(cand, dict):
-                        route_obj = cand
-                    elif (
-                        doc.get("prefix") is not None
-                        and (_normalize_prefix(str(doc.get("prefix"))) or str(doc.get("prefix"))) == prefix
-                    ):
-                        route_obj = doc
-                    else:
-                        routes = doc.get("routes")
-                        if isinstance(routes, dict):
-                            cand = routes.get(prefix)
-                            if isinstance(cand, list) and cand:
-                                route_obj = cand[0]
-                            elif isinstance(cand, dict):
-                                route_obj = cand
-                            else:
-                                for k, v in routes.items():
-                                    nk = _normalize_prefix(str(k)) or str(k)
-                                    if nk != prefix:
-                                        continue
-                                    if isinstance(v, list) and v:
-                                        route_obj = v[0]
-                                        break
-                                    if isinstance(v, dict):
-                                        route_obj = v
-                                        break
-                        if route_obj is None:
-                            for k, v in doc.items():
-                                nk = _normalize_prefix(str(k)) or str(k)
-                                if nk != prefix:
-                                    continue
-                                if isinstance(v, list) and v:
-                                    route_obj = v[0]
-                                    break
-                                if isinstance(v, dict):
-                                    route_obj = v
-                                    break
-                else:
-                    raise ValueError("unexpected_bgp_prefix_json_shape")
+                _obs = _nos_collect(
+                    rt, lab, node, _nos_ntype(topo, node),
+                    ObservationRequest(kind="bgp_localpref_equals", params={"prefix": _prefix}),
+                    "cmd_test invariant collection",
+                )
+            except NosCapabilityUnsupported as _unsup:
+                # Deny-by-default (B02 / founder ruling A on F-45b-C3-1).
+                return (
+                    False,
+                    False,
+                    {"norm_prefix": _prefix, "unsupported": True},
+                    {
+                        "cmd": "",
+                        "rc": None,
+                        "parse_error": _unsup.message,
+                        "reason": "unsupported_provider_capability",
+                        "node_type": _unsup.ntype,
+                    },
+                )
+            vtysh_ok = bool(_obs.evidence.get("probe_ok"))
+            observed_state = dict(_obs.data)
+            evidence = {k: v for k, v in _obs.evidence.items() if k != "probe_ok"}
 
-                if not isinstance(route_obj, dict):
-                    parse_error = "prefix not present in bgp json"
-                else:
-                    for key in ("locPrf", "localpref", "localPref", "local_preference"):
-                        val = route_obj.get(key)
-                        if val is None or str(val).strip() == "":
-                            continue
-                        try:
-                            observed_localpref = int(val)
-                            break
-                        except Exception:
-                            continue
+            predicate_ok = bool(observed_state.get("observed_localpref") is not None)
 
-                    if observed_localpref is None:
-                        paths = route_obj.get("paths")
-                        if isinstance(paths, list):
-                            for path in paths:
-                                if not isinstance(path, dict):
-                                    continue
-                                for key in ("locPrf", "localpref", "localPref", "local_preference"):
-                                    val = path.get(key)
-                                    if val is None or str(val).strip() == "":
-                                        continue
-                                    try:
-                                        observed_localpref = int(val)
-                                        break
-                                    except Exception:
-                                        continue
-                                if observed_localpref is not None:
-                                    break
-
-                    if observed_localpref is None:
-                        parse_error = "localpref not present in bgp json"
-            except Exception as e:
-                parse_error = str(e)
-
-            predicate_ok = (observed_localpref is not None)
-
-            observed_state = {
-                "norm_prefix": prefix,
-                "observed_localpref": observed_localpref,
-            }
-            evidence = {
-                "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
-                "rc": rc,
-                "parse_error": parse_error,
-            }
             return vtysh_ok, predicate_ok, observed_state, evidence
 
         if inv_type == "bgp_community":
             node = str(t.get("node") or "")
-            prefix = str(t.get("_norm_prefix") or "").strip()
-
-            cp = rt.exec(lab, node, ["vtysh", "-c", f"show ip bgp {prefix} json"], check=False)
-            out = cp.stdout or ""
-            rc = cp.returncode
-            if isinstance(out, (bytes, bytearray)):
-                try:
-                    out = out.decode("utf-8", errors="replace")
-                except Exception:
-                    out = str(out)
-
-            vtysh_ok = (rc == 0)
-
-            parse_error = ""
-            route_present = False
-            observed_tokens = []
-            empty_first_doc = False
+            _prefix = str(t.get("_norm_prefix") or "").strip()
+            # Provider seam (REQ-45b-4): probe + FRR-JSON normalization are
+            # provider-side; predicate evaluation and the verdict stay core.
             try:
-                _s = str(out or "").strip()
-                doc = json.loads(_s) if _s else {}
-                if isinstance(doc, dict) and not doc:
-                    empty_first_doc = True
-                route_obj = None
-                if isinstance(doc, dict):
-                    cand = doc.get(prefix)
-                    if isinstance(cand, list) and cand:
-                        route_obj = cand[0]
-                    elif isinstance(cand, dict):
-                        route_obj = cand
-                    elif (
-                        doc.get("prefix") is not None
-                        and (_normalize_prefix(str(doc.get("prefix"))) or str(doc.get("prefix"))) == prefix
-                    ):
-                        route_obj = doc
-                    else:
-                        routes = doc.get("routes")
-                        if isinstance(routes, dict):
-                            cand = routes.get(prefix)
-                            if isinstance(cand, list) and cand:
-                                route_obj = cand[0]
-                            elif isinstance(cand, dict):
-                                route_obj = cand
-                            else:
-                                for k, v in routes.items():
-                                    nk = _normalize_prefix(str(k)) or str(k)
-                                    if nk != prefix:
-                                        continue
-                                    if isinstance(v, list) and v:
-                                        route_obj = v[0]
-                                        break
-                                    if isinstance(v, dict):
-                                        route_obj = v
-                                        break
-                        if route_obj is None:
-                            for k, v in doc.items():
-                                nk = _normalize_prefix(str(k)) or str(k)
-                                if nk != prefix:
-                                    continue
-                                if isinstance(v, list) and v:
-                                    route_obj = v[0]
-                                    break
-                                if isinstance(v, dict):
-                                    route_obj = v
-                                    break
-                else:
-                    raise ValueError("unexpected_bgp_prefix_json_shape")
+                _obs = _nos_collect(
+                    rt, lab, node, _nos_ntype(topo, node),
+                    ObservationRequest(kind="bgp_community", params={"prefix": _prefix}),
+                    "cmd_test invariant collection",
+                )
+            except NosCapabilityUnsupported as _unsup:
+                # Deny-by-default (B02 / founder ruling A on F-45b-C3-1).
+                return (
+                    False,
+                    False,
+                    {"norm_prefix": _prefix, "unsupported": True},
+                    {
+                        "cmd": "",
+                        "rc": None,
+                        "parse_error": _unsup.message,
+                        "reason": "unsupported_provider_capability",
+                        "node_type": _unsup.ntype,
+                    },
+                )
+            vtysh_ok = bool(_obs.evidence.get("probe_ok"))
+            observed_state = dict(_obs.data)
+            evidence = {k: v for k, v in _obs.evidence.items() if k != "probe_ok"}
 
-                if isinstance(route_obj, dict):
-                    route_present = True
-                    observed_tokens = _route_communities(route_obj)
-            except Exception as e:
-                parse_error = str(e)
+            predicate_ok = bool(observed_state.get("route_present"))
 
-            predicate_ok = route_present
-
-            observed_state = {
-                "norm_prefix": prefix,
-                "route_present": route_present,
-                "observed_communities": sorted({_canonical_community_token(t) for t in observed_tokens}),
-            }
-            evidence = {
-                "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
-                "rc": rc,
-                "parse_error": parse_error,
-                "empty_first_doc": empty_first_doc,
-            }
             return vtysh_ok, predicate_ok, observed_state, evidence
 
         if inv_type == "bgp_as_path":
             node = str(t.get("node") or "")
-            prefix = str(t.get("_norm_prefix") or "").strip()
-
-            cp = rt.exec(lab, node, ["vtysh", "-c", f"show ip bgp {prefix} json"], check=False)
-            out = cp.stdout or ""
-            rc = cp.returncode
-            if isinstance(out, (bytes, bytearray)):
-                try:
-                    out = out.decode("utf-8", errors="replace")
-                except Exception:
-                    out = str(out)
-
-            vtysh_ok = (rc == 0)
-
-            parse_error = ""
-            route_present = False
-            observed_path = ""
-            empty_first_doc = False
+            _prefix = str(t.get("_norm_prefix") or "").strip()
+            # Provider seam (REQ-45b-4): probe + FRR-JSON normalization are
+            # provider-side; predicate evaluation and the verdict stay core.
             try:
-                _s = str(out or "").strip()
-                doc = json.loads(_s) if _s else {}
-                if isinstance(doc, dict) and not doc:
-                    empty_first_doc = True
-                route_obj = None
-                if isinstance(doc, dict):
-                    cand = doc.get(prefix)
-                    if isinstance(cand, list) and cand:
-                        route_obj = cand[0]
-                    elif isinstance(cand, dict):
-                        route_obj = cand
-                    elif (
-                        doc.get("prefix") is not None
-                        and (_normalize_prefix(str(doc.get("prefix"))) or str(doc.get("prefix"))) == prefix
-                    ):
-                        route_obj = doc
-                    else:
-                        routes = doc.get("routes")
-                        if isinstance(routes, dict):
-                            cand = routes.get(prefix)
-                            if isinstance(cand, list) and cand:
-                                route_obj = cand[0]
-                            elif isinstance(cand, dict):
-                                route_obj = cand
-                            else:
-                                for k, v in routes.items():
-                                    nk = _normalize_prefix(str(k)) or str(k)
-                                    if nk != prefix:
-                                        continue
-                                    if isinstance(v, list) and v:
-                                        route_obj = v[0]
-                                        break
-                                    if isinstance(v, dict):
-                                        route_obj = v
-                                        break
-                        if route_obj is None:
-                            for k, v in doc.items():
-                                nk = _normalize_prefix(str(k)) or str(k)
-                                if nk != prefix:
-                                    continue
-                                if isinstance(v, list) and v:
-                                    route_obj = v[0]
-                                    break
-                                if isinstance(v, dict):
-                                    route_obj = v
-                                    break
-                else:
-                    raise ValueError("unexpected_bgp_prefix_json_shape")
+                _obs = _nos_collect(
+                    rt, lab, node, _nos_ntype(topo, node),
+                    ObservationRequest(kind="bgp_as_path", params={"prefix": _prefix}),
+                    "cmd_test invariant collection",
+                )
+            except NosCapabilityUnsupported as _unsup:
+                # Deny-by-default (B02 / founder ruling A on F-45b-C3-1).
+                return (
+                    False,
+                    False,
+                    {"norm_prefix": _prefix, "unsupported": True},
+                    {
+                        "cmd": "",
+                        "rc": None,
+                        "parse_error": _unsup.message,
+                        "reason": "unsupported_provider_capability",
+                        "node_type": _unsup.ntype,
+                    },
+                )
+            vtysh_ok = bool(_obs.evidence.get("probe_ok"))
+            observed_state = dict(_obs.data)
+            evidence = {k: v for k, v in _obs.evidence.items() if k != "probe_ok"}
 
-                if isinstance(route_obj, dict):
-                    route_present = True
-                    observed_path = _route_as_path(route_obj)
-            except Exception as e:
-                parse_error = str(e)
+            predicate_ok = bool(observed_state.get("route_present"))
 
-            predicate_ok = route_present
-
-            observed_state = {
-                "norm_prefix": prefix,
-                "route_present": route_present,
-                "observed_as_path": observed_path,
-            }
-            evidence = {
-                "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
-                "rc": rc,
-                "parse_error": parse_error,
-                "empty_first_doc": empty_first_doc,
-            }
             return vtysh_ok, predicate_ok, observed_state, evidence
 
         if inv_type == "ospf_neighbor_up":
-            # H4: OSPF neighbor-state evaluator (REQ-H4-7 / B07).
-            # FRR JSON shape: {"neighbors": {"<router-id>": [{"nbrState": ...}]}}.
-            # Neighbor key is the OSPF router-ID literal (validated as IPv4
-            # at WI-1). FSM state may carry a role qualifier suffix
-            # ("Full/DR", "Full/Backup", "Full/DROther", "2-Way/DROther");
-            # the parser splits on '/' and maps to D-1's closed declarable
-            # set, with any outside-set literal mapped to "Unknown" with
-            # empty last_error per B07.
             neighbor = str(t.get("neighbor") or "").strip()
-            cp = rt.exec(lab, src, ["vtysh", "-c", "show ip ospf neighbor json"], check=False)
-            vtysh_ok = (getattr(cp, "returncode", 1) == 0)
-            out = (cp.stdout or "") if hasattr(cp, "stdout") else ""
-
-            declarable_states = (
-                "Down",
-                "Attempt",
-                "Init",
-                "2-Way",
-                "ExStart",
-                "Exchange",
-                "Loading",
-                "Full",
-            )
-            observed_state_str: str = "Unknown"
-            last_error: str = ""
-            parse_error: str = ""
-            neighbor_present: bool = False
-
-            if vtysh_ok:
-                try:
-                    data = json.loads(out or "{}")
-                    nbrs = data.get("neighbors")
-                    if isinstance(nbrs, dict):
-                        if not nbrs:
-                            observed_state_str = "NotConfigured"
-                            last_error = "ospf neighbor table empty"
-                            parse_error = "ospf neighbor table empty"
-                        else:
-                            entries = nbrs.get(neighbor)
-                            if isinstance(entries, list) and entries:
-                                first = entries[0] if isinstance(entries[0], dict) else None
-                                if isinstance(first, dict):
-                                    neighbor_present = True
-                                    raw_state = first.get("nbrState")
-                                    if raw_state:
-                                        base = str(raw_state).split("/", 1)[0].strip()
-                                        if base in declarable_states:
-                                            observed_state_str = base
-                                        else:
-                                            observed_state_str = "Unknown"
-                                            last_error = ""
-                            else:
-                                observed_state_str = "NotConfigured"
-                                last_error = "neighbor not present in ospf neighbor table"
-                                parse_error = "neighbor not present in ospf neighbor table"
-                    else:
-                        observed_state_str = "NotConfigured"
-                        last_error = "ospf neighbor table empty"
-                        parse_error = "ospf neighbor table empty"
-                except Exception:
-                    observed_state_str = "Unknown"
-                    last_error = "vtysh output not parseable as JSON"
-                    parse_error = "vtysh output not parseable as JSON"
-            else:
-                observed_state_str = "Unknown"
-                last_error = "vtysh command failed"
-                parse_error = "vtysh command failed"
+            # Provider seam (REQ-45b-4): probe + FRR OSPF-JSON normalization are
+            # provider-side. The declared expected FSM state is an expectation,
+            # not an observation, so it is resolved core-side (design §5) and
+            # merged into observed_state here -- byte-identically to the
+            # pre-extraction dict (key order is not observable: results.json is
+            # written with sort_keys=True and the §13(c) renderer sorts keys).
+            try:
+                _obs = _nos_collect(
+                    rt, lab, src, _nos_ntype(topo, src),
+                    ObservationRequest(kind="ospf_neighbor_up", params={"neighbor": neighbor}),
+                    "cmd_test invariant collection",
+                )
+            except NosCapabilityUnsupported as _unsup:
+                # Deny-by-default (B02 / founder ruling A on F-45b-C3-1).
+                return (
+                    False,
+                    False,
+                    {"neighbor_present": False, "state": "Unsupported", "last_error": _unsup.message},
+                    {
+                        "cmd": "",
+                        "parse_error": _unsup.message,
+                        "returncode": None,
+                        "reason": "unsupported_provider_capability",
+                        "node_type": _unsup.ntype,
+                    },
+                )
+            vtysh_ok = bool(_obs.evidence.get("probe_ok"))
+            observed_state = dict(_obs.data)
+            evidence = {k: v for k, v in _obs.evidence.items() if k != "probe_ok"}
 
             # Predicate: neighbor present AND observed FSM state matches the
             # declared expected state. Test record's 'state' is defaulted to
             # "Full" by WI-2 per LD-2 if omitted.
             expected_state = str(t.get("state") or "Full").strip()
-            predicate_ok = bool(neighbor_present and observed_state_str == expected_state)
+            observed_state["expected_state"] = expected_state
+            predicate_ok = bool(
+                observed_state.get("neighbor_present")
+                and observed_state.get("state") == expected_state
+            )
 
-            observed_state = {
-                "neighbor_present": neighbor_present,
-                "state": observed_state_str,
-                "last_error": last_error,
-                "expected_state": expected_state,
-            }
-            evidence = {
-                "cmd": "vtysh -c 'show ip ospf neighbor json'",
-                "parse_error": parse_error,
-                "returncode": getattr(cp, "returncode", None),
-            }
             return vtysh_ok, predicate_ok, observed_state, evidence
 
         if inv_type == "interface_state":
@@ -6670,7 +6165,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported EVPN BGP-session evidence provider capability",
                     evidence={
-                        "cmd": "vtysh -c 'show bgp l2vpn evpn summary json'",
+                        "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn summary json'",
                         "rc": rc,
                     },
                     meta={
@@ -6693,7 +6188,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported EVPN BGP-session evidence normalization",
                     evidence={
-                        "cmd": "vtysh -c 'show bgp l2vpn evpn summary json'",
+                        "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn summary json'",
                         "rc": rc,
                     },
                     meta={
@@ -6740,7 +6235,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 duration_ms=int((time.time() - start) * 1000),
                 error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                 evidence={
-                    "cmd": "vtysh -c 'show bgp l2vpn evpn summary json'",
+                    "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn summary json'",
                     "rc": rc,
                     "neighbors": evidence_entries,
                 },
@@ -6831,7 +6326,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                         duration_ms=0,
                         error="unsupported BGP MED evidence provider capability",
                         evidence={
-                            "cmd": f"vtysh -c 'show ip bgp {norm_prefix} json'",
+                            "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {norm_prefix} json'",
                             "rc": rc,
                         },
                         meta={
@@ -6866,7 +6361,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                         duration_ms=0,
                         error="unsupported BGP MED evidence normalization",
                         evidence={
-                            "cmd": f"vtysh -c 'show ip bgp {norm_prefix} json'",
+                            "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {norm_prefix} json'",
                             "rc": rc,
                             "parse_error": parse_error,
                         },
@@ -6905,7 +6400,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=int((time.time() - start) * 1000),
                     error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                     evidence={
-                        "cmd": f"vtysh -c 'show ip bgp {norm_prefix} json'",
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {norm_prefix} json'",
                         "rc": rc,
                         "prefix": norm_prefix,
                         "med": observed_med,
@@ -6927,6 +6422,36 @@ def cmd_test(args: argparse.Namespace) -> None:
             rc = last_evidence.get("rc")
             present = bool(last_state.get("present"))
             observed_prefixes = list(last_state.get("observed_prefixes") or [])
+
+            if str(last_evidence.get("reason") or "") == "unsupported_provider_capability":
+                # BL-P2-4.5c-44: deny-by-default must not render as a negative
+                # observation. Without this guard the predicate below reads the
+                # unsupported state's absent keys as observed="fail", which
+                # SATISFIES a negative expectation and yields a passing verdict
+                # on a device never queried (Doctrine 1.11: absence must never
+                # imply pass). Shape is the already-ratified UNSUP disposition
+                # shipping at the rc-guard sites (F-45b-C3-1). Founder ruling
+                # 2026-08-22: supersedes option 1b, unreachable once this exits.
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported route evidence evidence provider capability",
+                    evidence={
+                        "cmd": last_evidence.get("cmd") or "vtysh -c 'show ip route json'",
+                        "rc": last_evidence.get("rc"),
+                    },
+                    meta={
+                        "type": inv_type,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
 
             if inv_type == "route_present":
                 observed = "pass" if present else "fail"
@@ -6967,7 +6492,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 duration_ms=int((time.time() - start) * 1000),
                 error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                 evidence={
-                    "cmd": "vtysh -c 'show ip route json'",
+                    "cmd": last_evidence.get("cmd") or "vtysh -c 'show ip route json'",
                     "rc": rc,
                 },
                 meta={
@@ -7043,7 +6568,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported EVPN VNI/MAC-route evidence provider capability",
                     evidence={
-                        "cmd": "vtysh -c 'show bgp l2vpn evpn route json'",
+                        "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn route json'",
                         "rc": rc,
                     },
                     meta={
@@ -7056,25 +6581,46 @@ def cmd_test(args: argparse.Namespace) -> None:
                 raise SystemExit(2)
 
             if not present and inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent"):
-                cp_text = rt.exec(
-                    lab,
-                    src,
-                    ["vtysh", "-c", "show bgp l2vpn evpn route"],
-                    check=False,
-                    capture_output=True,
-                )
+                # Supplementary text-mode leg (REQ-45C-14, LD-45C-1 ruled shape):
+                # a SECOND ObservationRequest of a distinct kind, issued only
+                # after the JSON leg returned no matching route. The provider
+                # parses and returns; core keeps every decision -- the
+                # evidence_entries/present composition, the parse_error merge,
+                # and the rc-gated misuse exit below. The Observation's
+                # `excerpt` is deliberately NOT promoted into record_fn: the
+                # authoritative record surface is frozen (REQ-45C-19, §7
+                # outputs; founder ruling 2026-08-20).
+                try:
+                    _sup = _nos_collect(
+                        rt, lab, src, _nos_ntype(topo, src),
+                        ObservationRequest(kind="evpn_mac_route_text", params={"vni_i": vni_i}),
+                        "cmd_test supplementary EVPN collection",
+                    )
+                except NosCapabilityUnsupported:
+                    record_fn(
+                        name=test_name,
+                        kind="invariant",
+                        src=src,
+                        dst="",
+                        expected=expected,
+                        observed="fail",
+                        verdict="fail",
+                        duration_ms=0,
+                        error="unsupported EVPN VNI/MAC-route evidence provider capability",
+                        evidence={
+                            "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn route'",
+                            "rc": None,
+                        },
+                        meta={
+                            "type": inv_type,
+                            "mac": mac,
+                            "vni": vni_i,
+                            "misuse": True,
+                        },
+                    )
+                    raise SystemExit(2)
 
-                if isinstance(cp_text, str):
-                    out_text = cp_text
-                    rc_text = None
-                else:
-                    out_text = getattr(cp_text, "stdout", "") or getattr(cp_text, "output", "") or ""
-                    if isinstance(out_text, (bytes, bytearray)):
-                        try:
-                            out_text = out_text.decode("utf-8", errors="replace")
-                        except Exception:
-                            out_text = str(out_text)
-                    rc_text = getattr(cp_text, "returncode", None)
+                rc_text = _sup.evidence.get("returncode")
 
                 if rc_text not in (0, None):
                     record_fn(
@@ -7088,7 +6634,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                         duration_ms=0,
                         error="unsupported EVPN VNI/MAC-route evidence provider capability",
                         evidence={
-                            "cmd": "vtysh -c 'show bgp l2vpn evpn route'",
+                            "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn route'",
                             "rc": rc_text,
                             "json_rc": rc,
                         },
@@ -7101,31 +6647,17 @@ def cmd_test(args: argparse.Namespace) -> None:
                     )
                     raise SystemExit(2)
 
-                try:
-                    import re as _re
-
-                    text = str(out_text or "")
-                    for line in text.splitlines():
-                        m = _re.search(r"\[2\]:\[0\]:\[48\]:\[([0-9a-f:]{17})\]", line, flags=_re.IGNORECASE)
-                        if not m:
-                            continue
-                        mac_val = m.group(1).lower()
-                        rec = {
-                            "mac": str(mac_val or "").strip().lower(),
-                            "vni": vni_i,
-                            "route_type": "2",
-                            "node": src,
-                        }
-                        if not rec["mac"]:
-                            continue
-                        evidence_entries.append(rec)
-                        if rec["mac"] == mac and rec["vni"] == vni_i:
-                            present = True
-                except Exception as e:
+                _sup_parse_error = str(_sup.data.get("parse_error") or "")
+                if _sup_parse_error:
                     if parse_error:
-                        parse_error = f"{parse_error}; text_parse={e}"
+                        parse_error = f"{parse_error}; {_sup_parse_error}"
                     else:
-                        parse_error = f"text_parse={e}"
+                        parse_error = _sup_parse_error
+
+                for rec in list(_sup.data.get("records") or []):
+                    evidence_entries.append(rec)
+                    if rec["mac"] == mac and rec["vni"] == vni_i:
+                        present = True
 
             if parse_error and not evidence_entries:
                 record_fn(
@@ -7139,7 +6671,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported EVPN VNI/MAC-route evidence normalization",
                     evidence={
-                        "cmd": "vtysh -c 'show bgp l2vpn evpn route json'",
+                        "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn route json'",
                         "rc": rc,
                     },
                     meta={
@@ -7250,7 +6782,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 duration_ms=int((time.time() - start) * 1000),
                 error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                 evidence={
-                    "cmd": "vtysh -c 'show bgp l2vpn evpn route json'",
+                    "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn route json'",
                     "rc": rc,
                     "routes": evidence_entries,
                 },
@@ -7349,7 +6881,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported route advertisement evidence provider capability",
                     evidence={
-                        "cmd": f"vtysh -c 'show ip bgp neighbor {peer_ips[0]} advertised-routes json'",
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp neighbor {peer_ips[0]} advertised-routes json'",
                         "rc": rc,
                     },
                     meta={
@@ -7373,7 +6905,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported route advertisement evidence normalization",
                     evidence={
-                        "cmd": f"vtysh -c 'show ip bgp neighbor {peer_ips[0]} advertised-routes json'",
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp neighbor {peer_ips[0]} advertised-routes json'",
                         "rc": rc,
                         "parse_error": parse_error,
                     },
@@ -7443,7 +6975,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 duration_ms=int((time.time() - start) * 1000),
                 error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                 evidence={
-                    "cmd": f"vtysh -c 'show ip bgp neighbor {peer_ips[0]} advertised-routes json'",
+                    "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp neighbor {peer_ips[0]} advertised-routes json'",
                     "rc": rc,
                     "prefixes": advertised_prefixes,
                 },
@@ -7484,7 +7016,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported BGP LOCALPREF evidence normalization",
                     evidence={
-                        "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
                         "rc": rc,
                         "parse_error": parse_error,
                     },
@@ -7523,7 +7055,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 duration_ms=int((time.time() - start) * 1000),
                 error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                 evidence={
-                    "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                    "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
                     "rc": rc,
                     "prefix": prefix,
                     "localpref": observed_localpref,
@@ -7554,6 +7086,36 @@ def cmd_test(args: argparse.Namespace) -> None:
             observed_communities = list(last_state.get("observed_communities") or [])
             empty_first_doc = bool(last_evidence.get("empty_first_doc"))
 
+            if str(last_evidence.get("reason") or "") == "unsupported_provider_capability":
+                # BL-P2-4.5c-44: deny-by-default must not render as a negative
+                # observation. Without this guard the predicate below reads the
+                # unsupported state's absent keys as observed="fail", which
+                # SATISFIES a negative expectation and yields a passing verdict
+                # on a device never queried (Doctrine 1.11: absence must never
+                # imply pass). Shape is the already-ratified UNSUP disposition
+                # shipping at the rc-guard sites (F-45b-C3-1). Founder ruling
+                # 2026-08-22: supersedes option 1b, unreachable once this exits.
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=node,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported BGP community evidence provider capability",
+                    evidence={
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
+                        "rc": last_evidence.get("rc"),
+                    },
+                    meta={
+                        "type": inv_type,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
             if rc not in (0, None):
                 record_fn(
                     name=test_name,
@@ -7566,7 +7128,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported BGP community evidence provider capability",
                     evidence={
-                        "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
                         "rc": rc,
                     },
                     meta={
@@ -7619,7 +7181,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 duration_ms=int((time.time() - start) * 1000),
                 error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                 evidence={
-                    "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                    "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
                     "rc": rc,
                     "prefix": prefix,
                     "communities": sorted(observed_communities),
@@ -7649,6 +7211,36 @@ def cmd_test(args: argparse.Namespace) -> None:
             observed_as_path = str(last_state.get("observed_as_path") or "")
             empty_first_doc = bool(last_evidence.get("empty_first_doc"))
 
+            if str(last_evidence.get("reason") or "") == "unsupported_provider_capability":
+                # BL-P2-4.5c-44: deny-by-default must not render as a negative
+                # observation. Without this guard the predicate below reads the
+                # unsupported state's absent keys as observed="fail", which
+                # SATISFIES a negative expectation and yields a passing verdict
+                # on a device never queried (Doctrine 1.11: absence must never
+                # imply pass). Shape is the already-ratified UNSUP disposition
+                # shipping at the rc-guard sites (F-45b-C3-1). Founder ruling
+                # 2026-08-22: supersedes option 1b, unreachable once this exits.
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=node,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported BGP AS-path evidence provider capability",
+                    evidence={
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
+                        "rc": last_evidence.get("rc"),
+                    },
+                    meta={
+                        "type": inv_type,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
             if rc not in (0, None):
                 record_fn(
                     name=test_name,
@@ -7661,7 +7253,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     duration_ms=0,
                     error="unsupported BGP AS-path evidence provider capability",
                     evidence={
-                        "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                        "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
                         "rc": rc,
                     },
                     meta={
@@ -7712,7 +7304,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 duration_ms=int((time.time() - start) * 1000),
                 error="" if verdict == "pass" else f"{inv_type} mismatch (expected {expected}, observed {observed})",
                 evidence={
-                    "cmd": f"vtysh -c 'show ip bgp {prefix} json'",
+                    "cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'",
                     "rc": rc,
                     "prefix": prefix,
                     "as_path": observed_as_path,
@@ -7820,6 +7412,36 @@ def cmd_test(args: argparse.Namespace) -> None:
                 dur_ms = int((time.time() - start) * 1000)
                 ok = ok_a
 
+            if str(last_evidence.get("reason") or "") == "unsupported_provider_capability":
+                # BL-P2-4.5c-44: deny-by-default must not render as a negative
+                # observation. Without this guard the predicate below reads the
+                # unsupported state's absent keys as observed="fail", which
+                # SATISFIES a negative expectation and yields a passing verdict
+                # on a device never queried (Doctrine 1.11: absence must never
+                # imply pass). Shape is the already-ratified UNSUP disposition
+                # shipping at the rc-guard sites (F-45b-C3-1). Founder ruling
+                # 2026-08-22: supersedes option 1b, unreachable once this exits.
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst=neighbor,
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported BGP session-state evidence provider capability",
+                    evidence={
+                        "cmd": last_evidence.get("cmd") or "",
+                        "rc": last_evidence.get("rc"),
+                    },
+                    meta={
+                        "type": inv_type,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
             observed_state_str = str(last_state.get("state") or "Unknown")
             last_error = str(last_state.get("last_error") or "")
             parse_error = str(last_evidence.get("parse_error") or "")
@@ -7830,7 +7452,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             verdict = "pass" if observed == expected else "fail"
 
             evidence = {
-                "cmd": "vtysh -c 'show bgp summary json'",
+                "cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp summary json'",
                 "parse_error": parse_error,
             }
             meta = {
@@ -7981,6 +7603,36 @@ def cmd_test(args: argparse.Namespace) -> None:
                 dur_ms = int((time.time() - start) * 1000)
                 ok = ok_a
 
+            if str(last_evidence.get("reason") or "") == "unsupported_provider_capability":
+                # BL-P2-4.5c-44: deny-by-default must not render as a negative
+                # observation. Without this guard the predicate below reads the
+                # unsupported state's absent keys as observed="fail", which
+                # SATISFIES a negative expectation and yields a passing verdict
+                # on a device never queried (Doctrine 1.11: absence must never
+                # imply pass). Shape is the already-ratified UNSUP disposition
+                # shipping at the rc-guard sites (F-45b-C3-1). Founder ruling
+                # 2026-08-22: supersedes option 1b, unreachable once this exits.
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst=neighbor,
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported OSPF neighbor-state evidence provider capability",
+                    evidence={
+                        "cmd": last_evidence.get("cmd") or "",
+                        "rc": last_evidence.get("rc"),
+                    },
+                    meta={
+                        "type": inv_type,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
             observed_state_str = str(last_state.get("state") or "Unknown")
             last_error = str(last_state.get("last_error") or "")
             parse_error = str(last_evidence.get("parse_error") or "")
@@ -7990,7 +7642,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             verdict = "pass" if observed == expected else "fail"
 
             evidence = {
-                "cmd": "vtysh -c 'show ip ospf neighbor json'",
+                "cmd": last_evidence.get("cmd") or "vtysh -c 'show ip ospf neighbor json'",
                 "parse_error": parse_error,
             }
             meta = {
@@ -8148,6 +7800,36 @@ def cmd_test(args: argparse.Namespace) -> None:
                 dur_ms = int((time.time() - start) * 1000)
                 ok = ok_a
 
+            if str(last_evidence.get("reason") or "") == "unsupported_provider_capability":
+                # BL-P2-4.5c-44: deny-by-default must not render as a negative
+                # observation. Without this guard the predicate below reads the
+                # unsupported state's absent keys as observed="fail", which
+                # SATISFIES a negative expectation and yields a passing verdict
+                # on a device never queried (Doctrine 1.11: absence must never
+                # imply pass). Shape is the already-ratified UNSUP disposition
+                # shipping at the rc-guard sites (F-45b-C3-1). Founder ruling
+                # 2026-08-22: supersedes option 1b, unreachable once this exits.
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst=iface,
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=0,
+                    error="unsupported interface-state evidence provider capability",
+                    evidence={
+                        "cmd": last_evidence.get("cmd") or "",
+                        "rc": last_evidence.get("rc"),
+                    },
+                    meta={
+                        "type": inv_type,
+                        "misuse": True,
+                    },
+                )
+                raise SystemExit(2)
+
             admin_state = str(last_state.get("admin_state") or "unknown")
             operstate = str(last_state.get("operstate") or "UNKNOWN")
             carrier = str(last_state.get("carrier") or "unknown")
@@ -8161,7 +7843,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             verdict = "pass" if observed == expected else "fail"
 
             evidence = {
-                "cmd": f"ip -j link show {iface}",
+                "cmd": last_evidence.get("cmd") or f"ip -j link show {iface}",
                 "parse_error": parse_error,
             }
             # REQ-H5-15 / LD-4.c ruling A: meta has exactly 7 keys, NO
@@ -8614,7 +8296,7 @@ def cmd_test(args: argparse.Namespace) -> None:
         Capture interface-scoped *via* routes that Linux may remove when iface goes down.
         Deterministic: exact command, stable filtering + sanitization.
         """
-        cp = rt.exec(lab, node, ["ip", "-4", "route", "show", "dev", str(iface)], check=False)
+        cp = rt.substrate_exec(lab, node, ["ip", "-4", "route", "show", "dev", str(iface)], check=False)
         out = (cp.stdout or "") if hasattr(cp, "stdout") else ""
         lines: list[str] = []
 
@@ -8643,7 +8325,7 @@ def cmd_test(args: argparse.Namespace) -> None:
         Best-effort but deterministic: run in sorted order, no retries.
         """
         for r in sorted(set(routes)):
-            rt.exec(lab, node, ["ip", "-4", "route", "replace"] + r.split(), check=False)
+            rt.substrate_exec(lab, node, ["ip", "-4", "route", "replace"] + r.split(), check=False)
 
     def _find_link_interfaces_from_topology(
         topo: dict,
@@ -8783,7 +8465,7 @@ def cmd_test(args: argparse.Namespace) -> None:
         def _iface_down(node: str, iface: str) -> None:
             key = (node, iface)
             fault_state_routes_v4[key] = _snapshot_v4_via_routes(node, iface)
-            cp = rt.exec(
+            cp = rt.substrate_exec(
                 lab,
                 node,
                 ["ip", "link", "set", "dev", str(iface), "down"],
@@ -8792,7 +8474,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             _must_ok(cp, f"failed to set link down on {node}:{iface}")
 
         def _iface_up(node: str, iface: str) -> int:
-            cp = rt.exec(
+            cp = rt.substrate_exec(
                 lab,
                 node,
                 ["ip", "link", "set", "dev", str(iface), "up"],
@@ -8806,7 +8488,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             return len(routes)
 
         def _iface_netem_loss(node: str, iface: str, loss_percent: int) -> None:
-            cp = rt.exec(
+            cp = rt.substrate_exec(
                 lab,
                 node,
                 ["tc", "qdisc", "replace", "dev", str(iface), "root", "netem", "loss", f"{loss_percent}%"],
@@ -8815,7 +8497,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             _must_ok(cp, f"failed to apply packet loss on {node}:{iface}")
 
         def _iface_netem_delay(node: str, iface: str, latency_ms: int) -> None:
-            cp = rt.exec(
+            cp = rt.substrate_exec(
                 lab,
                 node,
                 ["tc", "qdisc", "replace", "dev", str(iface), "root", "netem", "delay", f"{latency_ms}ms"],
@@ -8824,7 +8506,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             _must_ok(cp, f"failed to apply latency on {node}:{iface}")
 
         def _iface_tbf(node: str, iface: str, bandwidth_mbps: int) -> None:
-            cp = rt.exec(
+            cp = rt.substrate_exec(
                 lab,
                 node,
                 [
@@ -9817,7 +9499,28 @@ def cmd_test(args: argparse.Namespace) -> None:
                 _sv(f"[scenario {sid}] {step_idx:02d}. wait_for_bgp node={node} timeout={timeout}")
 
                 try:
-                    wait_for_bgp(rt, lab, node, timeout=timeout)
+                    # §4.5-c WI-3 (REQ-45C-10/-30; LD-45C-R2 R1): the
+                    # scenario dispatch mirrors the ratified precheck
+                    # branch at `:10358-10365`, which is NOT edited --
+                    # FRR's path stays byte-unchanged. FRR keeps the
+                    # inline wait (NG-9); a registered non-FRR provider
+                    # takes its `convergence_wait` leg, which carries the
+                    # DECLARED peer IPs. That scoping is load-bearing:
+                    # stock SONiC ships 31 neighbours that never
+                    # establish, so a wait scoped to all peers could
+                    # never pass (`sonic-guest-probe-reference.md` §4.2).
+                    # `type` only, mirroring the precheck branch: the
+                    # resolver reads `n["type"]` as a hard subscript, and
+                    # the `kind` it writes belongs to the containerlab
+                    # topology, never to `topo["nodes"]`.
+                    _ntype = str((nodes_by_name.get(node) or {}).get("type") or "")
+                    _prov = NOS_PROVIDERS.get(_ntype)
+                    if _ntype == "frr" or _prov is None:
+                        wait_for_bgp(rt, lab, node, timeout=timeout)
+                    else:
+                        _prov.convergence_wait(
+                            rt, lab, node, timeout, _expected_peer_ips(node)
+                        )
 
                     dur_ms = int((time.time() - step_started) * 1000)
                     meta = {"node": node, "timeout_s": timeout}
@@ -9953,7 +9656,7 @@ def cmd_test(args: argparse.Namespace) -> None:
 
                     # Background + pid capture
                     sh = " ".join([_shell_quote(x) for x in td]) + " >/dev/null 2>&1 & echo $!"
-                    cp = rt.exec(lab, node, cmd + [sh], check=False, capture_output=True)
+                    cp = rt.substrate_exec(lab, node, cmd + [sh], check=False, capture_output=True)
 
                     pid = ""
                     if cp.stdout:
@@ -10042,7 +9745,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     chosen_tmp = ""
                     try:
                         for cand in candidates:
-                            cp_exists = rt.exec(
+                            cp_exists = rt.substrate_exec(
                                 lab,
                                 node,
                                 ["sh", "-lc", f"test -f {cand} && echo OK || true"],
@@ -10065,7 +9768,7 @@ def cmd_test(args: argparse.Namespace) -> None:
 
                     try:
                         if pid:
-                            rt.exec(
+                            rt.substrate_exec(
                                 lab,
                                 node,
                                 ["sh", "-lc", f"kill {pid} >/dev/null 2>&1 || true"],
@@ -10074,7 +9777,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                             )
                         else:
                             # Best effort: kill by filename pattern (still scoped to step id)
-                            rt.exec(
+                            rt.substrate_exec(
                                 lab,
                                 node,
                                 ["sh", "-lc", f"pkill -f 'tcpdump.*netsim_pcap_{int(cur.get('step_seq_start')):03d}' >/dev/null 2>&1 || true"],
@@ -10094,7 +9797,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                             if not err:
                                 err = "pcap tmp file not found in node"
                         else:
-                            rt.copy_from_node(lab, node, chosen_tmp, str(pcap_path))
+                            rt.substrate_copy_from(lab, node, chosen_tmp, str(pcap_path))
                             try:
                                 bytes_written = int(pcap_path.stat().st_size)
                             except Exception:
@@ -10107,7 +9810,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     # attempt to remove tmp pcaps (never fail)
                     try:
                         for cand in candidates:
-                            rt.exec(lab, node, ["sh", "-lc", f"rm -f {cand} 2>/dev/null || true"], check=False, capture_output=False)
+                            rt.substrate_exec(lab, node, ["sh", "-lc", f"rm -f {cand} 2>/dev/null || true"], check=False, capture_output=False)
                     except Exception:
                         pass
 
@@ -10448,10 +10151,21 @@ def cmd_test(args: argparse.Namespace) -> None:
 
             if want_scenarios and not (results.get("scenarios") or []):
                 scenario_items = []
-                if selected_scenario:
-                    scenario_items = [s for s in (scenarios or []) if isinstance(s, dict) and str(s.get("id") or "").strip() == selected_scenario]
-                elif run_all_scenarios:
-                    scenario_items = [s for s in (scenarios or []) if isinstance(s, dict)]
+                # UNDEF remediation: `selected_scenario` / `run_all_scenarios`
+                # were bound nowhere; a refactor renamed the pair and left these
+                # blocked-path references on the old names (REQ-UNDEF-6, -9).
+                # Rebound to the pair `want_scenarios` is derived from; the
+                # two-way dispatch semantics are unchanged.
+                # UNDEF remediation (out-of-class, NG-6 amended by CF note 3):
+                # `scenarios` is assigned only AFTER these blocks, so reading it
+                # here raised UnboundLocalError once the orphaned names above were
+                # rebound. Read from `topo` directly -- the identical expression the
+                # three in-scope assignments use. NOT a class member; the 30-site
+                # enumeration and the 26/3/1 split are unchanged.
+                if scenario_id:
+                    scenario_items = [s for s in (topo.get("scenarios") or []) if isinstance(s, dict) and str(s.get("id") or "").strip() == scenario_id]
+                elif all_scenarios:
+                    scenario_items = [s for s in (topo.get("scenarios") or []) if isinstance(s, dict)]
                 for s in scenario_items:
                     results["scenarios"].append(
                         {
@@ -10492,7 +10206,39 @@ def cmd_test(args: argparse.Namespace) -> None:
     # =============================================================================
     # 3) Optional control-plane checks (FRR/BGP)
     # =============================================================================
-    frr_nodes = [n for n in nodes if n.get("type") == "frr"]
+    # §4.5-c WI-3 (REQ-45C-8). BGP participation is a property of the
+    # DECLARATION -- a node with a registered NOS provider that declares `asn`
+    # -- not of the node being FRR. Both predicates below read `frr` only
+    # incidentally: Cassian authored FRR's config, so "FRR node" and "Cassian-
+    # managed BGP speaker" happened to coincide. `sonic-vm` is where that stops.
+    # NG-9 is preserved by the DISPATCH below, not by these predicates: FRR
+    # still takes the inline `wait_for_bgp` and its provider placeholder stays
+    # a placeholder.
+    #
+    # ZERO BEHAVIOURAL DELTA FOR FRR, deliberately asymmetric:
+    #   node side -- `frr` short-circuits True, reproducing the previous
+    #     `[n for n in nodes if n.get("type") == "frr"]` exactly. The prior code
+    #     applied no node-level `asn` test, and adding one would change which
+    #     FRR nodes are participants.
+    #   peer side -- `"frr" in NOS_PROVIDERS` holds, so the previous
+    #     `peer.get("type") == "frr" and "asn" in peer` is a strict subset of
+    #     the new test. An all-FRR topology selects the identical peer set.
+    def _is_bgp_node(n: object) -> bool:
+        if not isinstance(n, dict):
+            return False
+        ntype = str(n.get("type") or "")
+        if ntype == "frr":
+            return True
+        return ntype in NOS_PROVIDERS and "asn" in n
+
+    def _is_bgp_peer(p: object) -> bool:
+        return bool(
+            isinstance(p, dict)
+            and str(p.get("type") or "") in NOS_PROVIDERS
+            and "asn" in p
+        )
+
+    bgp_speakers = [n for n in nodes if _is_bgp_node(n)]
     links_by_node = build_node_links(topo)
 
     def expected_bgp_peers(node_name: str) -> list[dict]:
@@ -10500,12 +10246,113 @@ def cmd_test(args: argparse.Namespace) -> None:
         for l in links_by_node.get(node_name, []) or []:
             peer_name = l.get("peer")
             peer = nodes_by_name.get(peer_name)
-            if peer and peer.get("type") == "frr" and "asn" in peer:
+            if peer and _is_bgp_peer(peer):
                 out.append(l)
         return out
 
+    def _expected_peer_ips(node_name: str) -> "tuple[str, ...]":
+        """Peer IPs of the LINKED BGP speakers for `node_name`, sorted.
+
+        CORRECTED (§4.5-c WI-3 packet 4a). This was documented as "declared
+        peer IPs" at `d00de88`; it is not. `expected_bgp_peers` iterates
+        `links_by_node` and admits any far end passing `_is_bgp_peer` -- it
+        never consults this node's own `bgp.neighbors`. On a symmetric topology
+        linked and declared coincide; on an ASYMMETRIC one they diverge, and
+        that divergence is exactly REQ-45C-24's subject. Behaviour unchanged:
+        a precheck reasonably waits on every linked speaker. Only the
+        description was wrong.
+
+        The channel the widened `convergence_wait` contract carries (founder
+        ruling 2026-08-25). Opaque to the provider contract: peer-IP strings
+        only, no NOS vocabulary.
+        """
+        return tuple(sorted(
+            str(l.get("peer_ip") or "").strip()
+            for l in expected_bgp_peers(node_name)
+            if str(l.get("peer_ip") or "").strip()
+        ))
+
+    def _declared_neighbor_names(node: object) -> "set[str]":
+        """Peer NODE NAMES this node declares under `bgp.neighbors`.
+
+        The declaration names its peer by node name -- `cassian_model.py:1697`
+        binds `peer_name` from `nbr["peer"]` and matches it against
+        `build_node_links`' `l["peer"]`. This is the DECLARED set, as against
+        `expected_bgp_peers`' LINKED set.
+        """
+        if not isinstance(node, dict):
+            return set()
+        bgp = node.get("bgp")
+        if not isinstance(bgp, dict):
+            return set()
+        nbrs = bgp.get("neighbors")
+        if not isinstance(nbrs, list):
+            return set()
+        out: "set[str]" = set()
+        for nbr in nbrs:
+            if isinstance(nbr, dict):
+                name = str(nbr.get("peer") or "").strip()
+                if name:
+                    out.add(name)
+        return out
+
+    def _declaration_asymmetries() -> "list[tuple[str, str]]":
+        """(declarer, silent_peer) for every one-sided BGP declaration.
+
+        REQ-45C-24: "Undeclared-neighbor asymmetry (one side declares a
+        neighbor the other does not) surfaces in precheck output as named
+        evidence -- never silence." Doctrine §1.11.
+
+        A TOPOLOGY property, computed at precheck ENTRY from the resolved
+        topology -- no device, no polling, no NOS. Core owns it because core is
+        the only place holding BOTH sides: the provider seam carries
+        `expected_peer_ips`, a tuple of IP strings with no notion of the far
+        node's declaration (`cassian_nos_types.py:215`). Founder ruling
+        2026-08-25.
+
+        Emitted at ENTRY rather than on the timeout path deliberately: an
+        asymmetric pair never converges, so a timeout message would arrive
+        after the full precheck bound and only if the poll is reached at all.
+        Naming it up front is the reading of §19.1 that does not depend on
+        failing first.
+
+        COVERAGE LIMIT (PBE-P2-8): this names a one-sided declaration between
+        two LINKED BGP speakers. It does NOT name a neighbour declared against
+        a node with no link (the FRR leg already drops those -- no `link_match`
+        at `cassian_model.py:1705`), nor a pair where NEITHER side declares.
+        Neither is REQ-45C-24's stated case.
+        """
+        seen: "set[tuple[str, str]]" = set()
+        out: "list[tuple[str, str]]" = []
+        for n in bgp_speakers:
+            a = str(n.get("name") or "")
+            a_decl = _declared_neighbor_names(n)
+            for l in links_by_node.get(a, []) or []:
+                b = str(l.get("peer") or "")
+                peer = nodes_by_name.get(b)
+                if not b or not _is_bgp_peer(peer):
+                    continue
+                b_decl = _declared_neighbor_names(peer)
+                if (a in b_decl) == (b in a_decl):
+                    continue
+                pair = (a, b) if b in a_decl else (b, a)
+                if pair not in seen:
+                    seen.add(pair)
+                    out.append(pair)
+        return sorted(out)
+
+    _asymmetries = _declaration_asymmetries()
+    if _asymmetries:
+        # REQ-45C-24: named evidence, never silence (Doctrine §1.11).
+        print("Precheck: undeclared-neighbor asymmetry (REQ-45C-24)")
+        for _a, _b in _asymmetries:
+            print(f"  {_a} declares {_b}; {_b} declares no matching neighbor")
+    results["summary"]["precheck_declaration_asymmetries"] = [
+        {"declares": a, "silent": b} for a, b in _asymmetries
+    ]
+
     bgp_participants: list[dict] = []
-    for n in frr_nodes:
+    for n in bgp_speakers:
         if expected_bgp_peers(n["name"]):
             bgp_participants.append(n)
 
@@ -10522,7 +10369,23 @@ def cmd_test(args: argparse.Namespace) -> None:
             precheck_timeout = 60 if (require_evpn_bgp and is_replay_lab) else 30
             post_precheck_sleep = 15 if (require_evpn_bgp and is_replay_lab) else (10 if require_evpn_bgp else 5)
             for n in bgp_participants:
-                wait_for_bgp(rt, lab, n["name"], timeout=precheck_timeout, require_evpn=require_evpn_bgp)
+                # §4.5-c WI-3 (REQ-45C-8): precheck dispatched through the
+                # provider seam. NG-9: FRR keeps the inline wait and its
+                # `convergence_wait` placeholder stays a placeholder -- the
+                # bounds, interval and timeout it is given are unchanged
+                # (REQ-45C-29). A non-FRR participant takes its provider leg;
+                # if that leg is still `deferred_leg`, the placeholder fails
+                # LOUD and §13-grade (cassian_nos_types.py:250) rather than
+                # being handed FRR's vtysh path, which would reach the vrnetlab
+                # launcher on a vm-runtime node, not the NOS.
+                _ntype = str(n.get("type") or "")
+                _prov = NOS_PROVIDERS.get(_ntype)
+                if _ntype == "frr" or _prov is None:
+                    wait_for_bgp(rt, lab, n["name"], timeout=precheck_timeout, require_evpn=require_evpn_bgp)
+                else:
+                    _prov.convergence_wait(
+                        rt, lab, n["name"], precheck_timeout, _expected_peer_ips(n["name"])
+                    )
             time.sleep(post_precheck_sleep)
         except SystemExit:
             results["result"] = "fail"
@@ -10548,13 +10411,24 @@ def cmd_test(args: argparse.Namespace) -> None:
 
             if want_scenarios and not (results.get("scenarios") or []):
                 scenario_items = []
-                if selected_scenario:
+                # UNDEF remediation: `selected_scenario` / `run_all_scenarios`
+                # were bound nowhere; a refactor renamed the pair and left these
+                # blocked-path references on the old names (REQ-UNDEF-6, -9).
+                # Rebound to the pair `want_scenarios` is derived from; the
+                # two-way dispatch semantics are unchanged.
+                # UNDEF remediation (out-of-class, NG-6 amended by CF note 3):
+                # `scenarios` is assigned only AFTER these blocks, so reading it
+                # here raised UnboundLocalError once the orphaned names above were
+                # rebound. Read from `topo` directly -- the identical expression the
+                # three in-scope assignments use. NOT a class member; the 30-site
+                # enumeration and the 26/3/1 split are unchanged.
+                if scenario_id:
                     scenario_items = [
-                        s for s in (scenarios or [])
-                        if isinstance(s, dict) and str(s.get("id") or "").strip() == selected_scenario
+                        s for s in (topo.get("scenarios") or [])
+                        if isinstance(s, dict) and str(s.get("id") or "").strip() == scenario_id
                     ]
-                elif run_all_scenarios:
-                    scenario_items = [s for s in (scenarios or []) if isinstance(s, dict)]
+                elif all_scenarios:
+                    scenario_items = [s for s in (topo.get("scenarios") or []) if isinstance(s, dict)]
                 for s in scenario_items:
                     results["scenarios"].append(
                         {

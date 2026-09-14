@@ -23,6 +23,9 @@ from cassian_runtime_container import (
     scenario_clear_fault_state,
 )
 
+# LD-45C-R10 R1/R2: one bounded header-import line, one symbol, one module.
+from cassian_model import nos_wait_for_bgp_rejection
+
 def ensure_nc(rt: Runtime, lab: str, node: str) -> None:
     cp = rt.exec(
         lab,
@@ -370,8 +373,6 @@ def _coverage_touch_nodes_from_test(
 import re
 import ipaddress
 
-_RE_NEIGH_LINE = re.compile(r"^\s*(\d{1,3}(?:\.\d{1,3}){3})\s+")
-_RE_IPV4_PREFIX = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3}/\d{1,2})\b")
 
 def derive_expected_routes_for_frr(topo: dict[str, Any]) -> dict[str, set[str]]:
     """
@@ -430,132 +431,8 @@ def derive_expected_routes_for_frr(topo: dict[str, Any]) -> dict[str, set[str]]:
 
     return expected
 
-def parse_frr_show_ip_route_prefixes(text: str) -> set[str]:
-    """
-    Parse `vtysh -c "show ip route"` and extract IPv4 prefixes.
-    This avoids fragile column indexes.
-    """
-    out: set[str] = set()
-    if not text:
-        return out
 
-    for line in text.splitlines():
-        m = _RE_IPV4_PREFIX.search(line)
-        if not m:
-            continue
-        p = _normalize_prefix(m.group(1))
-        if p:
-            out.add(p)
-    return out
 
-def parse_frr_show_ip_route_prefixes_json(raw: str) -> set[str]:
-    """
-    Parse `vtysh -c "show ip route json"` into a set of prefixes like "192.168.1.0/24".
-    Returns empty set if raw isn't valid/expected JSON.
-    """
-    raw = (raw or "").strip()
-    if not raw:
-        return set()
-
-    try:
-        doc = json.loads(raw)
-    except Exception:
-        return set()
-
-    prefixes: set[str] = set()
-
-    # FRR typically returns keys as prefixes at the top level (e.g. "10.0.0.0/31": {...})
-    # Some versions may wrap under "routes" or "routeTable"; handle a couple common shapes.
-    if isinstance(doc, dict):
-        if "routes" in doc and isinstance(doc["routes"], dict):
-            route_dict = doc["routes"]
-        else:
-            route_dict = doc
-
-        for k, v in route_dict.items():
-            if not isinstance(k, str):
-                continue
-            # keep only things that look like prefixes
-            try:
-                ipaddress.ip_network(k, strict=False)
-            except Exception:
-                continue
-            prefixes.add(k)
-
-    return prefixes
-
-def parse_frr_bgp_summary_neighbors_json(out: str) -> dict[str, dict[str, Any]]:
-    """
-    Parse FRR `show bgp summary json`.
-
-    Observed schema (FRR):
-      {
-        "ipv4Unicast": {
-          "peers": {
-            "10.0.0.1": { "state": "Established", "pfxRcd": 1, "peerState": "OK", ... },
-            ...
-          }
-        }
-      }
-
-    Returns:
-      { "<neighbor_ip>": {"established": bool, "raw": "<state>"} }
-
-    Notes:
-      - We treat `state` as authoritative when present.
-      - We only fall back to `peerState` / `pfxRcd` if `state` is missing, because
-        `pfxRcd` can remain non-zero even after an admin shutdown (stale last-known).
-    """
-    import json
-
-    if not out:
-        return {}
-
-    try:
-        obj = json.loads(out)
-    except Exception:
-        return {}
-
-    v4 = obj.get("ipv4Unicast")
-    if not isinstance(v4, dict):
-        return {}
-
-    peers = v4.get("peers")
-    if not isinstance(peers, dict):
-        return {}
-
-    res: dict[str, dict[str, Any]] = {}
-
-    for nbr_ip, pdata in peers.items():
-        if not isinstance(nbr_ip, str):
-            continue
-        if not _RE_NEIGH_LINE.match(nbr_ip + " "):
-            continue
-
-        established = False
-        raw_state = ""
-
-        if isinstance(pdata, dict):
-            state = pdata.get("state")
-            peer_state = pdata.get("peerState")
-            pfx = pdata.get("pfxRcd")
-
-            # Authoritative: `state` if present
-            if isinstance(state, str) and state.strip():
-                raw_state = state.strip()
-                established = raw_state.lower().startswith("estab")
-            else:
-                # Fallback signals only if `state` is missing
-                if isinstance(peer_state, str) and peer_state.strip().upper() == "OK":
-                    established = True
-                elif isinstance(pfx, int):
-                    established = True
-                elif isinstance(pfx, str) and pfx.isdigit():
-                    established = True
-
-        res[nbr_ip] = {"established": bool(established), "raw": raw_state}
-
-    return res
 
 def _node_index_by_name(topo: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """
@@ -617,66 +494,6 @@ def derive_expected_bgp_neighbors_from_links(topo: dict[str, Any]) -> dict[str, 
     return expected
 
 
-def parse_frr_bgp_summary_neighbors(out: str) -> dict[str, dict[str, Any]]:
-    """
-    Parse `show bgp summary` and return:
-      { "<neighbor_ip>": {"established": bool, "raw": "<line>"} }
-
-    Robust logic:
-      - Find the table header and locate the 'State/PfxRcd' column index.
-      - Neighbor rows start with an IPv4 address.
-      - Established if State/PfxRcd token is numeric OR equals 'Established' (case-insensitive).
-    """
-    obs: dict[str, dict[str, Any]] = {}
-    if not out:
-        return obs
-    if "No BGP neighbors found" in out:
-        return obs
-
-    lines = out.splitlines()
-
-    # 1) Find header and determine column index for State/PfxRcd
-    state_idx: int | None = None
-    for line in lines:
-        if "Neighbor" in line and "State/PfxRcd" in line:
-            cols = line.split()
-            # Example header tokens:
-            # Neighbor V AS MsgRcvd MsgSent TblVer InQ OutQ Up/Down State/PfxRcd PfxSnt Desc
-            for i, c in enumerate(cols):
-                if c == "State/PfxRcd":
-                    state_idx = i
-                    break
-            break
-
-    # Fallback: if we can't find header, keep a safe heuristic:
-    # treat as established if ANY token is exactly 'Established' OR ANY token is purely numeric
-    fallback = (state_idx is None)
-
-    for line in lines:
-        m = _RE_NEIGH_LINE.match(line)
-        if not m:
-            continue
-
-        ip = m.group(1)
-        cols = line.split()
-
-        established = False
-        if fallback:
-            if any(c.lower() == "established" for c in cols):
-                established = True
-            else:
-                # In established rows there is typically at least one numeric token at State/PfxRcd,
-                # but fallback is less precise; still better than "last token".
-                established = any(c.isdigit() for c in cols)
-        else:
-            if len(cols) > state_idx:
-                state = cols[state_idx]
-                if state.isdigit() or state.lower() == "established":
-                    established = True
-
-        obs[ip] = {"established": established, "raw": line.rstrip("\n")}
-
-    return obs
 
 def compare_expected_vs_observed_bgp(expected: set[str], observed: dict[str, dict[str, Any]]) -> dict[str, Any]:
     obs_set = set(observed.keys())
@@ -2177,8 +1994,9 @@ def validate_scenarios(topo: dict[str, Any]) -> None:
                     die(f"{sctx}.wait_for_bgp.node: unknown node '{node}'")
 
                 nt = nrec.get("type") or nrec.get("kind")
-                if nt != "frr":
-                    die(f"{sctx}.wait_for_bgp.node: node '{node}' is not type/kind 'frr' (got {nt!r})")
+                _why = nos_wait_for_bgp_rejection(str(nt or ""))
+                if _why is not None:
+                    die(f"{sctx}.wait_for_bgp.node: node '{node}' {_why}")
 
 def build_test_index(topo: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """
@@ -2465,7 +2283,7 @@ def _pcap_resolve_target_to_node_iface(topo: dict[str, Any], target: dict[str, A
     return node, iface
 
 def _pcap_tool_precheck(rt: "Runtime", lab: str, node: str) -> tuple[bool, str]:
-    cp = rt.exec(lab, node, ["sh", "-lc", "command -v tcpdump >/dev/null"], check=False, capture_output=True)
+    cp = rt.substrate_exec(lab, node, ["sh", "-lc", "command -v tcpdump >/dev/null"], check=False, capture_output=True)
     if cp.returncode != 0:
         return False, "tcpdump not found"
     return True, "ok"
@@ -2516,7 +2334,7 @@ def _pcap_start(
     parts.append(f"nohup sh -lc {json.dumps(sh_cmd)} >/dev/null 2>&1 & echo $! > {pidfile}")
 
     script = " ; ".join(parts)
-    cp = rt.exec(lab, node, ["sh", "-lc", script], check=False, capture_output=True)
+    cp = rt.substrate_exec(lab, node, ["sh", "-lc", script], check=False, capture_output=True)
     if cp.returncode != 0:
         return False, "tcpdump start failed"
     return True, "ok"
@@ -2534,7 +2352,7 @@ def _pcap_stop(rt: "Runtime", lab: str, node: str, pidfile: str) -> tuple[bool, 
         "fi ; "
         "true"
     )
-    cp = rt.exec(lab, node, ["sh", "-lc", script], check=False, capture_output=True)
+    cp = rt.substrate_exec(lab, node, ["sh", "-lc", script], check=False, capture_output=True)
     if cp.returncode != 0:
         return False, "tcpdump stop failed"
     return True, "ok"
@@ -2707,7 +2525,7 @@ def execute_scenario(
                 # copy pcap out (best-effort, non-gating)
                 cp_ok = True
                 try:
-                    rt.copy_from_node(lab, node, tmp_pcap, out_pcap, check=True)
+                    rt.substrate_copy_from(lab, node, tmp_pcap, out_pcap, check=True)
                 except Exception:
                     cp_ok = False
                     tool_status = "failed"
@@ -2715,7 +2533,7 @@ def execute_scenario(
                         err = "pcap copy-out failed"
 
                 # attempt to remove tmp pcap (never fail)
-                rt.exec(lab, node, ["sh", "-lc", f"rm -f {tmp_pcap} 2>/dev/null || true"], check=False)
+                rt.substrate_exec(lab, node, ["sh", "-lc", f"rm -f {tmp_pcap} 2>/dev/null || true"], check=False)
 
                 # bytes written (host-side)
                 bytes_written = 0
@@ -2913,12 +2731,12 @@ def execute_scenario(
             _pcap_stop(rt, lab, node, pidfile)
             try:
                 Path(out_pcap).parent.mkdir(parents=True, exist_ok=True)
-                rt.copy_from_node(lab, node, tmp_pcap, out_pcap, check=True)
+                rt.substrate_copy_from(lab, node, tmp_pcap, out_pcap, check=True)
             except Exception:
                 tool_status = "failed"
                 if not err:
                     err = "pcap copy-out failed"
-            rt.exec(lab, node, ["sh", "-lc", f"rm -f {tmp_pcap} 2>/dev/null || true"], check=False)
+            rt.substrate_exec(lab, node, ["sh", "-lc", f"rm -f {tmp_pcap} 2>/dev/null || true"], check=False)
 
         bytes_written = 0
         try:
