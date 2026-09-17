@@ -9,6 +9,8 @@ from typing import Any
 from cassian_common import die
 from cassian_artifacts import lab_dir, load_yaml, node_cfg_dir
 from cassian_runtime_container import Runtime
+from cassian_model import NOS_PROVIDERS
+from cassian_nos_types import is_deferred
 
 _CAPTURE_CONFIG_SCHEMA_VERSION = "1"
 _CAPTURE_CONFIG_MAX_CHARS = 200_000
@@ -196,43 +198,14 @@ def _state_capture_validate_argv_or_die(*, profile: str, node: str, node_type: s
             )
 
     # Node-type-specific allowlists
-    if node_type == "frr":
-        # Bounded allowlist extension (Phase 1a H6, LD-3 ruled (a)):
-        # permit two exact ip -j argv tuples for frr-interfaces-basic and
-        # frr-comprehensive Linux-primitive interface-state probes.
-        # All other argv on FRR node type continues through the vtysh-only
-        # allowlist below; default-deny floor preserved.
-        _frr_ip_j_allowed = {
-            ("ip", "-j", "link", "show"),
-            ("ip", "-j", "addr", "show"),
-        }
-        if tuple(argv) in _frr_ip_j_allowed:
-            return
-        # Only: vtysh -c "show ..."
-        if not (len(argv) == 3 and argv[0] == "vtysh" and argv[1] == "-c"):
-            die(
-                f"state-capture: FRR commands must be 'vtysh -c <cmd>' "
-                f"(profile '{profile}' node '{node}'): {argv!r}",
-                code=2,
-            )
-        cmd = argv[2].strip()
-        cmd_l = cmd.lower()
-        # Must start with "show "
-        if not cmd_l.startswith("show "):
-            die(
-                f"state-capture: FRR command must start with 'show ' "
-                f"(profile '{profile}' node '{node}'): {cmd!r}",
-                code=2,
-            )
-        # Deny obvious mutation / risky subcommands
-        deny_words = ["configure", "conf t", "write", "clear", "debug", "terminal", "end", "exit", "|"]
-        for w in deny_words:
-            if w in cmd_l:
-                die(
-                    f"state-capture: FRR command denied by allowlist rule ({w!r}) "
-                    f"(profile '{profile}' node '{node}'): {cmd!r}",
-                    code=2,
-                )
+    _provider = NOS_PROVIDERS.get(node_type)
+    if _provider is not None and not is_deferred(_provider.state_argv_allow):
+        # REQ-45D-7: the per-type rule is dispatched to the provider, which
+        # owns its own §13(a) refusal text and returns it whole. The decision
+        # site stays single; it stops enumerating node types.
+        _ok, _why = _provider.state_argv_allow(profile, node, argv)
+        if not _ok:
+            die(_why, code=2)
 
     elif node_type == "host":
         # Allow only exact commands:
@@ -251,28 +224,6 @@ def _state_capture_validate_argv_or_die(*, profile: str, node: str, node_type: s
                 code=2,
             )
 
-    elif node_type == "nft-fw":
-        allowed = {
-            ("nft", "list", "ruleset"),
-            ("sysctl", "-n", "net.ipv4.ip_forward"),
-            ("sysctl", "-n", "net.ipv4.conf.all.rp_filter"),
-            ("sysctl", "-n", "net.ipv4.conf.default.rp_filter"),
-        }
-        tup = tuple(argv)
-        if tup not in allowed:
-            die(
-                f"state-capture: nft-fw command not allowlisted "
-                f"(profile '{profile}' node '{node}'): {argv!r}",
-                code=2,
-            )
-        # extra hard deny for mutation verbs if someone tries to sneak them in
-        joined_l = " ".join(argv).lower()
-        if "flush" in joined_l or "add" in joined_l or "delete" in joined_l or " -w " in joined_l or "sysctl -w" in joined_l:
-            die(
-                f"state-capture: mutation command denied "
-                f"(profile '{profile}' node '{node}'): {argv!r}",
-                code=2,
-            )
     else:
         die(
             f"state-capture: unsupported node type '{node_type}' for profile '{profile}' node '{node}'",

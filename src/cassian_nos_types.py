@@ -257,7 +257,7 @@ class NosProvider:
     # `_exec_command_allowed` stays inline this handover, REQ-45b-10) ----
     exec_command_rule: Callable[[str], "tuple[bool, str]"]
     state_profiles: Mapping[str, StateProfile]
-    state_argv_allow: Callable[[str, "list[str]"], "tuple[bool, str]"]
+    state_argv_allow: Callable[[str, str, "list[str]"], "tuple[bool, str]"]
 
 
 # -------------------------

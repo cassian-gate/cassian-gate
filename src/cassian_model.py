@@ -59,6 +59,34 @@ from cassian_nos_sonic import SONIC_PROVIDER
 # image defaults STAY at the existing model/common maps untouched -- only the
 # frr entry is REGISTRY-DERIVED (LD-H1 / REQ-45b-11 / P5).
 
+
+def _nft_fw_state_argv_allow(profile: str, node: str, argv: "list[str]") -> "tuple[bool, str]":
+    """nft-fw state-capture argv allow-list (REQ-45D-7).
+
+    Relocated verbatim in behaviour from
+    `cassian_state._state_capture_validate_argv_or_die`'s inline
+    `node_type == "nft-fw"` branch. Returns the complete operator-facing
+    message on refusal (§13(a) text owned by the provider).
+    """
+    allowed = {
+        ("nft", "list", "ruleset"),
+        ("sysctl", "-n", "net.ipv4.ip_forward"),
+        ("sysctl", "-n", "net.ipv4.conf.all.rp_filter"),
+        ("sysctl", "-n", "net.ipv4.conf.default.rp_filter"),
+    }
+    tup = tuple(argv)
+    if tup not in allowed:
+        return (False,
+                f"state-capture: nft-fw command not allowlisted "
+                f"(profile '{profile}' node '{node}'): {argv!r}")
+    # extra hard deny for mutation verbs if someone tries to sneak them in
+    joined_l = " ".join(argv).lower()
+    if "flush" in joined_l or "add" in joined_l or "delete" in joined_l or " -w " in joined_l or "sysctl -w" in joined_l:
+        return (False,
+                f"state-capture: mutation command denied "
+                f"(profile '{profile}' node '{node}'): {argv!r}")
+    return (True, "")
+
 def _nft_fw_exec_command_rule(argv: "list[str]") -> "tuple[bool, str]":
     """nft-fw read-only exec allow-list (REQ-45D-6).
 
@@ -92,7 +120,7 @@ _NFT_FW_PROVIDER = NosProvider(
     doctor_checks=deferred_leg("doctor_checks", "nft-fw content handover (unassigned)"),
     exec_command_rule=_nft_fw_exec_command_rule,
     state_profiles={},
-    state_argv_allow=deferred_leg("state_argv_allow", "§4.5-d"),
+    state_argv_allow=_nft_fw_state_argv_allow,
 )
 
 NOS_PROVIDERS = MappingProxyType({
