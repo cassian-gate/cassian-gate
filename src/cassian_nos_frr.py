@@ -1691,6 +1691,26 @@ def _status_routes(rt, lab, node) -> StatusObservation:
     )
 
 
+
+def _frr_exec_command_rule(argv: "list[str]") -> "tuple[bool, str]":
+    """FRR read-only exec allow-list (REQ-45D-6).
+
+    Relocated verbatim in behaviour from `cassian_model._exec_command_allowed`'s
+    inline `derived_type == "frr"` branch. Generic metacharacter / shlex /
+    empty checks stay at the single decision site in the model; this rule
+    decides only the FRR-specific form. Accept/reject sets and reason bytes
+    are unchanged (extraction bar, §3 row 1).
+    """
+    if argv[0] != "vtysh" or "-c" not in argv:
+        return (False, "frr exec commands must be read-only 'vtysh -c \"show \u2026\"'")
+    _ci = argv.index("-c")
+    if _ci + 1 >= len(argv):
+        return (False, "frr exec commands must be read-only 'vtysh -c \"show \u2026\"'")
+    _vc = argv[_ci + 1].strip().lower()
+    if _vc != "show" and not _vc.startswith("show "):
+        return (False, "frr exec commands must be read-only 'vtysh -c \"show \u2026\"'")
+    return (True, "")
+
 FRR_PROVIDER = NosProvider(
     node_type=FRR_NODE_TYPE,
     default_image=FRR_DEFAULT_IMAGE,
@@ -1716,8 +1736,8 @@ FRR_PROVIDER = NosProvider(
     status_routes=_status_routes,
     collect_targets=FRR_COLLECT_TARGETS,
     doctor_checks=deferred_leg("doctor_checks", "post-§4.5-b (unassigned)"),
-    # -- bounded per-type rules: deferred; decision sites stay inline --
-    exec_command_rule=deferred_leg("exec_command_rule", "§4.5-d (LD-45b-6)"),
+    # -- bounded per-type rules: exec wired by §4.5-d REQ-45D-6 --
+    exec_command_rule=_frr_exec_command_rule,
     state_profiles={},
     state_argv_allow=deferred_leg("state_argv_allow", "§4.5-d"),
 )
