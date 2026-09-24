@@ -68,7 +68,18 @@ CMDS = [
     'vtysh -c "show $(whoami)"', "echo `id`", 'vtysh -c "show ip route" > /tmp/x',
     "nft list ruleset & ", 'vtysh -c "show {a}"', "unclosed 'quote",
 ]
-TYPES = ["frr", "nft-fw", "sonic-vm", "host", "bogus-type"]
+# "sonic-vm" was removed from this corpus at §4.5-d H1-a2-i (founder ruling
+# (a), 2026-09-24). The ORACLE above is the FROZEN pre-extraction rule from
+# `50201fe`, which answers every non-frr / non-nft-fw type with the
+# default-deny floor. `sonic-vm` sat here as a FLOOR case; once
+# `SONIC_PROVIDER.exec_command_rule` is wired the frozen oracle can no longer
+# represent it, and 19 of this corpus' cases legitimately move -- that change
+# is REQ-45D-5's, not a parity breach. REQ-45D-6's bar is FRR + `nft-fw` set
+# equality (handover §3 row 1, §15.2, §18) and is unaffected. Floor coverage
+# is retained by "host" and "bogus-type". SONiC's accept/reject set is owned
+# by `tests/sonic_exec_allowlist_proof.py` (REQ-45D-5).
+# TYPES_S below is the STATE-CAPTURE leg and is NOT changed by that ruling.
+TYPES = ["frr", "nft-fw", "host", "bogus-type"]
 
 print("== corpus parity: oracle vs live decision site (allowed + reason bytes)")
 mismatch = 0
