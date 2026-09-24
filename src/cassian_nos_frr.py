@@ -1784,6 +1784,7 @@ FRR_PROVIDER = NosProvider(
     doctor_checks=deferred_leg("doctor_checks", "post-§4.5-b (unassigned)"),
     # -- bounded per-type rules: exec wired by §4.5-d REQ-45D-6 --
     exec_command_rule=_frr_exec_command_rule,
+    exec_allowed_forms="vtysh -c \"show \u2026\"",
     state_profiles={},
     state_argv_allow=_frr_state_argv_allow,
 )

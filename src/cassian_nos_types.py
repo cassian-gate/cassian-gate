@@ -256,6 +256,7 @@ class NosProvider:
     # sites (the decision sites themselves do not move or fragment;
     # `_exec_command_allowed` stays inline this handover, REQ-45b-10) ----
     exec_command_rule: Callable[[str], "tuple[bool, str]"]
+    exec_allowed_forms: str  # operator-facing allowed exec forms, rendered in the "Allowed:" clause (D1)
     state_profiles: Mapping[str, StateProfile]
     state_argv_allow: Callable[[str, str, "list[str]"], "tuple[bool, str]"]
 
@@ -321,6 +322,8 @@ def validate_provider(p: NosProvider) -> None:
         problems.append("collect_targets must be a tuple")
     if not isinstance(p.state_profiles, Mapping):
         problems.append("state_profiles must be a Mapping")
+    if not p.exec_allowed_forms or not isinstance(p.exec_allowed_forms, str):
+        problems.append("exec_allowed_forms must be a non-empty str")
     if problems:
         sys.stderr.write(
             "ERROR: NOS provider contract incomplete for "

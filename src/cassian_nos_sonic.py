@@ -1222,6 +1222,7 @@ SONIC_PROVIDER = NosProvider(
     # -- legs the ratified design does NOT assign to SONiC (NG-9) --
     doctor_checks=deferred_leg("doctor_checks", "unassigned"),
     exec_command_rule=deferred_leg("exec_command_rule", "§4.5-d (LD-45b-6)"),
+    exec_allowed_forms="show \u2026 or vtysh -c \"show \u2026\" (not show techsupport)",
     state_profiles={},
     state_argv_allow=deferred_leg("state_argv_allow", "§4.5-d"),
 )

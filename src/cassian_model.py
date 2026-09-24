@@ -119,6 +119,7 @@ _NFT_FW_PROVIDER = NosProvider(
     collect_targets=(),
     doctor_checks=deferred_leg("doctor_checks", "nft-fw content handover (unassigned)"),
     exec_command_rule=_nft_fw_exec_command_rule,
+    exec_allowed_forms="nft list \u2026",
     state_profiles={},
     state_argv_allow=_nft_fw_state_argv_allow,
 )
@@ -2644,7 +2645,12 @@ def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
                 die(
                     f"{ctx}: exec command rejected \u2014 {cmd_raw.strip()!r} is not read-only "
                     f"for node {src_node!r} (type {derived_type!r}): {_why}. "
-                    f"Allowed: frr -> vtysh -c \"show \u2026\"; nft-fw -> nft list \u2026"
+                    + "Allowed: "
+                    + "; ".join(
+                        f"{_k} -> {NOS_PROVIDERS[_k].exec_allowed_forms}"
+                        for _k in nos_known_types()
+                        if not is_deferred(NOS_PROVIDERS[_k].exec_command_rule)
+                    )
                 )
             t["command"] = cmd_raw.strip()
             _validate_exec_assertion(t.get("assertion"), ctx)
