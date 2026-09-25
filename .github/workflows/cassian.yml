@@ -698,6 +698,15 @@ jobs:
           set -euo pipefail
           python tests/exec_rule_parity_proof.py
 
+      - name: VM guest-probe rc=5 transient proof — vm_guest_probe_rc5_proof.py (§4.5-d, BL-P2-4.5c-32, R1/D-i)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/vm_guest_probe_rc5_proof.py
+
       - name: SONiC (VM) teardown sweep (§4.5-c WI-3)
         if: always()
         env:

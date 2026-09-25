@@ -154,6 +154,7 @@ for _p in ("sonic_leaf_import_proof.py", "sonic_configgen_determinism_proof.py",
 # does NOT prove the step executes, that the runner reaches it, or that the
 # proof passes.
 for _p in ("sonic_exec_allowlist_proof.py",   # H1-a2-ii, REQ-45D-5
+           "vm_guest_probe_rc5_proof.py",    # S7, BL-P2-4.5c-32 (R1/D-i)
            "exec_rule_parity_proof.py"):      # H1-a2-ii, REQ-45D-6/-7
     check(f"§4.5-d proof is CI-wired: {_p} present in the gate", _p in gate)
 
