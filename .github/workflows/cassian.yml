@@ -680,6 +680,33 @@ jobs:
             topologies/vm-assertion-smoke.yaml vm-assertion-smoke
           ./src/cassian.py down vm-assertion-smoke
 
+      - name: SONiC exec allow-list proof — sonic_exec_allowlist_proof.py (§4.5-d, REQ-45D-5)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/sonic_exec_allowlist_proof.py
+
+      - name: exec rule parity proof, FRR + nft-fw — exec_rule_parity_proof.py (§4.5-d, REQ-45D-6/-7)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/exec_rule_parity_proof.py
+
+      - name: VM guest-probe rc=5 transient proof — vm_guest_probe_rc5_proof.py (§4.5-d, BL-P2-4.5c-32, R1/D-i)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/vm_guest_probe_rc5_proof.py
+
       - name: SONiC (VM) teardown sweep (§4.5-c WI-3)
         if: always()
         env:

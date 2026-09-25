@@ -259,7 +259,11 @@ def main():
     # REQ-45a-4b/-8: the readiness error classes and the copy-UNSUP text shipped in
     # the Finding-C commit are §13(a)(b)(c) surfaces; assert their corrected content.
     import cassian_runtime_vm as _rv
-    _ec_b = _rv.classify_guest_probe_rc("s1", _rv.VM_SSHPASS_RC_AUTH_FAIL)
+    # D-i (founder ruling 2026-09-24, BL-P2-4.5c-32): rc=5 is transient before the
+    # deadline; the (b) text is emitted by the deadline classifier, byte-identical.
+    check("P-EC (b) readiness rc=5 is transient before the deadline (D-i)",
+          _rv.classify_guest_probe_rc("s1", _rv.VM_SSHPASS_RC_AUTH_FAIL) is None)
+    _ec_b = _rv.guest_probe_deadline_error("s1", _rv.VM_SSHPASS_RC_AUTH_FAIL, 300)
     check("P-EC (b) readiness auth-fail names boot-time provenance (default: admin)",
           bool(_ec_b) and "default: admin" in _ec_b and "contrib/sonic-image-build/" in _ec_b)
     check("P-EC (b) readiness auth-fail cites the capabilities doc",

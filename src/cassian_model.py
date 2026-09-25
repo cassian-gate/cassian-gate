@@ -58,6 +58,46 @@ from cassian_nos_sonic import SONIC_PROVIDER
 # and LD-H2 placeholders for every content leg. default_image=None: nft-fw
 # image defaults STAY at the existing model/common maps untouched -- only the
 # frr entry is REGISTRY-DERIVED (LD-H1 / REQ-45b-11 / P5).
+
+
+def _nft_fw_state_argv_allow(profile: str, node: str, argv: "list[str]") -> "tuple[bool, str]":
+    """nft-fw state-capture argv allow-list (REQ-45D-7).
+
+    Relocated verbatim in behaviour from
+    `cassian_state._state_capture_validate_argv_or_die`'s inline
+    `node_type == "nft-fw"` branch. Returns the complete operator-facing
+    message on refusal (§13(a) text owned by the provider).
+    """
+    allowed = {
+        ("nft", "list", "ruleset"),
+        ("sysctl", "-n", "net.ipv4.ip_forward"),
+        ("sysctl", "-n", "net.ipv4.conf.all.rp_filter"),
+        ("sysctl", "-n", "net.ipv4.conf.default.rp_filter"),
+    }
+    tup = tuple(argv)
+    if tup not in allowed:
+        return (False,
+                f"state-capture: nft-fw command not allowlisted "
+                f"(profile '{profile}' node '{node}'): {argv!r}")
+    # extra hard deny for mutation verbs if someone tries to sneak them in
+    joined_l = " ".join(argv).lower()
+    if "flush" in joined_l or "add" in joined_l or "delete" in joined_l or " -w " in joined_l or "sysctl -w" in joined_l:
+        return (False,
+                f"state-capture: mutation command denied "
+                f"(profile '{profile}' node '{node}'): {argv!r}")
+    return (True, "")
+
+def _nft_fw_exec_command_rule(argv: "list[str]") -> "tuple[bool, str]":
+    """nft-fw read-only exec allow-list (REQ-45D-6).
+
+    Relocated verbatim in behaviour from `_exec_command_allowed`'s inline
+    `derived_type == "nft-fw"` branch. Homed on this provider's own record
+    (the provider is defined here), so the model holds no per-type rule.
+    """
+    if argv[0] != "nft" or len(argv) < 2 or argv[1] != "list":
+        return (False, "nft-fw exec commands must be read-only 'nft list \u2026' (mutation subcommands denied)")
+    return (True, "")
+
 _NFT_FW_PROVIDER = NosProvider(
     node_type="nft-fw",
     default_image=None,
@@ -78,9 +118,10 @@ _NFT_FW_PROVIDER = NosProvider(
     status_routes=None,
     collect_targets=(),
     doctor_checks=deferred_leg("doctor_checks", "nft-fw content handover (unassigned)"),
-    exec_command_rule=deferred_leg("exec_command_rule", "§4.5-d (LD-45b-6)"),
+    exec_command_rule=_nft_fw_exec_command_rule,
+    exec_allowed_forms="nft list \u2026",
     state_profiles={},
-    state_argv_allow=deferred_leg("state_argv_allow", "§4.5-d"),
+    state_argv_allow=_nft_fw_state_argv_allow,
 )
 
 NOS_PROVIDERS = MappingProxyType({
@@ -1961,7 +2002,13 @@ def topo_to_containerlab(topo: dict) -> dict:
 
 def _exec_command_allowed(command: str, derived_type: str) -> tuple[bool, str]:
     """Single canonical read-only allow-list decision site for exec commands
-    (LD-B; DOCTRINE-1). Default-deny; raw shell closed. Returns (allowed, reason)."""
+    (LD-B; DOCTRINE-1). Default-deny; raw shell closed. Returns (allowed, reason).
+
+    REQ-45D-6: the generic checks stay here; the per-type rule is dispatched to
+    `provider.exec_command_rule(argv)`. The decision site does not move or
+    fragment -- it stops enumerating node types. A type with no registered
+    provider still falls to the default-deny floor below, byte-unchanged.
+    """
     cmd = str(command or "").strip()
     if not cmd:
         return (False, "command is empty")
@@ -1974,20 +2021,9 @@ def _exec_command_allowed(command: str, derived_type: str) -> tuple[bool, str]:
         return (False, "command is not a well-formed single command")
     if not argv:
         return (False, "command is empty")
-    if derived_type == "frr":
-        if argv[0] != "vtysh" or "-c" not in argv:
-            return (False, "frr exec commands must be read-only 'vtysh -c \"show \u2026\"'")
-        _ci = argv.index("-c")
-        if _ci + 1 >= len(argv):
-            return (False, "frr exec commands must be read-only 'vtysh -c \"show \u2026\"'")
-        _vc = argv[_ci + 1].strip().lower()
-        if _vc != "show" and not _vc.startswith("show "):
-            return (False, "frr exec commands must be read-only 'vtysh -c \"show \u2026\"'")
-        return (True, "")
-    if derived_type == "nft-fw":
-        if argv[0] != "nft" or len(argv) < 2 or argv[1] != "list":
-            return (False, "nft-fw exec commands must be read-only 'nft list \u2026' (mutation subcommands denied)")
-        return (True, "")
+    _provider = NOS_PROVIDERS.get(derived_type)
+    if _provider is not None and not is_deferred(_provider.exec_command_rule):
+        return _provider.exec_command_rule(argv)
     return (False, f"no read-only allow-list for node type {derived_type!r}")
 
 
@@ -2609,7 +2645,12 @@ def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
                 die(
                     f"{ctx}: exec command rejected \u2014 {cmd_raw.strip()!r} is not read-only "
                     f"for node {src_node!r} (type {derived_type!r}): {_why}. "
-                    f"Allowed: frr -> vtysh -c \"show \u2026\"; nft-fw -> nft list \u2026"
+                    + "Allowed: "
+                    + "; ".join(
+                        f"{_k} -> {NOS_PROVIDERS[_k].exec_allowed_forms}"
+                        for _k in nos_known_types()
+                        if not is_deferred(NOS_PROVIDERS[_k].exec_command_rule)
+                    )
                 )
             t["command"] = cmd_raw.strip()
             _validate_exec_assertion(t.get("assertion"), ctx)

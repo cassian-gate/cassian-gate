@@ -1691,6 +1691,72 @@ def _status_routes(rt, lab, node) -> StatusObservation:
     )
 
 
+
+
+def _frr_state_argv_allow(profile: str, node: str, argv: "list[str]") -> "tuple[bool, str]":
+    """FRR state-capture argv allow-list (REQ-45D-7).
+
+    Relocated verbatim in behaviour from
+    `cassian_state._state_capture_validate_argv_or_die`'s inline
+    `node_type == "frr"` branch. The global deny-token floor and the
+    unsupported-type floor stay at the single decision site in
+    `cassian_state`; this rule decides only the FRR-specific form.
+
+    Returns the COMPLETE operator-facing message on refusal, so the §13(a)
+    text this provider owns lives in one file and the caller renders it
+    byte-identically (`die(why, code=2)`).
+    """
+    # Bounded allowlist extension (Phase 1a H6, LD-3 ruled (a)):
+    # permit two exact ip -j argv tuples for frr-interfaces-basic and
+    # frr-comprehensive Linux-primitive interface-state probes.
+    # All other argv on FRR node type continues through the vtysh-only
+    # allowlist below; default-deny floor preserved.
+    _frr_ip_j_allowed = {
+        ("ip", "-j", "link", "show"),
+        ("ip", "-j", "addr", "show"),
+    }
+    if tuple(argv) in _frr_ip_j_allowed:
+        return (True, "")
+    # Only: vtysh -c "show ..."
+    if not (len(argv) == 3 and argv[0] == "vtysh" and argv[1] == "-c"):
+        return (False,
+                f"state-capture: FRR commands must be 'vtysh -c <cmd>' "
+                f"(profile '{profile}' node '{node}'): {argv!r}")
+    cmd = argv[2].strip()
+    cmd_l = cmd.lower()
+    # Must start with "show "
+    if not cmd_l.startswith("show "):
+        return (False,
+                f"state-capture: FRR command must start with 'show ' "
+                f"(profile '{profile}' node '{node}'): {cmd!r}")
+    # Deny obvious mutation / risky subcommands
+    deny_words = ["configure", "conf t", "write", "clear", "debug", "terminal", "end", "exit", "|"]
+    for w in deny_words:
+        if w in cmd_l:
+            return (False,
+                    f"state-capture: FRR command denied by allowlist rule ({w!r}) "
+                    f"(profile '{profile}' node '{node}'): {cmd!r}")
+    return (True, "")
+
+def _frr_exec_command_rule(argv: "list[str]") -> "tuple[bool, str]":
+    """FRR read-only exec allow-list (REQ-45D-6).
+
+    Relocated verbatim in behaviour from `cassian_model._exec_command_allowed`'s
+    inline `derived_type == "frr"` branch. Generic metacharacter / shlex /
+    empty checks stay at the single decision site in the model; this rule
+    decides only the FRR-specific form. Accept/reject sets and reason bytes
+    are unchanged (extraction bar, §3 row 1).
+    """
+    if argv[0] != "vtysh" or "-c" not in argv:
+        return (False, "frr exec commands must be read-only 'vtysh -c \"show \u2026\"'")
+    _ci = argv.index("-c")
+    if _ci + 1 >= len(argv):
+        return (False, "frr exec commands must be read-only 'vtysh -c \"show \u2026\"'")
+    _vc = argv[_ci + 1].strip().lower()
+    if _vc != "show" and not _vc.startswith("show "):
+        return (False, "frr exec commands must be read-only 'vtysh -c \"show \u2026\"'")
+    return (True, "")
+
 FRR_PROVIDER = NosProvider(
     node_type=FRR_NODE_TYPE,
     default_image=FRR_DEFAULT_IMAGE,
@@ -1716,10 +1782,11 @@ FRR_PROVIDER = NosProvider(
     status_routes=_status_routes,
     collect_targets=FRR_COLLECT_TARGETS,
     doctor_checks=deferred_leg("doctor_checks", "post-§4.5-b (unassigned)"),
-    # -- bounded per-type rules: deferred; decision sites stay inline --
-    exec_command_rule=deferred_leg("exec_command_rule", "§4.5-d (LD-45b-6)"),
+    # -- bounded per-type rules: exec wired by §4.5-d REQ-45D-6 --
+    exec_command_rule=_frr_exec_command_rule,
+    exec_allowed_forms="vtysh -c \"show \u2026\"",
     state_profiles={},
-    state_argv_allow=deferred_leg("state_argv_allow", "§4.5-d"),
+    state_argv_allow=_frr_state_argv_allow,
 )
 
 

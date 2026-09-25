@@ -74,6 +74,7 @@ def _make_provider(node_type, runtime_requirement, log):
         collect_targets=(),
         doctor_checks=deferred_leg("doctor_checks", "proof fake"),
         exec_command_rule=deferred_leg("exec_command_rule", "proof fake"),
+        exec_allowed_forms="proof fake",
         state_profiles={},
         state_argv_allow=deferred_leg("state_argv_allow", "proof fake"),
     )

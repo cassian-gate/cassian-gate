@@ -146,6 +146,18 @@ for _p in ("sonic_leaf_import_proof.py", "sonic_configgen_determinism_proof.py",
            "sonic_preconfigured_proof.py"):
     check(f"§4.5-c proof is CI-wired: {_p} present in the gate", _p in gate)
 
+# §4.5-d (REQ-45D-27; founder ruling (B), 2026-09-24): §4.5-d's hosted proofs
+# are gate-wired in lockstep with the cassian.yml steps that run them, in a
+# section loop of their own beside §4.5-b's and §4.5-c's, so each check names
+# the section that owns the proof. Coverage limit (PBE-P2-8), as stated for
+# §4.5-c above: this substring test proves each proof is NAMED in the gate; it
+# does NOT prove the step executes, that the runner reaches it, or that the
+# proof passes.
+for _p in ("sonic_exec_allowlist_proof.py",   # H1-a2-ii, REQ-45D-5
+           "vm_guest_probe_rc5_proof.py",    # S7, BL-P2-4.5c-32 (R1/D-i)
+           "exec_rule_parity_proof.py"):      # H1-a2-ii, REQ-45D-6/-7
+    check(f"§4.5-d proof is CI-wired: {_p} present in the gate", _p in gate)
+
 fails = [n for n, ok in checks if not ok]
 print(f"PO-B3-fold (WF-12/13 replay): {len(checks) - len(fails)}/{len(checks)} checks passed.")
 for n, ok in checks:

@@ -1196,6 +1196,43 @@ def provision(rt: "Runtime", lab: str, node: str, node_d: dict,
     return out
 
 
+def _sonic_exec_command_rule(argv: "list[str]") -> "tuple[bool, str]":
+    """SONiC read-only exec allow-list (REQ-45D-5; LD-45D-5, D2, D4).
+
+    Two accepted forms, default-deny otherwise:
+
+    * ``show \u2026`` -- ``argv[0] == "show"``, excluding ``show techsupport``
+      (founder ruling D4, 2026-09-24), which interrupts the device and writes a
+      dump. ``show auto-techsupport`` is a different subcommand and stays
+      accepted. D4 narrows this form only.
+    * ``vtysh -c "show \u2026"`` -- EXACTLY three arguments (founder ruling D2,
+      2026-09-24). The guest's ``/usr/bin/vtysh`` is a wrapper that passes every
+      argument to FRR's vtysh, which honours repeated ``-c`` and ``-b`` / ``-f``
+      / ``-w``; any other arity therefore reaches a configuration path.
+
+    The generic metacharacter / ``shlex`` / empty checks stay at the single
+    decision site in the model (REQ-45D-6); this rule decides only the SONiC
+    form and owns its own operator-facing text (DC v2.1 \u00a713(a)). One reason
+    string for every refusal, as D4 directs ("the standard refusal message");
+    the excluded subcommand is surfaced to the operator by the registry-derived
+    ``Allowed:`` clause, which carries ``exec_allowed_forms``.
+    """
+    _reason = (
+        "sonic-vm exec commands must be read-only "
+        "'show \u2026' or 'vtysh -c \"show \u2026\"'"
+    )
+    if argv[0] == "show":
+        if len(argv) > 1 and argv[1] == "techsupport":
+            return (False, _reason)
+        return (True, "")
+    if argv[0] != "vtysh" or len(argv) != 3 or argv[1] != "-c":
+        return (False, _reason)
+    _vc = argv[2].strip().lower()
+    if _vc != "show" and not _vc.startswith("show "):
+        return (False, _reason)
+    return (True, "")
+
+
 SONIC_PROVIDER = NosProvider(
     node_type=SONIC_NODE_TYPE,
     default_image=SONIC_DEFAULT_IMAGE,
@@ -1221,7 +1258,8 @@ SONIC_PROVIDER = NosProvider(
     collect_targets=(),
     # -- legs the ratified design does NOT assign to SONiC (NG-9) --
     doctor_checks=deferred_leg("doctor_checks", "unassigned"),
-    exec_command_rule=deferred_leg("exec_command_rule", "§4.5-d (LD-45b-6)"),
+    exec_command_rule=_sonic_exec_command_rule,
+    exec_allowed_forms="show \u2026 or vtysh -c \"show \u2026\" (not show techsupport)",
     state_profiles={},
     state_argv_allow=deferred_leg("state_argv_allow", "§4.5-d"),
 )
