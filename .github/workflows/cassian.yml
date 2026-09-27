@@ -707,6 +707,15 @@ jobs:
           set -euo pipefail
           python tests/vm_guest_probe_rc5_proof.py
 
+      - name: SONiC observation-kinds proof — sonic_observation_kinds_proof.py (§4.5-d, REQ-45D-1/-8/-9/-10/-15/-16)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/sonic_observation_kinds_proof.py
+
       - name: SONiC (VM) teardown sweep (§4.5-c WI-3)
         if: always()
         env:

@@ -43,9 +43,12 @@ from typing import TYPE_CHECKING, Any, Mapping
 from cassian_nos_types import (
     CapabilityDisposition,
     NosProvider,
+    Observation,
+    ObservationRequest,
     deferred_leg,
     impl,
 )
+from cassian_common import _canonical_community_token, _normalize_prefix
 
 if TYPE_CHECKING:  # annotation-only (no runtime import of the runtime leaf)
     from cassian_runtime_container import Runtime
@@ -1233,6 +1236,299 @@ def _sonic_exec_command_rule(argv: "list[str]") -> "tuple[bool, str]":
     return (True, "")
 
 
+# -- §4.5-d H1-b1 (script 1): observation collection, six BGP-family kinds --
+#
+# REQ-45D-1, -8, -9, -10, -15, -16; founder rulings A (2026-09-25) and D1 (2026-09-26).
+# Each handler returns an Observation whose `data` / `evidence` keys are the
+# result format FRR's handler for the same kind fills (REQ-45D-21, handover
+# §15.2 L463: "keys = FRR's" is the shared result format ONLY). The values are
+# parsed from SONiC's own vtysh output; nothing here reads, imports or compares
+# against FRR's parser (founder statement, 2026-09-26). Core keeps the retry
+# driver, the verdict and the record; no handler decides a verdict.
+#
+# A read that fails, or output that does not carry what the kind needs, is a
+# COLLECTION FAILURE: `evidence["parse_error"]` names it and every `data` key is
+# still present with its not-observed value -- never a partial `data`
+# (handover §15.2, -1 negative row).
+#
+# SHAPE COVERAGE LIMIT (PBE-P2-8). Two SONiC output shapes are read, both as
+# captured from `local/sonic-vm:202405` (FRR 8.5.4):
+#   * `show bgp summary json`: a `peers` mapping at the top level or one level
+#     down (the capture nests it under `ipv4Unicast`), each peer carrying
+#     `state`;
+#   * `show ip bgp <prefix> json`: one prefix object, `prefix` + `paths`, or
+#     `{}` when the prefix is absent. The path read is the one FRR marks
+#     `bestpath.overall`, else the first.
+# Any other shape is a collection failure, not a guess. `paths[*].lastUpdate`
+# is never read: FRR recomputes it at every read (session-9 ruling (1)).
+#
+# Capability tokens for these kinds are NOT declared here: they flip in H1-b1
+# script 2 (ruling D1). Until then `_nos_collect` raises UNSUP before
+# `provider.collect` is reached (engine `_nos_collect`), so wiring `collect=`
+# below opens no path to these handlers from `cassian test`.
+
+
+def _sonic_read(rt: "Runtime", lab: str, node: str, argv: tuple) -> "tuple[Any, str]":
+    """One guest read for the collection seam: (returncode, stdout).
+
+    Unlike `_guest_stdout`, never dies -- a failed read is an observation
+    (probe_ok False), not a provisioning error. STDOUT only: the guest's SSH
+    banner lands on STDERR (F-45C-C3-20).
+    """
+    cp = rt.exec(lab, node, list(argv), check=False, capture_output=True)
+    rc = getattr(cp, "returncode", None)
+    out = getattr(cp, "stdout", "") or ""
+    if isinstance(out, (bytes, bytearray)):
+        out = out.decode("utf-8", errors="replace")
+    return rc, str(out)
+
+
+def _summary_peer(raw: str, neighbor: str) -> "tuple[Any, str]":
+    """(peer mapping or None, parse_error) for one neighbor in a summary read."""
+    try:
+        doc = json.loads((raw or "").strip() or "{}")
+    except Exception:
+        return None, "vtysh output not parseable as JSON"
+    if not isinstance(doc, dict):
+        return None, "peers not found in summary"
+    peers = doc.get("peers")
+    if not isinstance(peers, dict):
+        peers = None
+        for key in sorted(doc):
+            value = doc[key]
+            if isinstance(value, dict) and isinstance(value.get("peers"), dict):
+                peers = value["peers"]
+                break
+    if peers is None:
+        return None, "peers not found in summary"
+    peer = peers.get(neighbor)
+    if not isinstance(peer, dict):
+        return None, "neighbor not present in summary"
+    return peer, ""
+
+
+def _sonic_collect_bgp_session_up(rt, lab, node, req: "ObservationRequest") -> "Observation":
+    """REQ-45D-8: one declared neighbor's session state from the BGP summary."""
+    neighbor = str(req.params.get("neighbor") or "").strip()
+    rc, out = _sonic_read(rt, lab, node, _BGP_SUMMARY_ARGV)
+    probe_ok = (rc == 0)
+    peer_present, state, last_error, parse_error = False, "Unknown", "", ""
+    if not probe_ok:
+        last_error = parse_error = "vtysh command failed"
+    else:
+        peer, parse_error = _summary_peer(out, neighbor)
+        if peer is None:
+            if parse_error == "neighbor not present in summary":
+                state = "NotConfigured"
+            last_error = parse_error
+        else:
+            peer_present = True
+            raw_state = peer.get("state")
+            if isinstance(raw_state, str) and raw_state.strip():
+                state = raw_state.strip()
+                reset = peer.get("lastResetReason")
+                last_error = str(reset) if reset else ""
+            else:
+                last_error = parse_error = "state not present for neighbor"
+    return Observation(
+        kind="bgp_session_up",
+        data={"peer_present": peer_present, "state": state, "last_error": last_error},
+        evidence={
+            "cmd": "vtysh -c 'show bgp summary json'",
+            "parse_error": parse_error,
+            "returncode": rc,
+            "probe_ok": probe_ok,
+        },
+    )
+
+
+def _sonic_collect_bgp_neighbor(rt, lab, node, req: "ObservationRequest") -> "Observation":
+    """REQ-45D-1: `bgp_neighbor` -- up iff the neighbor's state is Established."""
+    neighbor = str(req.params.get("neighbor") or "").strip()
+    rc, out = _sonic_read(rt, lab, node, _BGP_SUMMARY_ARGV)
+    probe_ok = (rc == 0)
+    observed, state, parse_error = "down", None, ""
+    if not probe_ok:
+        parse_error = "vtysh command failed"
+    else:
+        peer, parse_error = _summary_peer(out, neighbor)
+        if peer is not None:
+            raw_state = peer.get("state")
+            if isinstance(raw_state, str) and raw_state.strip():
+                state = raw_state.strip()
+                observed = "up" if state.lower() == "established" else "down"
+            else:
+                parse_error = "state not present for neighbor"
+    return Observation(
+        kind="bgp_neighbor",
+        data={"observed": observed, "state": state},
+        evidence={
+            "cmd": "vtysh -c 'show bgp summary json'",
+            "parse_error": parse_error,
+            "returncode": rc,
+            "probe_ok": probe_ok,
+        },
+    )
+
+
+def _prefix_argv(prefix: str) -> tuple:
+    return ("vtysh", "-c", f"show ip bgp {prefix} json")
+
+
+def _prefix_path(raw: str, prefix: str) -> "tuple[Any, str, bool]":
+    """(selected path or None, parse_error, empty_first_doc) for one prefix read."""
+    text = (raw or "").strip()
+    try:
+        doc = json.loads(text) if text else {}
+    except Exception:
+        return None, "vtysh output not parseable as JSON", False
+    if not isinstance(doc, dict):
+        return None, "unexpected bgp prefix json shape", False
+    if not doc:
+        return None, "prefix not present in bgp json", True
+    want = _normalize_prefix(prefix) or prefix
+    got = doc.get("prefix")
+    if got is None:
+        return None, "prefix not present in bgp json", False
+    if (_normalize_prefix(str(got)) or str(got)) != want:
+        return None, "bgp json names a different prefix", False
+    paths = doc.get("paths")
+    if not isinstance(paths, list) or not paths or not all(isinstance(p, dict) for p in paths):
+        return None, "paths not present in bgp json", False
+    for path in paths:
+        best = path.get("bestpath")
+        if isinstance(best, dict) and best.get("overall") is True:
+            return path, "", False
+    return paths[0], "", False
+
+
+def _int_or_none(value: Any) -> "int | None":
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _sonic_collect_bgp_localpref_equals(rt, lab, node, req: "ObservationRequest") -> "Observation":
+    """REQ-45D-9: the selected path's local preference (`locPrf`)."""
+    prefix = str(req.params.get("prefix") or "").strip()
+    rc, out = _sonic_read(rt, lab, node, _prefix_argv(prefix))
+    probe_ok = (rc == 0)
+    observed = None
+    path, parse_error, _empty = _prefix_path(out, prefix)
+    if path is not None:
+        observed = _int_or_none(path.get("locPrf"))
+        if observed is None:
+            parse_error = "localpref not present in bgp json"
+    return Observation(
+        kind="bgp_localpref_equals",
+        data={"norm_prefix": prefix, "observed_localpref": observed},
+        evidence=dict(
+            {"cmd": f"vtysh -c 'show ip bgp {prefix} json'", "rc": rc, "parse_error": parse_error},
+            probe_ok=probe_ok,
+        ),
+    )
+
+
+def _sonic_collect_bgp_med_equals(rt, lab, node, req: "ObservationRequest") -> "Observation":
+    """REQ-45D-10: the selected path's MED (`metric`)."""
+    prefix = str(req.params.get("prefix") or "").strip()
+    rc, out = _sonic_read(rt, lab, node, _prefix_argv(prefix))
+    probe_ok = (rc in (0, None))
+    observed = None
+    path, parse_error, empty = _prefix_path(out, prefix)
+    if path is not None:
+        observed = _int_or_none(path.get("metric"))
+        if observed is None:
+            parse_error = "med not present in bgp json"
+    return Observation(
+        kind="bgp_med_equals",
+        data={"norm_prefix": prefix, "observed_med": observed},
+        evidence=dict(
+            {"cmd": f"vtysh -c 'show ip bgp {prefix} json'", "rc": rc,
+             "parse_error": parse_error, "empty_first_doc": empty},
+            probe_ok=probe_ok,
+        ),
+    )
+
+
+def _sonic_collect_bgp_community(rt, lab, node, req: "ObservationRequest") -> "Observation":
+    """REQ-45D-15: the selected path's communities, canonical tokens, sorted.
+
+    A present route with no `community` key has no communities -- an
+    observation, not a failure.
+    """
+    prefix = str(req.params.get("prefix") or "").strip()
+    rc, out = _sonic_read(rt, lab, node, _prefix_argv(prefix))
+    probe_ok = (rc == 0)
+    tokens: "list[str]" = []
+    path, parse_error, empty = _prefix_path(out, prefix)
+    if path is not None:
+        comm = path.get("community")
+        if isinstance(comm, dict) and isinstance(comm.get("list"), list):
+            tokens = [str(t) for t in comm["list"]]
+        elif comm is not None:
+            parse_error = "community not readable in bgp json"
+    return Observation(
+        kind="bgp_community",
+        data={
+            "norm_prefix": prefix,
+            "route_present": path is not None,
+            "observed_communities": sorted({_canonical_community_token(t) for t in tokens}),
+        },
+        evidence=dict(
+            {"cmd": f"vtysh -c 'show ip bgp {prefix} json'", "rc": rc,
+             "parse_error": parse_error, "empty_first_doc": empty},
+            probe_ok=probe_ok,
+        ),
+    )
+
+
+def _sonic_collect_bgp_as_path(rt, lab, node, req: "ObservationRequest") -> "Observation":
+    """REQ-45D-16: the selected path's AS path, path-ordered, space-joined."""
+    prefix = str(req.params.get("prefix") or "").strip()
+    rc, out = _sonic_read(rt, lab, node, _prefix_argv(prefix))
+    probe_ok = (rc == 0)
+    observed = ""
+    path, parse_error, empty = _prefix_path(out, prefix)
+    if path is not None:
+        asp = path.get("aspath")
+        text = asp.get("string") if isinstance(asp, dict) else None
+        if isinstance(text, str) and text.strip():
+            observed = " ".join(text.split())
+        else:
+            parse_error = "as path not present in bgp json"
+    return Observation(
+        kind="bgp_as_path",
+        data={"norm_prefix": prefix, "route_present": path is not None, "observed_as_path": observed},
+        evidence=dict(
+            {"cmd": f"vtysh -c 'show ip bgp {prefix} json'", "rc": rc,
+             "parse_error": parse_error, "empty_first_doc": empty},
+            probe_ok=probe_ok,
+        ),
+    )
+
+
+_SONIC_COLLECT_HANDLERS = {
+    "bgp_neighbor": _sonic_collect_bgp_neighbor,
+    "bgp_session_up": _sonic_collect_bgp_session_up,
+    "bgp_localpref_equals": _sonic_collect_bgp_localpref_equals,
+    "bgp_med_equals": _sonic_collect_bgp_med_equals,
+    "bgp_community": _sonic_collect_bgp_community,
+    "bgp_as_path": _sonic_collect_bgp_as_path,
+}
+
+
+def collect(rt, lab, node, req: "ObservationRequest") -> "Observation":
+    """The single SONiC collection entry. A kind with no handler is refused."""
+    handler = _SONIC_COLLECT_HANDLERS.get(req.kind)
+    if handler is None:
+        return deferred_leg(f"collect:{req.kind}", "§4.5-d/-e")()
+    return handler(rt, lab, node, req)
+
+
 SONIC_PROVIDER = NosProvider(
     node_type=SONIC_NODE_TYPE,
     default_image=SONIC_DEFAULT_IMAGE,
@@ -1249,7 +1545,7 @@ SONIC_PROVIDER = NosProvider(
     nos_ready=nos_ready,
     convergence_wait=convergence_wait,
     # -- validation seam: SONiC collection lands at §4.5-d/-e --
-    collect=deferred_leg("collect", "§4.5-d/-e"),
+    collect=collect,
     # -- change workflow: §4.5-f (BL-P2-4.5b-2 shape) --
     candidate=None,
     # -- operational legs: §4.5-d --
