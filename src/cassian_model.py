@@ -32,8 +32,10 @@ from cassian_artifacts import (
 from types import MappingProxyType
 
 from cassian_nos_types import (
+    CAP_IMPL,
     CandidateSpec,
     NosProvider,
+    capability_for,
     deferred_leg,
     is_deferred,
     validate_provider,
@@ -235,6 +237,33 @@ def nos_provider_for(ntype: str, seam: str) -> NosProvider:
             code=2,
         )
     return p
+
+
+# Admitted invariant types -- the validator's own closed vocabulary, named once
+# (phase2 §4.5-d, founder ruling A-prime of 2026-09-28, SP #1). Content and order
+# are the pre-hoist admission tuple's, unchanged; the admission check reads this
+# constant, and the R-O1 gate derives its un-flipped list from it minus the
+# provider's IMPL declarations (LD-45D-4). Coverage limit (PBE-P2-8): this is an
+# enumerated domain maintained by hand, as the inline tuple was; a type admitted
+# here but absent from a provider's capability table is reported as deferred,
+# never as supported.
+_INVARIANT_TYPES: tuple[str, ...] = (
+    "bgp_session_up",
+    "route_present",
+    "route_absent",
+    "bgp_med_equals",
+    "bgp_localpref_equals",
+    "bgp_community",
+    "bgp_as_path",
+    "route_advertised_to",
+    "route_not_advertised_to",
+    "evpn_mac_route_present",
+    "evpn_mac_route_absent",
+    "evpn_vni_route_present",
+    "evpn_bgp_session_up",
+    "ospf_neighbor_up",
+    "interface_state",
+)
 
 
 # -------------------------
@@ -1141,6 +1170,19 @@ def ensure_valid_topology(topo: dict) -> None:
             die(
                 f"Topology invalid: node '{n.get('name')}': "
                 f"runtime must be 'container' or 'vm' if provided"
+            )
+
+        # REQ-45D-24 (item 5, BL-P2-4.5c-46): the converse of the VM runtime contract
+        # below. A sonic-vm node declared with runtime: container is refused; resolve
+        # defaults sonic-vm to vm only when runtime is omitted. Reads the same
+        # resolved `runtime` field the contract check reads (PBE-P2-6).
+        if runtime == "container" and (n.get("type") or "").strip().lower() == "sonic-vm":
+            die(
+                f"Topology invalid: node {str(n.get('name') or '<unnamed>').strip()}: "
+                "type sonic-vm requires runtime vm; explicit runtime: container is "
+                "not permitted for this type.\n"
+                "Valid: set runtime: vm on this node, or omit runtime (sonic-vm "
+                "resolves to vm)."
             )
 
         if runtime == "vm":
@@ -2572,23 +2614,7 @@ def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
             inv_type = str(type_raw).strip().lower()
             if not inv_type:
                 die(f"tests[{i}]: invariant test requires non-empty 'type'")
-            if inv_type not in (
-                "bgp_session_up",
-                "route_present",
-                "route_absent",
-                "bgp_med_equals",
-                "bgp_localpref_equals",
-                "bgp_community",
-                "bgp_as_path",
-                "route_advertised_to",
-                "route_not_advertised_to",
-                "evpn_mac_route_present",
-                "evpn_mac_route_absent",
-                "evpn_vni_route_present",
-                "evpn_bgp_session_up",
-                "ospf_neighbor_up",
-                "interface_state",
-            ):
+            if inv_type not in _INVARIANT_TYPES:
                 die(
                     f"tests[{i}]: invariant.type unsupported ({inv_type!r}) "
                     f"(supported: bgp_session_up, route_present, route_absent, "
@@ -2777,7 +2803,13 @@ def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
                         f"{src!r} but no node by that name exists in the topology"
                     )
                 _src_kind = str(_src_node.get("type") or "").strip().lower()
-                if _src_kind != "frr":
+                # Ruling alpha (2026-09-25, SP #1): accepted iff the src type has a
+                # registered provider declaring IMPL for 'bgp_community' -- the same
+                # capability read the R-O1 gate uses (PBE-P2-6). An unregistered type
+                # is never routed through nos_provider_for (its registry UNSUP would
+                # replace this message); it keeps the existing refusal, byte-identical.
+                _src_prov = NOS_PROVIDERS.get(_src_kind)
+                if _src_prov is None or capability_for(_src_prov, "bgp_community").state != CAP_IMPL:
                     die(
                         f"{ctx}: invariant 'bgp_community' references src "
                         f"{src!r} of type {_src_kind!r}; this invariant requires "
@@ -2818,7 +2850,13 @@ def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
                         f"{src!r} but no node by that name exists in the topology"
                     )
                 _src_kind = str(_src_node.get("type") or "").strip().lower()
-                if _src_kind != "frr":
+                # Ruling alpha (2026-09-25, SP #1): accepted iff the src type has a
+                # registered provider declaring IMPL for 'bgp_as_path' -- the same
+                # capability read the R-O1 gate uses (PBE-P2-6). An unregistered type
+                # is never routed through nos_provider_for (its registry UNSUP would
+                # replace this message); it keeps the existing refusal, byte-identical.
+                _src_prov = NOS_PROVIDERS.get(_src_kind)
+                if _src_prov is None or capability_for(_src_prov, "bgp_as_path").state != CAP_IMPL:
                     die(
                         f"{ctx}: invariant 'bgp_as_path' references src "
                         f"{src!r} of type {_src_kind!r}; this invariant requires "
@@ -3203,9 +3241,10 @@ def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
         # kind in the engine's universe; it is simply no longer in THIS gate's
         # set. Removing any further kind requires the same discharge -- a
         # working guest path -- never a silent deletion (v8 §15).
-        # 'exec' is the sixth exec-into kind and is deliberately absent: its own type
-        # gate (frr / nft-fw only) pre-empts loudly for sonic-vm, so a gate here would
-        # be dead code. Adding a seventh kind to the engine's universe check without
+        # 'exec' is the sixth exec-into kind and is deliberately absent: its own
+        # per-type rule (provider.exec_command_rule, REQ-45D-6; sonic-vm's read-only
+        # allowlist since 7b65ee9) decides exec on every node type, so a gate here
+        # would be a second source for the same decision. Adding a seventh kind to the engine's universe check without
         # adding it here re-opens R-O1; the proof carries a case per kind.
         # Container exec against a vm-runtime node reaches the vrnetlab launcher, not
         # the guest NOS, so any verdict produced would describe the wrong entity.
@@ -3239,23 +3278,45 @@ def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
         # tests/vm_runtime_validate_rejection_proof.py cases (a) and (f) exist to
         # catch exactly that.
         #
-        # ORDERING (accepted): for bgp_community / bgp_as_path / ospf_neighbor_up the
-        # existing 'frr' src type gate fires earlier and its message stands; for kind
-        # 'exec' the existing type gate likewise pre-empts. Those gates are loud, so
-        # no silent path survives; this gate is their backstop, not their first line.
+        # ORDERING (accepted): for ospf_neighbor_up the existing 'frr' src type gate
+        # fires earlier and its message stands (D-047). The bgp_community /
+        # bgp_as_path src gates are capability-derived since ruling alpha
+        # (2026-09-25): a sonic-vm src passes them exactly when its provider declares
+        # the type IMPL, the same read this gate makes. Those gates are loud, so no
+        # silent path survives; this gate is their backstop, not their first line.
+        #
+        # PER-KIND DISCHARGE (REQ-45D-23, LD-45D-4): a reference resolving to a
+        # vm-runtime node is refused unless that node's NOS provider -- read through
+        # the closed coupling runtime vm <=> type sonic-vm -- declares IMPL for the
+        # kind's capability token (the invariant's own type for kind 'invariant').
+        # Validate and exec read the same declaration: _nos_collect refuses an
+        # undeclared token before provider.collect (PBE-1b-9 / PBE-P2-6). The
+        # rejection text lists the kinds and invariant types still deferred on that
+        # node type by derivation -- this gate's closed set and _INVARIANT_TYPES,
+        # each minus the provider's IMPL declarations -- never by hand.
         #
         # Authority: sonic-vm-open-questions-ruling-record (d9850b4), the H-1..H-5
         # carry-forward note (exec-into principle, Rev-3), and Addendum #2 (form
         # re-derived to the principle's own boundary; closure by enumeration).
         # ----------------------------
         _eig_kind = str(t.get("kind") or "").strip().lower()
-        if _eig_kind in ("tcp", "bgp_neighbor", "invariant", "route_prefix"):
+        _eig_set = ("tcp", "bgp_neighbor", "invariant", "route_prefix")
+        if _eig_kind in _eig_set:
             # REQ-45b-12 / PBE-P2-6: read the model-homed shared source instead
             # of re-deriving. This check remains an independent corroborating
             # gate -- it is not dropped, it just stops being a second
             # derivation of the same mapping.
             _eig_runtimes = node_runtime_map(resolved)
             _eig_ctx = f"tests[{i}] ({t.get('name', '<unnamed>')})"
+            _eig_types = {
+                str(_n.get("name") or "").strip(): str(_n.get("type") or "").strip().lower()
+                for _n in (resolved.get("nodes") or [])
+                if isinstance(_n, dict)
+            }
+            _eig_token = (
+                str(t.get("type") or "").strip().lower()
+                if _eig_kind == "invariant" else _eig_kind
+            )
             _eig_refs = [("src", t.get("src") or t.get("from"))]
             if _eig_kind == "tcp":
                 _eig_refs.append(("dst", t.get("dst") or t.get("to")))
@@ -3267,6 +3328,18 @@ def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
                     continue
                 if _eig_runtimes.get(_eig_name) != "vm":
                     continue
+                _eig_ntype = _eig_types.get(_eig_name, "")
+                _eig_prov = NOS_PROVIDERS.get(_eig_ntype)
+
+                def _eig_impl(_tok, _p=_eig_prov):
+                    return _p is not None and capability_for(_p, _tok).state == CAP_IMPL
+
+                if _eig_impl(_eig_token):
+                    continue
+                _eig_def_kinds = [
+                    _k for _k in _eig_set if _k != "invariant" and not _eig_impl(_k)
+                ]
+                _eig_def_types = [_ty for _ty in _INVARIANT_TYPES if not _eig_impl(_ty)]
                 die(
                     f"{_eig_ctx}: {_eig_kind} test references {_eig_field} node "
                     f"{_eig_name!r}, whose resolved runtime is 'vm'; running a "
@@ -3274,9 +3347,13 @@ def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
                     f"this release. Container exec reaches the vrnetlab launcher "
                     f"container, not the guest NOS, so the verdict would describe the "
                     f"wrong entity. Valid: give {_eig_field} a node whose resolved "
-                    f"runtime is 'container'. vm-runtime nodes currently support "
-                    f"lifecycle (up/status/down), node readiness, and ping tests "
-                    f"(executed against the guest); other test kinds are deferred "
+                    f"runtime is 'container'. vm-runtime nodes support lifecycle "
+                    f"(up/status/down), node readiness, ping tests (executed against "
+                    f"the guest), and each test kind and invariant type their NOS "
+                    f"provider declares implemented; on node type {_eig_ntype!r} the "
+                    f"deferred ones, derived from its provider's capability "
+                    f"declarations, are: tests {', '.join(_eig_def_kinds) or 'none'}; "
+                    f"invariant types {', '.join(_eig_def_types) or 'none'} "
                     f"(DC v2.1 §10, 'Model vs runtime backend')."
                 )
 

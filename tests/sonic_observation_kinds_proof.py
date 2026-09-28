@@ -22,10 +22,10 @@ read or compared.
 Sections:
   K-DISPATCH  collect() is wired and routes each kind to its handler; an
               undeclared kind is refused loudly (SystemExit 2).
-  K-CAP       capability tokens for the six kinds are NOT declared yet (they
-              flip in script 2, ruling D1), so core's _nos_collect refuses
-              them before provider.collect: no `cassian test` path reaches
-              these handlers in script 1.
+  K-CAP       re-authored in script 2 (ruling D1): the six kinds are declared
+              IMPL, exactly the handler table's keys -- handler-to-token
+              consistency, both directions (the check nos_deny_by_default's
+              leg (i) makes for FRR only) -- and an undeclared kind stays UNSUP.
   K-<kind>    parse on captured output: configured values (per-prefix kinds),
               recorded facts (summary kinds), and the collection-failure shape.
   K-KEYS      data/evidence key sets equal FRR's, per kind.
@@ -49,7 +49,7 @@ sys.path.insert(0, os.path.join(_HERE, "..", "src"))
 
 import cassian_nos_frr as FRR  # noqa: E402
 import cassian_nos_sonic as S  # noqa: E402
-from cassian_nos_types import CAP_UNSUP, ObservationRequest, capability_for  # noqa: E402
+from cassian_nos_types import CAP_IMPL, CAP_UNSUP, ObservationRequest, capability_for  # noqa: E402
 
 FIX = os.path.join(_HERE, "fixtures", "sonic-4_5d-h1b1")
 
@@ -198,8 +198,17 @@ try:
 
     # ------------------------------------------------------------------- K-CAP
     for k in KINDS:
-        check(f"K-CAP {k}: not yet declared (UNSUP until script 2)",
-              capability_for(S.SONIC_PROVIDER, k).state == CAP_UNSUP)
+        check(f"K-CAP {k}: declared IMPL (script 2, ruling D1)",
+              capability_for(S.SONIC_PROVIDER, k).state == CAP_IMPL)
+    # Coverage limit (PBE-P2-8): the two §4.5-c operational legs are named here by
+    # hand; any further IMPL token without a handler reds this check for review.
+    _impl_toks = {tok for tok, d in S.SONIC_PROVIDER.capabilities.items() if d.state == CAP_IMPL}
+    check("K-CAP every handler has an IMPL token; IMPL tokens without a handler are "
+          "exactly the §4.5-c legs gen_node_config, provision",
+          set(S._SONIC_COLLECT_HANDLERS) <= _impl_toks
+          and _impl_toks - set(S._SONIC_COLLECT_HANDLERS) == {"gen_node_config", "provision"})
+    check("K-CAP an undeclared kind (route_present) stays UNSUP",
+          capability_for(S.SONIC_PROVIDER, "route_present").state == CAP_UNSUP)
 
     # -------------------------------------------------------- K-<kind> (values)
     for k in SUMMARY_KINDS:

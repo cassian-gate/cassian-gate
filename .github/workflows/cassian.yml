@@ -716,6 +716,15 @@ jobs:
           set -euo pipefail
           python tests/sonic_observation_kinds_proof.py
 
+      - name: SONiC observed-state render proof — sonic_observed_state_render_proof.py (§4.5-d, REQ-45D-21)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/sonic_observed_state_render_proof.py
+
       - name: SONiC (VM) teardown sweep (§4.5-c WI-3)
         if: always()
         env:

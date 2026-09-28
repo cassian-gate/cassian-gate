@@ -237,6 +237,15 @@ def sonic_port_for_iface(iface: str, ports: tuple[str, ...], node: str) -> str:
 _SONIC_CAPABILITIES: dict[str, CapabilityDisposition] = {
     "gen_node_config": impl(),
     "provision": impl(),
+    # §4.5-d H1-b1 (founder ruling A of 2026-09-25; D1 of 2026-09-26): the six
+    # kinds whose handlers are in _SONIC_COLLECT_HANDLERS. Each token is the
+    # single source the model's R-O1 gate and _nos_collect both read.
+    "bgp_neighbor": impl(),
+    "bgp_session_up": impl(),
+    "bgp_localpref_equals": impl(),
+    "bgp_med_equals": impl(),
+    "bgp_community": impl(),
+    "bgp_as_path": impl(),
 }
 
 
