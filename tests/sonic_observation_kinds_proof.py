@@ -5,6 +5,8 @@ Kinds under test (founder ruling A, 2026-09-25; session-9 corrected invariant):
   REQ-45D-1  bgp_neighbor            REQ-45D-9   bgp_localpref_equals
   REQ-45D-8  bgp_session_up          REQ-45D-10  bgp_med_equals
   REQ-45D-15 bgp_community           REQ-45D-16  bgp_as_path
+H1-b2 script 1 (founder rulings A, 2026-09-25, and D1 = P1, 2026-09-29):
+  REQ-45D-13 route_advertised_to     REQ-45D-14  route_not_advertised_to
 
 Evidence rule (founder statement, 2026-09-26): SONiC's correctness is proven
 from SONiC's own evidence. The inputs are captured SONiC guest output,
@@ -32,6 +34,14 @@ Sections:
   K-LASTUPD   paths[*].lastUpdate is never read (session-9 ruling (1)).
   K-NV        two-directional non-vacuity: every value / key / failure-shape
               predicate above is re-run on a mutated capture and must fail.
+
+H1-b2 inputs: tests/fixtures/sonic-4_5d-h1b2/ from cap-45d-h1b2.tar
+(session-14 rulings note §3), a peered capture on the committed pair topology;
+the values cite capture-procedure-4_5d-h1b2-advertised.md rev 2 §1
+(CONFIGURED_ADV), never the capture. In script 1 the two kinds are wired with
+no capability token (K-CAP asserts UNSUP); script 2 flips them. Advertised
+entries carry no lastUpdate, so K-LASTUPD does not apply to them. H1-b2 limits
+(procedure rev 2 §6): IPv4 unicast, one eBGP neighbour, no outbound filter.
 
 Coverage limits (PBE-P2-8): lab-free, no guest contacted; one image
 (local/sonic-vm:202405, FRR 8.5.4); the summary capture has no Established
@@ -129,6 +139,36 @@ AFTER = load("h1b1v_prefix_after.out")
 STOCK = load("ip_bgp_10.1.0.1_32.out")
 ABSENT = load("ip_bgp_192.0.2.1_32.out")
 
+# -- H1-b2 (script 1): route_advertised_to / route_not_advertised_to --------
+# capture-procedure-4_5d-h1b2-advertised.md rev 2 §1 -- the configured values,
+# fixed before capture (sha256 2e7ca8bd…2e68f). Never read from the capture,
+# which is committed byte-exact under tests/fixtures/sonic-4_5d-h1b2/ (D4):
+#   h1b2_adv_after.out       Established neighbour, test prefix advertised
+#   h1b2_adv_before.out      Established neighbour, before configuration
+#   h1b2_adv_noneighbor.out  the absent-neighbour read (rc 0, warning object)
+FIX2 = os.path.join(_HERE, "fixtures", "sonic-4_5d-h1b2")
+CONFIGURED_ADV = {
+    "peer_ip": "198.51.100.1",      # s2, as s1 sees it on the pair link
+    "prefix": "203.0.113.0/24",     # the test prefix s1 originates
+    "control": "192.0.2.1/32",      # absent control: never a key
+    "absent_peer": "203.0.113.99",  # no such neighbour
+}
+ADV_KINDS = ("route_advertised_to", "route_not_advertised_to")
+
+
+def load2(name):
+    with open(os.path.join(FIX2, name), encoding="utf-8") as fh:
+        return fh.read()
+
+
+ADV_AFTER = load2("h1b2_adv_after.out")
+ADV_BEFORE = load2("h1b2_adv_before.out")
+ADV_NONEIGHBOR = load2("h1b2_adv_noneighbor.out")
+
+
+def adv_params(peer=None):
+    return {"peer_ip": peer or CONFIGURED_ADV["peer_ip"], "prefix": CONFIGURED_ADV["prefix"]}
+
 
 def mutate_json(text, fn):
     doc = json.loads(text)
@@ -180,8 +220,8 @@ try:
     # -------------------------------------------------------------- K-DISPATCH
     check("K-DISPATCH collect is wired (no longer the deferred placeholder)",
           S.SONIC_PROVIDER.collect is S.collect and not hasattr(S.collect, "cassian_deferred_leg"))
-    check("K-DISPATCH handler table holds exactly the six H1-b1 kinds",
-          sorted(S._SONIC_COLLECT_HANDLERS) == sorted(KINDS))
+    check("K-DISPATCH handler table holds exactly the six H1-b1 kinds and the two H1-b2 kinds",
+          sorted(S._SONIC_COLLECT_HANDLERS) == sorted(KINDS + ADV_KINDS))
     for k in KINDS:
         want = list(S._BGP_SUMMARY_ARGV) if k in SUMMARY_KINDS else ["vtysh", "-c", f"show ip bgp {CONFIGURED['prefix']} json"]
 
@@ -203,9 +243,11 @@ try:
     # Coverage limit (PBE-P2-8): the two §4.5-c operational legs are named here by
     # hand; any further IMPL token without a handler reds this check for review.
     _impl_toks = {tok for tok, d in S.SONIC_PROVIDER.capabilities.items() if d.state == CAP_IMPL}
-    check("K-CAP every handler has an IMPL token; IMPL tokens without a handler are "
-          "exactly the §4.5-c legs gen_node_config, provision",
-          set(S._SONIC_COLLECT_HANDLERS) <= _impl_toks
+    check("K-CAP every H1-b1 handler has an IMPL token and the two H1-b2 handlers have none "
+          "(script 1; the flip is script 2); IMPL tokens without a handler are exactly the "
+          "§4.5-c legs gen_node_config, provision",
+          set(S._SONIC_COLLECT_HANDLERS) - set(ADV_KINDS) <= _impl_toks
+          and not (set(ADV_KINDS) & _impl_toks)
           and _impl_toks - set(S._SONIC_COLLECT_HANDLERS) == {"gen_node_config", "provision"})
     check("K-CAP an undeclared kind (route_present) stays UNSUP",
           capability_for(S.SONIC_PROVIDER, "route_present").state == CAP_UNSUP)
@@ -314,6 +356,102 @@ try:
     short = SimpleNamespace(kind=o.kind, data={k: v for k, v in o.data.items() if k != "route_present"},
                             evidence=o.evidence)
     check("K-NV K-KEYS detects a dropped data key", not full_keys(short, "bgp_as_path", AFTER))
+
+
+    # ================================================ H1-b2 script 1 (-13, -14)
+    # K-DISPATCH: both kinds route to the one advertised-routes handler, one
+    # guest read, the advertised-routes argv for the requested neighbour.
+    ADV_ARGV = ["vtysh", "-c", f"show ip bgp neighbor {CONFIGURED_ADV['peer_ip']} advertised-routes json"]
+    for k in ADV_KINDS:
+        def _adv_dispatch(k=k):
+            o, rt = run(k, ADV_AFTER, params=adv_params())
+            return o.kind == k and rt.argvs == [ADV_ARGV]
+        guarded(f"K-DISPATCH {k}: Observation.kind == {k!r}, exactly one guest read, argv {ADV_ARGV!r}",
+                _adv_dispatch)
+    check("K-DISPATCH both advertised kinds share one handler (as FRR's do)",
+          S._SONIC_COLLECT_HANDLERS["route_advertised_to"] is S._SONIC_COLLECT_HANDLERS["route_not_advertised_to"])
+
+    # K-CAP (script 1): not declared -- the flip is script 2.
+    for k in ADV_KINDS:
+        check(f"K-CAP {k}: not declared in script 1; stays UNSUP until the script-2 flip",
+              capability_for(S.SONIC_PROVIDER, k).state == CAP_UNSUP)
+
+    def adv_ok(o):
+        return o.evidence.get("probe_ok") is True and o.evidence.get("parse_error") == ""
+
+    def advertised_configured(o):
+        d = o.data
+        return (adv_ok(o) and d.get("norm_prefix") == CONFIGURED_ADV["prefix"]
+                and CONFIGURED_ADV["prefix"] in d.get("advertised_prefixes", [])
+                and d.get("present") is True)
+
+    def control_absent(o):
+        return adv_ok(o) and CONFIGURED_ADV["control"] not in o.data.get("advertised_prefixes", [])
+
+    def not_yet_advertised(o):
+        d = o.data
+        return (adv_ok(o) and d.get("present") is False
+                and CONFIGURED_ADV["prefix"] not in d.get("advertised_prefixes", [])
+                and len(d.get("advertised_prefixes", [])) > 0)
+
+    def adv_failed(o, stdout, params):
+        return (failed_collection(o, o.kind, stdout, params)
+                and o.data.get("advertised_prefixes") == [] and o.data.get("present") is False)
+
+    # K-<kind>: parse on captured output. Values cite procedure rev 2 §1; the
+    # non-empty BEFORE set is the recorded fact of session-14 note §3.
+    _absent = adv_params(CONFIGURED_ADV["absent_peer"])
+    for k in ADV_KINDS:
+        o, _ = run(k, ADV_AFTER, params=adv_params())
+        check(f"K-{k} after configuration: {CONFIGURED_ADV['prefix']} advertised to "
+              f"{CONFIGURED_ADV['peer_ip']} (procedure §1)", advertised_configured(o))
+        check(f"K-{k} after configuration: control {CONFIGURED_ADV['control']} not advertised (procedure §1)",
+              control_absent(o))
+        o, _ = run(k, ADV_BEFORE, params=adv_params())
+        check(f"K-{k} before configuration: test prefix not advertised, set non-empty (session-14 note §3)",
+              not_yet_advertised(o))
+        o, _rt = run(k, ADV_NONEIGHBOR, params=_absent)
+        check(f"K-{k} absent neighbour {CONFIGURED_ADV['absent_peer']}: collection failure, "
+              "never an empty advertised set",
+              adv_failed(o, ADV_NONEIGHBOR, _absent)
+              and o.evidence["parse_error"].startswith("advertisedRoutes not present in advertised-routes json"))
+        check(f"K-DISPATCH {k}: the requested neighbour {CONFIGURED_ADV['absent_peer']} is the one read",
+              _rt.argvs == [["vtysh", "-c",
+                             f"show ip bgp neighbor {CONFIGURED_ADV['absent_peer']} advertised-routes json"]])
+        o, _ = run(k, ADV_AFTER, rc=1, params=adv_params())
+        check(f"K-{k} failed read (rc 1): probe_ok False", o.evidence["probe_ok"] is False)
+        o, _ = run(k, ADV_AFTER, params=adv_params())
+        check(f"K-KEYS {k}: data and evidence keys equal FRR's (derived at run time)",
+              full_keys(o, k, ADV_AFTER, adv_params()))
+
+    # K-NV direction 1: each value predicate fails on a capture whose value moved.
+    _nv = mutate_json(ADV_AFTER, lambda d: d["advertisedRoutes"].pop(CONFIGURED_ADV["prefix"]))
+    o, _ = run("route_advertised_to", _nv, params=adv_params())
+    check("K-NV advertised: the test prefix removed from the capture is detected", not advertised_configured(o))
+    _nv = mutate_json(ADV_AFTER, lambda d: d["advertisedRoutes"].__setitem__(CONFIGURED_ADV["control"], {}))
+    o, _ = run("route_not_advertised_to", _nv, params=adv_params())
+    check("K-NV advertised: the control added to the capture is detected", not control_absent(o))
+    _nv = mutate_json(ADV_BEFORE, lambda d: d["advertisedRoutes"].__setitem__(CONFIGURED_ADV["prefix"], {}))
+    o, _ = run("route_not_advertised_to", _nv, params=adv_params())
+    check("K-NV advertised: the test prefix added to the before capture is detected", not not_yet_advertised(o))
+    _nv = mutate_json(ADV_BEFORE, lambda d: d["advertisedRoutes"].clear())
+    o, _ = run("route_not_advertised_to", _nv, params=adv_params())
+    check("K-NV advertised: an empty advertised set fails the non-empty before fact", not not_yet_advertised(o))
+    # Direction 2: a key-drop or malformed capture is a collection failure.
+    _bad = (
+        ("advertisedRoutes removed", mutate_json(ADV_AFTER, lambda d: d.pop("advertisedRoutes"))),
+        ("a key that is not a prefix", mutate_json(ADV_AFTER, lambda d: d["advertisedRoutes"].__setitem__("not-a-prefix", {}))),
+        ("advertisedRoutes not a mapping", mutate_json(ADV_AFTER, lambda d: d.__setitem__("advertisedRoutes", [CONFIGURED_ADV["prefix"]]))),
+        ("malformed output", "{ not json"),
+    )
+    for name, bad in _bad:
+        for k in ADV_KINDS:
+            o, _ = run(k, bad, params=adv_params())
+            check(f"K-NV {k}: {name} is a collection failure, never a partial set",
+                  adv_failed(o, bad, adv_params()) and not advertised_configured(o))
+    # The absent-neighbour predicate itself can fail: a good read is not a failure.
+    o, _ = run("route_not_advertised_to", ADV_AFTER, params=adv_params())
+    check("K-NV the collection-failure predicate fails on a good read", not adv_failed(o, ADV_AFTER, adv_params()))
 
 except BaseException as _exc:  # a section aborted: record it, never exit silently
     check(f"proof aborted in a section [raised {type(_exc).__name__}: {_exc}]", False)

@@ -1520,6 +1520,82 @@ def _sonic_collect_bgp_as_path(rt, lab, node, req: "ObservationRequest") -> "Obs
     )
 
 
+# -- §4.5-d H1-b2 (script 1): advertised-routes collection, two kinds --
+#
+# REQ-45D-13 route_advertised_to, REQ-45D-14 route_not_advertised_to; founder
+# rulings A (2026-09-25: H1-b2 is the advertised family) and D1 = P1
+# (2026-09-29: the evidence is a peered SONiC capture). One handler serves both
+# kinds, as FRR's does; the result format is FRR's for the same kinds
+# (REQ-45D-21: "keys = FRR's" is the shared result FORMAT only). The values come
+# from SONiC's own `show ip bgp neighbor <peer> advertised-routes json`; nothing
+# here reads, imports or compares against FRR's parser (founder statement,
+# 2026-09-26). Core keeps the verdict and the record.
+#
+# SHAPE COVERAGE LIMIT (PBE-P2-8). One SONiC output shape is read, as captured
+# from `local/sonic-vm:202405` (FRR 8.5.4) on the committed pair topology: a
+# top-level object whose `advertisedRoutes` maps each advertised prefix to an
+# entry object. The advertised set is that mapping's keys, each normalized; a
+# key that does not normalize to an IPv4 prefix is a collection failure (the
+# capture is IPv4 unicast, one neighbour, no outbound filter). An absent
+# neighbour reads rc 0 with a top-level `warning` object and no
+# `advertisedRoutes`: that, like any other shape, is a COLLECTION FAILURE --
+# `evidence["parse_error"]` named, the advertised set empty -- and never an
+# empty advertised set, which would let route_not_advertised_to pass against a
+# neighbour that does not exist (session-14 rulings note §3). Core turns a
+# parse_error with an empty set into its existing deterministic failure.
+#
+# Capability tokens for these two kinds are NOT declared here: they flip in
+# H1-b2 script 2 (founder ruling of 2026-09-29, session 15: two scripts, as
+# H1-b1's D1). Until then `_nos_collect` raises UNSUP before
+# `provider.collect` is reached, so this wiring opens no path from
+# `cassian test`.
+
+
+def _advertised_argv(peer_ip: str) -> tuple:
+    """The advertised-routes read for one neighbour, as a vtysh argv."""
+    return ("vtysh", "-c", f"show ip bgp neighbor {peer_ip} advertised-routes json")
+
+
+def _advertised_prefixes(raw: str) -> "tuple[list, str]":
+    """(sorted advertised prefixes, parse_error) from one advertised-routes read."""
+    try:
+        doc = json.loads((raw or "").strip() or "{}")
+    except Exception:
+        return [], "vtysh output not parseable as JSON"
+    routes = doc.get("advertisedRoutes") if isinstance(doc, dict) else None
+    if not isinstance(routes, dict):
+        warning = doc.get("warning") if isinstance(doc, dict) else None
+        if isinstance(warning, str) and warning.strip():
+            return [], ("advertisedRoutes not present in advertised-routes json "
+                        f"(device warning: {warning.strip()})")
+        return [], "advertisedRoutes not present in advertised-routes json"
+    found = set()
+    for key in routes:
+        norm = _normalize_prefix(str(key))
+        if not norm:
+            return [], "advertised route key is not an IPv4 prefix"
+        found.add(norm)
+    return sorted(found), ""
+
+
+def _sonic_collect_advertised_routes(rt, lab, node, req: "ObservationRequest") -> "Observation":
+    """REQ-45D-13 / REQ-45D-14: the prefixes advertised to one neighbour."""
+    peer_ip = str(req.params.get("peer_ip") or "").strip()
+    prefix = str(req.params.get("prefix") or "").strip()
+    rc, out = _sonic_read(rt, lab, node, _advertised_argv(peer_ip))
+    probe_ok = (rc == 0)
+    advertised, parse_error = _advertised_prefixes(out)
+    return Observation(
+        kind=req.kind,
+        data={"norm_prefix": prefix, "present": prefix in advertised, "advertised_prefixes": advertised},
+        evidence=dict(
+            {"cmd": f"vtysh -c 'show ip bgp neighbor {peer_ip} advertised-routes json'", "rc": rc,
+             "parse_error": parse_error},
+            probe_ok=probe_ok,
+        ),
+    )
+
+
 _SONIC_COLLECT_HANDLERS = {
     "bgp_neighbor": _sonic_collect_bgp_neighbor,
     "bgp_session_up": _sonic_collect_bgp_session_up,
@@ -1527,6 +1603,8 @@ _SONIC_COLLECT_HANDLERS = {
     "bgp_med_equals": _sonic_collect_bgp_med_equals,
     "bgp_community": _sonic_collect_bgp_community,
     "bgp_as_path": _sonic_collect_bgp_as_path,
+    "route_advertised_to": _sonic_collect_advertised_routes,
+    "route_not_advertised_to": _sonic_collect_advertised_routes,
 }
 
 
