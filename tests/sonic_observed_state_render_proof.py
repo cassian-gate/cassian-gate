@@ -3,8 +3,9 @@ REQ-45D-21 -- SONiC observed-state render proof (hosted, lab-free).
 
 Phase 2 §4.5-d, H1-b1 script 2. Lands with H1-b1 by founder ruling (i) of
 2026-09-25 and is extended in H1-b2 / H1-b3. Covers bgp_neighbor through its
-test-record line by founder ruling of 2026-09-28 (Decision 1 (ii)). Authors no
-governance; numbers no precedent.
+test-record line by founder ruling of 2026-09-28 (Decision 1 (ii)). Extended in
+H1-b2 script 2 to the advertised pair, REQ-45D-13 / -14 (ruling (i); founder
+ruling 1 of 2026-09-29). Authors no governance; numbers no precedent.
 
 Property (handover REQ-45D-21, DC v2.1 §13(c), §14 item 9): for every SONiC-
 collected kind, a failure renders SONiC's ACTUAL observed state in
@@ -17,7 +18,8 @@ founder statement of 2026-09-26).
 Sections:
   R-SEAM    static (AST): the engine's _evaluate_invariant_attempt copies
             _obs.data wholesale into observed_state for each of the five
-            invariant kinds, with no node-type constant in that branch;
+            H1-b1 invariant kinds and in the advertised pair's one shared
+            branch, with no node-type constant in that branch;
             run_bgp_neighbor_test reads data["observed"] into its error line;
             the two render functions carry no node-type string constant.
   R-RENDER  per invariant kind: a failed record built as the engine builds it
@@ -33,7 +35,11 @@ Sections:
 Coverage limits (PBE-P2-8): lab-free; one image (local/sonic-vm:202405, FRR
 8.5.4); the records are built in-process in the engine's shape, not by running
 the engine's retry driver; truncation is not exercised (the payloads are far
-below the cap). The (VM) legs are the handover §18's, not asserted here.
+below the cap). The advertised pair's failing observations are the captured
+reads in which each kind fails -- BEFORE (test prefix not yet advertised) for
+route_advertised_to, AFTER (advertised) for route_not_advertised_to -- from
+tests/fixtures/sonic-4_5d-h1b2/, values citing capture procedure rev 2 §1. The
+(VM) legs are the handover §18's, not asserted here.
 Exit 0 on all-pass; exit 1 on any failure.
 """
 import ast
@@ -74,6 +80,29 @@ def load(name):
 SUMMARY = load("bgp_summary.out")
 AFTER = load("h1b1v_prefix_after.out")
 
+FIX2 = os.path.join(_HERE, "fixtures", "sonic-4_5d-h1b2")
+ADV_PEER = "198.51.100.1"           # capture procedure rev 2 §1 (2e7ca8bd…e68f)
+ADV_PREFIX = "203.0.113.0/24"       # capture procedure rev 2 §1
+ADV_KINDS = ("route_advertised_to", "route_not_advertised_to")
+
+
+def load2(name):
+    with open(os.path.join(FIX2, name), encoding="utf-8") as fh:
+        return fh.read()
+
+
+ADV_BEFORE = load2("h1b2_adv_before.out")
+ADV_AFTER = load2("h1b2_adv_after.out")
+
+
+def stdout_for(kind):
+    """The captured read each kind's FAILING observation comes from."""
+    if kind == "route_advertised_to":
+        return ADV_BEFORE           # fails: the test prefix is not yet advertised
+    if kind == "route_not_advertised_to":
+        return ADV_AFTER            # fails: the test prefix is advertised
+    return AFTER if kind != "bgp_session_up" else SUMMARY
+
 
 class FakeRt:
     def __init__(self, stdout):
@@ -84,6 +113,8 @@ class FakeRt:
 
 
 def _req(kind):
+    if kind in ADV_KINDS:
+        return ObservationRequest(kind=kind, params={"peer_ip": ADV_PEER, "prefix": ADV_PREFIX})
     if kind in ("bgp_neighbor", "bgp_session_up"):
         return ObservationRequest(kind=kind, params={"neighbor": NEIGHBOR})
     return ObservationRequest(kind=kind, params={"prefix": PREFIX})
@@ -163,6 +194,19 @@ def _copies_obs_data(branch):
     return False
 
 
+def _branch_in(fn, kinds):
+    """The one `if inv_type in (<kinds>):` branch whose constants are exactly kinds."""
+    for n in ast.walk(fn):
+        if (isinstance(n, ast.If) and isinstance(n.test, ast.Compare)
+                and isinstance(n.test.left, ast.Name) and n.test.left.id == "inv_type"
+                and len(n.test.ops) == 1 and isinstance(n.test.ops[0], ast.In)
+                and isinstance(n.test.comparators[0], ast.Tuple)
+                and all(isinstance(e, ast.Constant) for e in n.test.comparators[0].elts)
+                and {e.value for e in n.test.comparators[0].elts} == set(kinds)):
+            return n
+    return None
+
+
 def _str_consts(node):
     return {c.value for c in ast.walk(node) if isinstance(c, ast.Constant) and isinstance(c.value, str)}
 
@@ -176,6 +220,12 @@ for k in INV_KINDS:
     check("R-SEAM %s: branch names no node type (no NOS branch)" % k,
           br is not None and not (_str_consts(ast.Module(body=br.body, type_ignores=[]))
                                   & set(NOS_CONSTANTS)))
+_adv_br = _branch_in(_ev, ADV_KINDS) if _ev else None
+check("R-SEAM advertised pair: one shared branch copies _obs.data wholesale into observed_state",
+      _adv_br is not None and _copies_obs_data(_adv_br))
+check("R-SEAM advertised pair: branch names no node type (no NOS branch)",
+      _adv_br is not None and not (_str_consts(ast.Module(body=_adv_br.body, type_ignores=[]))
+                                   & set(NOS_CONSTANTS)))
 _bn = _fn.get("run_bgp_neighbor_test")
 _bn_src = ast.get_source_segment(_eng_src, _bn) if _bn else ""
 check("R-SEAM run_bgp_neighbor_test reads data['observed'] into its mismatch line",
@@ -187,9 +237,13 @@ for fname in ("_format_test_summary", "_format_observed_state_block"):
           not (_str_consts(tree) & set(NOS_CONSTANTS)))
 
 # --------------------------------------------------------------- R-RENDER
-for k in INV_KINDS:
-    o = sonic_obs(k, AFTER if k != "bgp_session_up" else SUMMARY)
-    stdout = AFTER if k != "bgp_session_up" else SUMMARY
+check("R-RENDER route_advertised_to: its observation is a failing state (test prefix not advertised)",
+      sonic_obs("route_advertised_to", stdout_for("route_advertised_to")).data.get("present") is False)
+check("R-RENDER route_not_advertised_to: its observation is a failing state (test prefix advertised)",
+      sonic_obs("route_not_advertised_to", stdout_for("route_not_advertised_to")).data.get("present") is True)
+for k in INV_KINDS + ADV_KINDS:
+    stdout = stdout_for(k)
+    o = sonic_obs(k, stdout)
     check("R-RENDER %s: SONiC observation collected without parse error" % k,
           not o.evidence.get("parse_error"))
     check("R-RENDER %s: rendered observed keys equal FRR's; lines equal SONiC's own block" % k,
@@ -236,8 +290,8 @@ check("R-NEIGH bgp_neighbor: no observed: block for a test kind (R27 unchanged)"
            "error": "x", "observed_state": dict(_no.data)})))
 
 # ------------------------------------------------------------------- R-NV
-for k in INV_KINDS:
-    stdout = AFTER if k != "bgp_session_up" else SUMMARY
+for k in INV_KINDS + ADV_KINDS:
+    stdout = stdout_for(k)
     data = dict(sonic_obs(k, stdout).data)
     victim = sorted(data)[0]
     dropped = {kk: vv for kk, vv in data.items() if kk != victim}

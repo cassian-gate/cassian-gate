@@ -246,6 +246,11 @@ _SONIC_CAPABILITIES: dict[str, CapabilityDisposition] = {
     "bgp_med_equals": impl(),
     "bgp_community": impl(),
     "bgp_as_path": impl(),
+    # §4.5-d H1-b2 script 2 (founder ruling A of 2026-09-25; ruling 1 of
+    # 2026-09-29): the two advertised kinds, one shared handler in
+    # _SONIC_COLLECT_HANDLERS. Same single source as the six above.
+    "route_advertised_to": impl(),
+    "route_not_advertised_to": impl(),
 }
 
 
@@ -1544,11 +1549,10 @@ def _sonic_collect_bgp_as_path(rt, lab, node, req: "ObservationRequest") -> "Obs
 # neighbour that does not exist (session-14 rulings note §3). Core turns a
 # parse_error with an empty set into its existing deterministic failure.
 #
-# Capability tokens for these two kinds are NOT declared here: they flip in
-# H1-b2 script 2 (founder ruling of 2026-09-29, session 15: two scripts, as
-# H1-b1's D1). Until then `_nos_collect` raises UNSUP before
-# `provider.collect` is reached, so this wiring opens no path from
-# `cassian test`.
+# Capability tokens for these two kinds are declared IMPL in
+# _SONIC_CAPABILITIES since H1-b2 script 2 (founder ruling 1 of 2026-09-29).
+# `_nos_collect` reads that declaration before `provider.collect`, so
+# `cassian test` reaches this handler only through it (PBE-P2-6).
 
 
 def _advertised_argv(peer_ip: str) -> tuple:

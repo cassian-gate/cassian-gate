@@ -24,10 +24,12 @@ read or compared.
 Sections:
   K-DISPATCH  collect() is wired and routes each kind to its handler; an
               undeclared kind is refused loudly (SystemExit 2).
-  K-CAP       re-authored in script 2 (ruling D1): the six kinds are declared
-              IMPL, exactly the handler table's keys -- handler-to-token
-              consistency, both directions (the check nos_deny_by_default's
-              leg (i) makes for FRR only) -- and an undeclared kind stays UNSUP.
+  K-CAP       re-authored in H1-b1 script 2 (ruling D1) and again in H1-b2
+              script 2 (ruling 1 of 2026-09-29): the six H1-b1 kinds and the
+              two H1-b2 kinds are declared IMPL, exactly the handler table's
+              keys -- handler-to-token consistency, both directions (the check
+              nos_deny_by_default's leg (i) makes for FRR only) -- and an
+              undeclared kind stays UNSUP.
   K-<kind>    parse on captured output: configured values (per-prefix kinds),
               recorded facts (summary kinds), and the collection-failure shape.
   K-KEYS      data/evidence key sets equal FRR's, per kind.
@@ -38,8 +40,8 @@ Sections:
 H1-b2 inputs: tests/fixtures/sonic-4_5d-h1b2/ from cap-45d-h1b2.tar
 (session-14 rulings note §3), a peered capture on the committed pair topology;
 the values cite capture-procedure-4_5d-h1b2-advertised.md rev 2 §1
-(CONFIGURED_ADV), never the capture. In script 1 the two kinds are wired with
-no capability token (K-CAP asserts UNSUP); script 2 flips them. Advertised
+(CONFIGURED_ADV), never the capture. H1-b2 script 1 wired the two kinds with
+no capability token; H1-b2 script 2 declares both IMPL (K-CAP). Advertised
 entries carry no lastUpdate, so K-LASTUPD does not apply to them. H1-b2 limits
 (procedure rev 2 §6): IPv4 unicast, one eBGP neighbour, no outbound filter.
 
@@ -243,11 +245,11 @@ try:
     # Coverage limit (PBE-P2-8): the two §4.5-c operational legs are named here by
     # hand; any further IMPL token without a handler reds this check for review.
     _impl_toks = {tok for tok, d in S.SONIC_PROVIDER.capabilities.items() if d.state == CAP_IMPL}
-    check("K-CAP every H1-b1 handler has an IMPL token and the two H1-b2 handlers have none "
-          "(script 1; the flip is script 2); IMPL tokens without a handler are exactly the "
-          "§4.5-c legs gen_node_config, provision",
-          set(S._SONIC_COLLECT_HANDLERS) - set(ADV_KINDS) <= _impl_toks
-          and not (set(ADV_KINDS) & _impl_toks)
+    check("K-CAP every handler has an IMPL token, the two H1-b2 handlers included "
+          "(H1-b2 script 2, ruling 1 of 2026-09-29); IMPL tokens without a handler are "
+          "exactly the §4.5-c legs gen_node_config, provision",
+          set(S._SONIC_COLLECT_HANDLERS) <= _impl_toks
+          and set(ADV_KINDS) <= _impl_toks
           and _impl_toks - set(S._SONIC_COLLECT_HANDLERS) == {"gen_node_config", "provision"})
     check("K-CAP an undeclared kind (route_present) stays UNSUP",
           capability_for(S.SONIC_PROVIDER, "route_present").state == CAP_UNSUP)
@@ -371,10 +373,10 @@ try:
     check("K-DISPATCH both advertised kinds share one handler (as FRR's do)",
           S._SONIC_COLLECT_HANDLERS["route_advertised_to"] is S._SONIC_COLLECT_HANDLERS["route_not_advertised_to"])
 
-    # K-CAP (script 1): not declared -- the flip is script 2.
+    # K-CAP (H1-b2 script 2, founder ruling 1 of 2026-09-29): declared IMPL.
     for k in ADV_KINDS:
-        check(f"K-CAP {k}: not declared in script 1; stays UNSUP until the script-2 flip",
-              capability_for(S.SONIC_PROVIDER, k).state == CAP_UNSUP)
+        check(f"K-CAP {k}: declared IMPL (H1-b2 script 2)",
+              capability_for(S.SONIC_PROVIDER, k).state == CAP_IMPL)
 
     def adv_ok(o):
         return o.evidence.get("probe_ok") is True and o.evidence.get("parse_error") == ""

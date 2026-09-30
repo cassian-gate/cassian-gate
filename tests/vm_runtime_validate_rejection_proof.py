@@ -316,7 +316,8 @@ def main():
           type(_ndr._for("c1")).__name__ == "ContainerRuntime")
 
     # ================================================================ REQ-45D-25
-    # §4.5-d H1-b1 script 2 (founder rulings A, alpha, D1, A-prime). Cases grow per
+    # §4.5-d H1-b1 script 2 (founder rulings A, alpha, D1, A-prime); H1-b2 script 2
+    # (founder ruling 1 of 2026-09-29) adds the advertised pair. Cases grow per
     # flip; existing cases (a)-(g) are not weakened ((b) re-targeted by ruling
     # alpha). The CI step that runs this file is unchanged.
     from cassian_nos_types import CAP_IMPL, capability_for
@@ -334,6 +335,12 @@ def main():
                           "src": "s1", "prefix": "10.0.0.0/24", "expected": "65000:100"},
         "bgp_as_path": {"kind": "invariant", "type": "bgp_as_path",
                         "src": "s1", "prefix": "198.51.100.0/24", "as_path": "^64999 64998"},
+        # H1-b2 script 2: prefix from capture procedure rev 2 §1; peer r1 is s1's
+        # declared link peer in this proof's topology.
+        "route_advertised_to": {"kind": "invariant", "type": "route_advertised_to",
+                                "src": "s1", "prefix": "203.0.113.0/24", "peer": "r1"},
+        "route_not_advertised_to": {"kind": "invariant", "type": "route_not_advertised_to",
+                                    "src": "s1", "prefix": "203.0.113.0/24", "peer": "r1"},
     }
     # (a) one case per flipped kind: validate-ACCEPT on a vm node.
     for _k, _t in _flip.items():
