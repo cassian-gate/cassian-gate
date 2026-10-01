@@ -7,6 +7,9 @@ Kinds under test (founder ruling A, 2026-09-25; session-9 corrected invariant):
   REQ-45D-15 bgp_community           REQ-45D-16  bgp_as_path
 H1-b2 script 1 (founder rulings A, 2026-09-25, and D1 = P1, 2026-09-29):
   REQ-45D-13 route_advertised_to     REQ-45D-14  route_not_advertised_to
+H1-b3 script 1a (founder rulings A, 2026-09-25; D-3 and D-4, 2026-09-30;
+Q13 (a), IPv6 (I) and (B), 2026-10-01):
+  REQ-45D-11 route_present           REQ-45D-12  route_absent
 
 Evidence rule (founder statement, 2026-09-26): SONiC's correctness is proven
 from SONiC's own evidence. The inputs are captured SONiC guest output,
@@ -44,6 +47,18 @@ the values cite capture-procedure-4_5d-h1b2-advertised.md rev 2 §1
 no capability token; H1-b2 script 2 declares both IMPL (K-CAP). Advertised
 entries carry no lastUpdate, so K-LASTUPD does not apply to them. H1-b2 limits
 (procedure rev 2 §6): IPv4 unicast, one eBGP neighbour, no outbound filter.
+
+H1-b3 inputs: tests/fixtures/sonic-4_5d-h1b3/ from cap-45d-h1b3.tar
+(session-17 rulings note §5), the full-table RIB read on the committed pair
+topology; values cite capture-procedure-4_5d-h1b3-rib.md rev 1 §1
+(CONFIGURED_RIB), never the capture. Script 1a wires both kinds with no
+capability token (K-CAP); script 2 declares them. Ruling (B): the shared result
+format is the core's, and the core's own route-kind evidence carries
+parse_error (K-KEYS grounds this in the engine source), so the RIB kinds'
+evidence is FRR's key set plus exactly parse_error; every other kind stays
+strictly equal. Route entries' values are never read (K-UPTIME). H1-b3 limits
+(procedure §6): IPv4 default table only -- an IPv6 prefix is a collection
+failure (ruling (I)); no ECMP, no VRF; one image.
 
 Coverage limits (PBE-P2-8): lab-free, no guest contacted; one image
 (local/sonic-vm:202405, FRR 8.5.4); the summary capture has no Established
@@ -172,6 +187,32 @@ def adv_params(peer=None):
     return {"peer_ip": peer or CONFIGURED_ADV["peer_ip"], "prefix": CONFIGURED_ADV["prefix"]}
 
 
+# -- H1-b3 (script 1a): route_present / route_absent --------------------------
+# capture-procedure-4_5d-h1b3-rib.md rev 1 §1 -- the configured values, fixed
+# before capture (sha256 d89089c9…296ca). Never read from the capture, which is
+# committed byte-exact under tests/fixtures/sonic-4_5d-h1b3/ (D4):
+#   h1b3_rib_table_after.out   full table after the static route was configured
+#   h1b3_rib_table_before.out  full table before any configuration
+FIX3 = os.path.join(_HERE, "fixtures", "sonic-4_5d-h1b3")
+CONFIGURED_RIB = {
+    "connected": "198.51.100.0/31",  # s1's end of the declared pair link
+    "static": "198.18.0.0/24",      # configured blackhole static route
+    "absent": "198.18.1.0/24",      # absent control: never configured
+}
+RIB_KINDS = ("route_present", "route_absent")
+RIB_ARGV = ["vtysh", "-c", "show ip route json"]
+IPV6_PREFIX = "2001:db8::/32"   # RFC 3849 documentation range
+
+
+def load3(name):
+    with open(os.path.join(FIX3, name), encoding="utf-8") as fh:
+        return fh.read()
+
+
+RIB_AFTER = load3("h1b3_rib_table_after.out")
+RIB_BEFORE = load3("h1b3_rib_table_before.out")
+
+
 def mutate_json(text, fn):
     doc = json.loads(text)
     fn(doc)
@@ -222,8 +263,9 @@ try:
     # -------------------------------------------------------------- K-DISPATCH
     check("K-DISPATCH collect is wired (no longer the deferred placeholder)",
           S.SONIC_PROVIDER.collect is S.collect and not hasattr(S.collect, "cassian_deferred_leg"))
-    check("K-DISPATCH handler table holds exactly the six H1-b1 kinds and the two H1-b2 kinds",
-          sorted(S._SONIC_COLLECT_HANDLERS) == sorted(KINDS + ADV_KINDS))
+    check("K-DISPATCH handler table holds exactly the six H1-b1 kinds, the two H1-b2 kinds "
+          "and the two H1-b3 RIB kinds",
+          sorted(S._SONIC_COLLECT_HANDLERS) == sorted(KINDS + ADV_KINDS + RIB_KINDS))
     for k in KINDS:
         want = list(S._BGP_SUMMARY_ARGV) if k in SUMMARY_KINDS else ["vtysh", "-c", f"show ip bgp {CONFIGURED['prefix']} json"]
 
@@ -232,11 +274,11 @@ try:
             return o.kind == k and rt.argvs == [want]
         guarded(f"K-DISPATCH {k}: Observation.kind == {k!r}, exactly one guest read, argv {want!r}", _dispatch)
     try:
-        run("route_present", AFTER, params={"prefix": CONFIGURED["prefix"]})
+        run("route_prefix", AFTER, params={"prefix": CONFIGURED["prefix"]})
         refused = False
     except SystemExit as e:
         refused = (e.code == 2)
-    check("K-DISPATCH an undeclared kind (route_present) is refused loudly (SystemExit 2)", refused)
+    check("K-DISPATCH an undeclared kind (route_prefix, H1-b3 script 1b) is refused loudly (SystemExit 2)", refused)
 
     # ------------------------------------------------------------------- K-CAP
     for k in KINDS:
@@ -245,14 +287,16 @@ try:
     # Coverage limit (PBE-P2-8): the two §4.5-c operational legs are named here by
     # hand; any further IMPL token without a handler reds this check for review.
     _impl_toks = {tok for tok, d in S.SONIC_PROVIDER.capabilities.items() if d.state == CAP_IMPL}
-    check("K-CAP every handler has an IMPL token, the two H1-b2 handlers included "
-          "(H1-b2 script 2, ruling 1 of 2026-09-29); IMPL tokens without a handler are "
-          "exactly the §4.5-c legs gen_node_config, provision",
-          set(S._SONIC_COLLECT_HANDLERS) <= _impl_toks
+    check("K-CAP every handler has an IMPL token except exactly the two H1-b3 RIB handlers "
+          "(wired with no token in script 1a, D-4 and Q13 (a); declared in script 2); the two "
+          "H1-b2 handlers included; IMPL tokens without a handler are exactly the §4.5-c legs "
+          "gen_node_config, provision",
+          set(S._SONIC_COLLECT_HANDLERS) - _impl_toks == set(RIB_KINDS)
           and set(ADV_KINDS) <= _impl_toks
           and _impl_toks - set(S._SONIC_COLLECT_HANDLERS) == {"gen_node_config", "provision"})
-    check("K-CAP an undeclared kind (route_present) stays UNSUP",
-          capability_for(S.SONIC_PROVIDER, "route_present").state == CAP_UNSUP)
+    for k in RIB_KINDS:
+        check(f"K-CAP {k}: handler wired, no capability token, stays UNSUP until script 2",
+              capability_for(S.SONIC_PROVIDER, k).state == CAP_UNSUP)
 
     # -------------------------------------------------------- K-<kind> (values)
     for k in SUMMARY_KINDS:
@@ -454,6 +498,133 @@ try:
     # The absent-neighbour predicate itself can fail: a good read is not a failure.
     o, _ = run("route_not_advertised_to", ADV_AFTER, params=adv_params())
     check("K-NV the collection-failure predicate fails on a good read", not adv_failed(o, ADV_AFTER, adv_params()))
+
+    # ======================================================= H1-b3 script 1a
+    def rib_params(prefix):
+        return {"prefix": prefix}
+
+    def rib_keys(o, prefix):
+        """Ruling (B): data keys equal FRR's; evidence = FRR's keys plus exactly parse_error."""
+        dk, ek = frr_keys(o.kind, RIB_AFTER, rib_params(prefix))
+        return sorted(o.data) == dk and sorted(o.evidence) == sorted(ek + ["parse_error"])
+
+    def rib_good(o):
+        return o.evidence.get("probe_ok") is True and o.evidence.get("parse_error") == ""
+
+    def rib_present(o, prefix):
+        return (rib_good(o) and o.data.get("present") is True and o.data.get("norm_prefix") == prefix
+                and prefix in o.data.get("observed_prefixes", []))
+
+    def rib_absent(o, prefix):
+        return (rib_good(o) and o.data.get("present") is False
+                and prefix not in o.data.get("observed_prefixes", []))
+
+    def rib_failed(o, prefix):
+        """Never 'absent': probe_ok False, parse_error named, present False, no observed
+        prefixes (a read SONiC cannot vouch for reports no state), keys per (B)."""
+        return (o.evidence.get("probe_ok") is False and bool(o.evidence.get("parse_error"))
+                and o.data.get("present") is False and o.data.get("observed_prefixes") == []
+                and rib_keys(o, prefix))
+
+    def core_route_evidence_carries_parse_error(engine_src):
+        """Ruling (B) item 6: the core's own route_present/route_absent evidence carries parse_error."""
+        head = '        if inv_type in ("route_present", "route_absent"):\n'
+        if engine_src.count(head) != 1:
+            return False
+        body = engine_src.split(head, 1)[1].split("            return vtysh_ok, predicate_ok", 1)[0]
+        return '"parse_error": _unsup.message' in body
+
+    for k in RIB_KINDS:
+        def _rib_dispatch(k=k):
+            o, rt = run(k, RIB_AFTER, params=rib_params(CONFIGURED_RIB["static"]))
+            return o.kind == k and rt.argvs == [RIB_ARGV]
+        guarded(f"K-DISPATCH {k}: Observation.kind == {k!r}, exactly one guest read, argv {RIB_ARGV!r}",
+                _rib_dispatch)
+    check("K-DISPATCH both RIB kinds share one handler (one shared RIB read, REQ-45D-11)",
+          S._SONIC_COLLECT_HANDLERS["route_present"] is S._SONIC_COLLECT_HANDLERS["route_absent"])
+
+    for k in RIB_KINDS:
+        o, _ = run(k, RIB_AFTER, params=rib_params(CONFIGURED_RIB["connected"]))
+        check(f"K-{k} after configuration: connected {CONFIGURED_RIB['connected']} present (procedure §1)",
+              rib_present(o, CONFIGURED_RIB["connected"]))
+        o, _ = run(k, RIB_AFTER, params=rib_params(CONFIGURED_RIB["static"]))
+        check(f"K-{k} after configuration: static {CONFIGURED_RIB['static']} present (procedure §1)",
+              rib_present(o, CONFIGURED_RIB["static"]))
+        o, _ = run(k, RIB_AFTER, params=rib_params(CONFIGURED_RIB["absent"]))
+        check(f"K-{k} after configuration: control {CONFIGURED_RIB['absent']} absent on a good read (procedure §1)",
+              rib_absent(o, CONFIGURED_RIB["absent"]))
+        o, _ = run(k, RIB_BEFORE, params=rib_params(CONFIGURED_RIB["static"]))
+        check(f"K-{k} before configuration: static {CONFIGURED_RIB['static']} absent on a good read",
+              rib_absent(o, CONFIGURED_RIB["static"]))
+        o, _ = run(k, RIB_BEFORE, params=rib_params(CONFIGURED_RIB["connected"]))
+        check(f"K-{k} before configuration: connected {CONFIGURED_RIB['connected']} present (procedure §1)",
+              rib_present(o, CONFIGURED_RIB["connected"]))
+        o, _ = run(k, RIB_AFTER, params=rib_params(CONFIGURED_RIB["static"]))
+        check(f"K-KEYS {k}: data keys equal FRR's; evidence keys FRR's plus exactly parse_error (ruling (B))",
+              rib_keys(o, CONFIGURED_RIB["static"]))
+
+    with open(os.path.join(_HERE, "..", "src", "cassian_engine.py"), encoding="utf-8") as fh:
+        _ENGINE_SRC = fh.read()
+    check("K-KEYS ruling (B) grounding: the core's own route_present/route_absent evidence carries parse_error",
+          core_route_evidence_carries_parse_error(_ENGINE_SRC))
+
+    # K-UPTIME: route entries' values are never read (session-17 capture ruling).
+    def _scramble_uptime(doc):
+        for entries in doc.values():
+            for e in entries:
+                e["uptime"] = "not-a-time"
+    _scr = mutate_json(RIB_AFTER, _scramble_uptime)
+    for k in RIB_KINDS:
+        a, _ = run(k, RIB_AFTER, params=rib_params(CONFIGURED_RIB["static"]))
+        b, _ = run(k, _scr, params=rib_params(CONFIGURED_RIB["static"]))
+        check(f"K-UPTIME {k}: observation identical with uptime scrambled", a.data == b.data and a.evidence == b.evidence)
+
+    # Collection failures: never an answer (REQ-45D-12; rulings (I) and (B)).
+    for k in RIB_KINDS:
+        o, rt = run(k, RIB_AFTER, params=rib_params(IPV6_PREFIX))
+        check(f"K-{k} IPv6 prefix {IPV6_PREFIX}: collection failure naming IPv6 on sonic-vm, no read issued (ruling (I))",
+              rib_failed(o, IPV6_PREFIX) and "IPv6" in o.evidence["parse_error"]
+              and "sonic-vm" in o.evidence["parse_error"] and rt.argvs == [])
+        o, _ = run(k, RIB_AFTER, rc=1, params=rib_params(CONFIGURED_RIB["static"]))
+        check(f"K-{k} failed read (rc 1): collection failure, never present", rib_failed(o, CONFIGURED_RIB["static"]))
+    _rib_bad = (
+        ("empty output", ""),
+        ("an empty table", "{}"),
+        ("malformed output", "{ not json"),
+        ("a table that is not an object", json.dumps([CONFIGURED_RIB["static"]])),
+        ("a key that is not an IPv4 prefix", mutate_json(RIB_AFTER, lambda d: d.__setitem__("not-a-prefix", []))),
+    )
+    for name, bad in _rib_bad:
+        for k in RIB_KINDS:
+            o, _ = run(k, bad, params=rib_params(CONFIGURED_RIB["absent"]))
+            check(f"K-{k} {name}: collection failure, never an absent answer",
+                  rib_failed(o, CONFIGURED_RIB["absent"]))
+
+    # K-NV: every predicate above is shown able to fail.
+    _nv = mutate_json(RIB_AFTER, lambda d: d.pop(CONFIGURED_RIB["static"]))
+    o, _ = run("route_present", _nv, params=rib_params(CONFIGURED_RIB["static"]))
+    check("K-NV RIB: the static prefix removed from the capture is detected", not rib_present(o, CONFIGURED_RIB["static"]))
+    _nv = mutate_json(RIB_AFTER, lambda d: d.pop(CONFIGURED_RIB["connected"]))
+    o, _ = run("route_present", _nv, params=rib_params(CONFIGURED_RIB["connected"]))
+    check("K-NV RIB: the connected prefix removed from the capture is detected",
+          not rib_present(o, CONFIGURED_RIB["connected"]))
+    _nv = mutate_json(RIB_AFTER, lambda d: d.__setitem__(CONFIGURED_RIB["absent"], []))
+    o, _ = run("route_absent", _nv, params=rib_params(CONFIGURED_RIB["absent"]))
+    check("K-NV RIB: the absent control added to the capture is detected", not rib_absent(o, CONFIGURED_RIB["absent"]))
+    o, _ = run("route_absent", RIB_AFTER, params=rib_params(CONFIGURED_RIB["absent"]))
+    check("K-NV RIB: the collection-failure predicate fails on a good read", not rib_failed(o, CONFIGURED_RIB["absent"]))
+    _dropped = SimpleNamespace(kind=o.kind, data={k: v for k, v in o.data.items() if k != "observed_prefixes"},
+                               evidence=o.evidence)
+    check("K-NV RIB: K-KEYS detects a dropped data key", not rib_keys(_dropped, CONFIGURED_RIB["absent"]))
+    _extra = SimpleNamespace(kind=o.kind, data=o.data, evidence=dict(o.evidence, reason="x"))
+    check("K-NV RIB: K-KEYS detects an evidence key beyond FRR's plus parse_error", not rib_keys(_extra, CONFIGURED_RIB["absent"]))
+    # Mutate inside the route branch only: the same text occurs in earlier branches, and
+    # a replace at the first occurrence would leave this branch intact (a vacuous mutant).
+    _head = '        if inv_type in ("route_present", "route_absent"):\n'
+    _pre, _post = _ENGINE_SRC.split(_head, 1)
+    _no_pe = _pre + _head + _post.replace('"parse_error": _unsup.message', '"error": _unsup.message', 1)
+    check("K-NV RIB: the ruling (B) grounding fails when the core drops parse_error",
+          not core_route_evidence_carries_parse_error(_no_pe))
 
 except BaseException as _exc:  # a section aborted: record it, never exit silently
     check(f"proof aborted in a section [raised {type(_exc).__name__}: {_exc}]", False)

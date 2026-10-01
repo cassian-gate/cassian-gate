@@ -1600,6 +1600,74 @@ def _sonic_collect_advertised_routes(rt, lab, node, req: "ObservationRequest") -
     )
 
 
+# -- §4.5-d H1-b3 script 1a: the shared RIB read (route_present, route_absent) --
+# Founder ruling A of 2026-09-25 (H1-b3 = REQ-45D-2, -11, -12); D-3 and D-4 of
+# 2026-09-30 (evidence form C1; the split); Q13 (a), IPv6 (I) and (B) of
+# 2026-10-01. One full-table read, `show ip route json`, is SONiC's single RIB
+# read (REQ-45D-11: shares the RIB read with REQ-45D-2). SONiC owns its parse
+# and its failure detection; the shared result format is the core's (ruling
+# (B)), and the core's own route-kind evidence carries `parse_error`, so this
+# evidence does too. A read SONiC cannot vouch for -- an IPv6 prefix (ruling
+# (I)), a non-zero rc, unparseable or empty output, a key that is not an IPv4
+# prefix -- is a collection failure (probe_ok False, parse_error named), never
+# "absent". No route entry's value is read, so `uptime` is never read
+# (session-17 capture ruling). No capability token is declared here: the flip
+# is H1-b3 script 2 (D-4), so `_nos_collect` refuses both kinds with UNSUP
+# before this handler is reached.
+_RIB_ARGV = ("vtysh", "-c", "show ip route json")
+
+
+def _rib_prefixes(raw: str) -> "tuple[list, str]":
+    """(sorted IPv4 prefixes, parse_error) from one full-table RIB read."""
+    text = (raw or "").strip()
+    if not text:
+        return [], "empty RIB read"
+    try:
+        doc = json.loads(text)
+    except Exception:
+        return [], "vtysh output not parseable as JSON"
+    if not isinstance(doc, dict):
+        return [], "RIB json is not an object keyed by prefix"
+    if not doc:
+        return [], "empty RIB read"
+    found = set()
+    for key in doc:
+        norm = _normalize_prefix(str(key))
+        if not norm:
+            return [], "RIB key is not an IPv4 prefix"
+        found.add(norm)
+    return sorted(found), ""
+
+
+def _sonic_collect_route_table(rt, lab, node, req: "ObservationRequest") -> "Observation":
+    """REQ-45D-11 / REQ-45D-12: one full-table RIB read serves both kinds."""
+    prefix = str(req.params.get("prefix") or "").strip()
+    norm = _normalize_prefix(prefix)
+    if norm is None:
+        reason = ("IPv6 prefix unsupported on sonic-vm (IPv4 RIB read only)" if ":" in prefix
+                  else "prefix is not an IPv4 prefix")
+        return Observation(
+            kind=req.kind,
+            data={"norm_prefix": prefix, "present": False, "observed_prefixes": []},
+            evidence=dict({"cmd": "", "rc": None, "parse_error": reason}, probe_ok=False),
+        )
+    rc, out = _sonic_read(rt, lab, node, _RIB_ARGV)
+    observed, parse_error = _rib_prefixes(out)
+    if rc != 0 and not parse_error:
+        parse_error = f"RIB read failed (rc {rc})"
+    if parse_error:
+        observed = []
+    return Observation(
+        kind=req.kind,
+        data={"norm_prefix": prefix, "present": (not parse_error) and norm in observed,
+              "observed_prefixes": observed},
+        evidence=dict(
+            {"cmd": "vtysh -c 'show ip route json'", "rc": rc, "parse_error": parse_error},
+            probe_ok=(rc == 0 and not parse_error),
+        ),
+    )
+
+
 _SONIC_COLLECT_HANDLERS = {
     "bgp_neighbor": _sonic_collect_bgp_neighbor,
     "bgp_session_up": _sonic_collect_bgp_session_up,
@@ -1609,6 +1677,9 @@ _SONIC_COLLECT_HANDLERS = {
     "bgp_as_path": _sonic_collect_bgp_as_path,
     "route_advertised_to": _sonic_collect_advertised_routes,
     "route_not_advertised_to": _sonic_collect_advertised_routes,
+    # H1-b3 script 1a: wired with no capability token (D-4; Q13 (a)).
+    "route_present": _sonic_collect_route_table,
+    "route_absent": _sonic_collect_route_table,
 }
 
 
