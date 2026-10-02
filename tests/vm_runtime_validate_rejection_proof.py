@@ -25,11 +25,9 @@ Ruled cases (carry-forward note §5):
       sees `node:`-declared invariants ONLY because the invariant block's own
       node->src backfill runs earlier in the same loop iteration. A gate moved
       ahead of that backfill silently loses invariant coverage; this case reds.
-  (b) bgp_community with `src` on a vm node -> FRR-gate message.
-      Pins the accepted ordering (§4 note 1) as a CI-guarded fact: the existing
-      frr type gate fires first and its message stands. The runtime gate is a
-      backstop, not the first line. If a future change makes the runtime gate
-      pre-empt, this case reds and the note's ordering claim gets revisited.
+  (b) [FLIPPED, ruling alpha 2026-09-25] bgp_community with `src` on a vm node
+      now VALIDATES: its src gate is capability-derived and sonic-vm declares the
+      type IMPL (H1-b1). Type-gate-first ordering stays pinned by case (g).
   (c) ping `src` on a vm node   -> RUNTIME-gate message.
   (d) tcp `src` on a vm node    -> RUNTIME-gate message.
   (e) tcp `dst` on a vm node    -> RUNTIME-gate message (the listener; C-4 leg).
@@ -126,15 +124,16 @@ def main():
     check("(a) message names the kind", "invariant test references" in a_m)
     check("(a) message names the node", "'s1'" in a_m)
 
-    # ---------------------------------------------------------------- ruled case (b)
-    # bgp_community: the existing frr type gate fires FIRST and its message stands.
-    b_o, b_m = _validate({
+    # ---------------------------------------------------------------- ruled case (b) [FLIPPED]
+    # Ruling alpha (2026-09-25, SP #1): the bgp_community src gate reads the src
+    # type's provider capability (PBE-P2-6); sonic-vm declares bgp_community IMPL
+    # (H1-b1), so bgp_community on a vm node now VALIDATES -- REQ-45D-25(a)'s case
+    # for that kind, in the shape of case (c). Case (g) keeps type-gate-first.
+    b_o, _b_m = _validate({
         "name": "bc-vm", "kind": "invariant", "type": "bgp_community",
         "src": "s1", "prefix": "10.0.0.0/24", "expected": "65000:100",
     })
-    check("(b) bgp_community src on vm node rejected", b_o == "die")
-    check("(b) rejection is the FRR type gate, not the runtime gate (accepted ordering)",
-          "src to be a node of type 'frr'" in b_m and not _is_runtime_gate(b_m))
+    check("(b) bgp_community src on vm node now VALIDATES (ruling alpha)", b_o == "ok")
 
     # ---------------------------------------------------------------- ruled case (c) [FLIPPED]
     # REQ-45a-6a: ping left the exec-into gate. The VM runtime backend now executes
@@ -259,7 +258,11 @@ def main():
     # REQ-45a-4b/-8: the readiness error classes and the copy-UNSUP text shipped in
     # the Finding-C commit are §13(a)(b)(c) surfaces; assert their corrected content.
     import cassian_runtime_vm as _rv
-    _ec_b = _rv.classify_guest_probe_rc("s1", _rv.VM_SSHPASS_RC_AUTH_FAIL)
+    # D-i (founder ruling 2026-09-24, BL-P2-4.5c-32): rc=5 is transient before the
+    # deadline; the (b) text is emitted by the deadline classifier, byte-identical.
+    check("P-EC (b) readiness rc=5 is transient before the deadline (D-i)",
+          _rv.classify_guest_probe_rc("s1", _rv.VM_SSHPASS_RC_AUTH_FAIL) is None)
+    _ec_b = _rv.guest_probe_deadline_error("s1", _rv.VM_SSHPASS_RC_AUTH_FAIL, 300)
     check("P-EC (b) readiness auth-fail names boot-time provenance (default: admin)",
           bool(_ec_b) and "default: admin" in _ec_b and "contrib/sonic-image-build/" in _ec_b)
     check("P-EC (b) readiness auth-fail cites the capabilities doc",
@@ -311,6 +314,156 @@ def main():
           type(_ndr._for("s1")).__name__ == "VmRuntime")
     check("P-ROUTE dispatch facade routes container node -> ContainerRuntime",
           type(_ndr._for("c1")).__name__ == "ContainerRuntime")
+
+    # ================================================================ REQ-45D-25
+    # §4.5-d H1-b1 script 2 (founder rulings A, alpha, D1, A-prime); H1-b2 script 2
+    # (founder ruling 1 of 2026-09-29) adds the advertised pair. Cases grow per
+    # flip; existing cases (a)-(g) are not weakened ((b) re-targeted by ruling
+    # alpha). The CI step that runs this file is unchanged.
+    from cassian_nos_types import CAP_IMPL, capability_for
+    _sp = cm.NOS_PROVIDERS["sonic-vm"]
+    _impl = lambda tok: capability_for(_sp, tok).state == CAP_IMPL
+    _flip = {
+        "bgp_neighbor": {"kind": "bgp_neighbor", "src": "s1", "dst": "10.0.0.1"},
+        "bgp_session_up": {"kind": "invariant", "type": "bgp_session_up",
+                           "src": "s1", "dst": "10.0.0.1"},
+        "bgp_localpref_equals": {"kind": "invariant", "type": "bgp_localpref_equals",
+                                 "src": "s1", "prefix": "198.51.100.0/24", "expected": 250},
+        "bgp_med_equals": {"kind": "invariant", "type": "bgp_med_equals",
+                           "src": "s1", "prefix": "198.51.100.0/24", "expected": 4321},
+        "bgp_community": {"kind": "invariant", "type": "bgp_community",
+                          "src": "s1", "prefix": "10.0.0.0/24", "expected": "65000:100"},
+        "bgp_as_path": {"kind": "invariant", "type": "bgp_as_path",
+                        "src": "s1", "prefix": "198.51.100.0/24", "as_path": "^64999 64998"},
+        # H1-b2 script 2: prefix from capture procedure rev 2 §1; peer r1 is s1's
+        # declared link peer in this proof's topology.
+        "route_advertised_to": {"kind": "invariant", "type": "route_advertised_to",
+                                "src": "s1", "prefix": "203.0.113.0/24", "peer": "r1"},
+        "route_not_advertised_to": {"kind": "invariant", "type": "route_not_advertised_to",
+                                    "src": "s1", "prefix": "203.0.113.0/24", "peer": "r1"},
+    }
+    # (a) one case per flipped kind: validate-ACCEPT on a vm node.
+    for _k, _t in _flip.items():
+        _o, _m = _validate(dict(_t, name="q25a-" + _k))
+        check("Q25 (a) %s on vm node VALIDATES (declared IMPL)" % _k, _o == "ok" and _impl(_k))
+
+    # (b) one case per still-gated kind: REJECT with the DERIVED text.
+    _def_kinds = [k for k in ("tcp", "bgp_neighbor", "route_prefix") if not _impl(k)]
+    _def_types = [ty for ty in cm._INVARIANT_TYPES if not _impl(ty)]
+    _clause = ("on node type 'sonic-vm' the deferred ones, derived from its provider's "
+               "capability declarations, are: tests %s; invariant types %s "
+               % (", ".join(_def_kinds), ", ".join(_def_types)))
+    check("Q25 (b) still-gated set is non-empty and excludes every flipped kind",
+          _def_kinds and _def_types and not (set(_flip) & set(_def_kinds + _def_types)))
+    for _ty in _def_types:
+        if _ty in ("ospf_neighbor_up",):  # frr type gate fires first -- case (g)
+            continue
+        _o, _m = _validate({"name": "q25b-" + _ty, "kind": "invariant", "type": _ty,
+                            "src": "s1", "prefix": "10.0.0.0/24", "dst": "10.0.0.1",
+                            "neighbor": "2.2.2.2", "interface": "eth1", "peer": "r1",
+                            "mac": "aa:bb:cc:dd:ee:ff", "vni": 100, "vtep": "10.0.0.9"})
+        check("Q25 (b) %s on vm node REJECTED" % _ty,
+              _o == "die" and ((_is_runtime_gate(_m) and _clause in _m) or "requires" in _m))
+    for _nm, _m in (("tcp (d)", d_m), ("route_prefix (f)", f_m), ("interface_state (a)", a_m)):
+        check("Q25 (b) %s carries the derived deferred clause" % _nm, _clause in _m)
+    def _listed(msg):
+        """Parse the derived clause into tokens -- never a substring test
+        ('route_present' is a substring of 'evpn_mac_route_present')."""
+        tail = msg.split("deferred ones, derived from its provider's capability "
+                         "declarations, are: tests ", 1)[-1].split(" (DC v2.1", 1)[0]
+        kinds, _, types = tail.partition("; invariant types ")
+        return ([x.strip() for x in kinds.split(",")], [x.strip() for x in types.split(",")])
+    _lk, _lt = _listed(d_m)
+    check("Q25 (b) derived clause names no flipped kind (token-parsed)",
+          _lk == _def_kinds and _lt == _def_types and not (set(_flip) & set(_lk + _lt)))
+
+    # (b)-NV: the text and the decision move WITH the declaration, both directions.
+    _saved = dict(_sp.capabilities)
+    try:
+        _sp.capabilities.pop("bgp_med_equals")          # too-little: un-declare a flip
+        _o, _m = _validate(dict(_flip["bgp_med_equals"], name="nv-med"))
+        _ok1 = _o == "die" and _is_runtime_gate(_m) and "bgp_med_equals" in _m
+        _sp.capabilities["bgp_med_equals"] = _saved["bgp_med_equals"]
+        _sp.capabilities.pop("bgp_neighbor")            # too-little: a test kind
+        _o4, _m4 = _validate(dict(_flip["bgp_neighbor"], name="nv-bn"))
+        _ok4 = (_o4 == "die" and _is_runtime_gate(_m4)
+                and "bgp_neighbor" in _listed(_m4)[0])
+        _sp.capabilities["bgp_neighbor"] = _saved["bgp_neighbor"]
+        from cassian_nos_types import impl as _impl_tok
+        _sp.capabilities["route_present"] = _impl_tok()  # too-much: declare an un-flipped
+        _o2, _m2 = _validate({"name": "nv-rp", "kind": "invariant", "type": "route_present",
+                              "src": "s1", "prefix": "10.0.0.0/24"})
+        _ok2 = _o2 == "ok"
+        _o3, _m3 = _validate({"name": "nv-rp2", "kind": "invariant", "type": "route_absent",
+                              "src": "s1", "prefix": "10.0.0.0/24"})
+        _ok3 = _o3 == "die" and "route_present" not in _listed(_m3)[1] \
+            and "route_absent" in _listed(_m3)[1]
+    finally:
+        _sp.capabilities.clear(); _sp.capabilities.update(_saved)
+    for _lbl, _ok in (("un-declaring a flipped type re-gates it and lists it", _ok1),
+                      ("declaring an un-flipped type discharges it", _ok2),
+                      ("a newly declared type leaves the derived list", _ok3),
+                      ("un-declaring a flipped test kind re-gates it and lists it", _ok4)):
+        print("  MUTATION-FAIL: %s" % _lbl if _ok else "  MUTATION-UNDETECTED: %s" % _lbl)
+        check("Q25 (b)-NV %s" % _lbl, _ok)
+    check("Q25 (b)-NV provider capabilities restored", dict(_sp.capabilities) == _saved)
+
+    # (c) item 5: type sonic-vm + explicit runtime: container -> REJECT, distinct.
+    def _validate_nodes(nodes, test):
+        td = {"name": "q25c", "nodes": nodes,
+              "links": [{"endpoints": ["r1:eth1", "s1:eth1"]}], "tests": [test]}
+        try:
+            cm.ensure_valid_topology(td); cm.resolve_topology(td); return ("ok", "")
+        except SystemExit as e:
+            return ("die", str(e))
+    _ping = {"name": "p", "kind": "ping", "src": "r1", "dst": "s1"}
+    _c_nodes = [{"name": "r1", "type": "frr"},
+                {"name": "s1", "type": "sonic-vm", "runtime": "container", "image": _VM_IMAGE}]
+    c5_o, c5_m = _validate_nodes([dict(n) for n in _c_nodes], _ping)
+    c5b_o, c5b_m = _validate_nodes([dict(n) for n in _c_nodes], _ping)
+    check("Q25 (c) sonic-vm + runtime: container REJECTED", c5_o == "die")
+    check("Q25 (c) message is distinct from the VM-runtime-contract message",
+          "VM runtime contract violation" not in c5_m)
+    check("Q25 (c) names node, field and value; states the fix (vm, or omit)",
+          "node s1" in c5_m and "runtime: container" in c5_m and "runtime: vm" in c5_m
+          and "omit runtime" in c5_m and "Valid:" in c5_m)
+    check("Q25 (c) deterministic bytes", c5_m == c5b_m)
+    _om_o, _ = _validate_nodes([{"name": "r1", "type": "frr"},
+                                {"name": "s1", "type": "sonic-vm", "image": _VM_IMAGE}], _ping)
+    check("Q25 (c) control: sonic-vm with runtime omitted still validates (resolves to vm)",
+          _om_o == "ok")
+    _vm_o, _ = _validate_nodes([{"name": "r1", "type": "frr"},
+                                {"name": "s1", "type": "sonic-vm", "runtime": "vm",
+                                 "image": _VM_IMAGE}], _ping)
+    check("Q25 (c) control: sonic-vm with runtime: vm still validates", _vm_o == "ok")
+
+    # (d) exec on sonic-vm: allowed command ACCEPTED, refused command REJECTED.
+    _xa_o, _ = _validate({"name": "q25d-ok", "kind": "exec", "src": "s1",
+                          "command": "show version", "assertion": {"contains": "SONiC"}})
+    _xr_o, _xr_m = _validate({"name": "q25d-no", "kind": "exec", "src": "s1",
+                              "command": "config save -y", "assertion": {"contains": "x"}})
+    check("Q25 (d) exec 'show version' on sonic-vm ACCEPTED", _xa_o == "ok")
+    check("Q25 (d) exec 'config save -y' on sonic-vm REJECTED by the exec rule",
+          _xr_o == "die" and "exec command rejected" in _xr_m and not _is_runtime_gate(_xr_m))
+
+    # Ruling A-prime: the admission vocabulary is the pre-hoist tuple, unchanged in
+    # content and order, and the admission rejection is byte-identical.
+    _pre_hoist = ("bgp_session_up", "route_present", "route_absent", "bgp_med_equals",
+                  "bgp_localpref_equals", "bgp_community", "bgp_as_path",
+                  "route_advertised_to", "route_not_advertised_to",
+                  "evpn_mac_route_present", "evpn_mac_route_absent",
+                  "evpn_vni_route_present", "evpn_bgp_session_up", "ospf_neighbor_up",
+                  "interface_state")
+    check("A-prime admitted vocabulary equals the pre-hoist tuple (content and order)",
+          cm._INVARIANT_TYPES == _pre_hoist)
+    _u_o, _u_m = _validate({"name": "q-unknown", "kind": "invariant", "type": "nope", "src": "r1"})
+    check("A-prime unknown type: admission rejection bytes unchanged",
+          _u_o == "die" and _u_m == (
+              "tests[1]: invariant.type unsupported ('nope') (supported: bgp_session_up, "
+              "route_present, route_absent, bgp_med_equals, bgp_localpref_equals, "
+              "bgp_community, bgp_as_path, route_advertised_to, route_not_advertised_to, "
+              "evpn_mac_route_present, evpn_mac_route_absent, evpn_vni_route_present, "
+              "evpn_bgp_session_up, ospf_neighbor_up, interface_state)"))
 
     failed = [n for n, ok in checks if not ok]
     for n, ok in checks:

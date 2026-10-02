@@ -51,8 +51,8 @@ Copying is stated honestly rather than approximated:
 
 When a `sonic-vm` node is brought up, Cassian Gate polls the guest for readiness and fails with a §13-grade, direction-accurate message rather than a silent approximation. The classes are:
 
-- **(a) unreachable** — the SSH transport never answered (ssh rc=255): the wrapper and QEMU are up, but nothing is listening on the guest's forwarded SSH port yet.
-- **(b) auth-fail** — the transport answered but authentication failed (sshpass rc=5). Polling cannot cure wrong credentials, so this fails fast and names the credential provenance (see below).
+- **(a) unreachable** — the SSH transport had never answered, or had stopped answering, by the time the readiness window closed (ssh rc=255): the wrapper and QEMU are up, but nothing is listening on the guest's forwarded SSH port.
+- **(b) auth-fail** — the transport answered but authentication failed (sshpass rc=5), and that was still the last result when the readiness window closed. An rc=5 early in boot is expected and is polled through, usually for a single attempt: the launcher sets the guest password over the serial console at every boot, so SSH can answer before the credentials are in place. Wrong credentials are therefore reported when the readiness window closes, not at the first failed attempt; the message names the credential provenance (see below).
 - **(c) timeout** — the transport answered but the guest never returned `rc=0` to a trivial command within the readiness window.
 
 (A defensive host-key-unknown class (rc=6) exists but cannot occur under the pinned transport options `StrictHostKeyChecking=no` / `UserKnownHostsFile=/dev/null`; if seen, the transport has been modified.)

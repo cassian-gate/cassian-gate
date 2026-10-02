@@ -666,7 +666,7 @@ Supported node types:
 Important current boundary for vendor NOS VM nodes:
 
 - **ping tests are supported** on `sonic-vm` / NOS VM nodes: a ping with `src:` the guest runs against the guest NOS and produces an authoritative verdict
-- **`tcp`, `bgp_neighbor`, `route_prefix`, and invariant kinds are not supported** on vm-runtime nodes (deferred, DC v2.1 §10) and are rejected explicitly at validation time
+- **`tcp` and `route_prefix` tests, and every invariant type the node's NOS provider does not declare implemented, are not supported** on vm-runtime nodes (deferred, DC v2.1 §10) and are rejected explicitly at validation time; the deferred list is **derived** from the provider's capability declarations (see below)
 - current truthful behavior for an unsupported NOS VM test kind is:
   - misuse / unsupported test surface
   - exit code `2`
@@ -715,10 +715,20 @@ Expected outcome (message abridged):
 ERROR: tests[1] (reach): tcp test references src node 's1', whose resolved runtime
 is 'vm'; running a tcp test against a vm-runtime node is NOT SUPPORTED in this
 release. ... Valid: give src a node whose resolved runtime is 'container'. vm-runtime
-nodes currently support lifecycle (up/status/down), node readiness, and ping tests
-(executed against the guest); other test kinds are deferred.
+nodes support lifecycle (up/status/down), node readiness, ping tests (executed against
+the guest), and each test kind and invariant type their NOS provider declares
+implemented; on node type 'sonic-vm' the deferred ones, derived from its provider's
+capability declarations, are: tests tcp, route_prefix; invariant types ... (DC v2.1 §10, ...).
 exit code: 2
 ```
+
+The deferred list is **derived** from the node's provider capability declarations,
+not maintained by hand. For `sonic-vm` the implemented set is currently `bgp_neighbor`
+tests and the invariant types `bgp_session_up`, `bgp_localpref_equals`,
+`bgp_med_equals`, `bgp_community`, `bgp_as_path`, `route_advertised_to` and
+`route_not_advertised_to`. A `sonic-vm` node with an
+explicit `runtime: container` is rejected at validation (exit 2): set `runtime: vm`,
+or omit it.
 
 Meaning: for the gated kinds, container exec would reach the vrnetlab launcher container, not the guest NOS, so a verdict from it would describe the wrong entity. A ping does not have this problem -- it is executed against the guest and is supported.
 

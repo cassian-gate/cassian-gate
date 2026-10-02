@@ -157,6 +157,13 @@ SECTION_45C_FIXTURES = (
     # by tests/sonic_preconfigured_proof.py req26 instead. Stated because the
     # division is not obvious from either file alone.
     "sonic-preconfigured-boot.yaml",
+    # §4.5-d REQ-45D-24 (item 5, BL-P2-4.5c-46): the sonic-vm node declaring an
+    # explicit `runtime: container`, added at cassian-gate e28145a. NEVER
+    # DEPLOYED -- `cassian validate` refuses it at exit 2. Registered under
+    # founder Decision 4 (a) of 2026-09-28 (SP #1) so the enumeration-drop
+    # guard (F-45C-C3-3) sees it, and its two router_id addresses come under
+    # LEG 1's HALT-2 sweep.
+    "sonic-runtime-container.yaml",
 )
 
 # SONiC fixtures inherited from 4.5-a. REQ-45C-5 states these collide with

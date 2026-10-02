@@ -1,0 +1,57 @@
+{
+  "prefix":"198.51.100.0/24",
+  "version":2,
+  "paths":[
+    {
+      "aspath":{
+        "string":"64999 64998",
+        "segments":[
+          {
+            "type":"as-sequence",
+            "list":[
+              64999,
+              64998
+            ]
+          }
+        ],
+        "length":2
+      },
+      "origin":"IGP",
+      "metric":4321,
+      "locPrf":250,
+      "weight":32768,
+      "valid":true,
+      "version":2,
+      "sourced":true,
+      "local":true,
+      "bestpath":{
+        "overall":true,
+        "selectionReason":"First path received"
+      },
+      "community":{
+        "string":"64512:4242",
+        "list":[
+          "64512:4242"
+        ]
+      },
+      "lastUpdate":{
+        "epoch":1790448303,
+        "string":"Sat Sep 26 18:45:03 2026\n"
+      },
+      "nexthops":[
+        {
+          "ip":"0.0.0.0",
+          "hostname":"s1",
+          "afi":"ipv4",
+          "metric":0,
+          "accessible":true,
+          "used":true
+        }
+      ],
+      "peer":{
+        "peerId":"0.0.0.0",
+        "routerId":"10.1.0.1"
+      }
+    }
+  ]
+}

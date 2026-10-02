@@ -5177,7 +5177,8 @@ def cmd_test(args: argparse.Namespace) -> None:
         - src: vantage node name (runs check here)
         - prefix: CIDR string
         - expect: pass|fail (negative semantics preserved)
-        Current v1.5 support: frr nodes only (vtysh).
+        Collected through the NOS seam for every node type (REQ-45D-2); the
+        presence rule stays core.
         """
         prefix = str(t.get("prefix") or "").strip()
 
@@ -5185,71 +5186,73 @@ def cmd_test(args: argparse.Namespace) -> None:
         if expected not in ("pass", "fail"):
             expected = "pass"
 
-        # Resolve node type deterministically from resolved topology
-        node_type = ""
-        for n in (topo.get("nodes") or []):
-            if isinstance(n, dict) and n.get("name") == src:
-                node_type = str(n.get("type") or "").strip().lower()
-                break
+        # REQ-45D-2 / LD-45D-1: route_prefix is collected through the NOS seam for
+        # every node type; the provider reads, and the presence rule (present <=>
+        # non-empty) stays core. Founder ruling Q-A (A), 2026-10-01: an unregistered
+        # vantage type meets the registry UNSUP die inside _nos_collect; a registered
+        # provider that does not declare route_prefix is an explicit UNSUP-fail,
+        # verdict fail regardless of expect. A read the provider cannot vouch for
+        # (probe_ok False) is a collection failure, verdict fail regardless of expect
+        # (ruling (I) of 2026-10-01). Never an implicit pass.
+        node_type = _nos_ntype(topo, src)
 
         start = time.time()
 
-        if node_type != "frr":
+        try:
+            _obs = _nos_collect(
+                rt, lab, src, node_type,
+                ObservationRequest(kind="route_prefix", params={"prefix": prefix}),
+                "cmd_test route_prefix collection",
+            )
+        except NosCapabilityUnsupported as _unsup:
             dur_ms = int((time.time() - start) * 1000)
-            observed = "fail"
-            verdict = "fail" if expected == "pass" else "pass"
             record_fn(
                 name=test_name,
                 kind="route_prefix",
                 src=src,
                 dst="",
                 expected=expected,
-                observed=observed,
-                verdict=verdict,
+                observed="fail",
+                verdict="fail",
                 duration_ms=dur_ms,
-                error=f"route_prefix unsupported on node type '{node_type}' (supported: frr only)",
-                evidence={"reason": "unsupported_node_type"},
+                error=f"route_prefix unsupported on node type '{node_type}': {_unsup.message}",
+                evidence={
+                    "cmd": "",
+                    "rc": None,
+                    "parse_error": _unsup.message,
+                    "reason": "unsupported_provider_capability",
+                    "node_type": _unsup.ntype,
+                },
                 meta={"prefix": prefix, "node_type": node_type},
             )
-            return verdict
+            return "fail"
 
-        # Deterministic route presence check (kernel FIB)
-        # Rationale: connected routes + installed routes are observable here even if FRR daemons/vtysh view differs.
-        try:
-            nw = ipaddress.ip_network(prefix, strict=False)
-            ipver = nw.version
-        except Exception:
-            # Should have been caught in resolve-time validation; keep deterministic failure here.
-            ipver = 4
+        _ev = _obs.evidence
+        _parse_error = str(_ev.get("parse_error") or "")
+        evidence = {"cmd": _ev.get("cmd"), "rc": _ev.get("rc")}
+        if _parse_error:
+            evidence["parse_error"] = _parse_error
 
-        ip_cmd = ["ip", f"-{ipver}", "route", "show", prefix]
-        cp = rt.exec(lab, src, ip_cmd, check=False, capture_output=True)
+        if not _ev.get("probe_ok"):
+            dur_ms = int((time.time() - start) * 1000)
+            record_fn(
+                name=test_name,
+                kind="route_prefix",
+                src=src,
+                dst="",
+                expected=expected,
+                observed="fail",
+                verdict="fail",
+                duration_ms=dur_ms,
+                error=f"route_prefix collection failed on '{src}': {_parse_error or 'probe not ok'}",
+                evidence=evidence,
+                meta={"prefix": prefix, "present": False},
+            )
+            return "fail"
 
-        # rt.exec() may return a CompletedProcess-like object OR a raw string.
-        if isinstance(cp, str):
-            out = cp
-            rc = None
-        else:
-            out = ""
-            if hasattr(cp, "stdout") and cp.stdout is not None:
-                out = cp.stdout
-            elif hasattr(cp, "output") and cp.output is not None:
-                out = cp.output
-
-            # Normalize bytes -> str (defensive)
-            if isinstance(out, (bytes, bytearray)):
-                try:
-                    out = out.decode("utf-8", errors="replace")
-                except Exception:
-                    out = str(out)
-
-            rc = getattr(cp, "returncode", None)
-
-        out = str(out or "")
-        # Deterministic presence rule for `ip route show <prefix>`:
-        # - present => prints one or more lines
-        # - absent  => prints nothing
-        present = bool(out.strip())
+        # Deterministic presence rule (core, REQ-45D-2): present <=> the provider
+        # handed back one or more route lines / entries for the prefix.
+        present = bool(_obs.data.get("routes"))
 
         observed = "pass" if present else "fail"
         verdict = "pass" if observed == expected else "fail"
@@ -5265,7 +5268,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             verdict=verdict,
             duration_ms=dur_ms,
             error="" if verdict == "pass" else f"route_prefix mismatch (expected {expected}, observed {observed})",
-            evidence={"cmd": " ".join(ip_cmd), "rc": rc},
+            evidence=evidence,
             meta={"prefix": prefix, "present": bool(present)},
         )
         return verdict
@@ -8837,27 +8840,43 @@ def cmd_test(args: argparse.Namespace) -> None:
                 if not isinstance(prefix, str) or not prefix.strip():
                     raise ValueError("wait_for route_prefix: requires prefix as CIDR")
 
-                # Deterministic: ip route lookup should be fast; per_attempt_timeout_s is recorded.
-                cmd = ["sh", "-lc", f"ip -4 route show {prefix.strip()} 2>/dev/null || true"]
-                cp = rt.exec(lab, str(vantage).strip(), cmd, check=False)
+                # REQ-45D-2 / founder ruling D-1 (2026-09-30): the same seam observation
+                # and the same core presence rule as run_route_prefix_test. Founder ruling
+                # Q-A (A), 2026-10-01: an unregistered vantage type meets the registry UNSUP
+                # die inside _nos_collect; NosCapabilityUnsupported from a provider that
+                # does not declare route_prefix propagates, so the wait fails
+                # deterministically with the UNSUP reason. A read the provider cannot vouch
+                # for (probe_ok False) is a collection failure: it raises, so the wait fails
+                # regardless of expect -- never an implicit pass (ruling (I), 2026-10-01).
+                _vantage = str(vantage).strip()
+                _prefix = prefix.strip()
+                _obs = _nos_collect(
+                    rt, lab, _vantage, _nos_ntype(topo, _vantage),
+                    ObservationRequest(kind="route_prefix", params={"prefix": _prefix}),
+                    "scenario wait_for route_prefix collection",
+                )
+                _ev = _obs.evidence
+                _rc = _ev.get("rc")
+                _parse_error = str(_ev.get("parse_error") or "")
+                if not _ev.get("probe_ok"):
+                    raise RuntimeError(
+                        f"wait_for route_prefix: collection failed on '{_vantage}': "
+                        f"{_parse_error or 'probe not ok'}"
+                    )
+                # last_rc reports the provider read's own rc (founder ruling Q20-2 (A),
+                # 2026-10-02; declared under DC v2.1 §14 item 8).
+                cp = subprocess.CompletedProcess(args=str(_ev.get("cmd") or ""), returncode=_rc)
                 last_cp = cp
 
-                out = getattr(cp, "stdout", "") or ""
-                if isinstance(out, (bytes, bytearray)):
-                    try:
-                        out = out.decode("utf-8", errors="replace")
-                    except Exception:
-                        out = str(out)
-
-                present = (prefix.strip() in str(out))
+                present = bool(_obs.data.get("routes"))
 
                 # Underlying success for route_prefix is: present == True (uniform success definition)
                 last_obs = "pass" if present else "fail"
                 last_evidence = {
-                    "cmd": f"ip -4 route show {prefix.strip()}",
-                    "prefix": prefix.strip(),
+                    "cmd": _ev.get("cmd"),
+                    "prefix": _prefix,
                     "present": bool(present),
-                    "last_rc": getattr(cp, "returncode", None),
+                    "last_rc": _rc,
                 }
 
                 attempt_success = (last_obs == "pass")
