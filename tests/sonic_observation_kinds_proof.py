@@ -24,6 +24,12 @@ result FORMAT only: FRR's key sets are derived here at run time by running
 FRR's own handler over the same bytes and reading its KEYS -- no FRR value is
 read or compared.
 
+H1-b3 script 1b: route_prefix on SONiC from the same full-table read
+(founder ruling Q20-1 (A), 2026-10-02), wired with no capability token
+(K-CAP); script 2 declares it. Its keys are STRICTLY equal to FRR's
+_collect_route_prefix, which carries parse_error itself, so the
+ruling (B) exception stays limited to route_present / route_absent.
+
 Sections:
   K-DISPATCH  collect() is wired and routes each kind to its handler; an
               undeclared kind is refused loudly (SystemExit 2).
@@ -66,6 +72,7 @@ session and no received route, so -1/-8's up path and -16's received-path
 semantics are the (VM) legs' (handover §18), not asserted here.
 Exit 0 on all-pass; exit 1 on any failure.
 """
+import inspect
 import json
 import os
 import sys
@@ -264,8 +271,8 @@ try:
     check("K-DISPATCH collect is wired (no longer the deferred placeholder)",
           S.SONIC_PROVIDER.collect is S.collect and not hasattr(S.collect, "cassian_deferred_leg"))
     check("K-DISPATCH handler table holds exactly the six H1-b1 kinds, the two H1-b2 kinds "
-          "and the two H1-b3 RIB kinds",
-          sorted(S._SONIC_COLLECT_HANDLERS) == sorted(KINDS + ADV_KINDS + RIB_KINDS))
+          "and the three H1-b3 route kinds (route_prefix wired in script 1b)",
+          sorted(S._SONIC_COLLECT_HANDLERS) == sorted(KINDS + ADV_KINDS + RIB_KINDS + ("route_prefix",)))
     for k in KINDS:
         want = list(S._BGP_SUMMARY_ARGV) if k in SUMMARY_KINDS else ["vtysh", "-c", f"show ip bgp {CONFIGURED['prefix']} json"]
 
@@ -274,11 +281,14 @@ try:
             return o.kind == k and rt.argvs == [want]
         guarded(f"K-DISPATCH {k}: Observation.kind == {k!r}, exactly one guest read, argv {want!r}", _dispatch)
     try:
-        run("route_prefix", AFTER, params={"prefix": CONFIGURED["prefix"]})
+        run("ospf_neighbor_up", AFTER, params={"prefix": CONFIGURED["prefix"]})
         refused = False
     except SystemExit as e:
         refused = (e.code == 2)
-    check("K-DISPATCH an undeclared kind (route_prefix, H1-b3 script 1b) is refused loudly (SystemExit 2)", refused)
+    # Re-targeted in script 1b: route_prefix is now wired; ospf_neighbor_up is never
+    # declared on SONiC (REQ-45D-17), so it stays the undeclared-kind example.
+    check("K-DISPATCH an undeclared kind (ospf_neighbor_up, never declared on SONiC, REQ-45D-17) "
+          "is refused loudly (SystemExit 2)", refused)
 
     # ------------------------------------------------------------------- K-CAP
     for k in KINDS:
@@ -287,11 +297,12 @@ try:
     # Coverage limit (PBE-P2-8): the two §4.5-c operational legs are named here by
     # hand; any further IMPL token without a handler reds this check for review.
     _impl_toks = {tok for tok, d in S.SONIC_PROVIDER.capabilities.items() if d.state == CAP_IMPL}
-    check("K-CAP every handler has an IMPL token except exactly the two H1-b3 RIB handlers "
-          "(wired with no token in script 1a, D-4 and Q13 (a); declared in script 2); the two "
+    check("K-CAP every handler has an IMPL token except exactly the three H1-b3 route handlers "
+          "(route_present and route_absent wired with no token in script 1a, route_prefix in "
+          "script 1b; D-4 and Q13 (a); declared in script 2); the two "
           "H1-b2 handlers included; IMPL tokens without a handler are exactly the §4.5-c legs "
           "gen_node_config, provision",
-          set(S._SONIC_COLLECT_HANDLERS) - _impl_toks == set(RIB_KINDS)
+          set(S._SONIC_COLLECT_HANDLERS) - _impl_toks == set(RIB_KINDS) | {"route_prefix"}
           and set(ADV_KINDS) <= _impl_toks
           and _impl_toks - set(S._SONIC_COLLECT_HANDLERS) == {"gen_node_config", "provision"})
     for k in RIB_KINDS:
@@ -625,6 +636,102 @@ try:
     _no_pe = _pre + _head + _post.replace('"parse_error": _unsup.message', '"error": _unsup.message', 1)
     check("K-NV RIB: the ruling (B) grounding fails when the core drops parse_error",
           not core_route_evidence_carries_parse_error(_no_pe))
+
+    # ======================================================= H1-b3 script 1b
+    # REQ-45D-2: route_prefix on SONiC, answered from 1a's one full-table read.
+    # Founder ruling Q20-1 (A), 2026-10-02: this section lands with script 1b.
+    # K-KEYS is STRICT for route_prefix: FRR's _collect_route_prefix (script 1b)
+    # carries parse_error itself, so the core's route_prefix contract needs no
+    # exception (ruling (B) item 5 is not extended). Values cite capture
+    # procedure rev 1 §1 (CONFIGURED_RIB), never the capture.
+    PFX = "route_prefix"
+
+    def pfx_keys(o, prefix):
+        dk, ek = frr_keys(PFX, RIB_AFTER, rib_params(prefix))
+        return sorted(o.data) == dk and sorted(o.evidence) == ek
+
+    def pfx_good(o):
+        return o.evidence.get("probe_ok") is True and o.evidence.get("parse_error") == ""
+
+    def pfx_present(o, prefix):
+        return pfx_good(o) and o.data.get("prefix") == prefix and o.data.get("routes") == [prefix]
+
+    def pfx_absent(o, prefix):
+        return pfx_good(o) and o.data.get("prefix") == prefix and o.data.get("routes") == []
+
+    def pfx_failed(o, prefix):
+        """Never 'absent': probe_ok False, parse_error named, no routes, keys per K-KEYS."""
+        return (o.evidence.get("probe_ok") is False and bool(o.evidence.get("parse_error"))
+                and o.data.get("routes") == [] and pfx_keys(o, prefix))
+
+    def _pfx_dispatch():
+        o, rt = run(PFX, RIB_AFTER, params=rib_params(CONFIGURED_RIB["static"]))
+        return o.kind == PFX and rt.argvs == [RIB_ARGV]
+    guarded(f"K-DISPATCH {PFX}: Observation.kind == {PFX!r}, exactly one guest read, argv {RIB_ARGV!r}",
+            _pfx_dispatch)
+    _pfx_src = inspect.getsource(S._sonic_collect_route_prefix)
+    check(f"K-DISPATCH {PFX} reads through 1a's reader (_RIB_ARGV, _sonic_read, _rib_prefixes): "
+          "no second RIB read (REQ-45D-11)",
+          "_sonic_read(rt, lab, node, _RIB_ARGV)" in _pfx_src and "_rib_prefixes(out)" in _pfx_src
+          and _pfx_src.count("_sonic_read(") == 1)
+    check(f"K-CAP {PFX}: handler wired, no capability token, stays UNSUP until script 2",
+          capability_for(S.SONIC_PROVIDER, PFX).state == CAP_UNSUP)
+
+    o, _ = run(PFX, RIB_AFTER, params=rib_params(CONFIGURED_RIB["connected"]))
+    check(f"K-{PFX} after configuration: connected {CONFIGURED_RIB['connected']} present (procedure §1)",
+          pfx_present(o, CONFIGURED_RIB["connected"]))
+    o, _ = run(PFX, RIB_AFTER, params=rib_params(CONFIGURED_RIB["static"]))
+    check(f"K-{PFX} after configuration: static {CONFIGURED_RIB['static']} present (procedure §1)",
+          pfx_present(o, CONFIGURED_RIB["static"]))
+    o, _ = run(PFX, RIB_AFTER, params=rib_params(CONFIGURED_RIB["absent"]))
+    check(f"K-{PFX} after configuration: control {CONFIGURED_RIB['absent']} absent on a good read (procedure §1)",
+          pfx_absent(o, CONFIGURED_RIB["absent"]))
+    o, _ = run(PFX, RIB_BEFORE, params=rib_params(CONFIGURED_RIB["static"]))
+    check(f"K-{PFX} before configuration: static {CONFIGURED_RIB['static']} absent on a good read",
+          pfx_absent(o, CONFIGURED_RIB["static"]))
+    o, _ = run(PFX, RIB_BEFORE, params=rib_params(CONFIGURED_RIB["connected"]))
+    check(f"K-{PFX} before configuration: connected {CONFIGURED_RIB['connected']} present (procedure §1)",
+          pfx_present(o, CONFIGURED_RIB["connected"]))
+    o, _ = run(PFX, RIB_AFTER, params=rib_params(CONFIGURED_RIB["static"]))
+    check(f"K-KEYS {PFX}: data and evidence keys STRICTLY equal FRR's (derived at run time)",
+          pfx_keys(o, CONFIGURED_RIB["static"]))
+    check(f"K-KEYS {PFX}: FRR's own route_prefix evidence carries parse_error (why strict equality holds)",
+          "parse_error" in frr_keys(PFX, RIB_AFTER, rib_params(CONFIGURED_RIB["static"]))[1])
+
+    a, _ = run(PFX, RIB_AFTER, params=rib_params(CONFIGURED_RIB["static"]))
+    b, _ = run(PFX, _scr, params=rib_params(CONFIGURED_RIB["static"]))
+    check(f"K-UPTIME {PFX}: observation identical with uptime scrambled", a.data == b.data and a.evidence == b.evidence)
+
+    o, rt = run(PFX, RIB_AFTER, params=rib_params(IPV6_PREFIX))
+    check(f"K-{PFX} IPv6 prefix {IPV6_PREFIX}: collection failure naming IPv6 on sonic-vm, no read issued (ruling (I))",
+          pfx_failed(o, IPV6_PREFIX) and "IPv6" in o.evidence["parse_error"]
+          and "sonic-vm" in o.evidence["parse_error"] and rt.argvs == [])
+    o, _ = run(PFX, RIB_AFTER, rc=1, params=rib_params(CONFIGURED_RIB["static"]))
+    check(f"K-{PFX} failed read (rc 1): collection failure, never present", pfx_failed(o, CONFIGURED_RIB["static"]))
+    for name, bad in _rib_bad:
+        o, _ = run(PFX, bad, params=rib_params(CONFIGURED_RIB["absent"]))
+        check(f"K-{PFX} {name}: collection failure, never an absent answer", pfx_failed(o, CONFIGURED_RIB["absent"]))
+
+    # K-NV: every route_prefix predicate above is shown able to fail.
+    _nv = mutate_json(RIB_AFTER, lambda d: d.pop(CONFIGURED_RIB["static"]))
+    o, _ = run(PFX, _nv, params=rib_params(CONFIGURED_RIB["static"]))
+    check(f"K-NV {PFX}: the static prefix removed from the capture is detected",
+          not pfx_present(o, CONFIGURED_RIB["static"]))
+    _nv = mutate_json(RIB_AFTER, lambda d: d.__setitem__(CONFIGURED_RIB["absent"], []))
+    o, _ = run(PFX, _nv, params=rib_params(CONFIGURED_RIB["absent"]))
+    check(f"K-NV {PFX}: the absent control added to the capture is detected",
+          not pfx_absent(o, CONFIGURED_RIB["absent"]))
+    o, _ = run(PFX, RIB_AFTER, params=rib_params(CONFIGURED_RIB["absent"]))
+    check(f"K-NV {PFX}: the collection-failure predicate fails on a good read",
+          not pfx_failed(o, CONFIGURED_RIB["absent"]))
+    _dropped = SimpleNamespace(kind=o.kind, data={k: v for k, v in o.data.items() if k != "routes"},
+                               evidence=o.evidence)
+    check(f"K-NV {PFX}: K-KEYS detects a dropped data key", not pfx_keys(_dropped, CONFIGURED_RIB["absent"]))
+    _no_pe = SimpleNamespace(kind=o.kind, data=o.data,
+                             evidence={k: v for k, v in o.evidence.items() if k != "parse_error"})
+    check(f"K-NV {PFX}: strict K-KEYS detects a missing parse_error", not pfx_keys(_no_pe, CONFIGURED_RIB["absent"]))
+    _extra = SimpleNamespace(kind=o.kind, data=o.data, evidence=dict(o.evidence, reason="x"))
+    check(f"K-NV {PFX}: strict K-KEYS detects an extra evidence key", not pfx_keys(_extra, CONFIGURED_RIB["absent"]))
 
 except BaseException as _exc:  # a section aborted: record it, never exit silently
     check(f"proof aborted in a section [raised {type(_exc).__name__}: {_exc}]", False)

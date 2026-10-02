@@ -1668,6 +1668,43 @@ def _sonic_collect_route_table(rt, lab, node, req: "ObservationRequest") -> "Obs
     )
 
 
+def _sonic_collect_route_prefix(rt, lab, node, req: "ObservationRequest") -> "Observation":
+    """REQ-45D-2: route_prefix answered from the one full-table RIB read 1a wired.
+
+    The same argv, reader and parser as route_present / route_absent (_RIB_ARGV,
+    _sonic_read, _rib_prefixes; session-19 note §2), so no second RIB read. data
+    hands the core the matching RIB key, [prefix] or [], and the core keeps the
+    presence rule (present <=> non-empty). A read SONiC cannot vouch for -- an
+    IPv6 prefix (no read issued, ruling (I)), a non-zero rc, empty, unparseable
+    or non-object output, a non-IPv4 key -- is a collection failure: probe_ok
+    False, parse_error named, no routes; never an absent answer (ruling (B)).
+    The keys are the core's route_prefix contract, equal to FRR's handler's.
+    Route entries' values (uptime) are never read.
+    """
+    prefix = str(req.params.get("prefix") or "").strip()
+    norm = _normalize_prefix(prefix)
+    if norm is None:
+        reason = ("IPv6 prefix unsupported on sonic-vm (IPv4 RIB read only)" if ":" in prefix
+                  else "prefix is not an IPv4 prefix")
+        return Observation(
+            kind=req.kind,
+            data={"prefix": prefix, "routes": []},
+            evidence=dict({"cmd": "", "rc": None, "parse_error": reason}, probe_ok=False),
+        )
+    rc, out = _sonic_read(rt, lab, node, _RIB_ARGV)
+    observed, parse_error = _rib_prefixes(out)
+    if rc != 0 and not parse_error:
+        parse_error = f"RIB read failed (rc {rc})"
+    return Observation(
+        kind=req.kind,
+        data={"prefix": prefix, "routes": [] if parse_error else [p for p in observed if p == norm]},
+        evidence=dict(
+            {"cmd": "vtysh -c 'show ip route json'", "rc": rc, "parse_error": parse_error},
+            probe_ok=(rc == 0 and not parse_error),
+        ),
+    )
+
+
 _SONIC_COLLECT_HANDLERS = {
     "bgp_neighbor": _sonic_collect_bgp_neighbor,
     "bgp_session_up": _sonic_collect_bgp_session_up,
@@ -1680,6 +1717,8 @@ _SONIC_COLLECT_HANDLERS = {
     # H1-b3 script 1a: wired with no capability token (D-4; Q13 (a)).
     "route_present": _sonic_collect_route_table,
     "route_absent": _sonic_collect_route_table,
+    # H1-b3 script 1b: wired with no capability token (D-4; Q13 (a)).
+    "route_prefix": _sonic_collect_route_prefix,
 }
 
 

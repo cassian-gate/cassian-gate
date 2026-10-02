@@ -869,6 +869,54 @@ def _collect_route_prefix_table(rt, lab, node, req: ObservationRequest) -> Obser
     )
 
 
+def _collect_route_prefix(rt, lab, node, req: ObservationRequest) -> Observation:
+    """REQ-45D-2 / LD-45D-1: FRR's route_prefix read, moved out of the engine.
+
+    The read and its rc handling are the engine's former run_route_prefix_test
+    lines, unchanged in behaviour: the kernel FIB read for the prefix, the IP
+    version taken from the prefix (4 when it does not parse), str / bytes /
+    stdout / output normalisation as before. The presence rule (present <=>
+    non-empty) stays core: this handler hands core the non-empty output lines.
+    probe_ok is True on every completed read because the engine never consulted
+    rc for route_prefix, and REQ-45D-2 moves that behaviour unchanged.
+    parse_error is always "": FRR's route_prefix output is not parsed. The keys
+    are the core's route_prefix contract (ruling (B) of 2026-10-01), shared with
+    SONiC's handler.
+    """
+    prefix = str(req.params.get("prefix") or "").strip()
+    try:
+        ipver = ipaddress.ip_network(prefix, strict=False).version
+    except Exception:
+        ipver = 4
+
+    ip_cmd = ["ip", f"-{ipver}", "route", "show", prefix]
+    cp = rt.exec(lab, node, ip_cmd, check=False, capture_output=True)
+
+    if isinstance(cp, str):
+        out = cp
+        rc = None
+    else:
+        out = ""
+        if hasattr(cp, "stdout") and cp.stdout is not None:
+            out = cp.stdout
+        elif hasattr(cp, "output") and cp.output is not None:
+            out = cp.output
+        if isinstance(out, (bytes, bytearray)):
+            try:
+                out = out.decode("utf-8", errors="replace")
+            except Exception:
+                out = str(out)
+        rc = getattr(cp, "returncode", None)
+
+    out = str(out or "")
+    routes = [ln.strip() for ln in out.splitlines() if ln.strip()]
+    return Observation(
+        kind=req.kind,
+        data={"prefix": prefix, "routes": routes},
+        evidence=dict({"cmd": " ".join(ip_cmd), "rc": rc, "parse_error": ""}, probe_ok=True),
+    )
+
+
 def _collect_advertised_routes(rt, lab, node, req: ObservationRequest) -> Observation:
     """Probe + normalize FRR routing state for route_advertised_to, route_not_advertised_to."""
     peer_ip = str(req.params.get("peer_ip") or "").strip()
@@ -1462,6 +1510,7 @@ _COLLECT_HANDLERS = {
     "bgp_as_path": _collect_bgp_as_path,
     "route_present": _collect_route_prefix_table,
     "route_absent": _collect_route_prefix_table,
+    "route_prefix": _collect_route_prefix,
     "route_advertised_to": _collect_advertised_routes,
     "route_not_advertised_to": _collect_advertised_routes,
     "evpn_bgp_session_up": _collect_evpn_bgp_summary,
