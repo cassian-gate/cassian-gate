@@ -6456,6 +6456,37 @@ def cmd_test(args: argparse.Namespace) -> None:
                 )
                 raise SystemExit(2)
 
+            # Q20-3 (founder ruling (i) of 2026-10-02, an SP #1 bounded-scope amendment;
+            # finding F-S20-1): a read the provider cannot vouch for (probe_ok False)
+            # is an explicit collection failure for both NOSes -- verdict fail
+            # regardless of expect, never an absent answer (Doctrine 1.11). The shape
+            # of run_route_prefix_test's collection-failure record.
+            if not _vtysh_ok:
+                _parse_error = str(last_evidence.get("parse_error") or "")
+                _cf_evidence = {
+                    "cmd": last_evidence.get("cmd") or "vtysh -c 'show ip route json'",
+                    "rc": rc,
+                }
+                if _parse_error:
+                    _cf_evidence["parse_error"] = _parse_error
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=int((time.time() - start) * 1000),
+                    error=f"{inv_type} collection failed on '{src}': {_parse_error or 'probe not ok'}",
+                    evidence=_cf_evidence,
+                    meta={
+                        "type": inv_type,
+                        "prefix": norm_prefix,
+                    },
+                )
+                return "fail"
+
             if inv_type == "route_present":
                 observed = "pass" if present else "fail"
             else:
@@ -8919,6 +8950,16 @@ def cmd_test(args: argparse.Namespace) -> None:
                         src=str(src).strip(),
                     )
                 )
+                if not vtysh_ok:
+                    # F-S21-1 (founder ruling (A) of 2026-10-03, an SP #1 bounded-scope
+                    # amendment): a read the provider cannot vouch for, or a provider
+                    # that does not declare the kind, fails the wait step regardless
+                    # of expect -- the scenario behaviour script 1b gave route_prefix.
+                    _parse_error = str((evidence or {}).get("parse_error") or "")
+                    raise RuntimeError(
+                        f"wait_for route_present: collection failed on '{str(src).strip()}': "
+                        f"{_parse_error or 'probe not ok'}"
+                    )
                 last_cp = None
                 last_obs = "pass" if predicate_ok else "fail"
                 last_evidence = dict(evidence or {})

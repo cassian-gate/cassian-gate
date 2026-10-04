@@ -16,6 +16,14 @@ against a fake runtime that answers the kernel-FIB read for each node:
 The scenario oracle is the live wait_for_predicate with only its route_prefix
 branch replaced by the frozen one, so the two runs differ in that branch alone.
 
+Widened by H1-b3 script 2a (founder rulings Q20-3 (i) of 2026-10-02, and F-S21-1
+(A) and R2 of 2026-10-03). This proof's property is no longer route_prefix alone:
+section P-RP also holds the route_present / route_absent consumer of
+run_invariant_test (test path) and the wait_for route_present branch of
+wait_for_predicate (scenario) to FRR rc-0 parity and to never-a-pass on a read the
+provider cannot vouch for, for both NOSes. The file name is kept because it is
+CI-wired and named in wf_12_13_replay_proof.py's §4.5-d loop.
+
 Sections:
   P-ORACLE  the frozen texts are the a2fcae5 extraction (sha256 pinned).
   P-SITES   no route command is issued from core at either site; each calls
@@ -42,6 +50,17 @@ Sections:
   P-NEVER   ruling (I): a read the provider cannot vouch for (probe_ok False)
             is verdict fail regardless of expect on the test path, and raises on
             the scenario path. SONiC route_prefix stays UNSUP until script 2.
+  P-RP      (script 2a) ORACLE: each consumer is the live function with exactly
+            the 2a guard text removed, sha256-pinned to the f015801 extraction.
+            PARITY: FRR rc 0, every committed route_present / route_absent test
+            and route_present wait plus a synthetic matrix -- identical before and
+            after. DECL (DC v2.1 §14 item 8): FRR non-zero rc on the test path
+            (verdict fail) and on the scenario path (raises); a provider without
+            the kind on the scenario path (raises with the UNSUP reason). UNSUP:
+            the test path's recorded misuse and exit 2, unchanged. NEVER: a read
+            the provider cannot vouch for is verdict fail for both kinds and both
+            expects, asserting the record's verdict as well as its observed, and
+            raises on the scenario path.
   P-NV      mutation controls on the consumed surfaces (the executed engine
             text and FRR's handler): each must turn a check above red. A
             detected mutant prints MUTATION-FAIL; an undetected one prints
@@ -547,6 +566,244 @@ try:
     check("P-NEVER sonic-vm route_prefix stays UNSUP until script 2: explicit UNSUP-fail, verdict fail",
           v[0] == ("verdict", "fail") and v[1]["evidence"].get("reason") == "unsupported_provider_capability")
 
+    # ------------------------------------------------------------------- P-RP
+    # H1-b3 script 2a (rulings Q20-3 (i), F-S21-1 (A), R2). Oracles are the live
+    # functions with exactly the guard text below removed; that removal must
+    # reproduce the f015801 extraction byte for byte.
+    import json as _json
+
+    RIT_ORACLE_SHA256 = "2a2fa73c2fb47283e1dbdbb6486dced205999473972b511af4eaab0a640e5d2a"
+    WFP_ORACLE_SHA256 = "f90862ca977f6193ba3607ae8fe01f024cc988345036a32485e9b11b41499529"
+    GUARD_RIT = '''\
+        # Q20-3 (founder ruling (i) of 2026-10-02, an SP #1 bounded-scope amendment;
+        # finding F-S20-1): a read the provider cannot vouch for (probe_ok False)
+        # is an explicit collection failure for both NOSes -- verdict fail
+        # regardless of expect, never an absent answer (Doctrine 1.11). The shape
+        # of run_route_prefix_test's collection-failure record.
+        if not _vtysh_ok:
+            _parse_error = str(last_evidence.get("parse_error") or "")
+            _cf_evidence = {
+                "cmd": last_evidence.get("cmd") or "vtysh -c 'show ip route json'",
+                "rc": rc,
+            }
+            if _parse_error:
+                _cf_evidence["parse_error"] = _parse_error
+            record_fn(
+                name=test_name,
+                kind="invariant",
+                src=src,
+                dst="",
+                expected=expected,
+                observed="fail",
+                verdict="fail",
+                duration_ms=int((time.time() - start) * 1000),
+                error=f"{inv_type} collection failed on '{src}': {_parse_error or 'probe not ok'}",
+                evidence=_cf_evidence,
+                meta={
+                    "type": inv_type,
+                    "prefix": norm_prefix,
+                },
+            )
+            return "fail"
+
+'''
+    GUARD_WFP = '''\
+            if not vtysh_ok:
+                # F-S21-1 (founder ruling (A) of 2026-10-03, an SP #1 bounded-scope
+                # amendment): a read the provider cannot vouch for, or a provider
+                # that does not declare the kind, fails the wait step regardless
+                # of expect -- the scenario behaviour script 1b gave route_prefix.
+                _parse_error = str((evidence or {}).get("parse_error") or "")
+                raise RuntimeError(
+                    f"wait_for route_present: collection failed on '{str(src).strip()}': "
+                    f"{_parse_error or 'probe not ok'}"
+                )
+'''
+    NEW_RIT = seg("run_invariant_test")
+    NEW_EIA = seg("_evaluate_invariant_attempt")
+    OLD_RIT = NEW_RIT.replace(GUARD_RIT, "")
+    OLD_WFP_RP = NEW_WFP.replace(GUARD_WFP, "")
+    check("P-RP-ORACLE run_invariant_test carries the Q20-3 guard exactly once and is otherwise "
+          "the f015801 extraction (sha256 pinned)",
+          NEW_RIT.count(GUARD_RIT) == 1 and sha(OLD_RIT) == RIT_ORACLE_SHA256)
+    check("P-RP-ORACLE wait_for_predicate carries the F-S21-1 guard exactly once and is otherwise "
+          "the f015801 extraction (sha256 pinned)",
+          NEW_WFP.count(GUARD_WFP) == 1 and sha(OLD_WFP_RP) == WFP_ORACLE_SHA256)
+
+    class FakeRib:
+        """Answers FRR's `vtysh -c 'show ip route json'` per node. `rib` maps
+        node -> prefixes; a non-zero rc returns empty output, as a failed read."""
+
+        def __init__(self, rib, rc=0, present_after=None):
+            self.rib, self.rc, self.present_after, self.calls = rib, rc, present_after, []
+
+        def exec(self, lab, node, argv, check=False, **_kw):
+            self.calls.append(list(argv))
+            assert list(argv) == ["vtysh", "-c", "show ip route json"], f"unexpected argv {argv!r}"
+            if self.rc:
+                return SimpleNamespace(returncode=self.rc, stdout="", stderr="% error")
+            pfxs = [] if (self.present_after is not None and len(self.calls) <= self.present_after) \
+                else sorted(self.rib.get(node, ()))
+            body = _json.dumps({p: [{"prefix": p, "protocol": "bgp"}] for p in pfxs})
+            return SimpleNamespace(returncode=0, stdout=body, stderr="")
+
+    def ns_rp(texts, topo, rt, collect=None):
+        ns = dict(E.__dict__)
+        ns.update(topo=topo, rt=rt, lab="lab", record_test=lambda **_kw: None)
+        for _text in texts:
+            exec(compile(_text, "<route_prefix_seam_parity_proof:P-RP>", "exec"), ns)
+        if collect is not None:
+            ns["_nos_collect"] = collect
+        return ns
+
+    def run_inv(rit, topo, rt, t, src, collect=None):
+        cap = {}
+        ns = ns_rp((NEW_EIA, rit), topo, rt, collect)
+        try:
+            with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+                out = ("verdict", ns["run_invariant_test"](test_name="t", src=src, t=t,
+                                                          record_fn=lambda **kw: cap.update(kw)))
+        except SystemExit as exc:
+            out = ("exit", exc.code)
+        return out, {k: val for k, val in cap.items() if k != "duration_ms"}
+
+    def run_wfp(wfp, topo, rt, wf, collect=None):
+        ns = ns_rp((NEW_EIA, wfp), topo, rt, collect)
+        w = dict(wf, timeout=1, interval_s=0.05)
+        try:
+            with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+                _wt, _ex, observed, _dur, meta, verdict = ns["wait_for_predicate"](w)
+        except SystemExit as exc:
+            return ("exit", exc.code), None
+        except Exception as exc:  # the scenario runner records a raised wait as a failed step
+            return ("raise", type(exc).__name__, str(exc)), None
+        return ("verdict", verdict, observed), {k: meta[k] for k in ("type", "from", "succeeded", "last_rc", "evidence")
+                                                if k in meta}
+
+    def inv_t(kind, prefix, expect, node="r1"):
+        return {"name": "t", "kind": "invariant", "type": kind, "node": node, "prefix": prefix, "expect": expect}
+
+    def rp_wf(prefix, expect, vantage="r1"):
+        return {"type": "route_present", "from": vantage, "prefix": prefix, "expect": expect}
+
+    rp_tests, rp_waits = [], []
+    for path in sorted(glob.glob(os.path.join(_ROOT, "topologies", "*.yaml"))
+                       + glob.glob(os.path.join(_ROOT, "examples", "*.yaml"))):
+        with open(path, encoding="utf-8") as fh:
+            try:
+                doc = yaml.safe_load(fh)
+            except yaml.YAMLError:
+                continue
+        if not isinstance(doc, dict):
+            continue
+        rel = os.path.relpath(path, _ROOT)
+        for t in doc.get("tests") or []:
+            if isinstance(t, dict) and t.get("kind") == "invariant" and t.get("type") in ("route_present", "route_absent"):
+                rp_tests.append((rel, doc, t))
+        for s in doc.get("scenarios") or []:
+            for st in (s.get("steps") or []) if isinstance(s, dict) else []:
+                wf = st.get("wait_for") if isinstance(st, dict) else None
+                if isinstance(wf, dict) and wf.get("type") == "route_present":
+                    rp_waits.append((rel, doc, wf))
+    check("P-RP enumeration found route_present / route_absent tests and route_present waits in the committed fixtures",
+          len(rp_tests) > 0 and len(rp_waits) > 0)
+    print(f"P-RP enumerated {len(rp_tests)} route_present/route_absent test(s), {len(rp_waits)} route_present wait(s)")
+
+    def rp_parity_deltas(rit_new, wfp_new):
+        deltas = []
+        cases_t = [(rel, topo_of(doc), dict(t), str(t.get("node") or "")) for rel, doc, t in rp_tests]
+        cases_t += [("synthetic", R1, inv_t(k, "192.0.2.0/24", e), "r1")
+                    for k in ("route_present", "route_absent") for e in ("pass", "fail")]
+        for rel, topo, t, node in cases_t:
+            for present in (True, False):
+                rib = {node: {str(t.get("prefix"))}} if present else {}
+                a = run_inv(OLD_RIT, topo, FakeRib(rib), dict(t), node)
+                b = run_inv(rit_new, topo, FakeRib(rib), dict(t), node)
+                if a != b:
+                    deltas.append(("test", rel, t.get("type"), t.get("expect"), present, a, b))
+        cases_w = [(rel, topo_of(doc), dict(wf)) for rel, doc, wf in rp_waits]
+        cases_w += [("synthetic", R1, rp_wf("192.0.2.0/24", "fail"))]
+        for rel, topo, wf in cases_w:
+            v, pfx = str(wf.get("from") or ""), str(wf.get("prefix"))
+            for label, rib, after in (("present", {v: {pfx}}, None), ("absent", {}, None),
+                                      ("becomes-present", {v: {pfx}}, 1)):
+                a = run_wfp(OLD_WFP_RP, topo, FakeRib(rib, present_after=after), wf)
+                b = run_wfp(wfp_new, topo, FakeRib(rib, present_after=after), wf)
+                if a != b:
+                    deltas.append(("wait", rel, wf.get("expect"), label, a, b))
+        return deltas
+
+    _rp_deltas = rp_parity_deltas(NEW_RIT, NEW_WFP)
+    for _d in _rp_deltas:
+        print("DELTA:", _d)
+    check("P-RP-PARITY FRR rc 0: zero verdict / record / evidence deltas, test path and scenario, every committed "
+          "fixture plus the synthetic matrix, present, absent and becomes-present",
+          not _rp_deltas)
+
+    # Declared deltas, DC v2.1 §14 item 8.
+    a = run_inv(OLD_RIT, R1, FakeRib({}, rc=1), inv_t("route_absent", "192.0.2.0/24", "pass"), "r1")
+    b = run_inv(NEW_RIT, R1, FakeRib({}, rc=1), inv_t("route_absent", "192.0.2.0/24", "pass"), "r1")
+    check("P-RP-DECL Q20-3 FRR non-zero rc (test path, route_absent, expect pass): the retired consumer passed on "
+          "the failed read; now an explicit collection failure, verdict fail",
+          a[0] == ("verdict", "pass") and b[0] == ("verdict", "fail")
+          and b[1].get("observed") == "fail" and b[1].get("verdict") == "fail"
+          and b[1].get("error") == "route_absent collection failed on 'r1': probe not ok"
+          and b[1].get("evidence") == {"cmd": "vtysh -c 'show ip route json'", "rc": 1})
+    a = run_inv(OLD_RIT, R1, FakeRib({}, rc=1), inv_t("route_present", "192.0.2.0/24", "fail"), "r1")
+    b = run_inv(NEW_RIT, R1, FakeRib({}, rc=1), inv_t("route_present", "192.0.2.0/24", "fail"), "r1")
+    check("P-RP-DECL Q20-3 FRR non-zero rc (test path, route_present, expect fail): the retired consumer passed; "
+          "now verdict fail",
+          a[0] == ("verdict", "pass") and b[0] == ("verdict", "fail") and b[1].get("verdict") == "fail")
+    a = run_wfp(OLD_WFP_RP, R1, FakeRib({}, rc=1), rp_wf("192.0.2.0/24", "fail"))
+    b = run_wfp(NEW_WFP, R1, FakeRib({}, rc=1), rp_wf("192.0.2.0/24", "fail"))
+    check("P-RP-DECL F-S21-1 FRR non-zero rc (scenario, expect fail): the retired wait passed on the failed read; "
+          "now it raises and the step fails",
+          a[0] == ("verdict", "pass", "fail")
+          and b[0] == ("raise", "RuntimeError", "wait_for route_present: collection failed on 'r1': probe not ok"))
+    a = run_wfp(OLD_WFP_RP, F1, FakeRib({}), rp_wf("192.0.2.0/24", "fail", "fw"))
+    b = run_wfp(NEW_WFP, F1, FakeRib({}), rp_wf("192.0.2.0/24", "fail", "fw"))
+    check("P-RP-DECL F-S21-1 provider without the kind (scenario, nft-fw, expect fail): the retired wait passed on "
+          "the refusal; now it raises with the UNSUP reason",
+          a[0] == ("verdict", "pass", "fail") and b[0][:2] == ("raise", "RuntimeError")
+          and "collection failed on 'fw'" in b[0][2] and "nft-fw" in b[0][2] and "route_present" in b[0][2])
+
+    _same = True
+    for _k in ("route_present", "route_absent"):
+        for _e in ("pass", "fail"):
+            a = run_inv(OLD_RIT, F1, FakeRib({}), inv_t(_k, "192.0.2.0/24", _e, "fw"), "fw")
+            b = run_inv(NEW_RIT, F1, FakeRib({}), inv_t(_k, "192.0.2.0/24", _e, "fw"), "fw")
+            _same = _same and a == b and a[0] == ("exit", 2) and a[1].get("verdict") == "fail"
+    check("P-RP-UNSUP test path unchanged: a provider without the kind keeps its recorded misuse and exit 2, "
+          "identical before and after, both kinds and both expects", _same)
+
+    def stub_collect_rp(rt, lab, node, ntype, request, seam):
+        p = request.params["prefix"]
+        return Observation(kind=request.kind, data={"norm_prefix": p, "present": False, "observed_prefixes": []},
+                           evidence={"cmd": "stub", "rc": 1, "parse_error": "read not vouched for", "probe_ok": False})
+
+    def never_pass_rit(rit):
+        ok = True
+        for k in ("route_present", "route_absent"):
+            for e in ("pass", "fail"):
+                out, rec = run_inv(rit, R1, FakeRib({}), inv_t(k, "192.0.2.0/24", e), "r1", collect=stub_collect_rp)
+                ok = (ok and out == ("verdict", "fail") and rec.get("verdict") == "fail"
+                      and rec.get("observed") == "fail"
+                      and rec.get("evidence", {}).get("parse_error") == "read not vouched for"
+                      and rec.get("error") == f"{k} collection failed on 'r1': read not vouched for")
+        return ok
+
+    def never_pass_wfp(wfp):
+        res = [run_wfp(wfp, R1, FakeRib({}), rp_wf("192.0.2.0/24", e), collect=stub_collect_rp)
+               for e in ("pass", "fail")]
+        return all(r[0] == ("raise", "RuntimeError",
+                            "wait_for route_present: collection failed on 'r1': read not vouched for") for r in res)
+
+    check("P-RP-NEVER test path: probe_ok False is verdict fail for route_present AND route_absent, expect pass AND "
+          "fail -- the returned verdict, the record's verdict and its observed -- reason recorded (Q20-3)",
+          never_pass_rit(NEW_RIT))
+    check("P-RP-NEVER scenario: probe_ok False raises for expect pass AND expect fail (F-S21-1)",
+          never_pass_wfp(NEW_WFP))
+
     # -------------------------------------------------------------------- P-NV
     def mutate(text, old, new):
         assert text.count(old) == 1, f"mutation anchor count {text.count(old)}"
@@ -580,6 +837,16 @@ try:
 
     m5 = _pre + mutate(NEW_BRANCH, 'if not _ev.get("probe_ok"):', "if False:") + _post
     report("scenario probe raise removed -> never-a-pass fails", not never_pass_wait(m5))
+
+    m6 = mutate(NEW_RIT, "if not _vtysh_ok:", "if False:")
+    report("Q20-3 guard removed -> test-path never-a-pass fails", not never_pass_rit(m6))
+
+    m7 = mutate(NEW_RIT, 'verdict="fail",\n                duration_ms=int((time.time() - start) * 1000),\n                error=f"{inv_type} collection failed', 'verdict="pass",\n                duration_ms=int((time.time() - start) * 1000),\n                error=f"{inv_type} collection failed')
+    report("Q20-3 failure record written with verdict pass -> test-path never-a-pass fails on the record's verdict",
+           not never_pass_rit(m7))
+
+    m8 = mutate(NEW_WFP, "if not vtysh_ok:", "if False:")
+    report("F-S21-1 guard removed -> scenario never-a-pass fails", not never_pass_wfp(m8))
 
 except BaseException as _exc:  # a section aborted: record it, never exit silently
     check(f"proof aborted in a section [raised {type(_exc).__name__}: {_exc}]", False)
