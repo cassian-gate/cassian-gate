@@ -32,7 +32,10 @@ Ruled cases (carry-forward note §5):
   (d) tcp `src` on a vm node    -> RUNTIME-gate message.
   (e) tcp `dst` on a vm node    -> RUNTIME-gate message (the listener; C-4 leg).
   (f) route_prefix via `on:`    -> RUNTIME-gate message. Addendum #2. Pins the
-      on->src backfill dependency, as (a) pins node->src. route_prefix is the
+      on->src backfill dependency, as (a) pins node->src. Since H1-b3 script 2b-i
+      the case un-declares route_prefix on sonic-vm for its own duration (founder
+      ruling Decision 3 = (i), 2026-10-05); (f') asserts ACCEPT on the shipped
+      declaration. route_prefix is the
       sixth exec-into kind; the closed set is enumerated against the engine's own
       universe check, so no seventh can sit outside the form.
 
@@ -164,14 +167,33 @@ def main():
     # route_prefix declared via `on:` -- the alias the shipped gate's (src|from) read
     # would not see without the generic on->src backfill running earlier in the same
     # loop iteration. Same shape as case (a), different backfill. Addendum #2.
-    f_o, f_m = _validate({
-        "name": "rp-vm", "kind": "route_prefix", "on": "s1", "prefix": "10.0.0.0/24",
-    })
+    # H1-b3 script 2b-i (founder ruling Decision 3 = (i), 2026-10-05): sonic-vm now
+    # declares route_prefix IMPL, so the case un-declares it on the provider for its
+    # own duration -- the (b)-NV pattern -- and keeps its REJECT expectation; (f')
+    # asserts ACCEPT on the shipped declaration.
+    _f_sp = cm.NOS_PROVIDERS["sonic-vm"]
+    _f_saved = dict(_f_sp.capabilities)
+    try:
+        _f_sp.capabilities.pop("route_prefix", None)
+        f_o, f_m = _validate({
+            "name": "rp-vm", "kind": "route_prefix", "on": "s1", "prefix": "10.0.0.0/24",
+        })
+    finally:
+        _f_sp.capabilities.clear()
+        _f_sp.capabilities.update(_f_saved)
+    check("(f) the case un-declared a shipped IMPL token (route_prefix declared outside it)",
+          "route_prefix" in _f_saved)
+    check("(f) provider capabilities restored after the case", dict(_f_sp.capabilities) == _f_saved)
     check("(f) route_prefix via on: on vm node rejected", f_o == "die")
     check("(f) rejection is the RUNTIME gate (proves on->src backfill dependency)",
           _is_runtime_gate(f_m))
     check("(f) message names the kind", "route_prefix test references" in f_m)
     check("(f) message names the node", "'s1'" in f_m)
+    fa_o, fa_m = _validate({
+        "name": "rp-vm-ok", "kind": "route_prefix", "on": "s1", "prefix": "10.0.0.0/24",
+    })
+    check("(f') route_prefix via on: on vm node VALIDATES on the shipped declaration "
+          "(Decision 3 = (i))", fa_o == "ok")
 
     # ---------------------------------------------------------------- ruled case (g)
     # ospf_neighbor_up: like bgp_community (case b), the frr src type gate fires
@@ -341,6 +363,13 @@ def main():
                                 "src": "s1", "prefix": "203.0.113.0/24", "peer": "r1"},
         "route_not_advertised_to": {"kind": "invariant", "type": "route_not_advertised_to",
                                     "src": "s1", "prefix": "203.0.113.0/24", "peer": "r1"},
+        # H1-b3 script 2b-i (founder rulings R2 of 2026-10-03, Decision 2 of 2026-10-05):
+        # the three route kinds; prefixes from capture procedure 4_5d-h1b3-rib rev 1 §1.
+        "route_prefix": {"kind": "route_prefix", "src": "s1", "prefix": "198.18.0.0/24"},
+        "route_present": {"kind": "invariant", "type": "route_present",
+                          "src": "s1", "prefix": "198.18.0.0/24"},
+        "route_absent": {"kind": "invariant", "type": "route_absent",
+                         "src": "s1", "prefix": "198.18.1.0/24"},
     }
     # (a) one case per flipped kind: validate-ACCEPT on a vm node.
     for _k, _t in _flip.items():
@@ -364,8 +393,17 @@ def main():
                             "mac": "aa:bb:cc:dd:ee:ff", "vni": 100, "vtep": "10.0.0.9"})
         check("Q25 (b) %s on vm node REJECTED" % _ty,
               _o == "die" and ((_is_runtime_gate(_m) and _clause in _m) or "requires" in _m))
-    for _nm, _m in (("tcp (d)", d_m), ("route_prefix (f)", f_m), ("interface_state (a)", a_m)):
+    for _nm, _m in (("tcp (d)", d_m), ("interface_state (a)", a_m)):
         check("Q25 (b) %s carries the derived deferred clause" % _nm, _clause in _m)
+    # Case (f) ran with route_prefix un-declared (Decision 3 = (i)): its clause is the
+    # one derived under that declaration -- the text moves with the declaration.
+    _def_kinds_f = [k for k in ("tcp", "bgp_neighbor", "route_prefix")
+                    if not _impl(k) or k == "route_prefix"]
+    _clause_f = ("on node type 'sonic-vm' the deferred ones, derived from its provider's "
+                 "capability declarations, are: tests %s; invariant types %s "
+                 % (", ".join(_def_kinds_f), ", ".join(_def_types)))
+    check("Q25 (b) route_prefix (f) carries the clause derived under its in-case declaration",
+          _clause_f in f_m)
     def _listed(msg):
         """Parse the derived clause into tokens -- never a substring test
         ('route_present' is a substring of 'evpn_mac_route_present')."""
@@ -378,6 +416,12 @@ def main():
           _lk == _def_kinds and _lt == _def_types and not (set(_flip) & set(_lk + _lt)))
 
     # (b)-NV: the text and the decision move WITH the declaration, both directions.
+    _tm_pool = [ty for ty in cm._INVARIANT_TYPES if not _impl(ty) and ty != "ospf_neighbor_up"]
+    _tm_univ = {"src": "s1", "prefix": "10.0.0.0/24", "dst": "10.0.0.1", "neighbor": "2.2.2.2",
+                "interface": "eth1", "peer": "r1", "mac": "aa:bb:cc:dd:ee:ff", "vni": 100,
+                "vtep": "10.0.0.9"}
+    check("Q25 (b)-NV too-much pool: at least two un-flipped invariant types (derived)",
+          len(_tm_pool) >= 2)
     _saved = dict(_sp.capabilities)
     try:
         _sp.capabilities.pop("bgp_med_equals")          # too-little: un-declare a flip
@@ -390,14 +434,17 @@ def main():
                 and "bgp_neighbor" in _listed(_m4)[0])
         _sp.capabilities["bgp_neighbor"] = _saved["bgp_neighbor"]
         from cassian_nos_types import impl as _impl_tok
-        _sp.capabilities["route_present"] = _impl_tok()  # too-much: declare an un-flipped
-        _o2, _m2 = _validate({"name": "nv-rp", "kind": "invariant", "type": "route_present",
-                              "src": "s1", "prefix": "10.0.0.0/24"})
+        # Since H1-b3 script 2b-i route_present / route_absent are flipped; the too-much
+        # vehicles are the first two un-flipped types, derived at run time (founder ruling
+        # Decision 3 = (i), 2026-10-05; ospf_neighbor_up excluded -- the frr type gate
+        # fires first, case (g)).
+        _tm_a, _tm_b = (_tm_pool + [None, None])[:2]
+        _sp.capabilities[_tm_a] = _impl_tok()  # too-much: declare an un-flipped
+        _o2, _m2 = _validate(dict(_tm_univ, name="nv-tm-a", kind="invariant", type=_tm_a))
         _ok2 = _o2 == "ok"
-        _o3, _m3 = _validate({"name": "nv-rp2", "kind": "invariant", "type": "route_absent",
-                              "src": "s1", "prefix": "10.0.0.0/24"})
-        _ok3 = _o3 == "die" and "route_present" not in _listed(_m3)[1] \
-            and "route_absent" in _listed(_m3)[1]
+        _o3, _m3 = _validate(dict(_tm_univ, name="nv-tm-b", kind="invariant", type=_tm_b))
+        _ok3 = _o3 == "die" and _tm_a not in _listed(_m3)[1] \
+            and _tm_b in _listed(_m3)[1]
     finally:
         _sp.capabilities.clear(); _sp.capabilities.update(_saved)
     for _lbl, _ok in (("un-declaring a flipped type re-gates it and lists it", _ok1),

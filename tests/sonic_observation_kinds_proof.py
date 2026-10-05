@@ -33,9 +33,10 @@ ruling (B) exception stays limited to route_present / route_absent.
 Sections:
   K-DISPATCH  collect() is wired and routes each kind to its handler; an
               undeclared kind is refused loudly (SystemExit 2).
-  K-CAP       re-authored in H1-b1 script 2 (ruling D1) and again in H1-b2
-              script 2 (ruling 1 of 2026-09-29): the six H1-b1 kinds and the
-              two H1-b2 kinds are declared IMPL, exactly the handler table's
+  K-CAP       re-authored in H1-b1 script 2 (ruling D1), in H1-b2 script 2
+              (ruling 1 of 2026-09-29) and in H1-b3 script 2b-i (Decision 2 of
+              2026-10-05): the six H1-b1 kinds, the two H1-b2 kinds and the three
+              H1-b3 route kinds are declared IMPL, exactly the handler table's
               keys -- handler-to-token consistency, both directions (the check
               nos_deny_by_default's leg (i) makes for FRR only) -- and an
               undeclared kind stays UNSUP.
@@ -297,17 +298,15 @@ try:
     # Coverage limit (PBE-P2-8): the two §4.5-c operational legs are named here by
     # hand; any further IMPL token without a handler reds this check for review.
     _impl_toks = {tok for tok, d in S.SONIC_PROVIDER.capabilities.items() if d.state == CAP_IMPL}
-    check("K-CAP every handler has an IMPL token except exactly the three H1-b3 route handlers "
-          "(route_present and route_absent wired with no token in script 1a, route_prefix in "
-          "script 1b; D-4 and Q13 (a); declared in script 2); the two "
-          "H1-b2 handlers included; IMPL tokens without a handler are exactly the §4.5-c legs "
-          "gen_node_config, provision",
-          set(S._SONIC_COLLECT_HANDLERS) - _impl_toks == set(RIB_KINDS) | {"route_prefix"}
+    check("K-CAP every handler has an IMPL token (the three H1-b3 route handlers declared in "
+          "script 2b-i, Decision 2 of 2026-10-05; the two H1-b2 handlers included); IMPL tokens "
+          "without a handler are exactly the §4.5-c legs gen_node_config, provision",
+          set(S._SONIC_COLLECT_HANDLERS) <= _impl_toks
           and set(ADV_KINDS) <= _impl_toks
           and _impl_toks - set(S._SONIC_COLLECT_HANDLERS) == {"gen_node_config", "provision"})
     for k in RIB_KINDS:
-        check(f"K-CAP {k}: handler wired, no capability token, stays UNSUP until script 2",
-              capability_for(S.SONIC_PROVIDER, k).state == CAP_UNSUP)
+        check(f"K-CAP {k}: declared IMPL (H1-b3 script 2b-i)",
+              capability_for(S.SONIC_PROVIDER, k).state == CAP_IMPL)
 
     # -------------------------------------------------------- K-<kind> (values)
     for k in SUMMARY_KINDS:
@@ -674,8 +673,8 @@ try:
           "no second RIB read (REQ-45D-11)",
           "_sonic_read(rt, lab, node, _RIB_ARGV)" in _pfx_src and "_rib_prefixes(out)" in _pfx_src
           and _pfx_src.count("_sonic_read(") == 1)
-    check(f"K-CAP {PFX}: handler wired, no capability token, stays UNSUP until script 2",
-          capability_for(S.SONIC_PROVIDER, PFX).state == CAP_UNSUP)
+    check(f"K-CAP {PFX}: declared IMPL (H1-b3 script 2b-i)",
+          capability_for(S.SONIC_PROVIDER, PFX).state == CAP_IMPL)
 
     o, _ = run(PFX, RIB_AFTER, params=rib_params(CONFIGURED_RIB["connected"]))
     check(f"K-{PFX} after configuration: connected {CONFIGURED_RIB['connected']} present (procedure §1)",

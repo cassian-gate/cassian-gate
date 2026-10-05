@@ -251,6 +251,12 @@ _SONIC_CAPABILITIES: dict[str, CapabilityDisposition] = {
     # _SONIC_COLLECT_HANDLERS. Same single source as the six above.
     "route_advertised_to": impl(),
     "route_not_advertised_to": impl(),
+    # §4.5-d H1-b3 script 2b-i (founder rulings R2 of 2026-10-03 and Decision 2 of
+    # 2026-10-05): the three route kinds whose handlers scripts 1a and 1b wired with
+    # no token. Same single source as the kinds above.
+    "route_prefix": impl(),
+    "route_present": impl(),
+    "route_absent": impl(),
 }
 
 

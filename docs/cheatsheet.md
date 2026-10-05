@@ -666,7 +666,7 @@ Supported node types:
 Important current boundary for vendor NOS VM nodes:
 
 - **ping tests are supported** on `sonic-vm` / NOS VM nodes: a ping with `src:` the guest runs against the guest NOS and produces an authoritative verdict
-- **`tcp` and `route_prefix` tests, and every invariant type the node's NOS provider does not declare implemented, are not supported** on vm-runtime nodes (deferred, DC v2.1 §10) and are rejected explicitly at validation time; the deferred list is **derived** from the provider's capability declarations (see below)
+- **`tcp` tests, and every invariant type the node's NOS provider does not declare implemented, are not supported** on vm-runtime nodes (deferred, DC v2.1 §10) and are rejected explicitly at validation time; the deferred list is **derived** from the provider's capability declarations (see below)
 - current truthful behavior for an unsupported NOS VM test kind is:
   - misuse / unsupported test surface
   - exit code `2`
@@ -718,14 +718,15 @@ release. ... Valid: give src a node whose resolved runtime is 'container'. vm-ru
 nodes support lifecycle (up/status/down), node readiness, ping tests (executed against
 the guest), and each test kind and invariant type their NOS provider declares
 implemented; on node type 'sonic-vm' the deferred ones, derived from its provider's
-capability declarations, are: tests tcp, route_prefix; invariant types ... (DC v2.1 §10, ...).
+capability declarations, are: tests tcp; invariant types ... (DC v2.1 §10, ...).
 exit code: 2
 ```
 
 The deferred list is **derived** from the node's provider capability declarations,
 not maintained by hand. For `sonic-vm` the implemented set is currently `bgp_neighbor`
-tests and the invariant types `bgp_session_up`, `bgp_localpref_equals`,
-`bgp_med_equals`, `bgp_community`, `bgp_as_path`, `route_advertised_to` and
+and `route_prefix` tests and the invariant types `bgp_session_up`,
+`bgp_localpref_equals`, `bgp_med_equals`, `bgp_community`, `bgp_as_path`,
+`route_present`, `route_absent`, `route_advertised_to` and
 `route_not_advertised_to`. A `sonic-vm` node with an
 explicit `runtime: container` is rejected at validation (exit 2): set `runtime: vm`,
 or omit it.
@@ -741,8 +742,8 @@ Which references are rejected:
 
 Support boundary:
 
-- supported current surfaces for `sonic-vm`: lifecycle (`up` / `status` / `down`), node readiness, and **ping tests** (executed against the guest)
-- unsupported current surfaces: `tcp` / `bgp_neighbor` / `route_prefix` / invariant tests, guest-file `copy_*`, and candidate-config input against `sonic-vm` / NOS VM nodes
+- supported current surfaces for `sonic-vm`: lifecycle (`up` / `status` / `down`), node readiness, **ping tests** (executed against the guest), and the test kinds and invariant types in the implemented set above
+- unsupported current surfaces: test kinds and invariant types outside the implemented set above (the deferred list the validation rejection message derives), guest-file `copy_*`, and candidate-config input against `sonic-vm` / NOS VM nodes
 
 Scope boundary:
 

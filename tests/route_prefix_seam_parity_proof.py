@@ -49,7 +49,8 @@ Sections:
             (int(None)) in both forms, for every wait_for type (F-S20-2).
   P-NEVER   ruling (I): a read the provider cannot vouch for (probe_ok False)
             is verdict fail regardless of expect on the test path, and raises on
-            the scenario path. SONiC route_prefix stays UNSUP until script 2.
+            the scenario path. SONiC route_prefix is declared IMPL in script
+            2b-i; its never-pass is ruling (I)'s IPv6 collection failure.
   P-RP      (script 2a) ORACLE: each consumer is the live function with exactly
             the 2a guard text removed, sha256-pinned to the f015801 extraction.
             PARITY: FRR rc 0, every committed route_present / route_absent test
@@ -561,10 +562,17 @@ try:
           never_pass_test(NEW_RPT))
     check("P-NEVER scenario: probe_ok False raises (the wait fails regardless of expect; ruling (I))",
           never_pass_wait(NEW_WFP))
+    # H1-b3 script 2b-i declares SONiC route_prefix IMPL (founder rulings R2 of
+    # 2026-10-03 and Decision 2 of 2026-10-05). The UNSUP never-pass stays pinned by
+    # the nft-fw cases (P-DECL Q-A); SONiC's own never-pass is ruling (I): an IPv6
+    # prefix is a collection failure, no read issued, verdict fail for both expects.
     S1 = {"nodes": [{"name": "s1", "type": "sonic-vm"}]}
-    v = run_test(NEW_RPT, S1, FakeRt({}), t_for("192.0.2.0/24", "fail", "s1"), "s1")
-    check("P-NEVER sonic-vm route_prefix stays UNSUP until script 2: explicit UNSUP-fail, verdict fail",
-          v[0] == ("verdict", "fail") and v[1]["evidence"].get("reason") == "unsupported_provider_capability")
+    _s6 = [run_test(NEW_RPT, S1, FakeRt({}), t_for("2001:db8::/32", e, "s1"), "s1") for e in ("pass", "fail")]
+    check("P-NEVER sonic-vm route_prefix (declared IMPL, script 2b-i): an IPv6 prefix is verdict fail for "
+          "expect pass AND expect fail, the IPv6 reason recorded (ruling (I))",
+          all(v[0] == ("verdict", "fail")
+              and "IPv6 prefix unsupported on sonic-vm" in str(v[1].get("error", ""))
+              for v in _s6))
 
     # ------------------------------------------------------------------- P-RP
     # H1-b3 script 2a (rulings Q20-3 (i), F-S21-1 (A), R2). Oracles are the live
