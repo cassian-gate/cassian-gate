@@ -61,6 +61,27 @@ SONIC_NODE_TYPE = "sonic-vm"
 # `hard_defaults` chain via `nos_default_image` (`cassian_model.py:1821-1823`).
 SONIC_DEFAULT_IMAGE = "local/sonic-vm:202405"
 
+# Stock routes of SONIC_DEFAULT_IMAGE (founder ruling D-2 = A, 2026-09-30, SP #1;
+# LD-45D-2(a)). Every IPv4 prefix the image's own RIB carries before Cassian
+# configures anything that the topology did not declare: the BEFORE full-table
+# read of capture procedure 4_5d-h1b3-rib rev 1 (tests/fixtures/sonic-4_5d-h1b3/
+# h1b3_rib_table_before.out, 38 keys) minus s1's declared prefixes in
+# topologies/probe-sonic-bgp-pair.yaml (198.51.100.0/31, 192.0.2.11/32) and the one
+# BGP-learned route (192.0.2.12/32): 34 connected + 1 kernel. SONiC's own evidence
+# only (founder statement 2026-09-26). Canonical _normalize_prefix form. The
+# model's validate step reads it through its import of this module -- no
+# contract field (D-2). STATED LIMIT: one image (ffef3b5662b0), one boot, IPv4,
+# default VRF; another image's stock routes are not measured.
+SONIC_STOCK_PREFIXES: frozenset[str] = frozenset((
+    "0.0.0.0/0", "10.0.0.0/24", "10.0.0.0/31", "10.0.0.2/31", "10.0.0.4/31",
+    "10.0.0.6/31", "10.0.0.8/31", "10.0.0.10/31", "10.0.0.12/31", "10.0.0.14/31",
+    "10.0.0.16/31", "10.0.0.18/31", "10.0.0.20/31", "10.0.0.22/31", "10.0.0.24/31",
+    "10.0.0.26/31", "10.0.0.28/31", "10.0.0.30/31", "10.0.0.32/31", "10.0.0.34/31",
+    "10.0.0.36/31", "10.0.0.38/31", "10.0.0.40/31", "10.0.0.42/31", "10.0.0.44/31",
+    "10.0.0.46/31", "10.0.0.48/31", "10.0.0.50/31", "10.0.0.52/31", "10.0.0.54/31",
+    "10.0.0.56/31", "10.0.0.58/31", "10.0.0.60/31", "10.0.0.62/31", "10.1.0.1/32",
+))
+
 
 # -------------------------
 # Platform port map (REQ-45C-5; founder ruling 2026-08-17)

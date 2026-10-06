@@ -17,6 +17,7 @@ import cassian_common  # LD-45C-R17/-R21: model-homed errors are read back
                        # §4.5-c preconfigured proof; §14.4 unrestricted.
 from cassian_common import (
     DEFAULT_IMAGES,
+    _normalize_prefix,
     assert_vm_runtime_supported,
     die,
     is_ip_literal,
@@ -41,7 +42,7 @@ from cassian_nos_types import (
     validate_provider,
 )
 from cassian_nos_frr import FRR_PROVIDER
-from cassian_nos_sonic import SONIC_PROVIDER
+from cassian_nos_sonic import SONIC_PROVIDER, SONIC_STOCK_PREFIXES
 
 # -------------------------
 # NOS provider registry (Phase 2 §4.5-b, REQ-45b-1; design §3.3)
@@ -2742,6 +2743,30 @@ def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
                     _ = ipaddress.ip_network(pfx.strip(), strict=False)
                 except Exception:
                     die(f"{ctx}: {inv_type}.prefix must be a valid CIDR (e.g. 10.0.0.0/24)")
+
+                if inv_type == "route_absent":
+                    # Founder ruling D-2 = A (2026-09-30, SP #1; LD-45D-2(a)): route_absent
+                    # on a prefix the src node's provider declares STOCK is a declaration
+                    # error -- the image carries that route on every boot and Cassian never
+                    # removes it, so the assertion can never pass. The set is SONiC's own
+                    # evidence, read through this module's import of the provider module
+                    # (no contract field); normalisation is the helper SONiC's RIB reader
+                    # uses (PBE-1b-9). A src whose type has no stock set -- every other
+                    # provider, or an unregistered type -- is not affected here.
+                    _stock_by_type = {SONIC_PROVIDER.node_type: SONIC_STOCK_PREFIXES}
+                    _ra_node = next((_n for _n in (resolved.get("nodes") or [])
+                                     if isinstance(_n, dict)
+                                     and str(_n.get("name") or "").strip() == src.strip()), None)
+                    _ra_type = str((_ra_node or {}).get("type") or "").strip().lower()
+                    _ra_norm = _normalize_prefix(pfx)
+                    if _ra_norm is not None and _ra_norm in _stock_by_type.get(_ra_type, ()):
+                        die(
+                            f"{ctx}: route_absent.prefix {_ra_norm!r} is a stock route of node "
+                            f"{src.strip()!r} (type {_ra_type!r}): the image installs it at boot and "
+                            f"Cassian never removes it, so route_absent on it can never pass; "
+                            f"assert route_absent on a prefix outside the image's stock routes, "
+                            f"or route_present if the stock route is what you mean to check"
+                        )
 
                 if inv_type in ("route_advertised_to", "route_not_advertised_to"):
                     peer = t.get("peer")

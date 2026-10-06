@@ -402,6 +402,25 @@ try:
                 if isinstance(wf, dict) and wf.get("type") == "route_prefix":
                     fixtures_waits.append((rel, doc, wf))
 
+    # Founder rulings S24-R2a / S24-R2b (2026-10-06): these are FRR parity proofs over
+    # FRR fixtures (handover §6.7.2 / §15.2: "every FRR fixture"). A committed case whose
+    # vantage node is type sonic-vm is skipped -- SONiC is proven from its own evidence
+    # (founder statement 2026-09-26; ruling (B) of 2026-10-01). Nothing else is skipped;
+    # the skipped count is printed as the coverage limit (PBE-P2-8).
+    def _sonic_vantage(doc, name):
+        for _n in doc.get("nodes") or []:
+            if isinstance(_n, dict) and _n.get("name") == name:
+                return str(_n.get("type") or "").strip().lower() == "sonic-vm"
+        return False
+
+    def _test_vantage(t):
+        return t.get("node") or t.get("src") or t.get("on")
+
+    _pp_skip = (sum(1 for _r, _d, _t in fixtures_tests if _sonic_vantage(_d, _test_vantage(_t)))
+                + sum(1 for _r, _d, _w in fixtures_waits if _sonic_vantage(_d, _w.get("from"))))
+    fixtures_tests = [_c for _c in fixtures_tests if not _sonic_vantage(_c[1], _test_vantage(_c[2]))]
+    fixtures_waits = [_c for _c in fixtures_waits if not _sonic_vantage(_c[1], _c[2].get("from"))]
+    print(f"P-PARITY skipped {_pp_skip} committed case(s) with a sonic-vm vantage (S24-R2b; coverage limit)")
     check("P-PARITY enumeration found route_prefix tests and waits in the committed fixtures",
           len(fixtures_tests) > 0 and len(fixtures_waits) > 0)
     print(f"P-PARITY enumerated {len(fixtures_tests)} route_prefix test(s), "
@@ -713,6 +732,12 @@ try:
                 wf = st.get("wait_for") if isinstance(st, dict) else None
                 if isinstance(wf, dict) and wf.get("type") == "route_present":
                     rp_waits.append((rel, doc, wf))
+    # Founder ruling S24-R2a (2026-10-06): the same rule as P-PARITY above.
+    _rp_skip = (sum(1 for _r, _d, _t in rp_tests if _sonic_vantage(_d, _test_vantage(_t)))
+                + sum(1 for _r, _d, _w in rp_waits if _sonic_vantage(_d, _w.get("from"))))
+    rp_tests = [_c for _c in rp_tests if not _sonic_vantage(_c[1], _test_vantage(_c[2]))]
+    rp_waits = [_c for _c in rp_waits if not _sonic_vantage(_c[1], _c[2].get("from"))]
+    print(f"P-RP skipped {_rp_skip} committed case(s) with a sonic-vm vantage (S24-R2a; coverage limit)")
     check("P-RP enumeration found route_present / route_absent tests and route_present waits in the committed fixtures",
           len(rp_tests) > 0 and len(rp_waits) > 0)
     print(f"P-RP enumerated {len(rp_tests)} route_present/route_absent test(s), {len(rp_waits)} route_present wait(s)")

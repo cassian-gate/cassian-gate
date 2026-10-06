@@ -50,6 +50,13 @@ Additional obligations:
   P-ALIAS  `from` and `to` alias forms are read.
   P-NR     container-runtime topologies still validate (no false-fail).
   P-DET    identical input -> byte-identical rejection message.
+  D-2      REQ-45D-12 (founder ruling D-2 = A, 2026-09-30, SP #1; LD-45D-2(a)):
+           route_absent on a prefix the src node's provider declares STOCK is
+           rejected at validate with DC §13(a) content; the stock set equals
+           SONiC's own BEFORE full-table read minus the pair topology's declared
+           prefixes; FRR, route_present, non-stock and IPv6 prefixes unaffected;
+           the decision moves with the declaration; the committed fixture
+           topologies/sonic-route-absent-stock.yaml is what fires.
 
 Exit 0 on all-pass; exit 1 on any failed assertion.
 """
@@ -492,6 +499,107 @@ def main():
     check("Q25 (d) exec 'show version' on sonic-vm ACCEPTED", _xa_o == "ok")
     check("Q25 (d) exec 'config save -y' on sonic-vm REJECTED by the exec rule",
           _xr_o == "die" and "exec command rejected" in _xr_m and not _is_runtime_gate(_xr_m))
+
+    # ================================================================ REQ-45D-12 (D-2)
+    # H1-b3 script 2b-ii (founder ruling D-2 = A of 2026-09-30, SP #1; LD-45D-2(a);
+    # Decision 2 of 2026-10-05). route_absent on a prefix the src node's provider
+    # declares STOCK is a declaration error at validate. The set is SONiC's own
+    # evidence (founder statement 2026-09-26): it must equal the committed BEFORE
+    # full-table read minus s1's declared prefixes in the pair topology (capture
+    # procedure 4_5d-h1b3-rib rev 1 §1; session-21 note §5 row 2).
+    import json as _json
+    import yaml as _yaml
+    _root = os.path.dirname(_HERE)
+    with open(os.path.join(_root, "tests", "fixtures", "sonic-4_5d-h1b3",
+                           "h1b3_rib_table_before.out"), encoding="utf-8") as _fh:
+        _before = _json.load(_fh)
+    with open(os.path.join(_root, "topologies", "probe-sonic-bgp-pair.yaml"),
+              encoding="utf-8") as _fh:
+        _pair = _yaml.safe_load(_fh)
+    _s1 = [_n for _n in _pair["nodes"] if _n.get("name") == "s1"][0]
+    _decl = {_cc._normalize_prefix(_p) for _p in (_s1.get("networks") or [])}
+    for _l in _pair.get("links") or []:
+        for _ep, _a in zip(_l.get("endpoints") or [], _l.get("ipv4") or []):
+            if str(_ep).startswith("s1:"):
+                _decl.add(_cc._normalize_prefix(_a))
+    _derived = frozenset(_k for _k, _v in _before.items()
+                         if {_e.get("protocol") for _e in _v} <= {"connected", "kernel"}) - _decl
+    _stock = cm.SONIC_STOCK_PREFIXES
+    print("D-2 stock set: %d prefixes; derived from SONiC's BEFORE read: %d"
+          % (len(_stock), len(_derived)))
+    check("D-2 stock set equals SONiC's own BEFORE read minus s1's declared prefixes (non-empty)",
+          len(_derived) > 0 and _stock == _derived)
+    check("D-2 the model reads the provider module's declaration (one object, no copy)",
+          cm.SONIC_STOCK_PREFIXES is __import__("cassian_nos_sonic").SONIC_STOCK_PREFIXES)
+
+    def _ra(prefix, src="s1", name="d2", ty="route_absent"):
+        return {"name": name, "kind": "invariant", "type": ty, "src": src, "prefix": prefix}
+
+    def _is_stock_reject(msg, norm):
+        return (("route_absent.prefix %r is a stock route of node 's1' (type 'sonic-vm')" % norm) in msg
+                and "can never pass" in msg and "outside the image's stock routes" in msg
+                and "route_present" in msg and not _is_runtime_gate(msg))
+
+    _each = []
+    for _p in sorted(_stock):
+        _o, _m = _validate(_ra(_p, name="d2-" + _p))
+        _each.append(_o == "die" and _is_stock_reject(_m, _p))
+    check("D-2 every stock prefix as route_absent on sonic-vm REJECTED with the stock-route text",
+          _each and all(_each))
+    _o1, _m1 = _validate(_ra("10.1.0.1/32"))
+    _o2, _m2 = _validate(_ra("10.1.0.1/32"))
+    check("D-2 deterministic bytes", _o1 == "die" and _m1 == _m2)
+    _oh, _mh = _validate(_ra("10.0.0.1/31"))
+    check("D-2 host bits normalise to the stock network and are rejected naming it",
+          _oh == "die" and _is_stock_reject(_mh, "10.0.0.0/31"))
+    _ow, _mw = _validate(_ra(" 10.1.0.1/32 "))
+    check("D-2 surrounding whitespace does not evade the check", _ow == "die"
+          and _is_stock_reject(_mw, "10.1.0.1/32"))
+    for _lbl, _t in (("non-stock absent control 198.18.1.0/24 (capture §1)", _ra("198.18.1.0/24")),
+                     ("route_present on a stock prefix", _ra("10.1.0.1/32", ty="route_present")),
+                     ("route_absent on an frr src, stock-shaped prefix (no FRR delta)",
+                      _ra("10.1.0.1/32", src="r1")),
+                     ("route_absent on an IPv6 prefix (collection-time failure, IPv6 (I))",
+                      _ra("2001:db8::/32"))):
+        _o, _m = _validate(dict(_t, name="d2-ctl"))
+        check("D-2 control: %s VALIDATES" % _lbl, _o == "ok")
+    # Placement: D-2 sits in the route-family validation, ahead of the R-O1 gate
+    # (session-21 note §5 row 4) -- with route_absent un-declared, the stock text wins.
+    _saved2 = dict(_sp.capabilities)
+    try:
+        _sp.capabilities.pop("route_absent")
+        _og, _mg = _validate(_ra("10.1.0.1/32"))
+        _ok_place = _og == "die" and _is_stock_reject(_mg, "10.1.0.1/32")
+    finally:
+        _sp.capabilities.clear(); _sp.capabilities.update(_saved2)
+    check("D-2 fires ahead of the R-O1 gate (route_absent un-declared, stock text wins)", _ok_place)
+    # Non-vacuity: the decision moves WITH the declaration, both directions.
+    _saved_stock = cm.SONIC_STOCK_PREFIXES
+    try:
+        cm.SONIC_STOCK_PREFIXES = frozenset()
+        _on, _ = _validate(_ra("10.1.0.1/32"))
+        _nv_empty = _on == "ok"
+        cm.SONIC_STOCK_PREFIXES = frozenset(_saved_stock | {"198.18.1.0/24"})
+        _oa, _ma = _validate(_ra("198.18.1.0/24"))
+        _nv_add = _oa == "die" and _is_stock_reject(_ma, "198.18.1.0/24")
+    finally:
+        cm.SONIC_STOCK_PREFIXES = _saved_stock
+    for _lbl, _ok in (("an empty stock set admits the stock prefix", _nv_empty),
+                      ("a prefix added to the stock set is rejected", _nv_add)):
+        print("  MUTATION-FAIL: %s" % _lbl if _ok else "  MUTATION-UNDETECTED: %s" % _lbl)
+        check("D-2-NV %s" % _lbl, _ok)
+    check("D-2-NV stock set and capabilities restored",
+          cm.SONIC_STOCK_PREFIXES is _saved_stock and dict(_sp.capabilities) == _saved2)
+    # The committed fixture named by handover §18 (-11/-12 row) is what fires.
+    with open(os.path.join(_root, "topologies", "sonic-route-absent-stock.yaml"),
+              encoding="utf-8") as _fh:
+        _fx = _yaml.safe_load(_fh)
+    try:
+        cm.ensure_valid_topology(_fx); cm.resolve_topology(_fx); _fo, _fm = "ok", ""
+    except SystemExit as _e:
+        _fo, _fm = "die", str(_e)
+    check("D-2 topologies/sonic-route-absent-stock.yaml is rejected by the stock-route check",
+          _fo == "die" and _is_stock_reject(_fm, "10.1.0.1/32"))
 
     # Ruling A-prime: the admission vocabulary is the pre-hoist tuple, unchanged in
     # content and order, and the admission rejection is byte-identical.
