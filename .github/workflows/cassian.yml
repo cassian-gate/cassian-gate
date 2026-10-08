@@ -734,6 +734,15 @@ jobs:
           set -euo pipefail
           python tests/route_prefix_seam_parity_proof.py
 
+      - name: EVPN precheck MAC-route poll proof — evpn_precheck_mac_poll_proof.py (§4.5-d, S24-R5, BL-P2-4.5c-53)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/evpn_precheck_mac_poll_proof.py
+
       - name: SONiC (VM) teardown sweep (§4.5-c WI-3)
         if: always()
         env:

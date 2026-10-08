@@ -158,7 +158,8 @@ for _p in ("sonic_exec_allowlist_proof.py",   # H1-a2-ii, REQ-45D-5
            "sonic_observation_kinds_proof.py",  # H1-b1 script 1, REQ-45D-1/-8/-9/-10/-15/-16
            "sonic_observed_state_render_proof.py",  # H1-b1 script 2, REQ-45D-21 (ruling (i))
            "exec_rule_parity_proof.py",       # H1-a2-ii, REQ-45D-6/-7
-           "route_prefix_seam_parity_proof.py"):  # H1-b3 script 1b, REQ-45D-2 (ruling Q-B)
+           "route_prefix_seam_parity_proof.py",  # H1-b3 script 1b, REQ-45D-2 (ruling Q-B)
+           "evpn_precheck_mac_poll_proof.py"):  # S24-R5, BL-P2-4.5c-53 (S25-R4)
     check(f"§4.5-d proof is CI-wired: {_p} present in the gate", _p in gate)
 
 fails = [n for n, ok in checks if not ok]

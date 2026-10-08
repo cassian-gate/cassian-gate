@@ -10446,7 +10446,84 @@ def cmd_test(args: argparse.Namespace) -> None:
                     _prov.convergence_wait(
                         rt, lab, n["name"], precheck_timeout, _expected_peer_ips(n["name"])
                     )
-            time.sleep(post_precheck_sleep)
+            # S24-R5 (founder ruling 2026-10-06, BL-P2-4.5c-53's named fix) as
+            # applied by S25-R4 (2026-10-08). For an EVPN lab that is not a replay
+            # lab, the fixed post-precheck sleep is replaced by a bounded poll for
+            # the declared EVPN MAC routes: every host attachment of the resolved
+            # `fabric.evpn` (DC §1 authoritative input), on every EVPN leaf.
+            # Predicate: the product's existing presence read, unchanged --
+            # `_evaluate_invariant_attempt` with kind `evpn_mac_route_present`,
+            # consumed as the REQ-WF-6 wait_for consumes it (predicate only).
+            # Bound: the existing `precheck_timeout`; interval 1 s, as
+            # wait_for_bgp polls. A timeout fails loud, naming the lab and each
+            # leaf, host, MAC and VNI still absent, with elapsed time against the
+            # bound. Non-EVPN and replay labs keep `time.sleep(post_precheck_sleep)`
+            # byte-identically; for this branch the computed 10 s is no longer
+            # slept. Declared under DC v2.1 §14 item 8.
+            if require_evpn_bgp and not is_replay_lab:
+                _evpn_fab = (topo.get("fabric") or {}).get("evpn") or {}
+                _evpn_vni = {
+                    str(_k): (_v or {}).get("vni")
+                    for _k, _v in (_evpn_fab.get("vlans") or {}).items()
+                }
+                _evpn_leaves = sorted(str(_l) for _l in (_evpn_fab.get("leaf_nodes") or []))
+                _evpn_decl = []
+                for _a in (_evpn_fab.get("host_attachments") or []):
+                    _a = _a if isinstance(_a, dict) else {}
+                    _evpn_decl.append(
+                        (
+                            str(_a.get("host") or ""),
+                            str(_a.get("mac") or "").strip().lower(),
+                            _evpn_vni.get(str(_a.get("vlan"))),
+                        )
+                    )
+                _evpn_decl.sort(key=lambda _d: (_d[1], _d[0]))
+                if (
+                    not _evpn_leaves
+                    or not _evpn_decl
+                    or any((not _m) or (not isinstance(_v, int)) or isinstance(_v, bool) for _h, _m, _v in _evpn_decl)
+                ):
+                    die(
+                        f"EVPN precheck: lab {lab}'s resolved topology declares no EVPN leaf, no host "
+                        "attachment, or a host without a MAC or VNI under fabric.evpn, so the declared "
+                        "MAC routes cannot be waited for.\n"
+                        "Action: re-run `cassian up <topology> --reconfigure` so topology.resolved.yaml "
+                        "is regenerated from the declared topology, then re-run `cassian test`."
+                    )
+
+                def _evpn_decl_attempt():
+                    _absent = []
+                    for _leaf in _evpn_leaves:
+                        for _host, _mac, _vni in _evpn_decl:
+                            _present = _evaluate_invariant_attempt(
+                                inv_type="evpn_mac_route_present",
+                                t={"_mac": _mac, "_vni_i": _vni},
+                                src=_leaf,
+                            )[1]
+                            if not _present:
+                                _absent.append((_leaf, _host, _mac, _vni))
+                    return (not _absent), _absent
+
+                _evpn_ok, _evpn_absent, _evpn_attempts, _evpn_ms = retry_until(
+                    precheck_timeout, 1.0, _evpn_decl_attempt
+                )
+                if not _evpn_ok:
+                    die(
+                        f"EVPN precheck: declared host MAC routes still absent after "
+                        f"{_evpn_ms / 1000:.1f}s (bound {precheck_timeout}s, {_evpn_attempts} attempts) "
+                        f"in lab {lab}:\n"
+                        + "".join(
+                            f"  {_leaf}: {_host} {_mac} (VNI {_vni}) is not in the EVPN MAC-route read\n"
+                            for _leaf, _host, _mac, _vni in _evpn_absent
+                        )
+                        + "Every host declared under fabric.evpn must be present on every EVPN leaf before "
+                        "tests read EVPN state; reading earlier would give verdicts from an unconverged fabric.\n"
+                        "Action: check that each listed host is up and has sent traffic on its access link, "
+                        "and that each leaf's EVPN session to the route reflector is Established; then re-run "
+                        "`cassian test`."
+                    )
+            else:
+                time.sleep(post_precheck_sleep)
         except SystemExit:
             results["result"] = "fail"
             finished_at = time.time()
