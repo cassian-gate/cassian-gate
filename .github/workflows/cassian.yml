@@ -763,6 +763,24 @@ jobs:
           python tests/evpn_rr_next_hop_self_proof.py --hosted evpn-mac-route-absent-expect-fail || rc=1
           exit "$rc"
 
+      - name: SONiC ospf_neighbor_up UNSUPPORTED proof — sonic_ospf_unsupported_proof.py (§4.5-d, REQ-45D-17)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/sonic_ospf_unsupported_proof.py
+
+      - name: added-step if-key proof — wf_added_steps_if_key_proof.py (§4.5-d, REQ-45D-28)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/wf_added_steps_if_key_proof.py
+
       - name: SONiC (VM) teardown sweep (§4.5-c WI-3)
         if: always()
         env:

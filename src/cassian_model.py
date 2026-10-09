@@ -2996,6 +2996,24 @@ def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
                         f"{src!r} but no node by that name exists in the topology"
                     )
                 _src_kind = str(_src_node.get("type") or "").strip().lower()
+                # REQ-45D-17 (D-047.VAL; the OSPF governance anchor): OSPF on SONiC
+                # is UNSUPPORTED in this release (IMPL deferred to §4.12), so a
+                # sonic-vm src meets a deterministic UNSUPPORTED message at exit 2 --
+                # handover §6.6's template plus the corrective line the item-5
+                # message carries -- ahead of the frr-only gate below. Every other
+                # non-frr src keeps that gate's message byte-for-byte. SONiC's
+                # capability table does not declare ospf_neighbor_up (the
+                # deny-by-default backstop at exec). tests/sonic_ospf_unsupported_proof.py
+                # pins the bytes.
+                if _src_kind == "sonic-vm":
+                    die(
+                        "Topology invalid: invariant "
+                        f"{str(t.get('name') or '<unnamed>').strip()}: "
+                        "type ospf_neighbor_up is unsupported on node "
+                        f"{src.strip()} (type sonic-vm) \u2014 OSPF on SONiC is not "
+                        "supported in this release; see docs/cli-reference-v1.md\n"
+                        "Valid: point src at a node of type frr, or remove this invariant."
+                    )
                 if _src_kind != "frr":
                     die(
                         f"{ctx}: invariant 'ospf_neighbor_up' references src "
@@ -3304,8 +3322,9 @@ def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
         # tests/vm_runtime_validate_rejection_proof.py cases (a) and (f) exist to
         # catch exactly that.
         #
-        # ORDERING (accepted): for ospf_neighbor_up the existing 'frr' src type gate
-        # fires earlier and its message stands (D-047). The bgp_community /
+        # ORDERING (accepted): for ospf_neighbor_up the src type checks fire earlier
+        # (D-047): a sonic-vm src meets the REQ-45D-17 UNSUPPORTED message, any other
+        # non-frr src the frr-only message, which stands. The bgp_community /
         # bgp_as_path src gates are capability-derived since ruling alpha
         # (2026-09-25): a sonic-vm src passes them exactly when its provider declares
         # the type IMPL, the same read this gate makes. Those gates are loud, so no

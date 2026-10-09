@@ -1179,8 +1179,8 @@ When the built-in invariant catalog can't express the check you need, an `exec` 
 ```yaml
 - name: bgp_peer_established
   kind: exec
-  src: r1                                    # target node; type derived (frr | nft-fw)
-  command: vtysh -c "show bgp summary json"  # read-only: frr -> vtysh -c "show …"; nft-fw -> nft list …
+  src: r1                                    # target node; type derived (frr | nft-fw | sonic-vm)
+  command: vtysh -c "show bgp summary json"  # read-only: frr -> vtysh -c "show …"; nft-fw -> nft list …; sonic-vm -> show … or vtysh -c "show …" (not show techsupport)
   assertion:
     field:
       path: [ipv4Unicast, peers, "10.0.0.2", state]
@@ -1877,7 +1877,7 @@ This is useful for validating OSPF adjacency establishment such as:
 - post-change OSPF re-adjacency
 - guarded assertion of OSPF Full adjacency before further routing-policy invariants
 
-This invariant is **FRR-only**; declaring `ospf_neighbor_up` against a non-FRR `src` node is rejected at validation with exit code `2`.
+This invariant is **FRR-only**; declaring `ospf_neighbor_up` against a non-FRR `src` node is rejected at validation with exit code `2`. On a `sonic-vm` `src` the rejection is a deterministic unsupported error naming the invariant and the node: OSPF on SONiC is not supported in this release (see `docs/cli-reference-v1.md` §7).
 
 Required fields:
 

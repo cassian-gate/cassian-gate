@@ -203,17 +203,23 @@ def main():
           "(Decision 3 = (i))", fa_o == "ok")
 
     # ---------------------------------------------------------------- ruled case (g)
-    # ospf_neighbor_up: like bgp_community (case b), the frr src type gate fires
-    # FIRST and its message stands -- type-gate-first ordering (REQ-45a-7; OSPF
-    # anchor; Pin-2). 'neighbor' is required or an earlier field check pre-empts,
-    # so the test is well-formed to reach the type gate.
+    # ospf_neighbor_up: the src type check fires FIRST, ahead of the runtime gate
+    # -- type-gate-first ordering (REQ-45a-7; OSPF anchor; Pin-2). Since REQ-45D-17
+    # (D-047.VAL, the anchor's UNSUP-with-clear-error disposition) a sonic-vm src
+    # meets the deterministic UNSUPPORTED message at that check, not the frr-only
+    # message; the case still REJECTs, which is what handover §3 reads
+    # "unweakened" to require (no REJECT case turned ACCEPT). 'neighbor' is
+    # required or an earlier field check pre-empts, so the test is well-formed to
+    # reach the type check.
     g_o, g_m = _validate({
         "name": "ospf-vm-src", "kind": "invariant", "type": "ospf_neighbor_up",
         "src": "s1", "neighbor": "2.2.2.2",
     })
     check("(g) ospf_neighbor_up src on vm node rejected", g_o == "die")
-    check("(g) rejection is the FRR type gate, not the runtime gate (type-gate-first)",
-          "requires src to be a node of type 'frr'" in g_m and not _is_runtime_gate(g_m))
+    check("(g) rejection carries the REQ-45D-17 UNSUPPORTED text, not the runtime gate's "
+          "(type-gate-first)",
+          "type ospf_neighbor_up is unsupported on node s1 (type sonic-vm)" in g_m
+          and not _is_runtime_gate(g_m))
 
     # ---------------------------------------------------------------- P-13
     # DC v2.1 §13 (a)/(b)/(c) are non-negotiable for hard-fail rejection of
@@ -392,7 +398,7 @@ def main():
     check("Q25 (b) still-gated set is non-empty and excludes every flipped kind",
           _def_kinds and _def_types and not (set(_flip) & set(_def_kinds + _def_types)))
     for _ty in _def_types:
-        if _ty in ("ospf_neighbor_up",):  # frr type gate fires first -- case (g)
+        if _ty in ("ospf_neighbor_up",):  # its src type check fires first -- case (g)
             continue
         _o, _m = _validate({"name": "q25b-" + _ty, "kind": "invariant", "type": _ty,
                             "src": "s1", "prefix": "10.0.0.0/24", "dst": "10.0.0.1",
@@ -443,7 +449,7 @@ def main():
         from cassian_nos_types import impl as _impl_tok
         # Since H1-b3 script 2b-i route_present / route_absent are flipped; the too-much
         # vehicles are the first two un-flipped types, derived at run time (founder ruling
-        # Decision 3 = (i), 2026-10-05; ospf_neighbor_up excluded -- the frr type gate
+        # Decision 3 = (i), 2026-10-05; ospf_neighbor_up excluded -- its src type check
         # fires first, case (g)).
         _tm_a, _tm_b = (_tm_pool + [None, None])[:2]
         _sp.capabilities[_tm_a] = _impl_tok()  # too-much: declare an un-flipped
