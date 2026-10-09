@@ -126,7 +126,7 @@ Unlike `kind: invariant`, an `exec` test has no `type:` field, and there is no o
 
 ### 2a.2) Target node and derived type
 
-`src` MUST reference a node declared in `nodes:`. The engine **derives** the node's type from the topology — the operator does not declare it. In v1 the derived type MUST be one of `frr` or `nft-fw`; a target whose derived type is anything else is rejected at validation. The derived type also selects the read-only allow-list.
+`src` MUST reference a node declared in `nodes:`. The engine **derives** the node's type from the topology — the operator does not declare it. In v1 the derived type MUST be one of `frr`, `nft-fw` or `sonic-vm`; a target whose derived type is anything else is rejected at validation. The derived type also selects the read-only allow-list.
 
 ### 2a.3) Read-only allow-list
 
@@ -136,6 +136,7 @@ Commands are constrained to a node-type-aware read-only allow-list at a single v
 |---|---|
 | `frr` | `vtysh -c "show …"` (read-only `show` commands) |
 | `nft-fw` | `nft list …` (e.g. `nft list ruleset`; mutating verbs such as `add` / `delete` / `flush` / `insert` / `replace` are denied) |
+| `sonic-vm` | `show …` (SONiC's own read-only `show` commands; `show techsupport` is denied) or `vtysh -c "show …"` (exactly one `-c` with a `show` payload) |
 
 A command outside the allow-list for the target's derived type is rejected at validation (exit code `2`) with a deterministic error; it never reaches runtime.
 

@@ -135,18 +135,18 @@ Arguments:
 
 ### `cassian status <lab> [flags]`
 
-**Purpose:** Show lab status (containers + optional FRR info).
+**Purpose:** Show lab status (containers, plus optional BGP and route information for each node whose NOS provider implements the status legs: today `frr` and `sonic-vm`).
 
 Flags:
 
 * `--bgp`  
-  Include `show bgp summary` for FRR nodes.
+  Include `show bgp summary` for `frr` and `sonic-vm` nodes. Expected peers are derived only from links between two `frr` nodes, so a `sonic-vm` node prints `BGP (none)`; its observed sessions are in `--json` and `--bgp-verbose`.
 
 * `--bgp-verbose`  
   Print full `show bgp summary` output.
 
 * `--strict`  
-  Exit non-zero if any FRR peers are not `Established`.
+  Exit non-zero if any expected peer (derived from links between two `frr` nodes) is not `Established`.
 
 * `--interfaces`  
   Include `ip -br a` output per node.
@@ -326,7 +326,7 @@ Notes:
 
 Default is bare = NOS.
 
-Supported surfaces on a vm-runtime node: lifecycle (`up` / `status` / `down`), node readiness, and **ping tests** (executed against the guest). `tcp`, `bgp_neighbor`, `route_prefix`, and invariant kinds are deferred (DC v2.1 §10) and are rejected at validation time with exit code `2`. Guest-file `copy_*` is unsupported (deferred to §4.5-f); `substrate_copy_from` works; `substrate_copy_to` is intentionally absent (demand-led).
+Supported surfaces on a vm-runtime node: lifecycle (`up` / `status` / `down`), node readiness, **ping tests** (executed against the guest), and each test kind and invariant type the node's NOS provider declares implemented. The set is **derived**, not maintained by hand: validation reads the provider's capability declarations, and its rejection message lists what is still deferred. For `sonic-vm` this is currently `bgp_neighbor` and `route_prefix` tests and the invariant types `bgp_session_up`, `bgp_localpref_equals`, `bgp_med_equals`, `bgp_community`, `bgp_as_path`, `route_present`, `route_absent`, `route_advertised_to` and `route_not_advertised_to`; `tcp` tests and every other invariant type are deferred (DC v2.1 §10) and are rejected at validation time with exit code `2`. An `ospf_neighbor_up` invariant whose `src` is a `sonic-vm` node is rejected at validation time with a deterministic unsupported error naming the invariant and the node (exit code `2`): OSPF on SONiC is not supported in this release; point `src` at an `frr` node, or remove the invariant. A `sonic-vm` node declared with an explicit `runtime: container` is rejected at validation time with exit code `2` (set `runtime: vm`, or omit it). Guest-file `copy_*` is unsupported (deferred to §4.5-f); `substrate_copy_from` works; `substrate_copy_to` is intentionally absent (demand-led).
 
 Credentials are a boot-time launcher property (`admin` / `admin`; no schema key). See `docs/vm-runtime-capabilities.md` and `contrib/sonic-image-build/`.
 

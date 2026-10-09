@@ -157,6 +157,28 @@ SECTION_45C_FIXTURES = (
     # by tests/sonic_preconfigured_proof.py req26 instead. Stated because the
     # division is not obvious from either file alone.
     "sonic-preconfigured-boot.yaml",
+    # §4.5-d REQ-45D-24 (item 5, BL-P2-4.5c-46): the sonic-vm node declaring an
+    # explicit `runtime: container`, added at cassian-gate e28145a. NEVER
+    # DEPLOYED -- `cassian validate` refuses it at exit 2. Registered under
+    # founder Decision 4 (a) of 2026-09-28 (SP #1) so the enumeration-drop
+    # guard (F-45C-C3-3) sees it, and its two router_id addresses come under
+    # LEG 1's HALT-2 sweep.
+    "sonic-runtime-container.yaml",
+    # §4.5-d REQ-45D-12 (founder ruling D-2 = A of 2026-09-30): H1-b3 script 2b-ii's
+    # deliberately invalid validate-time fixture (handover §18, the -11/-12 row).
+    # NEVER DEPLOYED -- `cassian validate` refuses it at exit 2. Registered under
+    # founder ruling S24-R1 of 2026-10-06 (SP #1, as amended: Decision 4 (a)'s
+    # placement) so the enumeration-drop guard (F-45C-C3-3) sees it; it declares
+    # no address, so LEG 1's HALT-2 sweep passes over it.
+    "sonic-route-absent-stock.yaml",
+    # §4.5-d REQ-45D-17 (D-047.VAL): the hosted packet's deliberately invalid
+    # validate-time fixture (handover §18 row -17; §19.2). NEVER DEPLOYED --
+    # `cassian validate` refuses it at exit 2 with the UNSUPPORTED message.
+    # Registered under founder ruling S27-R5 of 2026-10-09 (SP #1: one entry and
+    # its comment per new §4.5-d SONiC fixture, in the change that adds it) so the
+    # enumeration-drop guard (F-45C-C3-3) sees it; its two router_id addresses,
+    # 192.0.2.31 and 192.0.2.41, come under LEG 1's HALT-2 sweep.
+    "sonic-ospf-unsup.yaml",
 )
 
 # SONiC fixtures inherited from 4.5-a. REQ-45C-5 states these collide with

@@ -666,7 +666,7 @@ Supported node types:
 Important current boundary for vendor NOS VM nodes:
 
 - **ping tests are supported** on `sonic-vm` / NOS VM nodes: a ping with `src:` the guest runs against the guest NOS and produces an authoritative verdict
-- **`tcp`, `bgp_neighbor`, `route_prefix`, and invariant kinds are not supported** on vm-runtime nodes (deferred, DC v2.1 §10) and are rejected explicitly at validation time
+- **`tcp` tests, and every invariant type the node's NOS provider does not declare implemented, are not supported** on vm-runtime nodes (deferred, DC v2.1 §10) and are rejected explicitly at validation time; the deferred list is **derived** from the provider's capability declarations (see below)
 - current truthful behavior for an unsupported NOS VM test kind is:
   - misuse / unsupported test surface
   - exit code `2`
@@ -715,10 +715,21 @@ Expected outcome (message abridged):
 ERROR: tests[1] (reach): tcp test references src node 's1', whose resolved runtime
 is 'vm'; running a tcp test against a vm-runtime node is NOT SUPPORTED in this
 release. ... Valid: give src a node whose resolved runtime is 'container'. vm-runtime
-nodes currently support lifecycle (up/status/down), node readiness, and ping tests
-(executed against the guest); other test kinds are deferred.
+nodes support lifecycle (up/status/down), node readiness, ping tests (executed against
+the guest), and each test kind and invariant type their NOS provider declares
+implemented; on node type 'sonic-vm' the deferred ones, derived from its provider's
+capability declarations, are: tests tcp; invariant types ... (DC v2.1 §10, ...).
 exit code: 2
 ```
+
+The deferred list is **derived** from the node's provider capability declarations,
+not maintained by hand. For `sonic-vm` the implemented set is currently `bgp_neighbor`
+and `route_prefix` tests and the invariant types `bgp_session_up`,
+`bgp_localpref_equals`, `bgp_med_equals`, `bgp_community`, `bgp_as_path`,
+`route_present`, `route_absent`, `route_advertised_to` and
+`route_not_advertised_to`. A `sonic-vm` node with an
+explicit `runtime: container` is rejected at validation (exit 2): set `runtime: vm`,
+or omit it.
 
 Meaning: for the gated kinds, container exec would reach the vrnetlab launcher container, not the guest NOS, so a verdict from it would describe the wrong entity. A ping does not have this problem -- it is executed against the guest and is supported.
 
@@ -731,8 +742,8 @@ Which references are rejected:
 
 Support boundary:
 
-- supported current surfaces for `sonic-vm`: lifecycle (`up` / `status` / `down`), node readiness, and **ping tests** (executed against the guest)
-- unsupported current surfaces: `tcp` / `bgp_neighbor` / `route_prefix` / invariant tests, guest-file `copy_*`, and candidate-config input against `sonic-vm` / NOS VM nodes
+- supported current surfaces for `sonic-vm`: lifecycle (`up` / `status` / `down`), node readiness, **ping tests** (executed against the guest), and the test kinds and invariant types in the implemented set above
+- unsupported current surfaces: test kinds and invariant types outside the implemented set above (the deferred list the validation rejection message derives), guest-file `copy_*`, and candidate-config input against `sonic-vm` / NOS VM nodes
 
 Scope boundary:
 
@@ -1168,8 +1179,8 @@ When the built-in invariant catalog can't express the check you need, an `exec` 
 ```yaml
 - name: bgp_peer_established
   kind: exec
-  src: r1                                    # target node; type derived (frr | nft-fw)
-  command: vtysh -c "show bgp summary json"  # read-only: frr -> vtysh -c "show …"; nft-fw -> nft list …
+  src: r1                                    # target node; type derived (frr | nft-fw | sonic-vm)
+  command: vtysh -c "show bgp summary json"  # read-only: frr -> vtysh -c "show …"; nft-fw -> nft list …; sonic-vm -> show … or vtysh -c "show …" (not show techsupport)
   assertion:
     field:
       path: [ipv4Unicast, peers, "10.0.0.2", state]
@@ -1866,7 +1877,7 @@ This is useful for validating OSPF adjacency establishment such as:
 - post-change OSPF re-adjacency
 - guarded assertion of OSPF Full adjacency before further routing-policy invariants
 
-This invariant is **FRR-only**; declaring `ospf_neighbor_up` against a non-FRR `src` node is rejected at validation with exit code `2`.
+This invariant is **FRR-only**; declaring `ospf_neighbor_up` against a non-FRR `src` node is rejected at validation with exit code `2`. On a `sonic-vm` `src` the rejection is a deterministic unsupported error naming the invariant and the node: OSPF on SONiC is not supported in this release (see `docs/cli-reference-v1.md` §7).
 
 Required fields:
 

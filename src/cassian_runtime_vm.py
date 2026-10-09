@@ -101,19 +101,12 @@ def classify_guest_probe_rc(node: str, rc: int) -> str | None:
     None when the result is transient and the caller should keep polling.
 
     Fatal immediately:
-      (b) auth-fail -- sshpass rc=5. Polling cannot cure wrong credentials, and
-                       waiting out the deadline would misreport the class as (c).
       (a)-class     -- sshpass rc=6 (host key). Should not occur under the pinned
                        ssh options; mapped defensively with a transport note.
     Transient (None):
       ssh rc=255 (connect failure) and any other rc -- the guest may still be
       booting; the deadline owns the final classification.
     """
-    if rc == VM_SSHPASS_RC_AUTH_FAIL:
-        return (
-            f"{node}: VM guest not reachable over SSH: authentication failed "
-            f"(sshpass rc=5). {_VM_CRED_PROVENANCE}"
-        )
     if rc == VM_SSHPASS_RC_HOST_KEY:
         return (
             f"{node}: VM guest not reachable over SSH: host key unknown "
@@ -130,8 +123,14 @@ def guest_probe_deadline_error(node: str, rc: int | None, timeout_s: float) -> s
     B07 deadline classification:
       (a) unreachable -- the last observed result was a connect failure (rc=255):
                          nothing is answering on the guest's forwarded SSH port.
+      (b) auth-fail   -- the last observed result was sshpass rc=5 (polled as transient, D-i).
       (c) timeout     -- the transport answered but the guest never returned rc=0.
     """
+    if rc == VM_SSHPASS_RC_AUTH_FAIL:
+        return (
+            f"{node}: VM guest not reachable over SSH: authentication failed "
+            f"(sshpass rc=5). {_VM_CRED_PROVENANCE}"
+        )
     if rc == VM_SSH_RC_CONNECT_FAIL:
         return (
             f"{node}: VM guest not reachable over SSH: connection failed "

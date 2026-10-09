@@ -16,15 +16,14 @@ Runtime, so the leg's real code path runs and the calls it issues are counted
 rather than asserted from reading.
 
 SCOPE OF THE SONiC HALF (REQ-45C-38), stated rather than left implicit.
-The shipped provider sets `SONIC_PROVIDER.status_bgp_summary = None` and
-`status_routes = None` -- "design 3.3: None => explicit UNSUP", with the
-operational legs assigned to 4.5-d. The SONiC summary leg is therefore NOT
-born in this handover, and there is no SONiC sequence to count here. Founder
-ruling 2026-08-18 (reading B): the FRR half lands now; REQ-45C-38 is discharged
-in this handover as a RATCHET rather than as an assertion --- leg 4 below fails
-loud the moment either SONiC status leg becomes callable, which forces whoever
-wires it (4.5-d) to add the 1/2/2/2 assertions here before it can go green.
-A vacuous pass would have been the alternative; this is not one.
+Founder ruling 2026-08-18 (reading B, R-C3-16) landed the FRR half first and
+discharged REQ-45C-38 as a RATCHET: leg 4 failed loud the moment either SONiC
+status leg became callable, obliging whoever wired it to add the per-mode
+counts here. §4.5-d wired both legs (REQ-45D-19) and, under founder ruling
+S27-R11 of 2026-10-09, leg 4 now COUNTS them on the same recording stub: the
+SONiC summary leg is born 1/2/2/2 with the raw text reused, never re-fetched,
+and the routes leg issues 1 probe when the JSON parses and 2 on fallback, as
+FRR's legs are counted above.
 
 COVERAGE LIMITS (PBE-P2-8):
   * Counts are measured against a stub Runtime. This proves the leg issues N
@@ -150,17 +149,52 @@ F._status_routes(_rt, "lab", "r1")
 check("REQ-45C-16 routes leg issues 1 probe when json parses",
       len(_rt.calls) == 1)
 
-# --- LEG 4 (REQ-45C-38): ratchet on the SONiC summary leg --------------------
+# --- LEG 4 (REQ-45C-38; founder ruling S27-R11): the SONiC legs, counted -----
+# Wired at §4.5-d (REQ-45D-19). The ratchet that stood here obliged these
+# counts; they run the shipped SONiC legs on the same recording stub.
 _s_sum = SONIC_PROVIDER.status_bgp_summary
 _s_rts = SONIC_PROVIDER.status_routes
-check("REQ-45C-38 SONiC summary leg is still explicit UNSUP (design 3.3 None)",
-      _s_sum is None,
-      "operational legs are assigned to 4.5-d. If this FAILS, a SONiC summary "
-      "leg now exists: add its 1/2/2/2 per-mode assertions to this proof "
-      "before wiring it -- REQ-45C-38 forbids it being born with a re-fetch")
-check("REQ-45C-38 SONiC routes leg is still explicit UNSUP",
-      _s_rts is None,
-      "same ratchet: wiring it obliges the probe-count assertions here")
+check("REQ-45C-38 SONiC summary and routes legs are wired (callable)",
+      callable(_s_sum) and callable(_s_rts))
+
+
+def _run_sonic_summary(json_out, text_outs, want_raw):
+    rt = RecordingRuntime(json_out, text_outs)
+    obs = _s_sum(rt, "lab", "s1", want_raw=want_raw)
+    return rt, obs
+
+
+_rt, _o = _run_sonic_summary(SUMMARY_JSON_OK, [], False)
+check("REQ-45C-38 SONiC mode json / no-raw issues 1 probe", len(_rt.calls) == 1,
+      "cmds: %s" % [" ".join(c[2:]) for c in _rt.calls])
+check("REQ-45C-38 SONiC mode json / no-raw parses as json",
+      _o.data["parser_mode"] == "json")
+_rt, _o = _run_sonic_summary(SUMMARY_JSON_BAD, [SUMMARY_TEXT], False)
+check("REQ-45C-38 SONiC mode text / no-raw issues 2 probes", len(_rt.calls) == 2,
+      "cmds: %s" % [" ".join(c[2:]) for c in _rt.calls])
+check("REQ-45C-38 SONiC mode text / no-raw parses as text",
+      _o.data["parser_mode"] == "text")
+_rt, _o = _run_sonic_summary(SUMMARY_JSON_OK, [SUMMARY_TEXT], True)
+check("REQ-45C-38 SONiC mode json / raw issues 2 probes", len(_rt.calls) == 2,
+      "cmds: %s" % [" ".join(c[2:]) for c in _rt.calls])
+_srt4, _so4 = _run_sonic_summary(SUMMARY_JSON_BAD, [SUMMARY_TEXT, "SECOND-FETCH"], True)
+check("REQ-45C-38 SONiC mode text / raw issues 2 probes, not 3 (born with the "
+      "reuse shape)", len(_srt4.calls) == 2,
+      "cmds: %s" % [" ".join(c[2:]) for c in _srt4.calls])
+check("REQ-45C-38 NON-VACUITY: SONiC raw text is REUSED, not re-fetched",
+      _so4.data["raw_text"] == SUMMARY_TEXT.strip()
+      and _so4.data["raw_text"] != "SECOND-FETCH",
+      "a re-fetch would have returned the stub's second scripted value")
+check("REQ-45C-38 NON-VACUITY: the recorder observes the SONiC leg's calls",
+      len(_srt4.calls) > 0 and _srt4.calls[0][-1].endswith("json"))
+_rt = RecordingRuntime(SUMMARY_JSON_BAD, [SUMMARY_TEXT])
+_s_rts(_rt, "lab", "s1")
+check("REQ-45C-38 SONiC routes leg issues 2 probes on fallback", len(_rt.calls) == 2,
+      "cmds: %s" % [" ".join(c[2:]) for c in _rt.calls])
+_rt = RecordingRuntime('{"10.0.0.0/24":[{"protocol":"bgp"}]}', [])
+_s_rts(_rt, "lab", "s1")
+check("REQ-45C-38 SONiC routes leg issues 1 probe when json parses",
+      len(_rt.calls) == 1)
 
 # --- Report ------------------------------------------------------------------
 _fails = [c for c in _checks if not c[1]]
