@@ -295,15 +295,18 @@ try:
     for k in KINDS:
         check(f"K-CAP {k}: declared IMPL (script 2, ruling D1)",
               capability_for(S.SONIC_PROVIDER, k).state == CAP_IMPL)
-    # Coverage limit (PBE-P2-8): the two §4.5-c operational legs are named here by
-    # hand; any further IMPL token without a handler reds this check for review.
+    # Coverage limit (PBE-P2-8): the two §4.5-c lifecycle legs and the two §4.5-d
+    # status legs (REQ-45D-19, founder ruling S27-R12) are named here by hand; any
+    # further IMPL token without a collect handler reds this check for review.
     _impl_toks = {tok for tok, d in S.SONIC_PROVIDER.capabilities.items() if d.state == CAP_IMPL}
     check("K-CAP every handler has an IMPL token (the three H1-b3 route handlers declared in "
           "script 2b-i, Decision 2 of 2026-10-05; the two H1-b2 handlers included); IMPL tokens "
-          "without a handler are exactly the §4.5-c legs gen_node_config, provision",
+          "without a handler are exactly the §4.5-c legs gen_node_config, provision and the "
+          "§4.5-d status legs status_bgp_summary, status_routes",
           set(S._SONIC_COLLECT_HANDLERS) <= _impl_toks
           and set(ADV_KINDS) <= _impl_toks
-          and _impl_toks - set(S._SONIC_COLLECT_HANDLERS) == {"gen_node_config", "provision"})
+          and _impl_toks - set(S._SONIC_COLLECT_HANDLERS) == {"gen_node_config", "provision",
+                                                              "status_bgp_summary", "status_routes"})
     for k in RIB_KINDS:
         check(f"K-CAP {k}: declared IMPL (H1-b3 script 2b-i)",
               capability_for(S.SONIC_PROVIDER, k).state == CAP_IMPL)

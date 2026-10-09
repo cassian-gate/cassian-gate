@@ -162,7 +162,8 @@ for _p in ("sonic_exec_allowlist_proof.py",   # H1-a2-ii, REQ-45D-5
            "evpn_precheck_mac_poll_proof.py",  # S24-R5, BL-P2-4.5c-53 (S25-R4)
            "evpn_rr_next_hop_self_proof.py",  # S26-R8/R9, BL-P2-4.5c-219 (S25-R5)
            "sonic_ospf_unsupported_proof.py",  # S27-R4, REQ-45D-17
-           "wf_added_steps_if_key_proof.py"):  # S27-R4, REQ-45D-28
+           "wf_added_steps_if_key_proof.py",  # S27-R4, REQ-45D-28
+           "sonic_status_collect_proof.py"):  # S27-R4, REQ-45D-19/-20 (lab-free legs)
     check(f"§4.5-d proof is CI-wired: {_p} present in the gate", _p in gate)
 
 fails = [n for n, ok in checks if not ok]

@@ -27,7 +27,7 @@ from cassian_model import (
     nos_default_image,
     NOS_PROVIDERS,
 )
-from cassian_nos_types import CAP_UNSUP, Observation, ObservationRequest, capability_for
+from cassian_nos_types import CAP_IMPL, CAP_UNSUP, Observation, ObservationRequest, capability_for
 from cassian_tests import (
     validate_scenarios,
     _preflight_default_out,
@@ -2639,8 +2639,12 @@ def cmd_status(args: argparse.Namespace) -> None:
             except Exception as e:
                 node_rec["interfaces_error"] = str(e)
 
-        # BGP
-        if running and bgp_enabled and ntype == "frr":
+        # BGP -- REQ-45D-19 (B09; founder rulings S27-R8 and S27-R9): capability-
+        # guarded, never a node-type literal. A type with no provider is never
+        # looked up; a provider that does not declare the leg IMPL keeps today's
+        # silence (no record, no line), so a None leg is never called.
+        if (running and bgp_enabled and ntype in NOS_PROVIDERS
+                and capability_for(NOS_PROVIDERS[ntype], "status_bgp_summary").state == CAP_IMPL):
             expected = expected_bgp_by_node.get(name, set())
             bgp_rec: dict[str, Any] = {
                 "expected": sorted(expected),
@@ -2687,8 +2691,9 @@ def cmd_status(args: argparse.Namespace) -> None:
 
             node_rec["bgp"] = bgp_rec
 
-        # ROUTES
-        if running and routes_enabled and ntype == "frr":
+        # ROUTES -- REQ-45D-19: the same capability guard as BGP above.
+        if (running and routes_enabled and ntype in NOS_PROVIDERS
+                and capability_for(NOS_PROVIDERS[ntype], "status_routes").state == CAP_IMPL):
             expected_routes = expected_routes_by_frr.get(name, set())
             routes_rec: dict[str, Any] = {
                 "expected": sorted(expected_routes),
@@ -2858,7 +2863,10 @@ def cmd_status(args: argparse.Namespace) -> None:
             for line in node_rec["interfaces"]:
                 print(f"      {line}")
 
-        if running and bgp_enabled and node_rec.get("type") == "frr":
+        # Human output (founder ruling S27-R8): the record guard's capability check.
+        if (running and bgp_enabled and node_rec.get("type") in NOS_PROVIDERS
+                and capability_for(NOS_PROVIDERS[node_rec.get("type")],
+                                   "status_bgp_summary").state == CAP_IMPL):
             bgp = node_rec.get("bgp") or {}
             expected = bgp.get("expected") or []
             pm = str(bgp.get("parser_mode") or "none")
@@ -2886,7 +2894,9 @@ def cmd_status(args: argparse.Namespace) -> None:
                     for line in raw_text:
                         print(f"      {line}")
 
-        if running and routes_enabled and node_rec.get("type") == "frr":
+        if (running and routes_enabled and node_rec.get("type") in NOS_PROVIDERS
+                and capability_for(NOS_PROVIDERS[node_rec.get("type")],
+                                   "status_routes").state == CAP_IMPL):
             rts = node_rec.get("routes") or {}
             expected = rts.get("expected") or []
             pm = str(rts.get("parser_mode") or "none")

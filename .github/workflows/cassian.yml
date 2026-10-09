@@ -781,6 +781,15 @@ jobs:
           set -euo pipefail
           python tests/wf_added_steps_if_key_proof.py
 
+      - name: SONiC status and collect proof, lab-free legs — sonic_status_collect_proof.py (§4.5-d, REQ-45D-19/-20)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/sonic_status_collect_proof.py
+
       - name: SONiC (VM) teardown sweep (§4.5-c WI-3)
         if: always()
         env:

@@ -135,18 +135,18 @@ Arguments:
 
 ### `cassian status <lab> [flags]`
 
-**Purpose:** Show lab status (containers + optional FRR info).
+**Purpose:** Show lab status (containers, plus optional BGP and route information for each node whose NOS provider implements the status legs: today `frr` and `sonic-vm`).
 
 Flags:
 
 * `--bgp`  
-  Include `show bgp summary` for FRR nodes.
+  Include `show bgp summary` for `frr` and `sonic-vm` nodes. Expected peers are derived only from links between two `frr` nodes, so a `sonic-vm` node prints `BGP (none)`; its observed sessions are in `--json` and `--bgp-verbose`.
 
 * `--bgp-verbose`  
   Print full `show bgp summary` output.
 
 * `--strict`  
-  Exit non-zero if any FRR peers are not `Established`.
+  Exit non-zero if any expected peer (derived from links between two `frr` nodes) is not `Established`.
 
 * `--interfaces`  
   Include `ip -br a` output per node.

@@ -42,13 +42,20 @@ from typing import TYPE_CHECKING, Any, Mapping
 
 from cassian_nos_types import (
     CapabilityDisposition,
+    CollectTarget,
     NosProvider,
     Observation,
     ObservationRequest,
+    StatusObservation,
     deferred_leg,
     impl,
 )
-from cassian_common import _canonical_community_token, _normalize_prefix
+from cassian_common import (
+    _RE_IPV4_PREFIX,
+    _RE_NEIGH_LINE,
+    _canonical_community_token,
+    _normalize_prefix,
+)
 
 if TYPE_CHECKING:  # annotation-only (no runtime import of the runtime leaf)
     from cassian_runtime_container import Runtime
@@ -278,6 +285,12 @@ _SONIC_CAPABILITIES: dict[str, CapabilityDisposition] = {
     "route_prefix": impl(),
     "route_present": impl(),
     "route_absent": impl(),
+    # §4.5-d REQ-45D-19 (founder rulings S27-R8, S27-R9 and S27-R12): the two
+    # operational status legs below. cmd_status reads these tokens to decide
+    # whether a node gets a status record at all; a provider that does not
+    # declare them keeps today's silence and its legs are never called.
+    "status_bgp_summary": impl(),
+    "status_routes": impl(),
 }
 
 
@@ -1757,6 +1770,288 @@ def collect(rt, lab, node, req: "ObservationRequest") -> "Observation":
     return handler(rt, lab, node, req)
 
 
+# -------------------------
+# Operational status and collect legs (§4.5-d REQ-45D-19 / REQ-45D-20)
+# -------------------------
+# Founder rulings S27-R9, S27-R10 and S27-R12 (2026-10-09). The legs mirror FRR's
+# (`cassian_nos_frr._status_bgp_summary`, `_status_routes`,
+# `_collect_bgp_summary_artifact`) in data shape and probe sequence: the summary leg
+# is born 1/2/2/2 (REQ-45C-38), counted by tests/sonic_status_probe_sequence_proof.py
+# (S27-R11). The JSON paths reuse this module's own readers (_peers_from_summary,
+# _rib_prefixes) mapped to FRR's shape; the text paths use the copies below.
+# Probes read STDOUT only -- the guest's SSH banner lands on stderr (F-45C-C3-20).
+# A failed probe yields an empty read, never an exit: `cassian status` must not
+# stop on a guest probe (REQ-45D-19), so these legs do not use _guest_stdout.
+
+_BGP_SUMMARY_TEXT_ARGV = ("vtysh", "-c", "show bgp summary")
+_RIB_TEXT_ARGV = ("vtysh", "-c", "show ip route")
+
+
+def _status_stdout(rt, lab, node, argv) -> str:
+    """One read probe: STDOUT only, decoded and stripped, never an exit."""
+    cp = rt.exec(lab, node, list(argv), check=False, capture_output=True)
+    out = cp.stdout.decode("utf-8", errors="replace") if isinstance(cp.stdout, bytes) else cp.stdout
+    return (out or "").strip()
+
+
+# Copy of cassian_nos_frr.parse_frr_bgp_summary_neighbors, body unchanged (founder ruling S27-R12): the
+# SONiC import floor forbids importing the FRR provider. Text fallback of the summary leg.
+# tests/sonic_status_collect_proof.py proves the output identical to FRR's.
+def _sonic_parse_bgp_summary_text(out: str) -> dict[str, dict[str, Any]]:
+    """
+    Parse `show bgp summary` and return:
+      { "<neighbor_ip>": {"established": bool, "raw": "<line>"} }
+
+    Robust logic:
+      - Find the table header and locate the 'State/PfxRcd' column index.
+      - Neighbor rows start with an IPv4 address.
+      - Established if State/PfxRcd token is numeric OR equals 'Established' (case-insensitive).
+    """
+    obs: dict[str, dict[str, Any]] = {}
+    if not out:
+        return obs
+    if "No BGP neighbors found" in out:
+        return obs
+
+    lines = out.splitlines()
+
+    # 1) Find header and determine column index for State/PfxRcd
+    state_idx: int | None = None
+    for line in lines:
+        if "Neighbor" in line and "State/PfxRcd" in line:
+            cols = line.split()
+            # Example header tokens:
+            # Neighbor V AS MsgRcvd MsgSent TblVer InQ OutQ Up/Down State/PfxRcd PfxSnt Desc
+            for i, c in enumerate(cols):
+                if c == "State/PfxRcd":
+                    state_idx = i
+                    break
+            break
+
+    # Fallback: if we can't find header, keep a safe heuristic:
+    # treat as established if ANY token is exactly 'Established' OR ANY token is purely numeric
+    fallback = (state_idx is None)
+
+    for line in lines:
+        m = _RE_NEIGH_LINE.match(line)
+        if not m:
+            continue
+
+        ip = m.group(1)
+        cols = line.split()
+
+        established = False
+        if fallback:
+            if any(c.lower() == "established" for c in cols):
+                established = True
+            else:
+                # In established rows there is typically at least one numeric token at State/PfxRcd,
+                # but fallback is less precise; still better than "last token".
+                established = any(c.isdigit() for c in cols)
+        else:
+            if len(cols) > state_idx:
+                state = cols[state_idx]
+                if state.isdigit() or state.lower() == "established":
+                    established = True
+
+        obs[ip] = {"established": established, "raw": line.rstrip("\n")}
+
+    return obs
+
+
+# Copy of cassian_nos_frr.parse_frr_show_ip_route_prefixes, body unchanged (founder ruling S27-R12): the
+# SONiC import floor forbids importing the FRR provider. Text fallback of the routes leg.
+# tests/sonic_status_collect_proof.py proves the output identical to FRR's.
+def _sonic_parse_ip_route_text(text: str) -> set[str]:
+    """
+    Parse `vtysh -c "show ip route"` and extract IPv4 prefixes.
+    This avoids fragile column indexes.
+    """
+    out: set[str] = set()
+    if not text:
+        return out
+
+    for line in text.splitlines():
+        m = _RE_IPV4_PREFIX.search(line)
+        if not m:
+            continue
+        p = _normalize_prefix(m.group(1))
+        if p:
+            out.add(p)
+    return out
+
+
+# Copy of cassian_nos_frr.normalize_bgp_summary, body unchanged (founder ruling S27-R12): the
+# SONiC import floor forbids importing the FRR provider. Content of the bgp-summary.txt collect artifact (S27-R10).
+# tests/sonic_status_collect_proof.py proves the output identical to FRR's.
+def _sonic_normalize_bgp_summary(text: str) -> str:
+    """
+    Deterministic BGP neighbor snapshot from `show bgp summary`.
+
+    We intentionally discard volatile counters/timers and keep only:
+    - neighbor address
+    - ASN (best-effort parse)
+    - state (Established vs Idle/Active/etc.)
+
+    Output format (one per neighbor):
+      <NEIGHBOR> AS=<ASN or ?> STATE=<STATE>
+    """
+    lines = (text or "").splitlines()
+    out: list[str] = []
+    in_table = False
+
+    for line in lines:
+        # Detect the table header
+        if ("Neighbor" in line) and ("Up/Down" in line):
+            in_table = True
+            out.append(line.rstrip())
+            continue
+
+        if not in_table:
+            # Keep pre-table lines as-is (usually stable)
+            out.append(line.rstrip())
+            continue
+
+        if not line.strip():
+            out.append("")
+            continue
+
+        parts = line.split()
+        if len(parts) < 2:
+            out.append(line.rstrip())
+            continue
+
+        nbr = parts[0]
+        # Neighbor column must look like an IP (v4/v6) to be a row
+        if not re.match(r"^[0-9A-Fa-f:.]+$", nbr):
+            out.append(line.rstrip())
+            continue
+
+        # Heuristic: AS is the first integer token shortly after the neighbor/V columns
+        asn: str | None = None
+        for tok in parts[1:6]:
+            if tok.isdigit():
+                asn = tok
+                break
+
+        # Last token often is State/PfxRcd. If it's numeric => Established.
+        last = parts[-1]
+        state = "Established" if last.isdigit() else last
+
+        out.append(f"{nbr} AS={asn or '?'} STATE={state}")
+
+    return "\n".join(out).rstrip() + "\n"
+
+
+def _status_peers_json(raw: str) -> "dict[str, dict[str, Any]]":
+    """FRR's status shape, {peer: {"established": bool, "raw": state}}, from the
+    `show bgp summary json` read _peers_from_summary already parses. Peers are kept
+    where FRR's JSON parser keeps them (an IPv4 neighbour address).
+
+    COVERAGE LIMIT (PBE-P2-8): FRR falls back to `peerState` / `pfxRcd` when a peer
+    carries no `state`; _peers_from_summary reads `state` only, so such a peer reads
+    not established here. The captured guest output carries `state` on every peer.
+    """
+    out: "dict[str, dict[str, Any]]" = {}
+    for peer, state in _peers_from_summary(raw).items():
+        if not _RE_NEIGH_LINE.match(peer + " "):
+            continue
+        st = (state or "").strip()
+        out[peer] = {"established": st.lower().startswith("estab"), "raw": st}
+    return out
+
+
+def _sonic_status_bgp_summary(rt, lab, node, want_raw: bool = False) -> StatusObservation:
+    """BGP summary status leg: JSON first, text fallback, raw text reused (1/2/2/2)."""
+    out_json = _status_stdout(rt, lab, node, _BGP_SUMMARY_ARGV)
+    observed = _status_peers_json(out_json)
+    out_text = None
+    if observed:
+        parser_mode = "json"
+    else:
+        out_text = _status_stdout(rt, lab, node, _BGP_SUMMARY_TEXT_ARGV)
+        observed = _sonic_parse_bgp_summary_text(out_text)
+        parser_mode = "text"
+
+    raw_text = None
+    if want_raw:
+        # REQ-45C-38: the text fallback already fetched this exact command, so its
+        # output IS the raw text; a second fetch would be the 1/2/2/3 defect.
+        raw_text = (out_text if out_text is not None
+                    else _status_stdout(rt, lab, node, _BGP_SUMMARY_TEXT_ARGV))
+
+    return StatusObservation(
+        returncode=None,
+        stdout="",
+        stderr="",
+        data={"observed": observed, "parser_mode": parser_mode, "raw_text": raw_text},
+        evidence={"cmd": "vtysh -c 'show bgp summary json'"},
+    )
+
+
+def _sonic_status_routes(rt, lab, node) -> StatusObservation:
+    """Route-table status leg: the full-table RIB read, text fallback."""
+    rt_json = _status_stdout(rt, lab, node, _RIB_ARGV)
+    observed = set(_rib_prefixes(rt_json)[0])
+    rt_text = ""
+    if observed:
+        parser_mode = "json"
+    else:
+        rt_text = _status_stdout(rt, lab, node, _RIB_TEXT_ARGV)
+        observed = _sonic_parse_ip_route_text(rt_text)
+        parser_mode = "text"
+
+    return StatusObservation(
+        returncode=None,
+        stdout="",
+        stderr="",
+        data={
+            "observed": observed,
+            "parser_mode": parser_mode,
+            "rt_text": rt_text,
+            "rt_json": rt_json,
+        },
+        evidence={"cmd": "vtysh -c 'show ip route json'"},
+    )
+
+
+def _sonic_collect_artifact_stdout(rt, lab, node, argv) -> "tuple[Any, str]":
+    cp = rt.exec(lab, node, list(argv), check=False, capture_output=True)
+    out = cp.stdout.decode("utf-8", errors="replace") if isinstance(cp.stdout, bytes) else cp.stdout
+    return getattr(cp, "returncode", None), out or ""
+
+
+def _sonic_collect_bgp_summary_artifact(rt, lab, node) -> StatusObservation:
+    """Content probe for `<node>.bgp-summary.txt` (S27-R10): FRR's artifact name and
+    normalisation, over the guest's STDOUT only. Core writes it."""
+    rc, out = _sonic_collect_artifact_stdout(rt, lab, node, _BGP_SUMMARY_TEXT_ARGV)
+    return StatusObservation(
+        returncode=rc,
+        stdout=_sonic_normalize_bgp_summary(out),
+        stderr="",
+        evidence={"cmd": "vtysh -c 'show bgp summary'"},
+    )
+
+
+def _sonic_collect_vtysh_ip_route_artifact(rt, lab, node) -> StatusObservation:
+    """Content probe for `<node>.vtysh-ip-route.txt` (S27-R10): the routing daemon's
+    table, distinct from the kernel table core writes as `<node>.ip-route.txt`.
+    Core writes it."""
+    rc, out = _sonic_collect_artifact_stdout(rt, lab, node, _RIB_TEXT_ARGV)
+    return StatusObservation(
+        returncode=rc,
+        stdout=out.rstrip() + "\n",
+        stderr="",
+        evidence={"cmd": "vtysh -c 'show ip route'"},
+    )
+
+
+SONIC_COLLECT_TARGETS = (
+    CollectTarget(artifact_name="bgp-summary.txt", run=_sonic_collect_bgp_summary_artifact),
+    CollectTarget(artifact_name="vtysh-ip-route.txt", run=_sonic_collect_vtysh_ip_route_artifact),
+)
+
+
 SONIC_PROVIDER = NosProvider(
     node_type=SONIC_NODE_TYPE,
     default_image=SONIC_DEFAULT_IMAGE,
@@ -1776,10 +2071,10 @@ SONIC_PROVIDER = NosProvider(
     collect=collect,
     # -- change workflow: §4.5-f (BL-P2-4.5b-2 shape) --
     candidate=None,
-    # -- operational legs: §4.5-d --
-    status_bgp_summary=None,  # design §3.3: None => explicit UNSUP
-    status_routes=None,
-    collect_targets=(),
+    # -- operational legs: §4.5-d REQ-45D-19 / REQ-45D-20 (S27-R9, S27-R10) --
+    status_bgp_summary=_sonic_status_bgp_summary,
+    status_routes=_sonic_status_routes,
+    collect_targets=SONIC_COLLECT_TARGETS,
     # -- legs the ratified design does NOT assign to SONiC (NG-9) --
     doctor_checks=deferred_leg("doctor_checks", "unassigned"),
     exec_command_rule=_sonic_exec_command_rule,
