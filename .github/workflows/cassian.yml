@@ -743,6 +743,26 @@ jobs:
           set -euo pipefail
           python tests/evpn_precheck_mac_poll_proof.py
 
+      - name: EVPN route-reflector next-hop-self proof — evpn_rr_next_hop_self_proof.py (§4.5-d, S26-R8/R9, BL-P2-4.5c-219)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          rc=0
+          # Lab-free leg: the declared rendered-config change over every EVPN
+          # topology the product resolves (S26-R8, S26-R9; DC v2.1 §14 item 8).
+          python tests/evpn_rr_next_hop_self_proof.py || rc=1
+          # Hosted leg: one booted FRR EVPN lab, read on leaf2 and spine1 through
+          # the product's vty path. The trap tears the lab down on every exit, so
+          # the teardown sweep below needs no entry for it.
+          trap './src/cassian.py down evpn-mac-route-absent-expect-fail || true' EXIT
+          ./src/cassian.py up topologies/evpn_mac_route_absent_expect_fail.yaml --reconfigure
+          python tests/evpn_rr_next_hop_self_proof.py --hosted evpn-mac-route-absent-expect-fail || rc=1
+          exit "$rc"
+
       - name: SONiC (VM) teardown sweep (§4.5-c WI-3)
         if: always()
         env:

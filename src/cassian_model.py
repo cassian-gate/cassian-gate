@@ -1804,6 +1804,7 @@ def gen_frr_conf(node: dict, topo: dict) -> str:
             cfg.append(f"  neighbor {peer_ip} activate")
             if rr_client:
                 cfg.append(f"  neighbor {peer_ip} route-reflector-client")
+                cfg.append(f"  neighbor {peer_ip} next-hop-self force")
         cfg.append(f"  network {rid}/32")
         cfg.append(" exit-address-family")
         cfg.append(" !")
