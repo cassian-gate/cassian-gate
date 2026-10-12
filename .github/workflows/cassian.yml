@@ -790,6 +790,26 @@ jobs:
           set -euo pipefail
           python tests/sonic_status_collect_proof.py
 
+      # §4.5-d VM-1 -- scope §9 row 15: one fixture, one boot, one declared FRR<->SONiC
+      # session carrying REQ-45D-8 first, then -1, -16 and -19 (S29-R5), and the two
+      # §15.2 negatives. The proof drives `cassian test --name` and `cassian status`
+      # itself, in order; `cassian test` without --name is not run here, because two
+      # declared tests are negative controls. The trap tears the lab down on every
+      # exit, so the teardown sweep below needs no entry for it (additions only,
+      # REQ-45D-27).
+      - name: SONiC FRR-to-SONiC BGP session (VM) — sonic_bgp_session_live_proof.py (§4.5-d, REQ-45D-1/-8/-16/-19)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-bgp-session-live || true' EXIT
+          ./src/cassian.py validate topologies/sonic-bgp-session-live.yaml
+          ./src/cassian.py up topologies/sonic-bgp-session-live.yaml --reconfigure
+          python tests/sonic_bgp_session_live_proof.py live topologies/sonic-bgp-session-live.yaml sonic-bgp-session-live
+
       - name: SONiC (VM) teardown sweep (§4.5-c WI-3)
         if: always()
         env:

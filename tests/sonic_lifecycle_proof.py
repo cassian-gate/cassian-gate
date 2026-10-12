@@ -179,6 +179,14 @@ SECTION_45C_FIXTURES = (
     # enumeration-drop guard (F-45C-C3-3) sees it; its two router_id addresses,
     # 192.0.2.31 and 192.0.2.41, come under LEG 1's HALT-2 sweep.
     "sonic-ospf-unsup.yaml",
+    # §4.5-d VM-1, scope §9 row 15 (REQ-45D-1/-8/-16/-19): the row-15 fixture -- one
+    # frr node and one sonic-vm guest, one declared eBGP session. DEPLOYED by its own
+    # (VM) step, which tears the lab down on every exit. Registered under founder
+    # ruling S27-R5 of 2026-10-09 (SP #1: one entry and its comment per new §4.5-d
+    # SONiC fixture, in the change that adds it) so the enumeration-drop guard
+    # (F-45C-C3-3) sees it; its router_id and link addresses (192.0.2.71, .72;
+    # 198.51.100.28, .29) come under LEG 1's HALT-2 sweep.
+    "sonic-bgp-session-live.yaml",
 )
 
 # SONiC fixtures inherited from 4.5-a. REQ-45C-5 states these collide with
