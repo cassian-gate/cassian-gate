@@ -47,6 +47,11 @@ Coverage limits, stated in-file (PBE-P2-8):
   - L5's control rests on L3 having read the same guest table on the same boot; an empty
     or failed read would also yield route_present False, which is why L5 runs only after L3.
   - The neighbour-removal wait is bounded (six scenario runs, five seconds apart).
+  - A scenario run records its test in results.json `events` (type scenario_test_run,
+    keyed by scenario id and test name), not in `tests`; a declared-test run records in
+    `tests`. find_record reads the place each run writes, and its two-directional check
+    is in NV (the first live run at 92a65b7 read `tests` for the scenario and so found
+    no record).
 
 Exit 0 when every check passes (BLOCKED or NOT ATTEMPTED legs are listed); exit 1 otherwise.
 """
@@ -187,6 +192,18 @@ def verbose_established(human, node, peer):
     return S._sonic_parse_bgp_summary_text(txt).get(peer, {}).get("established") is True
 
 
+def find_record(res, name, scenario=None):
+    """The one record a run wrote for `name`: a declared-test run writes it to `tests`; a
+    scenario run writes it to `events` as a scenario_test_run of that scenario
+    (cassian_engine.run_named_test passes record_event_test_run when it runs in a scenario)."""
+    if scenario:
+        hits = [e for e in res.get("events") or [] if e.get("type") == "scenario_test_run"
+                and e.get("scenario_id") == scenario and e.get("name") == name]
+    else:
+        hits = [t for t in res.get("tests") or [] if t.get("name") == name]
+    return hits[0] if len(hits) == 1 else None
+
+
 # ---- F: the fixture --------------------------------------------------------------------
 DOC = yaml.safe_load(open(FIXTURE, encoding="utf-8").read()) or {}
 D = declared(DOC)
@@ -294,6 +311,17 @@ def human(summary):
     return "\n".join(lines) + "\n"
 
 
+_ev = dict(rec(expected="fail", observed="fail", verdict="pass", meta={"state": "Active"}), type="scenario_test_run",
+           scenario_id="row15_neighbour_removed", step=1, name="row15_session_after_neighbour_removed")
+nv("find_record (scenario run)",
+   lambda x: find_record(x, "row15_session_after_neighbour_removed", "row15_neighbour_removed") is not None,
+   {"tests": [], "events": [_ev]},
+   {"tests": [], "events": [_ev, dict(_ev)]},
+   {"tests": [dict(_ev, type=None)], "events": []})
+nv("find_record (declared-test run)", lambda x: find_record(x, "row15_session_up") is not None,
+   {"tests": [rec(name="row15_session_up")], "events": []},
+   {"tests": [rec(name="row15_session_up"), rec(name="row15_session_up")], "events": []},
+   {"tests": [], "events": [dict(rec(name="row15_session_up"), type="scenario_test_run")]})
 nv("verbose_established", lambda x: verbose_established(x, SN, P), human(_hdr + _stock_lines + _peer_up),
    human(_hdr + _stock_lines + _stock_up + _peer_dn), human(_hdr + _stock_lines))
 nv("human_line_ok", lambda x: human_line_ok(x, SN), human(_hdr + _peer_up),
@@ -323,8 +351,7 @@ def run_test(lab, name, scenario=None):
         res = json.load(open(path, encoding="utf-8"))
     except Exception:  # noqa: BLE001 -- a run that wrote nothing is judged by the caller
         res = {}
-    hits = [t for t in res.get("tests") or [] if t.get("name") == name]
-    r = hits[0] if len(hits) == 1 else None
+    r = find_record(res, name, scenario)
     print("     record: %s" % json.dumps(r, sort_keys=True) if r else "     record: (none)")
     return rc, r
 
