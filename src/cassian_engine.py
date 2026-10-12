@@ -2403,7 +2403,6 @@ def cmd_status(args: argparse.Namespace) -> None:
            "container not running: r2 (container=clab-<lab>-r2)"
     """
     import json
-    rt = get_runtime()
 
     # Phase 3 (P3-A): accept either lab name OR topology path deterministically.
     # - No Docker scanning.
@@ -2518,6 +2517,14 @@ def cmd_status(args: argparse.Namespace) -> None:
     # Expected intent checks are only available when resolved topology exists.
     expected_bgp_by_node = derive_expected_bgp_neighbors_from_links(topo) if topo else {}
     expected_routes_by_frr = derive_expected_routes_for_frr(topo) if (topo and routes_enabled) else {}
+
+    # S29-R4 (founder ruling 2026-10-12; BL-P2-4.5c-223): built from the topology
+    # loaded above, as cmd_test builds its runtime, so a vm-runtime node's status
+    # legs read the guest NOS and not the vrnetlab wrapper. With no resolved
+    # topology, or no vm-runtime node in it, get_runtime returns the same
+    # ContainerRuntime the bare call returned. Declared under DC v2.1 §14 item 8:
+    # on a sonic-vm node, --interfaces now reads the guest as well.
+    rt = get_runtime(topo)
 
     def _node_exec(node: str, cmd: list[str]) -> str:
         cp = rt.exec(lab, node, cmd, check=False, capture_output=True)
@@ -2941,7 +2948,6 @@ def cmd_collect(args: argparse.Namespace) -> None:
     from typing import Any
 
     lab = args.lab
-    rt = get_runtime()
 
     tpath = topo_path_for_lab(lab)
     if not tpath.exists():
@@ -2949,6 +2955,13 @@ def cmd_collect(args: argparse.Namespace) -> None:
 
     topo = load_yaml(tpath)
     ensure_valid_topology(topo)
+    # S29-R4 (founder ruling 2026-10-12; BL-P2-4.5c-223): built from the topology
+    # loaded above, as cmd_test builds its runtime, so a vm-runtime node's collect
+    # targets read the guest NOS and not the vrnetlab wrapper. With no vm-runtime
+    # node, get_runtime returns the same ContainerRuntime the bare call returned.
+    # Declared under DC v2.1 §14 item 8: on a sonic-vm node, <node>.ip-addr.txt
+    # and <node>.ip-route.txt now carry the guest's output as well.
+    rt = get_runtime(topo)
 
     outdir = lab_dir(lab) / "artifacts"
     outdir.mkdir(parents=True, exist_ok=True)

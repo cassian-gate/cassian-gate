@@ -11,6 +11,7 @@ provider that does not declare a status leg IMPL keeps today's silence; a None l
 never called), S27-R10 (SONiC collect targets bgp-summary.txt and vtysh-ip-route.txt;
 "the core writer" is cmd_collect's write()), S27-R12 (SONiC copies of FRR's three text
 functions, proven output-identical; JSON paths mapped to FRR's shape).
+Founder ruling S29-R4 (2026-10-12; BL-P2-4.5c-223) is bound by SC-RUNTIME.
 
 Proof obligations (lab-free):
   SC-WIRE    both status legs callable; both tokens declared IMPL; collect targets are
@@ -34,6 +35,15 @@ Proof obligations (lab-free):
   SC-COLLECT `cassian collect` on the same stub lab writes s1.bgp-summary.txt and
              s1.vtysh-ip-route.txt through core's writer with the targets' content;
              no SONiC target writes a file itself (REQ-45D-20, B10).
+  SC-RUNTIME cmd_status and cmd_collect pass the lab's topology to get_runtime, as
+             cmd_test does (S29-R4): through a stub that answers as the guest for a
+             node the topology resolves to runtime vm and as the vrnetlab wrapper
+             otherwise, s1's bgp and routes records and s1.bgp-summary.txt carry the
+             guest's output; r1's records are unchanged; the declared collateral
+             (s1's --interfaces lines, s1.ip-addr.txt) reads the guest too. Each
+             call site, reverted to the bare form in a copy of the engine, makes
+             its own leg FAIL; an AST read shows one get_runtime call per command,
+             with `topo`.
   SC-NV      non-vacuity, each counter-example taken from a failure condition:
              a mutated capture changes observed (value checks can fail); a copy that
              differs is caught by the parity comparator; a target that writes its own
@@ -52,6 +62,11 @@ Coverage limits, stated in-file (PBE-P2-8):
     `state` on every peer, so SC-SUMMARY's equality holds on it, not on that shape.
   - The write tracer covers builtins.open in a write mode, io.open, os.open with write
     flags, and pathlib's write_text/write_bytes; another write route is uncovered.
+  - SC-RUNTIME's stub applies build_runtime's dispatch rule through M.node_runtime_map;
+    it does not run build_runtime, ContainerRuntime or VmRuntime. Its wrapper reply
+    (rc 127, no stdout) is a stand-in: what the vrnetlab wrapper returns for a guest
+    command has not been measured. The legs before SC-RUNTIME replace get_runtime
+    with a stub that ignores its argument.
 
 Exit 0 when every check passes (BLOCKED legs are listed); exit 1 otherwise.
 """
@@ -412,6 +427,185 @@ _n_out, _n_exc = with_provider(_impl_none, lambda: status_run(OUTPUTS, True))
 _n_recs = {n["name"]: n for n in (json.loads(_n_out).get("nodes", []) if _n_out.strip().startswith("{") else [])}
 check("SC-NV with the tokens still IMPL, a None leg IS reached (recorded as an error): the guard is "
       "what keeps SC-UNSUP silent", "error" in _n_recs.get("s1", {}).get("bgp", {}))
+
+# ---- SC-RUNTIME (founder ruling S29-R4, 2026-10-12; BL-P2-4.5c-223) ------------------
+# cmd_status and cmd_collect build their runtime from the lab's topology, as cmd_test
+# does, so a vm-runtime node's status legs and collect targets read the guest. The stub
+# keeps build_runtime's dispatch rule: a node the topology resolves to runtime "vm"
+# (M.node_runtime_map, the field build_runtime reads) answers from the guest; a SONiC
+# node reached without that topology answers as the vrnetlab wrapper would for a guest
+# command -- rc 127, no stdout. The legs above replace get_runtime with a stub that
+# ignores its argument, so they cannot see which runtime was built; this leg can.
+import ast  # noqa: E402
+import importlib.util  # noqa: E402
+
+RT_WRAPPER_NODES = {n["name"] for n in TOPO["nodes"] if n.get("type") == "sonic-vm"}
+RT_GUEST_IF = "Ethernet0        UP             198.51.100.0/31"
+RT_OUTPUTS = copy.deepcopy(OUTPUTS)
+RT_OUTPUTS["s1"]["sh -lc ip -br a"] = RT_GUEST_IF
+
+
+class TargetStubRuntime(StubRuntime):
+    def __init__(self, by_node, topo):
+        super().__init__(by_node)
+        self.vm_nodes = {k for k, v in M.node_runtime_map(topo).items() if v == "vm"}
+
+    def _wrapper(self, node):
+        return node in RT_WRAPPER_NODES and node not in self.vm_nodes
+
+    def exec(self, lab, node, cmd, check=False, capture_output=True):
+        self.calls.append((node, "exec", " ".join(cmd)))
+        if self._wrapper(node):
+            return _CP("", rc=127)
+        return _CP(self.by_node.get(node, {}).get(" ".join(cmd), ""))
+
+    def sh(self, lab, node, cmd, check=False, capture_output=True):
+        self.calls.append((node, "sh", cmd))
+        return _CP("%s %s %s\n" % ("wrapper" if self._wrapper(node) else "target", node, cmd))
+
+
+_rt_args = []
+
+
+def _selecting_get_runtime(topo=None, *a, **k):
+    _rt_args.append(topo)
+    return TargetStubRuntime(RT_OUTPUTS, topo)
+
+
+def runtime_leg(mod):
+    """cmd_status --bgp --routes --interfaces --json, then cmd_collect, on the stub lab,
+    through engine module `mod` with get_runtime replaced by the selecting stub."""
+    del _rt_args[:]
+    shutil.rmtree(E.lab_dir(LAB) / "artifacts", ignore_errors=True)
+    saved = (mod.get_runtime, mod.run)
+    mod.get_runtime = _selecting_get_runtime
+    mod.run = lambda *a, **k: _CP("[]")
+    ns = argparse.Namespace(lab=LAB, bgp=True, bgp_verbose=False, strict=False, interfaces=True,
+                            summary=False, json=True, routes=True, routes_verbose=False)
+    buf, sexc, cexc = io.StringIO(), None, None
+    try:
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+            try:
+                mod.cmd_status(ns)
+            except BaseException as ex:  # noqa: BLE001 -- recorded, judged below
+                sexc = ex
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            try:
+                mod.cmd_collect(argparse.Namespace(lab=LAB))
+            except BaseException as ex:  # noqa: BLE001
+                cexc = ex
+    finally:
+        mod.get_runtime, mod.run = saved
+    out = buf.getvalue()
+    recs = {n["name"]: n for n in (json.loads(out).get("nodes", []) if out.strip().startswith("{") else [])}
+    art = E.lab_dir(LAB) / "artifacts"
+
+    def _read(name):
+        p = art / name
+        return p.read_text(encoding="utf-8") if p.exists() else None
+
+    return {"recs": recs, "sexc": sexc, "cexc": cexc, "args": list(_rt_args),
+            "bgp_art": _read("s1.bgp-summary.txt"), "ipaddr_art": _read("s1.ip-addr.txt")}
+
+
+GUEST_PEERS = sorted(F.parse_frr_bgp_summary_neighbors_json(SUMMARY_JSON))
+GUEST_BGP_ART = S._sonic_normalize_bgp_summary(SUM_TEXT)
+GUEST_IPADDR_ART = "target s1 ip -br a\n"
+
+
+def status_ok(r):
+    s1 = r["recs"].get("s1", {})
+    return (r["sexc"] is None and s1.get("bgp", {}).get("observed") == GUEST_PEERS
+            and s1.get("bgp", {}).get("parser_mode") == "json"
+            and s1.get("routes", {}).get("parser_mode") == "json"
+            and len(s1.get("routes", {}).get("observed") or []) > 0)
+
+
+def collect_ok(r):
+    return r["cexc"] is None and r["bgp_art"] == GUEST_BGP_ART
+
+
+def topo_args_ok(r):
+    return len(r["args"]) == 2 and all(M.node_runtime_map(a).get("s1") == "vm" for a in r["args"])
+
+
+def get_runtime_calls(src):
+    """{function: [(positional args, keyword names)]} for every get_runtime call in the two commands."""
+    tree = ast.parse(src)
+    out = {}
+    for fn in ("cmd_status", "cmd_collect"):
+        defs = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == fn]
+        out[fn] = [([ast.unparse(a) for a in c.args], [k.arg for k in c.keywords])
+                   for d in defs for c in ast.walk(d)
+                   if isinstance(c, ast.Call) and getattr(c.func, "id", None) == "get_runtime"]
+    return out
+
+
+def ast_ok(src):
+    return get_runtime_calls(src) == {"cmd_status": [(["topo"], [])], "cmd_collect": [(["topo"], [])]}
+
+
+_ENGINE_SRC = open(E.__file__, encoding="utf-8").read()
+
+
+def reverted(fn):
+    """The engine source with `fn`'s get_runtime call reverted to the bare form, or None
+    when the site is not in the fixed form (one call, `get_runtime(topo)` on its line)."""
+    tree = ast.parse(_ENGINE_SRC)
+    defs = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == fn]
+    calls = [c for d in defs for c in ast.walk(d)
+             if isinstance(c, ast.Call) and getattr(c.func, "id", None) == "get_runtime"]
+    lines = _ENGINE_SRC.split("\n")
+    if len(calls) != 1 or lines[calls[0].lineno - 1].count("get_runtime(topo)") != 1:
+        return None
+    i = calls[0].lineno - 1
+    lines[i] = lines[i].replace("get_runtime(topo)", "get_runtime()")
+    return "\n".join(lines)
+
+
+def engine_copy(src, tag):
+    spec = importlib.util.spec_from_loader("cassian_engine_s29r4_" + tag, loader=None)
+    mod = importlib.util.module_from_spec(spec)
+    mod.__file__ = E.__file__
+    exec(compile(src, E.__file__, "exec"), mod.__dict__)
+    mod._bind_workspace_labs_dir(pathlib.Path(WORK))
+    return mod
+
+
+_r = runtime_leg(E)
+check("SC-RUNTIME get_runtime receives the lab's topology in both commands (s1 resolves to vm)",
+      topo_args_ok(_r), "args: %s" % [sorted(M.node_runtime_map(a).items()) if a else a for a in _r["args"]])
+check("SC-RUNTIME s1's bgp record carries the guest's sessions, parser json", status_ok(_r),
+      "observed=%s" % (_r["recs"].get("s1", {}).get("bgp", {}).get("observed"),))
+check("SC-RUNTIME s1.bgp-summary.txt carries the guest's normalised summary", collect_ok(_r))
+check("SC-RUNTIME r1 (frr) bgp and routes records equal SC-STATUS's",
+      all(_r["recs"].get("r1", {}).get(k) == _recs.get("r1", {}).get(k) for k in ("bgp", "routes")))
+check("SC-RUNTIME declared collateral: s1's --interfaces lines are the guest's",
+      _r["recs"].get("s1", {}).get("interfaces") == [RT_GUEST_IF])
+check("SC-RUNTIME declared collateral: s1.ip-addr.txt is the guest's output",
+      _r["ipaddr_art"] == GUEST_IPADDR_ART, repr(_r["ipaddr_art"]))
+check("SC-RUNTIME each command makes exactly one get_runtime call, with `topo`",
+      ast_ok(_ENGINE_SRC), repr(get_runtime_calls(_ENGINE_SRC)))
+
+# ---- SC-RUNTIME non-vacuity: the stub discriminates, and each reverted site fails ------
+_stub_none = TargetStubRuntime(RT_OUTPUTS, None).exec(LAB, "s1", ["vtysh", "-c", "show bgp summary json"])
+_stub_topo = TargetStubRuntime(RT_OUTPUTS, TOPO).exec(LAB, "s1", ["vtysh", "-c", "show bgp summary json"])
+check("SC-RUNTIME NV the stub answers as the wrapper without the topology and as the guest with it",
+      _stub_none.returncode == 127 and _stub_none.stdout == "" and _stub_topo.stdout == SUMMARY_JSON)
+_src_s, _src_c = reverted("cmd_status"), reverted("cmd_collect")
+check("SC-RUNTIME NV both sites are in the fixed form, so each can be reverted",
+      _src_s is not None and _src_c is not None)
+if _src_s is not None and _src_c is not None:
+    _rs = runtime_leg(engine_copy(_src_s, "status"))
+    check("SC-RUNTIME NV cmd_status reverted to get_runtime(): its leg FAILS and collect's still passes",
+          not status_ok(_rs) and collect_ok(_rs) and not ast_ok(_src_s),
+          "s1 bgp=%s" % (_rs["recs"].get("s1", {}).get("bgp", {}).get("observed"),))
+    _rc = runtime_leg(engine_copy(_src_c, "collect"))
+    check("SC-RUNTIME NV cmd_collect reverted to get_runtime(): its leg FAILS and status's still passes",
+          not collect_ok(_rc) and status_ok(_rc) and not ast_ok(_src_c),
+          "bgp_art=%r" % (_rc["bgp_art"],))
+    check("SC-RUNTIME NV a reverted site passes no topology (the recorded argument is None)",
+          _rs["args"][0] is None and _rc["args"][1] is None)
 
 shutil.rmtree(WORK, ignore_errors=True)
 
