@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""evpn_precheck_mac_poll_proof.py -- §4.5-d, S24-R5 (BL-P2-4.5c-53's named fix).
+"""evpn_precheck_mac_poll_proof.py -- §4.5-d, S24-R5 (BL-P2-4.5c-53's named fix),
+with S28-R1 and S28-R2 (BL-P2-4.5c-220's fix).
 
 The hosted differential that founder ruling S24-R5 (2026-10-06) binds, as applied
 by S25-R4 (2026-10-08): in `cmd_test`'s global control-plane precheck, an EVPN lab
@@ -8,6 +9,13 @@ it polls, within the existing `precheck_timeout`, for every declared host MAC
 route (the resolved `fabric.evpn` host attachments) on every EVPN leaf, through
 the product's existing presence read, and fails loud naming what is absent.
 Non-EVPN and replay labs stay byte-identical.
+
+S28-R1 and S28-R2 (founder rulings 2026-10-11, an SP #1 bounded-scope amendment of
+S26-R3): the poll accepts the declared set only once it is present on every EVPN
+leaf on 3 consecutive attempts; an attempt with anything absent starts the count
+again. Interval, bound and predicate are unchanged. On timeout the message names
+what was absent at the last attempt or, when nothing was, how many consecutive full
+attempts were reached out of 3.
 
 Method. Lab-free. The precheck's `try:` body is executed twice from source text,
 as a function, against recording stubs and a fake clock:
@@ -27,14 +35,28 @@ Sections:
   P-NONEVPN  a non-EVPN lab: BEFORE and AFTER traces identical (sleep 5).
   P-REPLAY   an EVPN replay lab (the engine's `{base}-replay-{h8}` name):
              traces identical (timeout 60, sleep 15).
-  P-EVPN     an EVPN lab, every route present: AFTER has no fixed sleep and
-             reads each leaf x declared MAC once, through
-             `_evaluate_invariant_attempt(kind evpn_mac_route_present)`.
+  P-EVPN     an EVPN lab, every route present: AFTER has no fixed sleep; it
+             reads each leaf x declared MAC on each of 3 attempts, through
+             `_evaluate_invariant_attempt(kind evpn_mac_route_present)`, and
+             returns after the window (two 1 s intervals).
   P-LATE     a route absent for three attempts, then present: AFTER returns
-             after four attempts, well inside the bound.
+             after six attempts (three absent, three present), inside the bound.
   P-TIMEOUT  a route never present: BEFORE proceeds silently after its sleep
              (the defect); AFTER dies at the bound naming lab, leaf, host, MAC
              and VNI, with elapsed time and attempts.
+  P-WINDOW   the window is the named constant `_evpn_stable_k = 3`, set once
+             in the branch (S28-R2), and the poll's accept test reads it (AST).
+  P-FLAP     BL-P2-4.5c-220's shape: every route present, then host1's MAC
+             gone from leaf2 for one attempt, then back. AFTER restarts its
+             count and returns after five attempts; with the window set to 1
+             (the single sample S24-R5 accepted) the same fabric is accepted
+             at the first attempt, before the loss.
+  P-UNSTABLE every route present at the last attempt but never 3 attempts in a
+             row: AFTER dies at the bound naming the lab, elapsed time, bound,
+             attempts and the consecutive full attempts reached out of 3, and
+             lists no absent route.
+  P-RESET    a route absent at the last attempt of a flapping fabric: the
+             message is the absent-route one, listing only that route.
   P-PRED     the predicate is the read's second element, as REQ-WF-6 consumes
              it: a failed probe that reports present counts as present, a
              clean probe that reports absent counts as absent.
@@ -52,7 +74,9 @@ the stubs stand in for the runtime and for `wait_for_bgp`. This proof does NOT
 show that the routes converge in CI or on any host, does NOT exercise the FRR
 read itself (the read is the product's existing one, unchanged), and does NOT
 show the CI acceptance S24-R5 requires (the EVPN step green on consecutive
-attempts, then green x2) -- that is read from CI, not from here.
+attempts, then green x2) -- that is read from CI, not from here. Nor does it show
+that 3 consecutive attempts outlast the churn a CI fabric shows: BL-P2-4.5c-220's
+withdrawal mechanism is not measured (session-28 rulings note).
 
 Reports only; writes nothing. Exit 0 = GREEN, 1 = RED.
 """
@@ -264,17 +288,19 @@ _a, _ax, _, _el = _run(LIVE_BODY, EVPN, ALL)
 check("P-EVPN BEFORE sleeps the fixed 10 s and reads nothing", _b[-1:] == [("sleep", 10.0)]
       and not any(e[0] == "eval" for e in _b), str(_b))
 check("P-EVPN AFTER: same BGP waits as BEFORE", [e for e in _a if e[0] == "bgp"] == [e for e in _b if e[0] == "bgp"])
-check("P-EVPN AFTER: no fixed sleep at all", not any(e[0] == "sleep" for e in _a), str(_a))
-check("P-EVPN AFTER: each leaf x declared MAC read once, kind evpn_mac_route_present, VNI 10100",
-      [e for e in _a if e[0] == "eval"] == EXPECT_EVALS, str([e for e in _a if e[0] == "eval"]))
-check("P-EVPN AFTER returns without failing", not _ax and _el == 0.0, "exited=%s elapsed=%s" % (_ax, _el))
+check("P-EVPN AFTER: no fixed sleep; only the poll's two 1 s intervals",
+      [e for e in _a if e[0] == "sleep"] == [("sleep", 1.0)] * 2, str(_a))
+check("P-EVPN AFTER: each leaf x declared MAC read on each of 3 attempts, kind evpn_mac_route_present, VNI 10100",
+      [e for e in _a if e[0] == "eval"] == EXPECT_EVALS * 3, str([e for e in _a if e[0] == "eval"]))
+check("P-EVPN AFTER returns without failing, after the 3-attempt window (2.0 s)", not _ax and _el == 2.0,
+      "exited=%s elapsed=%s" % (_ax, _el))
 
 # --- P-LATE ---------------------------------------------------------------------------------
 _late = lambda n, leaf, mac: (True, not (leaf == "leaf2" and mac.endswith(":66") and n < 3))  # noqa: E731
 _a, _ax, _, _el = _run(LIVE_BODY, EVPN, _late)
-check("P-LATE AFTER returns after 4 attempts, 3 one-second intervals, no failure",
-      not _ax and sum(1 for e in _a if e[0] == "eval") == 4 * len(EXPECT_EVALS)
-      and [e for e in _a if e[0] == "sleep"] == [("sleep", 1.0)] * 3 and _el == 3.0,
+check("P-LATE AFTER returns after 6 attempts (3 absent, 3 present), 5 one-second intervals, no failure",
+      not _ax and sum(1 for e in _a if e[0] == "eval") == 6 * len(EXPECT_EVALS)
+      and [e for e in _a if e[0] == "sleep"] == [("sleep", 1.0)] * 5 and _el == 5.0,
       "exited=%s elapsed=%s sleeps=%s" % (_ax, _el, [e for e in _a if e[0] == "sleep"]))
 
 # --- P-TIMEOUT ------------------------------------------------------------------------------
@@ -294,10 +320,55 @@ check("P-TIMEOUT the message names lab, leaf, host, MAC, VNI, elapsed, bound, at
 check("P-TIMEOUT the message lists only what is absent",
       _msg.count(" is not in the EVPN MAC-route read") == 1 and "leaf1:" not in _msg, _msg)
 
+# --- P-WINDOW / P-FLAP / P-UNSTABLE / P-RESET (S28-R1, S28-R2) ------------------------------
+K_LINE = "_evpn_stable_k = 3\n"
+check("P-WINDOW the window is set once in the live branch, as _evpn_stable_k = 3",
+      LIVE_BODY.count(K_LINE) == 1 and LIVE_BODY.count("_evpn_stable_k = ") == 1,
+      "count=%d" % LIVE_BODY.count(K_LINE))
+_kt = ast.parse(LIVE_BODY)
+_cmp = [c for c in ast.walk(_kt) if isinstance(c, ast.Compare) and isinstance(c.ops[0], ast.GtE)
+        and isinstance(c.comparators[0], ast.Name) and c.comparators[0].id == "_evpn_stable_k"]
+check("P-WINDOW the accept test compares the consecutive count with _evpn_stable_k (>=), once",
+      len(_cmp) == 1, str([ast.unparse(c) for c in _cmp]))
+K1_BODY = LIVE_BODY.replace(K_LINE, "_evpn_stable_k = 1\n", 1) if LIVE_BODY.count(K_LINE) == 1 else ""
+check("P-WINDOW the window-1 control body differs from the live body in that line only",
+      K1_BODY != "" and K1_BODY != LIVE_BODY and len(K1_BODY) == len(LIVE_BODY))
+
+# BL-P2-4.5c-220's recorded shape: leaf2 read without host1's MAC right after a full sample.
+_flap = lambda n, leaf, mac: (True, not (n == 1 and leaf == "leaf2" and mac.endswith(":55")))  # noqa: E731
+_a, _ax, _, _el = _run(LIVE_BODY, EVPN, _flap)
+check("P-FLAP AFTER restarts its count on the loss and returns after 5 attempts (4.0 s), no failure",
+      not _ax and sum(1 for e in _a if e[0] == "eval") == 5 * len(EXPECT_EVALS) and _el == 4.0,
+      "exited=%s elapsed=%s evals=%d" % (_ax, _el, sum(1 for e in _a if e[0] == "eval")))
+_c, _cx, _, _cel = _run(K1_BODY, EVPN, _flap) if K1_BODY else ([], True, "", -1.0)
+check("P-FLAP control: with the window set to 1, the same fabric is accepted at the first attempt, before the loss",
+      not _cx and _cel == 0.0 and sum(1 for e in _c if e[0] == "eval") == len(EXPECT_EVALS),
+      "exited=%s elapsed=%s" % (_cx, _cel))
+
+_unstable = lambda n, leaf, mac: (True, not (n % 3 == 1 and leaf == "leaf2" and mac.endswith(":55")))  # noqa: E731
+_a, _ax, _msg, _el = _run(LIVE_BODY, EVPN, _unstable)
+check("P-UNSTABLE AFTER fails loud at the bound (30 s), never reaching 3 in a row",
+      _ax and 30.0 <= _el <= 31.0, "exited=%s elapsed=%s" % (_ax, _el))
+_want_u = ["EVPN precheck: declared host MAC routes not stable after 30.0s",
+           "(bound 30s, 31 attempts)", "in lab " + EVPN["name"],
+           "present on every EVPN leaf at the last attempt",
+           "on only 2 consecutive full attempt(s) of the 3 required", "Action: "]
+check("P-UNSTABLE the message names lab, elapsed, bound, attempts and the consecutive count out of 3",
+      all(w in _msg for w in _want_u), "missing: %s" % [w for w in _want_u if w not in _msg])
+check("P-UNSTABLE the message lists no absent route", " is not in the EVPN MAC-route read" not in _msg, _msg)
+
+_reset = lambda n, leaf, mac: (True, not (n % 2 == 0 and leaf == "leaf2" and mac.endswith(":55")))  # noqa: E731
+_a, _ax, _msg, _el = _run(LIVE_BODY, EVPN, _reset)
+check("P-RESET a route absent at the last attempt: the absent-route message, that route only",
+      _ax and "still absent after 30.0s" in _msg
+      and _msg.count(" is not in the EVPN MAC-route read") == 1
+      and "  leaf2: host1 00:11:22:33:44:55 (VNI 10100) is not in the EVPN MAC-route read" in _msg
+      and "not stable" not in _msg, _msg)
+
 # --- P-PRED ---------------------------------------------------------------------------------
 _a, _ax, _, _el = _run(LIVE_BODY, EVPN, lambda n, leaf, mac: (False, True))
 check("P-PRED a failed probe that reports present counts as present (predicate only, as REQ-WF-6)",
-      not _ax and _el == 0.0)
+      not _ax and _el == 2.0)
 _a, _ax, _, _el = _run(LIVE_BODY, EVPN, lambda n, leaf, mac: (True, False))
 check("P-PRED a clean probe that reports absent counts as absent", _ax and _el >= 30.0)
 

@@ -10514,9 +10514,39 @@ def cmd_test(args: argparse.Namespace) -> None:
                                 _absent.append((_leaf, _host, _mac, _vni))
                     return (not _absent), _absent
 
+                # S28-R1 and S28-R2 (founder rulings 2026-10-11, BL-P2-4.5c-220's
+                # fix; an SP #1 bounded-scope amendment of S26-R3): the declared set
+                # is accepted only once it is present on every EVPN leaf on
+                # `_evpn_stable_k` consecutive attempts; an attempt with anything
+                # absent starts the count again. Interval, bound and predicate are
+                # unchanged. On timeout the message names what was absent at the
+                # last attempt or, when nothing was, how many consecutive full
+                # attempts were reached out of `_evpn_stable_k`. Declared under DC
+                # v2.1 §14 item 8.
+                _evpn_stable_k = 3
+                _evpn_streak = [0]
+
+                def _evpn_stable_attempt():
+                    _all_present, _absent = _evpn_decl_attempt()
+                    _evpn_streak[0] = (_evpn_streak[0] + 1) if _all_present else 0
+                    return (_evpn_streak[0] >= _evpn_stable_k), _absent
+
                 _evpn_ok, _evpn_absent, _evpn_attempts, _evpn_ms = retry_until(
-                    precheck_timeout, 1.0, _evpn_decl_attempt
+                    precheck_timeout, 1.0, _evpn_stable_attempt
                 )
+                if not _evpn_ok and not _evpn_absent:
+                    die(
+                        f"EVPN precheck: declared host MAC routes not stable after "
+                        f"{_evpn_ms / 1000:.1f}s (bound {precheck_timeout}s, {_evpn_attempts} attempts) "
+                        f"in lab {lab}: every declared host MAC route was present on every EVPN leaf "
+                        f"at the last attempt, but on only {_evpn_streak[0]} consecutive full "
+                        f"attempt(s) of the {_evpn_stable_k} required.\n"
+                        "Every host declared under fabric.evpn must stay present on every EVPN leaf for "
+                        f"{_evpn_stable_k} consecutive attempts before tests read EVPN state; reading "
+                        "earlier would give verdicts from a fabric whose routes are still changing.\n"
+                        "Action: check that each leaf's EVPN session to the route reflector is "
+                        "Established and not resetting, then re-run `cassian test`."
+                    )
                 if not _evpn_ok:
                     die(
                         f"EVPN precheck: declared host MAC routes still absent after "
