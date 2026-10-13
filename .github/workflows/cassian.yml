@@ -810,6 +810,25 @@ jobs:
           ./src/cassian.py up topologies/sonic-bgp-session-live.yaml --reconfigure
           python tests/sonic_bgp_session_live_proof.py live topologies/sonic-bgp-session-live.yaml sonic-bgp-session-live
 
+      # §4.5-d VM-2 -- scope §9 row 8: one fixture, one boot (founder ruling S29-R6).
+      # The proof runs the plain `cassian test` (§19 Walkthrough 1: the three declared
+      # tests pass), configures one static route on the guest through the product's
+      # runtime, runs the static-route scenario, then the synthetic-complete control on
+      # the live RIB. The trap tears the lab down on every exit, so the teardown sweep
+      # below needs no entry for it (additions only, REQ-45D-27).
+      - name: SONiC RIB collection (VM) — sonic_rib_collection_live_proof.py (§4.5-d, REQ-45D-2/-11/-12)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-rib || true' EXIT
+          ./src/cassian.py validate topologies/sonic-rib.yaml
+          ./src/cassian.py up topologies/sonic-rib.yaml --reconfigure
+          python tests/sonic_rib_collection_live_proof.py live topologies/sonic-rib.yaml sonic-rib
+
       - name: SONiC (VM) teardown sweep (§4.5-c WI-3)
         if: always()
         env:

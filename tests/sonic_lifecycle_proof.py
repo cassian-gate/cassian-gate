@@ -187,6 +187,15 @@ SECTION_45C_FIXTURES = (
     # (F-45C-C3-3) sees it; its router_id and link addresses (192.0.2.71, .72;
     # 198.51.100.28, .29) come under LEG 1's HALT-2 sweep.
     "sonic-bgp-session-live.yaml",
+    # §4.5-d VM-2, scope §9 row 8 (REQ-45D-2/-11/-12): the RIB fixture §19 Walkthrough 1
+    # names -- one sonic-vm guest with a declared loopback and its frr link partner,
+    # three declared tests that pass at boot and one static-route scenario (founder
+    # ruling S29-R6 of 2026-10-12). DEPLOYED by its own (VM) step, which tears the lab
+    # down on every exit. Registered under founder ruling S27-R5 of 2026-10-09 (SP #1:
+    # one entry and its comment per new §4.5-d SONiC fixture, in the change that adds
+    # it) so the enumeration-drop guard (F-45C-C3-3) sees it; its router_id and link
+    # addresses (192.0.2.81, .82; 198.51.100.32, .33) come under LEG 1's HALT-2 sweep.
+    "sonic-rib.yaml",
 )
 
 # SONiC fixtures inherited from 4.5-a. REQ-45C-5 states these collide with
