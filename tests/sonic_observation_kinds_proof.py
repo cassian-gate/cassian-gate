@@ -714,6 +714,21 @@ try:
         o, _ = run(PFX, bad, params=rib_params(CONFIGURED_RIB["absent"]))
         check(f"K-{PFX} {name}: collection failure, never an absent answer", pfx_failed(o, CONFIGURED_RIB["absent"]))
 
+    # BL-P2-4.5c-225 (founder ruling S29-R9, 2026-10-13): a read that exits
+    # non-zero is named a FAILED read whatever stdout holds; "empty RIB read" is
+    # kept for a read that exited 0 with nothing on stdout. The row's measured
+    # case: rc 1, 0 B stdout, vtysh "Exiting: failed to connect to any daemons.".
+    for k in RIB_KINDS + (PFX,):
+        o, _ = run(k, "", rc=1, params=rib_params(CONFIGURED_RIB["static"]))
+        check(f"K-225 {k} rc 1 with empty stdout: parse_error names the failed read, not an empty RIB",
+              o.evidence.get("parse_error") == "RIB read failed (rc 1)" and o.evidence.get("probe_ok") is False)
+        o, _ = run(k, RIB_AFTER, rc=1, params=rib_params(CONFIGURED_RIB["static"]))
+        check(f"K-225 {k} rc 1 with a well-formed table on stdout: still a failed read",
+              o.evidence.get("parse_error") == "RIB read failed (rc 1)" and o.evidence.get("probe_ok") is False)
+        o, _ = run(k, "", rc=0, params=rib_params(CONFIGURED_RIB["static"]))
+        check(f"K-225 {k} NON-VACUITY: rc 0 with empty stdout keeps 'empty RIB read'",
+              o.evidence.get("parse_error") == "empty RIB read" and o.evidence.get("probe_ok") is False)
+
     # K-NV: every route_prefix predicate above is shown able to fail.
     _nv = mutate_json(RIB_AFTER, lambda d: d.pop(CONFIGURED_RIB["static"]))
     o, _ = run(PFX, _nv, params=rib_params(CONFIGURED_RIB["static"]))

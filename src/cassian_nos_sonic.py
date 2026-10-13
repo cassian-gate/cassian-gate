@@ -708,22 +708,26 @@ def _reconcile_bgp(rt: "Runtime", lab: str, node: str) -> None:
     Without this step that rule is unsatisfied and nothing reports it
     (BL-P2-4.5c-58).
 
-    NO READINESS WAIT HERE, deliberately. `nos_ready`'s coverage limit assigns
-    bgp readiness to the legs that need it -- *"Legs needing those conditions
-    poll for them themselves (REQ-45C-8/-29 precheck; convergence_wait)"* -- and
-    `convergence_wait` above polls on a bounded loop treating a not-yet-serving
-    read as NOT-YET rather than a verdict. Re-polling here would wait for
-    something already waited for, which is `nos_ready`'s own stated reason for
-    being single-shot. Founder ruling 2026-08-25.
+    THE READINESS WAIT FOLLOWS, IN `provision`, NOT HERE. Founder ruling
+    2026-08-25 put no readiness wait after this restart, on the premise that the
+    legs needing bgp readiness poll for it themselves (`nos_ready`'s coverage
+    limit). Measured 2026-10-13, that premise does not hold for the RIB tests,
+    which read once: on a topology declaring no BGP nothing waited, and a
+    `cassian test` straight after `up` read the RIB before it was served
+    (BL-P2-4.5c-224). Founder ruling S29-R7 (2026-10-13) amends 2026-08-25
+    forward: `provision` calls `_await_routing_daemon` straight after this
+    function. This function still issues one restart and does not poll.
 
     COVERAGE LIMITS (PBE-P2-8), stated rather than implied:
-      1. DURING-BOOT RESTART IS UNMEASURED. `nos_ready` records that bgp arrives
-         up to ~90s after CONFIG_DB, and `provision` runs as soon as CONFIG_DB
-         serves -- so this may restart a container that is still STARTING. The
-         2026-08-25 measurement was taken on a settled guest, minutes after
-         `up`. A bgp that does not come back is caught by `convergence_wait`'s
-         bounded timeout with per-neighbour evidence, loudly; it is not caught
-         here.
+      1. DURING-BOOT RESTART, MEASURED ONCE. `provision` runs as soon as
+         CONFIG_DB serves, so this may restart a container that is still
+         starting. Measured 2026-10-13 on ai-netsim at cassian-gate@74ffb87: the
+         guest booted at 04:28:49, this restart ran 04:29:11-04:29:22, the
+         service came back `active` with `NRestarts=0`, and the daemons
+         answered within 15 s. One sample is not a distribution. A bgp that
+         does not come back is caught by `_await_routing_daemon`'s bounded
+         timeout, loudly, and for declared peers by `convergence_wait`'s; it is
+         not caught here.
       2. A NON-ZERO rc IS NOT SWALLOWED, but a zero rc proves only that
          systemctl accepted the request -- not that bgpcfgd rebuilt anything.
          What proves that is the convergence read.
@@ -746,6 +750,74 @@ def _reconcile_bgp(rt: "Runtime", lab: str, node: str) -> None:
             "configuration would be absent from FRR while the run looked clean",
             "report this with the guest's `systemctl status bgp` output",
         )
+
+
+# S29-R7 (founder ruling 2026-10-13; BL-P2-4.5c-224): the bound of the wait
+# that follows `_reconcile_bgp`. 30 s is the BGP control-plane precheck's own
+# bound (`cassian_engine.py`, `precheck_timeout`, the non-EVPN value), reused
+# rather than invented; the interval is `_CONVERGENCE_POLL_INTERVAL_S`. The
+# provider cannot import the engine (leaf import floor), so the proof asserts
+# the equality instead.
+_ROUTING_DAEMON_WAIT_S = 30
+
+
+def _await_routing_daemon(rt: "Runtime", lab: str, node: str,
+                          timeout: int = _ROUTING_DAEMON_WAIT_S) -> None:
+    """Bounded wait, after the reconcile restart, until the guest's routing
+    daemons answer the provider's own RIB read (S29-R7; BL-P2-4.5c-224).
+
+    WHY THIS EXISTS. `systemctl restart bgp` returns when the service reports
+    started; the daemons inside the container answer seconds later. Measured
+    2026-10-13 on ai-netsim at cassian-gate@74ffb87: the service started and
+    `up` returned at 04:29:22; the RIB read then exited 1 with nothing on
+    stdout while vtysh printed "Exiting: failed to connect to any daemons."
+    and the service read `active`; 15 s later it answered (rc 0, 26758 B).
+    Only the BGP precheck waited for the daemons, so on a topology declaring
+    no BGP the verdict of a `cassian test` run straight after `up` depended on
+    timing. Founder ruling S29-R7 amends founder ruling 2026-08-25 forward.
+
+    PREDICATE: `_RIB_ARGV` exits 0 with a table `_rib_prefixes` accepts -- the
+    read the RIB kinds themselves make (single-sourced, PBE-P2-6). A non-zero
+    exit, an empty answer or an unparseable one is NOT-YET, never ready.
+
+    BOUND: `timeout` seconds (default `_ROUTING_DAEMON_WAIT_S`), polled every
+    `_CONVERGENCE_POLL_INTERVAL_S`; at least one read is always issued. A
+    timeout is a §13-grade failure naming the read and its last result --
+    never a hang, never silence (Doctrine 1.11).
+
+    COVERAGE LIMITS (PBE-P2-8), stated rather than implied:
+      1. The read proves zebra answers. It does not prove staticd or bgpd do;
+         bgpd's readiness for declared peers stays `convergence_wait`'s.
+      2. The gap was measured once, between 0 and 15 s. The 30 s bound is the
+         precheck's, not a measured distribution.
+      3. Generated mode only. `_provision_preconfigured` applies with
+         `config reload`, which also restarts bgp; that path is unmeasured
+         and carries no wait.
+    """
+    deadline = time.time() + max(int(timeout), 0)
+    last = "no read issued"
+    while True:
+        rc, out = _sonic_read(rt, lab, node, _RIB_ARGV)
+        if rc == 0:
+            last = _rib_prefixes(out)[1]
+            if not last:
+                return
+        else:
+            last = f"RIB read failed (rc {rc})"
+        if time.time() >= deadline:
+            break
+        time.sleep(_CONVERGENCE_POLL_INTERVAL_S)
+    _fail(
+        "SONiC routing daemons did not answer after the reconcile restart",
+        node,
+        f"`{' '.join(_RIB_ARGV)}` returned no routing table within "
+        f"{max(int(timeout), 0)}s; last result: {last}",
+        "the restart that rebuilds FRR from ConfigDB returned, but the routing "
+        "daemons never served the RIB read the route tests make, so every "
+        "RIB-reading test on this node would read a daemon that is not answering",
+        "report this with the guest's `systemctl status bgp` and `docker ps -a` "
+        "output",
+    )
 
 
 # REQ-45C-8/-29 convergence read. Single-sourced argv (PBE-P2-6): the proof
@@ -1250,6 +1322,11 @@ def provision(rt: "Runtime", lab: str, node: str, node_d: dict,
     # actually in force (BL-P2-4.5c-58, founder ruling 2026-08-25).
     _reconcile_bgp(rt, lab, node)
 
+    # S29-R7 (founder ruling 2026-10-13, amending 2026-08-25 forward;
+    # BL-P2-4.5c-224): the restart returns before the routing daemons answer.
+    # Wait, bounded, until the RIB read the route tests make is served.
+    _await_routing_daemon(rt, lab, node)
+
     return out
 
 
@@ -1692,9 +1769,15 @@ def _sonic_collect_route_table(rt, lab, node, req: "ObservationRequest") -> "Obs
             evidence=dict({"cmd": "", "rc": None, "parse_error": reason}, probe_ok=False),
         )
     rc, out = _sonic_read(rt, lab, node, _RIB_ARGV)
-    observed, parse_error = _rib_prefixes(out)
-    if rc != 0 and not parse_error:
-        parse_error = f"RIB read failed (rc {rc})"
+    # BL-P2-4.5c-225 (S29-R9): the return code is tested FIRST. A read that
+    # exits non-zero is a failed read whatever stdout holds; tested after the
+    # output, an rc-1 read with empty stdout carried "empty RIB read" and named
+    # the wrong cause (measured 2026-10-13: vtysh had printed "Exiting: failed
+    # to connect to any daemons.").
+    if rc != 0:
+        observed, parse_error = [], f"RIB read failed (rc {rc})"
+    else:
+        observed, parse_error = _rib_prefixes(out)
     if parse_error:
         observed = []
     return Observation(
@@ -1732,9 +1815,15 @@ def _sonic_collect_route_prefix(rt, lab, node, req: "ObservationRequest") -> "Ob
             evidence=dict({"cmd": "", "rc": None, "parse_error": reason}, probe_ok=False),
         )
     rc, out = _sonic_read(rt, lab, node, _RIB_ARGV)
-    observed, parse_error = _rib_prefixes(out)
-    if rc != 0 and not parse_error:
-        parse_error = f"RIB read failed (rc {rc})"
+    # BL-P2-4.5c-225 (S29-R9): the return code is tested FIRST. A read that
+    # exits non-zero is a failed read whatever stdout holds; tested after the
+    # output, an rc-1 read with empty stdout carried "empty RIB read" and named
+    # the wrong cause (measured 2026-10-13: vtysh had printed "Exiting: failed
+    # to connect to any daemons.").
+    if rc != 0:
+        observed, parse_error = [], f"RIB read failed (rc {rc})"
+    else:
+        observed, parse_error = _rib_prefixes(out)
     return Observation(
         kind=req.kind,
         data={"prefix": prefix, "routes": [] if parse_error else [p for p in observed if p == norm]},
@@ -2080,5 +2169,5 @@ SONIC_PROVIDER = NosProvider(
     exec_command_rule=_sonic_exec_command_rule,
     exec_allowed_forms="show \u2026 or vtysh -c \"show \u2026\" (not show techsupport)",
     state_profiles={},
-    state_argv_allow=deferred_leg("state_argv_allow", "§4.5-d"),
+    state_argv_allow=deferred_leg("state_argv_allow", "§4.5-f"),
 )
