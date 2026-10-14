@@ -88,6 +88,7 @@ Rules:
 * `mac` fields MUST be canonical lowercase colon-separated form (e.g. `00:11:22:33:44:55`)
 * `vni` MUST be a positive integer matching a VNI declared in the topology's `vlans:` map
 * `route_absent` and `route_not_advertised_to` and `evpn_mac_route_absent` are the negative complements of their `_present` / `_advertised_to` peers; the verdict semantics flip accordingly (`expect: pass` means the route IS NOT present / IS NOT advertised / IS NOT in the EVPN MAC table)
+* In a `fabric.evpn` lab, the EVPN kinds read state only after the control-plane precheck's route poll has accepted (every host declared under `fabric.evpn` present on every EVPN leaf on 3 consecutive polls); the precheck runs for every run without scenarios, and for a scenario run with `--precheck-controlplane`. If the poll does not accept within its bound, the run fails before any test reads state (see `--precheck-controlplane` in `docs/cli-reference-v1.md`)
 
 ---
 

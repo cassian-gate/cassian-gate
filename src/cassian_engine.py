@@ -3529,6 +3529,173 @@ def _nos_collect(rt, lab, node, ntype, request, seam):
     return provider.collect(rt, lab, node, request)
 
 
+# =============================================================================
+# The global control-plane precheck's entry decision and its record.
+#
+# BL-P2-4.5c-216's fix (§4.5-d session 30; founder rulings S30-R1, S30-R2,
+# S30-R9 to S30-R11, S30-R13, S30-R16 to S30-R21 and S30-R23 to S30-R25,
+# 2026-10-14). Measured in
+# the session-30 capture: for every `fabric.evpn` topology the precheck derived
+# no BGP participant, so the whole block -- session waits, the S24-R5 route poll
+# with S28's window, even the fixed sleep -- was skipped and tests read EVPN
+# state with nothing gating them. Module-level so the precheck proof exercises
+# the real decision, not a copy. Declared under DC v2.1 §14 item 8.
+# =============================================================================
+
+_PRECHECK_GUARD_TEXT = (
+    "Control-plane precheck: lab {lab} declares BGP on {nodes} (`asn` or `bgp`), but no "
+    "linked BGP peer is derived, so there is no session to wait for.\n"
+    "A precheck that waits on nothing would let tests read a control plane that has not "
+    "converged; it fails instead.\n"
+    "Action: give each declared BGP node a link to a peer that also declares `asn`, then "
+    "re-run `cassian test`."
+)
+
+
+def _precheck_entry(topo: dict, bgp_participants: list, selected: bool):
+    """Whether `cmd_test`'s global control-plane precheck is entered.
+
+    Returns (enter, not_entered_reason, guard). `guard` is the text of the S30-R2
+    hard-fail, raised inside the precheck so the run is recorded as blocked.
+      - not selected (a scenario run without --precheck-controlplane): not entered.
+      - node-level BGP intent (a node with `asn` or a `bgp` mapping) and no
+        participant derived: entered, with the guard (S30-R2).
+      - any participant, or `fabric.evpn` enabled (replay labs included): entered
+        (S30-R1, S30-R16).
+      - otherwise: not entered, "no-bgp-intent".
+    """
+    if not selected:
+        return False, "not-selected", None
+    intent = sorted(
+        str(n.get("name") or "")
+        for n in (topo.get("nodes") or [])
+        if isinstance(n, dict) and ("asn" in n or isinstance(n.get("bgp"), dict))
+    )
+    if intent and not bgp_participants:
+        return True, None, _PRECHECK_GUARD_TEXT.format(
+            lab=str(topo.get("name") or ""), nodes=", ".join(intent))
+    fabric = bool((((topo.get("fabric") or {}).get("evpn") or {}).get("enabled")))
+    if bgp_participants or fabric:
+        return True, None, None
+    return False, "no-bgp-intent", None
+
+
+class _PrecheckRecord:
+    """`summary.precheck` (facts that are the same for the same outcome) and
+    `timing.precheck` (run-variant values, inside the subtree the tamper digest
+    and the replay comparison already exclude) -- S30-R9, S30-R10, S30-R11,
+    S30-R17, S30-R19 to S30-R21, S30-R23 and S30-R24. Session waits are listed
+    one per wait started, in the order they run (S30-R23). The dicts are attached
+    to `results` and mutated in place, so every later write of `results.json`
+    carries them."""
+
+    def __init__(self) -> None:
+        self.summary = {
+            "entered": False,
+            "not_entered_reason": "not-reached",
+            "participants": [],
+            "session_wait": [],
+            "settle": None,
+            "outcome": "not-entered",
+            "failure": None,
+        }
+        self.timing = None
+        self._t0 = None
+        self._wait_t0 = None
+        self._sleep_t0 = None
+        self._failure = None
+
+    def attach(self, results: dict) -> None:
+        results["summary"]["precheck"] = self.summary
+        if self.timing is not None:
+            results.setdefault("timing", {})["precheck"] = self.timing
+
+    def not_entered(self, reason: str) -> None:
+        self.summary["entered"] = False
+        self.summary["not_entered_reason"] = reason
+
+    def enter(self, participants: list, now: float) -> None:
+        self.summary["entered"] = True
+        self.summary["not_entered_reason"] = None
+        self.summary["participants"] = sorted(str(n.get("name") or "") for n in participants)
+        self.summary["outcome"] = None
+        self.timing = {"duration_ms": None, "session_wait": [], "settle": None}
+        self._t0 = now
+
+    def wait_start(self, node: str, leg: str, bound_s: int, now: float) -> None:
+        self.summary["session_wait"].append(
+            {"node": node, "leg": leg, "bound_s": int(bound_s), "interval_s": 1, "outcome": None})
+        self.timing["session_wait"].append(
+            {"node": node, "elapsed_ms": None, "attempts": None, "attempts_reported": leg == "frr"})
+        self._wait_t0 = now
+
+    def _close_wait(self, outcome: str, now: float, stats: dict) -> None:
+        self.summary["session_wait"][-1]["outcome"] = outcome
+        t = self.timing["session_wait"][-1]
+        t["elapsed_ms"] = int(round((now - self._wait_t0) * 1000))
+        if t["attempts_reported"]:
+            t["attempts"] = stats.get("attempts")
+        self._wait_t0 = None
+
+    def wait_end(self, now: float, stats: dict) -> None:
+        self._close_wait("established", now, stats)
+
+    def poll_start(self, leaves: list, declared: list, k: int, bound_s: int) -> None:
+        self.summary["settle"] = {
+            "kind": "evpn-route-poll",
+            "leaves": list(leaves),
+            "declared": [{"host": h, "mac": m, "vni": v} for h, m, v in declared],
+            "k_required": int(k),
+            "bound_s": int(bound_s),
+            "interval_s": 1,
+            "outcome": None,
+            "absent_at_last": [],
+        }
+
+    def poll_end(self, ok: bool, absent: list, attempts: int, elapsed_ms: int, final_consecutive: int) -> None:
+        s = self.summary["settle"]
+        if ok:
+            s["outcome"] = "accepted"
+        elif absent:
+            s["outcome"] = "timeout-absent"
+            s["absent_at_last"] = [{"leaf": l, "host": h, "mac": m, "vni": v} for l, h, m, v in absent]
+        else:
+            s["outcome"] = "timeout-unstable"
+        self.timing["settle"] = {"elapsed_ms": int(elapsed_ms), "attempts": int(attempts),
+                                 "final_consecutive": int(final_consecutive)}
+        if not ok:
+            self._failure = "evpn-route-timeout"
+
+    def sleep_start(self, seconds: int, now: float) -> None:
+        self.summary["settle"] = {"kind": "fixed-sleep", "seconds": int(seconds)}
+        self._sleep_t0 = now
+
+    def sleep_end(self, now: float) -> None:
+        self.timing["settle"] = {"elapsed_ms": int(round((now - self._sleep_t0) * 1000))}
+        self._sleep_t0 = None
+
+    def failing(self, failure: str) -> None:
+        """Set immediately before a die the precheck raises itself."""
+        self._failure = failure
+
+    def passed(self, now: float) -> None:
+        self.summary["outcome"] = "passed"
+        self.timing["duration_ms"] = int(round((now - self._t0) * 1000))
+
+    def failed(self, now: float, stats: "dict | None" = None) -> None:
+        """On SystemExit inside the precheck. A session wait still open ended in its
+        own die: "timeout" only when the waiting code reported one (S30-R20),
+        otherwise "failed"; never read from message text. An exit the precheck does
+        not classify leaves `failure` null and, if the poll had started, its
+        outcome and timing null (S30-R24)."""
+        if self._wait_t0 is not None:
+            timed_out = bool((stats or {}).get("timed_out"))
+            self._close_wait("timeout" if timed_out else "failed", now, stats or {})
+            self._failure = "session-timeout" if timed_out else "session-failed"
+        self.summary["outcome"] = "failed"
+        self.summary["failure"] = self._failure
+        self.timing["duration_ms"] = int(round((now - self._t0) * 1000))
+
 def cmd_test(args: argparse.Namespace) -> None:
     """
     v1 update (Section C): Scenarios wired into cmd_test (minimal invasive).
@@ -3737,6 +3904,12 @@ def cmd_test(args: argparse.Namespace) -> None:
                     "failed": 0,
                 },
             }
+            # S30-R9, S30-R17 and S30-R25 (founder rulings 2026-10-14): this writer is a
+            # `cmd_test` exit path too -- a gate-mode deploy or provision failure
+            # ends before the precheck's decision, so its results.json carries the
+            # "not-reached" record (and, S30-R21, no timing.precheck). Declared
+            # under DC v2.1 §14 item 8.
+            _PrecheckRecord().attach(results)
 
             # Collect-time schema stabilization (best-effort; additive-only)
             try:
@@ -4188,6 +4361,12 @@ def cmd_test(args: argparse.Namespace) -> None:
         "scenarios": [],
         "events": [],
     }
+
+    # S30-R17 (founder ruling 2026-10-14): the precheck's record exists from here,
+    # so every exit path that writes results.json carries it -- "not-reached"
+    # until the precheck's entry decision. Declared under DC v2.1 §14 item 8.
+    _pcr = _PrecheckRecord()
+    _pcr.attach(results)
 
     # v1.5 EVPN Awareness (presence-only): informational results metadata.
     # Authority remains tests/scenarios only; this must never affect verdict or exit code.
@@ -10440,13 +10619,31 @@ def cmd_test(args: argparse.Namespace) -> None:
             bgp_participants.append(n)
 
     # Convergence semantics:
-    # - Default tests: keep legacy behavior (precheck BGP if participants exist)
+    # - Default tests: the precheck is selected; whether it runs is
+    #   `_precheck_entry`'s decision below (BL-P2-4.5c-216's fix, S30-R1/R2)
     # - Scenarios: skip global precheck unless user explicitly requests it
     do_global_cp_precheck = (not want_scenarios) or precheck_controlplane
     results["summary"]["precheck_controlplane"] = bool(do_global_cp_precheck)
 
-    if do_global_cp_precheck and bgp_participants:
+    # BL-P2-4.5c-216's fix (§4.5-d session 30; founder rulings S30-R1, S30-R2 and
+    # S30-R16, 2026-10-14). The entry decision is `_precheck_entry`: a fabric.evpn
+    # lab, replay included, is gated although it derives no node-level participant
+    # (measured: every fabric topology derived none, so the block below never ran
+    # for them), and node-level BGP intent with no participant fails here instead
+    # of skipping. Declared under DC v2.1 §14 item 8.
+    _pc_enter, _pc_reason, _pc_guard = _precheck_entry(topo, bgp_participants, bool(do_global_cp_precheck))
+    if _pc_enter:
+        _pcr.enter(bgp_participants, time.time())
+        _pcr.attach(results)
+    else:
+        _pcr.not_entered(_pc_reason)
+    _pc_stats: dict = {}
+
+    if _pc_enter:
         try:
+            if _pc_guard is not None:
+                _pcr.failing("bgp-intent-without-participants")
+                die(_pc_guard)
             require_evpn_bgp = bool((((topo.get("fabric") or {}).get("evpn") or {}).get("enabled")))
             is_replay_lab = "-replay-" in str(topo.get("name", ""))
             precheck_timeout = 60 if (require_evpn_bgp and is_replay_lab) else 30
@@ -10463,15 +10660,24 @@ def cmd_test(args: argparse.Namespace) -> None:
                 # launcher on a vm-runtime node, not the NOS.
                 _ntype = str(n.get("type") or "")
                 _prov = NOS_PROVIDERS.get(_ntype)
+                # S30-R9 to S30-R11, S30-R13 and S30-R18 (2026-10-14): each session
+                # wait is recorded -- its bound and outcome in summary.precheck, its
+                # elapsed time and, for FRR's inline wait, which reports them through
+                # `stats`, its attempts in timing.precheck.
+                _pc_stats = {}
+                _pcr.wait_start(n["name"], "frr" if (_ntype == "frr" or _prov is None) else _ntype,
+                                precheck_timeout, time.time())
                 if _ntype == "frr" or _prov is None:
-                    wait_for_bgp(rt, lab, n["name"], timeout=precheck_timeout, require_evpn=require_evpn_bgp)
+                    wait_for_bgp(rt, lab, n["name"], timeout=precheck_timeout, require_evpn=require_evpn_bgp, stats=_pc_stats)
                 else:
                     _prov.convergence_wait(
                         rt, lab, n["name"], precheck_timeout, _expected_peer_ips(n["name"])
                     )
+                _pcr.wait_end(time.time(), _pc_stats)
             # S24-R5 (founder ruling 2026-10-06, BL-P2-4.5c-53's named fix) as
-            # applied by S25-R4 (2026-10-08). For an EVPN lab that is not a replay
-            # lab, the fixed post-precheck sleep is replaced by a bounded poll for
+            # applied by S25-R4 (2026-10-08), and amended for replay labs by
+            # S30-R16 (2026-10-14). For an EVPN lab, replay or not, the fixed
+            # post-precheck sleep is replaced by a bounded poll for
             # the declared EVPN MAC routes: every host attachment of the resolved
             # `fabric.evpn` (DC §1 authoritative input), on every EVPN leaf.
             # Predicate: the product's existing presence read, unchanged --
@@ -10480,10 +10686,12 @@ def cmd_test(args: argparse.Namespace) -> None:
             # Bound: the existing `precheck_timeout`; interval 1 s, as
             # wait_for_bgp polls. A timeout fails loud, naming the lab and each
             # leaf, host, MAC and VNI still absent, with elapsed time against the
-            # bound. Non-EVPN and replay labs keep `time.sleep(post_precheck_sleep)`
-            # byte-identically; for this branch the computed 10 s is no longer
-            # slept. Declared under DC v2.1 §14 item 8.
-            if require_evpn_bgp and not is_replay_lab:
+            # bound. Non-EVPN labs, replay or not, keep
+            # `time.sleep(post_precheck_sleep)` byte-identically; for this branch
+            # the computed 10 s (15 s for a replay lab) is no longer slept. S24-R5
+            # left replay labs on the sleep; S30-R16 gates a replay as the run it
+            # reproduces was, at its 60 s bound. Declared under DC v2.1 §14 item 8.
+            if require_evpn_bgp:
                 _evpn_fab = (topo.get("fabric") or {}).get("evpn") or {}
                 _evpn_vni = {
                     str(_k): (_v or {}).get("vni")
@@ -10506,6 +10714,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                     or not _evpn_decl
                     or any((not _m) or (not isinstance(_v, int)) or isinstance(_v, bool) for _h, _m, _v in _evpn_decl)
                 ):
+                    _pcr.failing("evpn-declaration-incomplete")
                     die(
                         f"EVPN precheck: lab {lab}'s resolved topology declares no EVPN leaf, no host "
                         "attachment, or a host without a MAC or VNI under fabric.evpn, so the declared "
@@ -10538,6 +10747,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 # v2.1 §14 item 8.
                 _evpn_stable_k = 3
                 _evpn_streak = [0]
+                _pcr.poll_start(_evpn_leaves, _evpn_decl, _evpn_stable_k, precheck_timeout)
 
                 def _evpn_stable_attempt():
                     _all_present, _absent = _evpn_decl_attempt()
@@ -10547,6 +10757,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 _evpn_ok, _evpn_absent, _evpn_attempts, _evpn_ms = retry_until(
                     precheck_timeout, 1.0, _evpn_stable_attempt
                 )
+                _pcr.poll_end(_evpn_ok, [] if _evpn_ok else _evpn_absent, _evpn_attempts, _evpn_ms, _evpn_streak[0])
                 if not _evpn_ok and not _evpn_absent:
                     die(
                         f"EVPN precheck: declared host MAC routes not stable after "
@@ -10576,8 +10787,12 @@ def cmd_test(args: argparse.Namespace) -> None:
                         "`cassian test`."
                     )
             else:
+                _pcr.sleep_start(post_precheck_sleep, time.time())
                 time.sleep(post_precheck_sleep)
+                _pcr.sleep_end(time.time())
+            _pcr.passed(time.time())
         except SystemExit:
+            _pcr.failed(time.time(), _pc_stats)
             results["result"] = "fail"
             finished_at = time.time()
             results["summary"]["finished_at"] = finished_at

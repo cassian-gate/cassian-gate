@@ -229,8 +229,31 @@ Scenario flags:
 Convergence control:
 
 * `--precheck-controlplane`  
-  Run global control-plane prechecks (e.g., BGP wait) before executing scenarios.  
-  Default: off when `--scenario` / `--all-scenarios` is used.
+  Run the global control-plane precheck before executing scenarios.  
+  Default: off when `--scenario` / `--all-scenarios` is used. A run without scenarios always runs it.
+
+Control-plane precheck:
+
+* Runs, when selected, if the topology declares BGP: a node with `asn` or a `bgp` mapping, or `fabric.evpn.enabled: true` (replay labs included).
+* Waits for each derived BGP participant's sessions, polling once a second (bound 30 s; 60 s for an EVPN replay lab).
+* In a `fabric.evpn` lab, then polls once a second within the same bound until every host declared under `fabric.evpn` has its MAC route on every EVPN leaf on 3 consecutive attempts. Any other lab sleeps a fixed 5 s instead.
+* Fails the run before any test reads state, recording every declared test `observed: blocked`, when a session wait fails or times out; when the routes are not present and stable within the bound; when the EVPN declaration names no leaf, no host, or a host without a MAC or VNI; or when nodes declare BGP but no BGP participant at all is derived (no declaring node has a link to a peer that also declares `asn`). A declaring node without such a link, in a lab where other nodes do peer, is not waited on.
+
+Precheck record (`results.json`, `summary.precheck`; the same for the same outcome):
+
+* `entered`: `true` or `false`.
+* `not_entered_reason`: `null` when entered; otherwise `"not-selected"`, `"no-bgp-intent"`, or `"not-reached"` (the run ended before the precheck).
+* `participants`: sorted node names; `[]` in a `fabric.evpn` lab.
+* `session_wait`: one entry per wait the precheck started, in the order it waits (the topology's node order), with `node`, `leg` (`frr` or the NOS type), `bound_s`, `interval_s` and `outcome` (`"established"`, `"timeout"` or `"failed"`). After a failed wait, the remaining participants have no entry.
+* `settle`: `null` if not reached. For the route poll: `kind: "evpn-route-poll"`, `leaves`, `declared` (host, MAC, VNI), `k_required`, `bound_s`, `interval_s`, `outcome` (`"accepted"`, `"timeout-absent"` or `"timeout-unstable"`; `null` if the poll did not finish) and `absent_at_last`. Otherwise `kind: "fixed-sleep"` with `seconds`.
+* `outcome`: `"passed"`, `"failed"` or `"not-entered"`.
+* `failure`: `"bgp-intent-without-participants"`, `"session-timeout"`, `"session-failed"`, `"evpn-route-timeout"` or `"evpn-declaration-incomplete"` when `outcome` is `"failed"`; `null` otherwise, and also when the precheck exited from code it does not classify (`outcome` still reads `"failed"`; the run's error output carries the cause).
+
+Precheck timing (`results.json`, `timing.precheck`; present only when the precheck was entered; varies from run to run, and the tamper digest excludes the `timing` subtree):
+
+* `duration_ms`.
+* `session_wait`: per wait, `node`, `elapsed_ms`, `attempts` and `attempts_reported`. For a wait a NOS provider drives, `attempts` is `null` and `attempts_reported` is `false`.
+* `settle`: `elapsed_ms`; for the route poll, also `attempts` and `final_consecutive`.
 
 Listing:
 

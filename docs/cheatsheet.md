@@ -1037,6 +1037,33 @@ cassian test topologies/neg/evpn_invalid_roles.yaml
 
 ---
 
+## Convergence Gate Before Tests
+
+Before `cassian test` lets any test read EVPN state in a `fabric.evpn` lab, the control-plane precheck waits for the fabric to converge:
+
+- it polls every EVPN leaf, once a second, for the MAC route of every host declared under `fabric.evpn` (the host's `mac`, in its VLAN's `vni`)
+- it accepts only when every declared route is present on every leaf on 3 consecutive polls; a poll with any route missing starts the count again
+- the bound is 30 s, or 60 s when replaying; replays are gated too
+- if the routes are not present and stable within the bound, the run fails before any test, naming each missing route (leaf, host, MAC, VNI) or how many consecutive full polls were reached, and every declared test is recorded `observed: blocked`, `verdict: fail`
+
+The precheck runs for every run without scenarios, and for a scenario run with `--precheck-controlplane`.
+
+Inspect what it did:
+
+```bash
+python -m json.tool labs/clab-<lab>/results.json
+```
+
+Look for:
+
+- `summary.precheck.settle.kind: evpn-route-poll` and `outcome: accepted`
+- `summary.precheck.settle.absent_at_last` after a timeout
+- `timing.precheck.settle` for attempts, elapsed time and the final consecutive count (these vary from run to run and are excluded from the tamper digest)
+
+The gate decides only whether tests run; it never alters what a test that runs observes. When it fails, check that each listed host is up and has sent traffic on its access link, and that each leaf's EVPN session to the route reflector is Established. The full record is described under `--precheck-controlplane` in `docs/cli-reference-v1.md`.
+
+---
+
 ## Artifact Note
 
 `topology.resolved.yaml` may include additive EVPN-resolved fields for the generated proof substrate.

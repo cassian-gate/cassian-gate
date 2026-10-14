@@ -7,7 +7,7 @@ import sys, os, ast, hashlib
 SRC = os.path.join(os.path.dirname(__file__), "..", "src", "cassian_tests.py")
 
 # v9 baselines (computed from the declared v9 consolidated snapshot).
-WHOLE_MODULE_V9 = "d977b4b1318266d6eea1360295b716db6d757ff1eb98f781f29c37f1e509a920"  # re-baselined from b8dc8534 (phase2 §4.5-c Unit B: wait_for_bgp gate predicate + LD-45C-R10 header import; LD-45C-R9/R10/R11; LD-45C-R2 D-5, founder ruling D-6, taken only with both seam segment pins PASSING -- re-measured PASSING at apply time 2026-08-31); prior 49f484b0; prior dd56046b; orig ba0a1f36
+WHOLE_MODULE_V9 = "9db9074568418580e8671719e083f876b0f7f111201284b889e483ef92388af7"  # re-baselined from d977b4b1 (phase2 §4.5-d BL-P2-4.5c-216 fix (founder rulings S30-R13, S30-R18 and S30-R20 of 2026-10-14), touched module src/cassian_tests.py; named check DC v2.1 §14 item 8: No silent mutation introduced), taken with both seam segment pins PASSING (re-measured in the packet's sandbox run); re-baselined from b8dc8534 (phase2 §4.5-c Unit B: wait_for_bgp gate predicate + LD-45C-R10 header import; LD-45C-R9/R10/R11; LD-45C-R2 D-5, founder ruling D-6, taken only with both seam segment pins PASSING -- re-measured PASSING at apply time 2026-08-31); prior 49f484b0; prior dd56046b; orig ba0a1f36
 SEAM_SEGMENT_V9 = {
     "_format_test_summary":        "2119d19a5667f77168df07ec5edcaa4d3001cdca49386027f1c6186c1f727ffa",
     "write_test_summary_artifact": "ff523b7eb74ebdff684ac8cb179842cd71c099e73913398ed280507343263420",
