@@ -628,7 +628,7 @@ def main():
         return orig_gnc(*a, **k)
 
     class _Rt:
-        """Records argv and answers THREE shaped queries. No guest is contacted.
+        """Records argv and answers FOUR shaped queries. No guest is contacted.
 
         LD-45C-R23 R1/R3: dispatch on the joined argv, following the in-repo
         pattern at `tests/sonic_provision_supply_proof.py:42-51`. This proof
@@ -636,7 +636,10 @@ def main():
         files. Three arms, not two: `provision` asks three differently-shaped
         questions, and a single-payload stub cannot answer them -- measured
         `pf=1 gnc=0`, which is the defect LD-45C-R23 was ruled on.
-        No leg's assertion changes.
+        No leg's assertion changes. The fourth arm answers the RIB read the
+        generated path now waits on after its reconcile (founder ruling S29-R7,
+        2026-10-13); without it (6c)'s generated run would spend the whole
+        30 s bound before its SystemExit was swallowed below.
         """
         def __init__(self):
             self.sent = []
@@ -650,6 +653,8 @@ def main():
                 out = json.dumps(_guest_port_table())
             elif "DEVICE_METADATA['localhost']" in joined:
                 out = repr(_guest_metadata())
+            elif joined == " ".join(S._RIB_ARGV):
+                out = '{"10.1.0.1/32": [{"protocol": "connected"}]}'
             else:
                 out = ""
 

@@ -14,6 +14,12 @@ and the founder rulings of 2026-08-20:
   row 4  misuse path: non-zero supplementary rc -> rc-gated record + exit
          CORE-side; the provider raises no control-flow exit
 
+and, for row 1, founder ruling S30-R4 (2026-10-14, BL-P2-4.5c-216's fix):
+R1-GATE checks each lab's `summary.precheck` record -- the control-plane
+precheck was entered and its EVPN route poll accepted every declared host MAC
+-- before R1-DECLARED and R1-PAIRED rely on declared-MAC membership. Its
+predicate is also checked lab-free against synthetic records (BL-GATE).
+
 MODES
   (default)              lab-free legs only (rows 2, 3, 4 + baseline
                          self-consistency). Safe in any pre/post sweep.
@@ -50,26 +56,24 @@ COVERAGE LIMITS  (PBE-P2-8)
   4. Row 1 proves the migrated path executed and produced no verdict delta.
      It does not prove FRR's response to the command string beyond what the
      corpus exercises.
-  5. ROW 1 IS TIMING-COUPLED TO LAB CONVERGENCE, AND THIS PROOF DOES NOT GATE
-     ON IT. The post side is a LIVE run: the CI step deploys all three
+  5. ROW 1 IS TIMING-COUPLED TO LAB CONVERGENCE; R1-GATE SAYS WHETHER THE GATE
+     HELD. The post side is a LIVE run: the CI step deploys all three
      topologies, so row 1 inherits whatever the convergence gate delivers.
-     That gate polls a PROXY condition and then sleeps a constant for the real
-     one -- `cassian_engine.py:10215` waits via `wait_for_bgp(require_evpn=True)`,
-     whose EVPN leg polls `show bgp l2vpn evpn summary json` for peer
-     `state == "established"` (BGP SESSION state, not MAC-route propagation),
-     and `cassian_engine.py:10217` then sleeps a fixed 10s. Nothing polls for
-     the declared MAC routes. Measured: run 32739772409 on 7c4c9a2, attempt 1
-     GREEN, attempt 2 RED, attempt 3 GREEN -- identical bytes. Attempt 2 began
-     1m43s after attempt 1 finished and observed one of two declared MACs;
-     R1-DECLARED, R1-VERDICT, R1-NONVACUITY and R1-13C all failed from that one
-     absence, while every structural leg (rows 2/3/4, baseline
-     self-consistency) passed. A RED here is therefore NOT self-evidently a
-     migration defect: check R1-DECLARED first, and if a declared MAC is
-     missing the finding is convergence, not this row's subject. Recorded as
-     `BL-P2-4.5c-53`, routed to §4.5-e with a PBE-P2-11 obligation on whoever
-     performs the FRR EVPN hardening to replace the fixed sleep with a wait on
-     the declared condition. Until then, step 28's replay-determinism
-     obligation under v3.4-CI §2 is NOT DISCHARGED.
+     Measured in the §4.5-d session-30 capture (BL-P2-4.5c-216): at 71a08b1
+     `cmd_test`'s global control-plane precheck was never entered for a
+     `fabric.evpn` lab -- no node-level BGP participant is derived for one -- so
+     the wait this limit used to describe (`wait_for_bgp(require_evpn=True)`,
+     then a fixed sleep, later S24-R5's route poll) was not reached, and nothing
+     but `verify_frr_ready`'s session check stood between deploy and the tests.
+     At 7c4c9a2, where run 32739772409 recorded attempt 1 GREEN, attempt 2 RED
+     and attempt 3 GREEN on identical bytes (`BL-P2-4.5c-53`), whether it was
+     reached is OPEN. Since BL-P2-4.5c-216's fix (S30-R1, S30-R4) the precheck
+     runs for fabric labs and records itself in `summary.precheck`. Read R1-GATE
+     first: when it is RED, the runs were not gated to convergence, and any
+     R1-DECLARED, R1-VERDICT, R1-NONVACUITY or R1-13C failure beside it is a
+     convergence finding, not this row's subject. A GREEN R1-GATE shows the gate
+     accepted at test start; it does not show that the routes stayed put while
+     the tests read them.
 
 Reports only; writes nothing. Exit 0 = GREEN, 1 = RED.
 """
@@ -279,6 +283,30 @@ def _typed(routes, want_str):
     return out
 
 
+K_REQUIRED = 3  # S28-R2's window, which the precheck record names as `k_required`
+
+
+def gate_record(doc):
+    """S30-R4: (ok, detail) for one lab's results.json -- the precheck was entered and
+    passed, its settle step was the EVPN route poll, the poll accepted with the ruled
+    window, every declared MAC was in its declared set, and the run-variant record
+    shows the window reached."""
+    pc = (doc.get("summary") or {}).get("precheck")
+    if not isinstance(pc, dict):
+        return False, "summary.precheck absent"
+    st = pc.get("settle") if isinstance(pc.get("settle"), dict) else {}
+    tst = (((doc.get("timing") or {}).get("precheck") or {}).get("settle") or {})
+    declared = {str(d.get("mac") or "").lower() for d in (st.get("declared") or []) if isinstance(d, dict)}
+    ok = (pc.get("entered") is True and pc.get("outcome") == "passed"
+          and st.get("kind") == "evpn-route-poll" and st.get("outcome") == "accepted"
+          and st.get("k_required") == K_REQUIRED
+          and all(m in declared for m in DECLARED_MACS)
+          and isinstance(tst.get("final_consecutive"), int) and tst["final_consecutive"] >= K_REQUIRED)
+    return ok, "entered=%s outcome=%s failure=%s settle=%s/%s k=%s declared=%s final_consecutive=%s" % (
+        pc.get("entered"), pc.get("outcome"), pc.get("failure"), st.get("kind"), st.get("outcome"),
+        st.get("k_required"), sorted(declared), tst.get("final_consecutive"))
+
+
 def row1_differential(artdir):
     print("\n--- row 1: pre/post differential on the FRR EVPN corpus ---")
     for lab, spec in sorted(BASELINE.items()):
@@ -293,6 +321,10 @@ def row1_differential(artdir):
             check("R1-ARTIFACT %s readable" % lab, False, repr(exc))
             continue
         check("R1-ARTIFACT %s present and readable" % lab, True)
+
+        gok, gdetail = gate_record(doc)
+        check("R1-GATE %s the precheck ran and its route poll accepted every "
+              "declared MAC (S30-R4)" % lab, gok, gdetail)
 
         got = {t.get("name"): t for t in (doc.get("tests") or [])}
         for name, base in sorted(spec["tests"].items()):
@@ -364,6 +396,29 @@ def baseline_self_check():
         topo = os.path.join(REPO, spec["topology"])
         check("BL-TOPO %s fixture present" % lab, os.path.exists(topo),
               spec["topology"])
+
+    # R1-GATE's predicate, against synthetic records (non-vacuity, lab-free):
+    # each refused record differs from the accepted one in one respect.
+    def rec(entered=True, outcome="passed", kind="evpn-route-poll",
+            poll="accepted", k=K_REQUIRED, macs=DECLARED_MACS, final=K_REQUIRED):
+        settle = ({"kind": kind, "outcome": poll, "k_required": k,
+                   "declared": [{"mac": m} for m in macs]}
+                  if kind == "evpn-route-poll" else {"kind": kind, "seconds": 10})
+        return {"summary": {"precheck": {"entered": entered, "outcome": outcome,
+                                         "settle": settle if entered else None}},
+                "timing": {"precheck": {"settle": {"final_consecutive": final}}}}
+    check("BL-GATE accepts an entered, passed, accepted EVPN route poll",
+          gate_record(rec())[0])
+    for label, doc in (
+            ("no record (the runs before BL-P2-4.5c-216's fix)", {"summary": {}}),
+            ("not entered", rec(entered=False, outcome="not-entered")),
+            ("a fixed sleep instead of the poll", rec(kind="fixed-sleep")),
+            ("a precheck that failed", rec(outcome="failed")),
+            ("a poll that timed out", rec(poll="timeout-absent")),
+            ("a window other than 3", rec(k=1)),
+            ("a declared MAC missing from the poll", rec(macs=DECLARED_MACS[:1])),
+            ("the window not reached", rec(final=2))):
+        check("BL-GATE refuses %s" % label, not gate_record(doc)[0])
 
 
 def main():
