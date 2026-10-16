@@ -1536,7 +1536,7 @@ FRR_NODE_TYPE = "frr"
 # REQ-45b-11 single source: the model's effective-image default for frr
 # derives from this value (one source, two readers with cmd_doctor per
 # REQ-45b-11-ext). Value unchanged through the extraction (P2).
-FRR_DEFAULT_IMAGE = "frrouting/frr:latest"
+FRR_DEFAULT_IMAGE = "quay.io/frrouting/frr:10.7.1@sha256:e995beaa50fdc9edb35eadcfefa29b7f062cc06f2b812613789b68fa541554d2"
 
 
 # Capability declarations (design §3.4): the (kind, node-type) pairs FRR

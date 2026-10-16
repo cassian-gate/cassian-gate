@@ -27,8 +27,10 @@ exec`, and asserts the streams are byte-identical. That tests BR-2's claim
 that cmd_vty streams cp.stdout/cp.stderr UNCHANGED -- not merely that dispatch
 occurred.
 
-This leg needs a container runtime. It starts frrouting/frr:latest with a bare
-`docker run` (no containerlab, no sudo, no netns) and removes it in a finally.
+This leg needs a container runtime. It starts the FRR provider's default
+image (cassian_nos_frr.FRR_DEFAULT_IMAGE, the image an FRR lab node gets by
+default) with a bare `docker run` (no containerlab, no sudo, no netns) and
+removes it in a finally.
 If docker is absent the leg FAILS with an actionable message; it does not skip.
 
 RESIDUAL, recorded rather than implied: this asserts pass-through of one
@@ -156,7 +158,7 @@ try:
         subprocess.run(["docker", "rm", "-f", _CN],
                        capture_output=True, text=True)
         _up = subprocess.run(
-            ["docker", "run", "-d", "--name", _CN, "frrouting/frr:latest"],
+            ["docker", "run", "-d", "--name", _CN, F.FRR_DEFAULT_IMAGE],
             capture_output=True, text=True)
         try:
             check(_up.returncode == 0,
