@@ -251,10 +251,12 @@ def _command_uses_workspace_labs(cmd: str) -> bool:
     }
 
 def _provision_nos_providers(rt, lab_name: str, topo: dict) -> None:
-    """Dispatch `provision` for every node whose provider wires it.
+    """Dispatch `nos_ready` and `provision` for every node whose provider wires them.
 
     Deferred legs are skipped by inspecting the LD-H2 placeholder marker, so an
     unwired provider is never invoked and never fails loud for merely existing.
+    A provider with `provision` deferred but `nos_ready` wired (FRR, S31-R10)
+    is dispatched for `nos_ready` only.
     """
     for n in topo.get("nodes", []) or []:
         if not isinstance(n, dict):
@@ -262,7 +264,8 @@ def _provision_nos_providers(rt, lab_name: str, topo: dict) -> None:
         prov = NOS_PROVIDERS.get(n.get("type"))
         if prov is None:
             continue
-        if getattr(prov.provision, "cassian_deferred_leg", None) is not None:
+        provision_deferred = getattr(prov.provision, "cassian_deferred_leg", None) is not None
+        if provision_deferred and getattr(prov.nos_ready, "cassian_deferred_leg", None) is not None:
             continue
         name = str(n.get("name") or "").strip()
         if not name:
@@ -278,14 +281,26 @@ def _provision_nos_providers(rt, lab_name: str, topo: dict) -> None:
             verify_sonic_vm_ready(rt, lab_name, name)
 
         # NOS-readiness leg at the engine -> adapter boundary (design :188).
-        # Marker-guarded exactly as `provision` is above: a provider whose
+        # Marker-guarded exactly as `provision` is: a provider whose
         # `nos_ready` is still a deferred placeholder is SKIPPED, never
-        # invoked. The guard is forward-looking -- today the `provision`
-        # skip already excludes FRR and nft-fw, whose `provision` legs are
-        # themselves deferred -- and becomes load-bearing the moment a
-        # provider lands `provision` without `nos_ready`.
+        # invoked. nft-fw, with both legs deferred, is skipped above; FRR,
+        # with `provision` deferred and `nos_ready` wired (S31-R10), reaches
+        # here and stops after it; the guard is load-bearing for a provider
+        # that lands `provision` without `nos_ready`.
         if getattr(prov.nos_ready, "cassian_deferred_leg", None) is None:
-            prov.nos_ready(rt, lab_name, name)
+            try:
+                prov.nos_ready(rt, lab_name, name)
+            except SystemExit as exc:
+                # S31-R12 / S31-R18: a provider that fails readiness with a
+                # `provision: ` MESSAGE hands it to core, which renders it,
+                # records it for the gate's hard-failure record and exits in
+                # the hard-failure band (CLI reference §6). Any other exit
+                # (SONiC's `_fail` exits 2 with its own text) passes through.
+                if isinstance(exc.code, str) and exc.code.startswith("provision: "):
+                    die(exc.code, code=1)
+                raise
+        if provision_deferred:
+            continue
 
         applied = prov.provision(rt, lab_name, name, n, topo)
         if not applied:
@@ -294,6 +309,25 @@ def _provision_nos_providers(rt, lab_name: str, topo: dict) -> None:
             out_path = node_cfg_dir(lab_name, name) / str(fname)
             out_path.parent.mkdir(parents=True, exist_ok=True)
             write_json_canonical(out_path, content)
+
+
+def _gate_hard_failure_phase(gate_phase, err_msg) -> str:
+    """The phase a gate-mode hard-failure record carries.
+
+    WI (Gate failure clarity): map netsim-owned resolve-time validation/coverage
+    failures to RESOLVE, even if they occur during the gate-style cmd_up() path;
+    and (S31-R12) a provider's readiness failure, `provision: <node>: ...`, to
+    PROVISION. Deterministic: purely string-based on netsim-owned error
+    messages; no probing. Outside the deploy stage the phase is unchanged.
+    """
+    phase_report = str(gate_phase or "").strip().lower()
+    if phase_report == "deploy":
+        em = str(err_msg or "").lower()
+        if em.startswith("coverage:") or em.startswith("schema:") or em.startswith("invalid yaml:") or em.startswith("topology "):
+            phase_report = "resolve"
+        elif em.startswith("provision:"):
+            phase_report = "provision"
+    return phase_report
 
 
 def _bind_workspace_labs_dir(workspace: Path) -> None:
@@ -4127,15 +4161,9 @@ def cmd_test(args: argparse.Namespace) -> None:
                 # Best-effort: render a gate-style hard failure record under the derived lab name.
                 # Phase must reflect whether failure happened during deploy/provision or during test execution.
                 try:
-                    phase_report = str(gate_phase or "").strip().lower()
-
-                    # WI (Gate failure clarity): map netsim-owned resolve-time validation/coverage failures
-                    # to RESOLVE, even if they occur during the gate-style cmd_up() path.
-                    # Deterministic: purely string-based on netsim-owned error messages; no probing.
-                    if phase_report == "deploy":
-                        em = err_msg.lower()
-                        if em.startswith("coverage:") or em.startswith("schema:") or em.startswith("invalid yaml:") or em.startswith("topology "):
-                            phase_report = "resolve"
+                    # Resolve-time failures map to RESOLVE and a provider's
+                    # readiness failure to PROVISION (S31-R12).
+                    phase_report = _gate_hard_failure_phase(gate_phase, err_msg)
 
                     _gate_write_hard_failure_results(
                         phase=str(phase_report),

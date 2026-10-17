@@ -165,7 +165,8 @@ for _p in ("sonic_exec_allowlist_proof.py",   # H1-a2-ii, REQ-45D-5
            "wf_added_steps_if_key_proof.py",  # S27-R4, REQ-45D-28
            "sonic_status_collect_proof.py",  # S27-R4, REQ-45D-19/-20 (lab-free legs)
            "sonic_bgp_session_live_proof.py",  # S29-R1, row 15, REQ-45D-1/-8/-16/-19 (VM)
-           "sonic_rib_collection_live_proof.py"):  # S29-R6, row 8, REQ-45D-2/-11/-12 (VM)
+           "sonic_rib_collection_live_proof.py",  # S29-R6, row 8, REQ-45D-2/-11/-12 (VM)
+           "frr_nos_ready_proof.py"):  # S31-R10 to S31-R19, S30-R5 readiness packet
     check(f"§4.5-d proof is CI-wired: {_p} present in the gate", _p in gate)
 
 fails = [n for n, ok in checks if not ok]

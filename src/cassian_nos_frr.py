@@ -18,7 +18,8 @@ never a silent no-op. Wiring status per leg:
 
   gen_node_config    -> deferred (config-generation leg; §4.5-d/-f)
   provision          -> deferred (provisioning leg; §4.5-d/-f)
-  nos_ready          -> deferred (readiness leg; §4.5-d/-f)
+  nos_ready          -> wired (S30-R5 daemon readiness; §4.5-d, S31-R10 to
+                        S31-R12, S31-R18)
   convergence_wait   -> deferred (convergence leg; §4.5-d/-f)
   exec_command_rule  -> deferred (§4.5-d; LD-45b-6 / BL-P2-4.5b-1 -- the
                         decision site `_exec_command_allowed` stays inline
@@ -46,6 +47,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import re
+import time
 from typing import TYPE_CHECKING, Any
 
 # Justified `cassian_common` leg (REQ-45b-17): the ruled acyclic floor
@@ -1806,15 +1808,101 @@ def _frr_exec_command_rule(argv: "list[str]") -> "tuple[bool, str]":
         return (False, "frr exec commands must be read-only 'vtysh -c \"show \u2026\"'")
     return (True, "")
 
+# -------------------------
+# NOS readiness (S30-R5; founder rulings S31-R10 to S31-R12 and S31-R18,
+# the fourth and fifth session-31 rulings notes)
+# -------------------------
+# Every daemon the node's generated `daemons` file enables must be running
+# before the lab is used, or the lab fails as a provision failure naming the
+# node and the daemons. "Running" is what vtysh can reach: `show daemons`
+# lists the daemons vtysh is connected to, and it agreed with watchfrr's own
+# Up/Down at every read of the session-31 probes, including a running zebra
+# killed (the fourth session-31 rulings note §3.3). The pid file and the vty
+# socket are not used: on FRR 8.4 both outlived a dead zebra.
+#
+# COVERAGE LIMIT (PBE-P2-8): this checks the daemons once, when the lab comes
+# up. A daemon that dies later is not detected here, and a daemon this file
+# does not enable (staticd, mgmtd, which FRR's start script always runs) is
+# not checked. The wait is not recorded in results.json: S31-R13 routes the
+# readiness waits to the §4.5-e scope document.
+
+FRR_DAEMONS_FILE = "/etc/frr/daemons"
+_DAEMONS_READ_ARGV = ("cat", FRR_DAEMONS_FILE)
+_SHOW_DAEMONS_ARGV = ("vtysh", "-c", "show daemons")
+# S31-R10: poll every second, for up to 30 s. The bound is shorter than
+# watchfrr's 60 s minimum restart interval, so a daemon that failed to start
+# is reported rather than restarted in time and passed.
+NOS_READY_BOUND_S = 30
+NOS_READY_POLL_S = 1
+# S31-R18: a daemon line is `<name>=yes`, the name lowercase letters and
+# digits. FRR's option keys (`vtysh_enable`, `<daemon>_options`) carry an
+# underscore and are not daemons; the file Cassian generates has none.
+_DAEMON_LINE = re.compile(r"([a-z0-9]+)=yes")
+
+
+def enabled_daemons(daemons_text: str) -> "tuple[str, ...]":
+    """The daemons a `daemons` file enables, in file order, once each."""
+    out: "list[str]" = []
+    for line in daemons_text.splitlines():
+        m = _DAEMON_LINE.fullmatch(line.strip())
+        if m and m.group(1) not in out:
+            out.append(m.group(1))
+    return tuple(out)
+
+
+def listed_daemons(show_daemons_stdout: str) -> "frozenset[str]":
+    """The daemons `show daemons` lists. Standard output only: vtysh writes
+    its start-up notices to standard error (the fourth session-31 rulings note
+    §3.3)."""
+    return frozenset(show_daemons_stdout.split())
+
+
+def _not_ready(node: str, detail: str) -> None:
+    """Fail the readiness leg with S31-R12's message.
+
+    The message is handed to core as the exit's string code: the engine's
+    dispatch renders it through `die` with the hard-failure exit code, which
+    also records it for the gate's hard-failure record (design :67 -- core
+    owns exit codes and rendering; this provider imports no core module).
+    Uncaught, Python prints the message and exits 1.
+    """
+    raise SystemExit("provision: %s: %s" % (node, detail))
+
+
+def nos_ready(rt, lab: str, node: str) -> None:
+    """NOS-readiness leg (design :149-151): every daemon the node's `daemons`
+    file enables is listed by `show daemons` within NOS_READY_BOUND_S."""
+    cp = rt.exec(lab, node, list(_DAEMONS_READ_ARGV), check=False, capture_output=True)
+    if getattr(cp, "returncode", 1) != 0:
+        _not_ready(node, "FRR daemons file not readable: %s" % FRR_DAEMONS_FILE)
+    want = enabled_daemons(cp.stdout or "")
+    if not want:
+        _not_ready(node, "no FRR daemon enabled in %s" % FRR_DAEMONS_FILE)
+    deadline = time.monotonic() + NOS_READY_BOUND_S
+    while True:
+        cp = rt.exec(lab, node, list(_SHOW_DAEMONS_ARGV), check=False, capture_output=True)
+        listed = (listed_daemons(cp.stdout or "")
+                  if getattr(cp, "returncode", 1) == 0 else frozenset())
+        missing = [d for d in want if d not in listed]
+        if not missing:
+            return
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(NOS_READY_POLL_S)
+    _not_ready(node, "FRR daemon not running after %ds: %s"
+               % (NOS_READY_BOUND_S, ", ".join(missing)))
+
+
 FRR_PROVIDER = NosProvider(
     node_type=FRR_NODE_TYPE,
     default_image=FRR_DEFAULT_IMAGE,
     runtime_requirement=None,
     capabilities=_FRR_CAPABILITIES,
-    # -- lifecycle legs: deferred (REQ-45b-3 deferral list) --
+    # -- lifecycle legs: deferred (REQ-45b-3 deferral list), except
+    #    nos_ready, wired by the S30-R5 readiness packet (S31-R10) --
     gen_node_config=deferred_leg("gen_node_config", "§4.5-d/-f"),
     provision=deferred_leg("provision", "§4.5-d/-f"),
-    nos_ready=deferred_leg("nos_ready", "§4.5-d/-f"),
+    nos_ready=nos_ready,
     convergence_wait=deferred_leg("convergence_wait", "§4.5-d/-f"),
     # -- validation seam: wired by this handover's extraction WI --
     collect=collect,

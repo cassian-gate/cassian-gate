@@ -129,7 +129,7 @@ for _leg in ("gen_node_config", "provision"):
 
 # --- NG-9: FRR's placeholders are untouched --------------------------------
 import cassian_nos_frr as F  # noqa: E402
-for _leg in ("gen_node_config", "provision", "nos_ready", "convergence_wait"):
+for _leg in ("gen_node_config", "provision", "convergence_wait"):
     check("NG-9 FRR's %s placeholder is untouched" % _leg,
           is_deferred(getattr(F.FRR_PROVIDER, _leg)),
           "FRR deferral is provider-scoped, not contract-scoped (HALT-1)")

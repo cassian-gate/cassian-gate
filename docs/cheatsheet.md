@@ -1019,13 +1019,13 @@ cassian up topologies/evpn_runtime_generation.yaml
 Run authoritative gate proof:
 
 ```bash
-cassian test topologies/evpn_runtime_generation.yaml
+cassian test topologies/evpn_mac_route_present.yaml
 ```
 
 Replay deterministically:
 
 ```bash
-cassian replay labs/clab-evpn-runtime-generation --gate --verify-results
+cassian replay labs/clab-evpn-mac-route-present --gate --verify-results
 ```
 
 Negative misuse proofs:

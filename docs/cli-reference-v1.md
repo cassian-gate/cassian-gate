@@ -337,6 +337,7 @@ Notes:
 
 * non-zero (other)  
   Hard execution failure (deploy/provision/runtime failure), or strict status failure.
+  An FRR node whose generated `daemons` file enables a daemon that vtysh still does not list after 30 s, once the lab is deployed, fails here as a provision failure that names the node and the daemons (`provision: <node>: FRR daemon not running after 30s: <daemon>`).
 
 ---
 
