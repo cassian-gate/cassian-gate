@@ -4001,6 +4001,12 @@ def cmd_test(args: argparse.Namespace) -> None:
             out = lab_dir(lab_name) / "results.json"
             try:
                 out.parent.mkdir(parents=True, exist_ok=True)
+                # S32-R2 (founder ruling 2026-10-18, BL-P2-4.5c-230): the tamper seal
+                # is recomputed LAST, by assignment, over exactly the object written
+                # (§4.13: "computed last") -- the schema floor above edits the record
+                # after _finalize_results_schema stamped it. Algorithm, domain and
+                # exclusion set unchanged. Declared under DC v2.1 §14 item 8.
+                results["tamper_check"] = _audit_compute_tamper_check(results)
                 write_json_canonical(out, results)
                 _invocation_record_written_artifact(out)
 
@@ -5011,6 +5017,13 @@ def cmd_test(args: argparse.Namespace) -> None:
             except Exception:
                 # Never allow observed_state stabilization to break gate execution.
                 pass
+            # S32-R2 (founder ruling 2026-10-18, BL-P2-4.5c-230): the tamper seal is
+            # recomputed LAST, by assignment, over exactly the object written
+            # (§4.13: "computed last") -- the schema floor and the observed_state
+            # step above edit the record after _finalize_results_schema stamped it.
+            # Algorithm, domain and exclusion set unchanged. Declared under DC v2.1
+            # §14 item 8.
+            results["tamper_check"] = _audit_compute_tamper_check(results)
             write_json_canonical(out, results)
             _invocation_record_written_artifact(out)
 

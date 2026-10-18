@@ -885,3 +885,17 @@ jobs:
             labs/**
           if-no-files-found: ignore
 
+      # §4.5-d S32-R3 (founder ruling 2026-10-18; BL-P2-4.5c-230, S30-R33): the job's
+      # final step. Every results.json present under labs/ is re-verified against its
+      # own tamper seal, by the recipe the docs page states and by the engine's
+      # function. A bundle overwritten earlier in the job by a later run of the same
+      # lab is not seen (stated in the proof's header; the step prints the count).
+      # Additions only (REQ-45D-27).
+      - name: results.json tamper-seal proof — results_tamper_check_bundle_proof.py (§4.5-d, S32-R3, BL-P2-4.5c-230)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/results_tamper_check_bundle_proof.py labs
