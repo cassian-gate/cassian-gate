@@ -196,6 +196,15 @@ SECTION_45C_FIXTURES = (
     # it) so the enumeration-drop guard (F-45C-C3-3) sees it; its router_id and link
     # addresses (192.0.2.81, .82; 198.51.100.32, .33) come under LEG 1's HALT-2 sweep.
     "sonic-rib.yaml",
+    # §4.5-d VM-3, scope §9 row 10 (REQ-45D-3/-4/-26): the ping-through fixture -- one
+    # sonic-vm guest and two hosts attached directly to it, four declared ping tests,
+    # the four quadrants of REQ-45D-4 (founder rulings S34-R1 to S34-R4 of 2026-10-19).
+    # DEPLOYED by its own (VM) step, which tears the lab down on every exit. Registered
+    # under founder ruling S27-R5 of 2026-10-09 (SP #1: one entry and its comment per new
+    # §4.5-d SONiC fixture, in the change that adds it) so the enumeration-drop guard
+    # (F-45C-C3-3) sees it; its router_id and link addresses (192.0.2.91; 198.51.100.41,
+    # .42, .49, .50) come under LEG 1's HALT-2 sweep.
+    "sonic-ping-through.yaml",
 )
 
 # SONiC fixtures inherited from 4.5-a. REQ-45C-5 states these collide with

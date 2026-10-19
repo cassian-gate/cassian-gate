@@ -856,6 +856,27 @@ jobs:
           ./src/cassian.py up topologies/sonic-rib.yaml --reconfigure
           python tests/sonic_rib_collection_live_proof.py live topologies/sonic-rib.yaml sonic-rib
 
+      # §4.5-d VM-3 -- scope §9 row 10 (founder rulings S34-R1 to S34-R4, 2026-10-19):
+      # one fixture, one boot -- a sonic-vm guest and two hosts attached directly to it.
+      # The proof asserts each host's data-plane address, MAC and default route
+      # (REQ-45D-26), drives the four declared ping tests one at a time with
+      # `cassian test --name` (REQ-45D-3/-4; two quadrants fail by design, so the plain
+      # `cassian test` is not run here), then shows the verify_host_ready trap on the live
+      # host. The trap tears the lab down on every exit, so the teardown sweep below
+      # needs no entry for it (additions only, REQ-45D-27).
+      - name: SONiC ping through a SONiC node (VM) — sonic_ping_through_proof.py (§4.5-d, REQ-45D-3/-4/-26)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-ping-through || true' EXIT
+          ./src/cassian.py validate topologies/sonic-ping-through.yaml
+          ./src/cassian.py up topologies/sonic-ping-through.yaml --reconfigure
+          python tests/sonic_ping_through_proof.py live topologies/sonic-ping-through.yaml sonic-ping-through
+
       - name: SONiC (VM) teardown sweep (§4.5-c WI-3)
         if: always()
         env:

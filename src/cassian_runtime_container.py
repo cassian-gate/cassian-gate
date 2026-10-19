@@ -12,7 +12,7 @@ import yaml
 
 from cassian_common import LABS_DIR, TOPO_DIR, run, die
 from cassian_artifacts import lab_dir, load_yaml, write_file
-from cassian_model import ensure_valid_topology, resolve_topology, topo_to_containerlab
+from cassian_model import ensure_valid_topology, nos_known_types, resolve_topology, topo_to_containerlab
 
 def gen_nft_fw_rules(node: dict) -> str:
     """
@@ -1032,7 +1032,7 @@ def configure_hosts_from_topology(rt: "Runtime", lab_name: str, topo: dict) -> N
         ip2 = ips[1]  # e.g. 192.168.1.1/24
 
         # Host on side 1?
-        if node_type.get(n1) == "host" and node_type.get(n2) in ("frr", "linux", "nft-fw"):
+        if node_type.get(n1) == "host" and node_type.get(n2) in (set(nos_known_types()) | {"linux"}):
             host_configure(
                 rt,
                 lab_name,
@@ -1044,7 +1044,7 @@ def configure_hosts_from_topology(rt: "Runtime", lab_name: str, topo: dict) -> N
             )
 
         # Host on side 2?
-        if node_type.get(n2) == "host" and node_type.get(n1) in ("frr", "linux", "nft-fw"):
+        if node_type.get(n2) == "host" and node_type.get(n1) in (set(nos_known_types()) | {"linux"}):
             host_configure(
                 rt,
                 lab_name,
