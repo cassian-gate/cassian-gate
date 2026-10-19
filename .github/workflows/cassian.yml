@@ -803,6 +803,20 @@ jobs:
           set -euo pipefail
           python tests/frr_nos_ready_proof.py
 
+      # §4.5-d S33-R4 (founder rulings S33-R1 to S33-R5, 2026-10-19; BL-P2-4.5c-233):
+      # the FRR interface step's address window. Lab-free legs, then a Docker leg that
+      # starts the pinned FRR image privileged and opens the window between the
+      # product's flush and its address call; the container is removed in a finally.
+      # Additions only (REQ-45D-27).
+      - name: FRR address-step window proof — frr_address_step_window_proof.py (§4.5-d, S33-R4, BL-P2-4.5c-233)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/frr_address_step_window_proof.py
+
       # §4.5-d VM-1 -- scope §9 row 15: one fixture, one boot, one declared FRR<->SONiC
       # session carrying REQ-45D-8 first, then -1, -16 and -19 (S29-R5), and the two
       # §15.2 negatives. The proof drives `cassian test --name` and `cassian status`

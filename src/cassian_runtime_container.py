@@ -988,7 +988,7 @@ def configure_frr_interfaces_from_topology(rt: "Runtime", lab: str, topo: dict[s
             # bring up + set address
             rt.exec(lab, node, ["ip", "link", "set", iface, "up"], check=False, capture_output=False)
             rt.exec(lab, node, ["ip", "addr", "flush", "dev", iface], check=False, capture_output=False)
-            rt.exec(lab, node, ["ip", "addr", "add", ipcidr, "dev", iface], check=True, capture_output=False)
+            rt.exec(lab, node, ["ip", "addr", "replace", ipcidr, "dev", iface], check=True, capture_output=False)
 
     # 2) Router-id loopback (router_id/32) if provided
     for node, n in nodes.items():
@@ -1001,7 +1001,7 @@ def configure_frr_interfaces_from_topology(rt: "Runtime", lab: str, topo: dict[s
         rt.exec(lab, node, ["ip", "link", "set", "lo", "up"], check=False, capture_output=False)
         # Keep it simple: flush + set router_id/32
         rt.exec(lab, node, ["ip", "addr", "flush", "dev", "lo"], check=False, capture_output=False)
-        rt.exec(lab, node, ["ip", "addr", "add", f"{rid}/32", "dev", "lo"], check=True, capture_output=False)
+        rt.exec(lab, node, ["ip", "addr", "replace", f"{rid}/32", "dev", "lo"], check=True, capture_output=False)
 
 def configure_hosts_from_topology(rt: "Runtime", lab_name: str, topo: dict) -> None:
     """
