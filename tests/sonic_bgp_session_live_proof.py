@@ -260,8 +260,8 @@ def nv(label, pred, complete, too_much, too_little):
     ok = check("NV %s: complete passes, too-much and too-little are detected" % label, a and not b and not c,
                "complete=%s too-much=%s too-little=%s" % (a, b, c))
     if ok:
-        print("  MUTATION-FAIL: %s too-much" % label)
-        print("  MUTATION-FAIL: %s too-little" % label)
+        print("  MUTATION-FAIL: too-much (%s)" % label)
+        print("  MUTATION-FAIL: too-little (%s)" % label)
 
 
 nv("session_ok", lambda x: session_ok(x, SN, P), rec(),

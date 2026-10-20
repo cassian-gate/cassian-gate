@@ -1,0 +1,34 @@
+name: sonic-exec-refused
+
+# §4.5-d REQ-45D-5 negative fixture -- handover §18 row -5 and §19's second
+# walkthrough (founder ruling S35-R2 of 2026-10-19). Declares an exec test whose
+# command, `config interface startup Ethernet0`, mutates the guest. The SONiC exec
+# rule admits only `show …` and `vtysh -c "show …"`, so `cassian validate` must
+# refuse it at exit 2 with the rejection line naming the command, the node, its
+# type, the rule and the registry-derived Allowed clause
+# (tests/sonic_exec_live_proof.py, leg V). The assertion is well formed, so the
+# command is the only thing refused. It is not a deployable topology and no proof
+# deploys it. Registered in tests/sonic_lifecycle_proof.py under founder ruling
+# S27-R5.
+
+nodes:
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    router_id: 192.0.2.103
+
+  - name: r1
+    type: frr
+    router_id: 192.0.2.104
+
+links:
+  - endpoints: ["s1:eth1", "r1:eth1"]
+
+tests:
+  - name: exec_refused
+    kind: exec
+    src: s1
+    command: config interface startup Ethernet0
+    assertion:
+      contains: "Ethernet0"

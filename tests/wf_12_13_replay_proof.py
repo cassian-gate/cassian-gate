@@ -169,7 +169,8 @@ for _p in ("sonic_exec_allowlist_proof.py",   # H1-a2-ii, REQ-45D-5
            "frr_nos_ready_proof.py",  # S31-R10 to S31-R19, S30-R5 readiness packet
            "results_tamper_check_bundle_proof.py",  # S32-R3, BL-P2-4.5c-230 (tamper seal)
            "frr_address_step_window_proof.py",  # S33-R4, BL-P2-4.5c-233 (address-step window)
-           "sonic_ping_through_proof.py"):  # S34-R1 to S34-R4, row 10, REQ-45D-3/-4/-26 (VM)
+           "sonic_ping_through_proof.py",  # S34-R1 to S34-R4, row 10, REQ-45D-3/-4/-26 (VM)
+           "sonic_exec_live_proof.py"):  # S35-R1 to S35-R6, row 9, REQ-45D-5 (VM)
     check(f"§4.5-d proof is CI-wired: {_p} present in the gate", _p in gate)
 
 fails = [n for n, ok in checks if not ok]

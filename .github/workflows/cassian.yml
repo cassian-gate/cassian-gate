@@ -877,6 +877,27 @@ jobs:
           ./src/cassian.py up topologies/sonic-ping-through.yaml --reconfigure
           python tests/sonic_ping_through_proof.py live topologies/sonic-ping-through.yaml sonic-ping-through
 
+      # §4.5-d VM-4 -- scope §9 row 9 (founder rulings S35-R1 to S35-R6, 2026-10-19):
+      # one fixture, one boot -- one frr node and one sonic-vm guest. The proof runs the
+      # refused-exec fixture's validate leg (REQ-45D-5, S35-R2), the three declared exec
+      # tests on the guest one at a time with `cassian test --name` (`show …` and
+      # `vtysh -c "show …"`, their output recorded as evidence; a live negative), and
+      # the guest-not-wrapper control through the product's substrate_exec. The trap
+      # tears the lab down on every exit, so the teardown sweep below needs no entry for
+      # it (additions only, REQ-45D-27).
+      - name: SONiC exec on the guest (VM) — sonic_exec_live_proof.py (§4.5-d, REQ-45D-5)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-exec-live || true' EXIT
+          ./src/cassian.py validate topologies/sonic-exec-live.yaml
+          ./src/cassian.py up topologies/sonic-exec-live.yaml --reconfigure
+          python tests/sonic_exec_live_proof.py live topologies/sonic-exec-live.yaml sonic-exec-live
+
       - name: SONiC (VM) teardown sweep (§4.5-c WI-3)
         if: always()
         env:

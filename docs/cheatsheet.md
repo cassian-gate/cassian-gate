@@ -742,12 +742,12 @@ Which references are rejected:
 
 Support boundary:
 
-- supported current surfaces for `sonic-vm`: lifecycle (`up` / `status` / `down`), node readiness, **ping tests** (executed against the guest), and the test kinds and invariant types in the implemented set above
+- supported current surfaces for `sonic-vm`: lifecycle (`up` / `status` / `down`), node readiness, **ping tests** (executed against the guest), **`exec` tests** that run a read-only `show …` (except `show techsupport`) or `vtysh -c "show …"` command on the guest, and the test kinds and invariant types in the implemented set above
 - unsupported current surfaces: test kinds and invariant types outside the implemented set above (the deferred list the validation rejection message derives), guest-file `copy_*`, and candidate-config input against `sonic-vm` / NOS VM nodes
 
 Scope boundary:
 
-- this does not currently establish `tcp` / `bgp_neighbor` / invariant / `route_prefix` test or guest `exec` support for `sonic-vm` or other vendor NOS VM node types
+- this does not currently establish test or invariant support for `sonic-vm` beyond the supported surfaces listed above, or any test support beyond ping for other vendor NOS VM node types
 - any future NOS VM test/exec support requires an explicit contract surface and proof
 
 ---

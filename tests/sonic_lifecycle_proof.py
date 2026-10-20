@@ -205,6 +205,22 @@ SECTION_45C_FIXTURES = (
     # (F-45C-C3-3) sees it; its router_id and link addresses (192.0.2.91; 198.51.100.41,
     # .42, .49, .50) come under LEG 1's HALT-2 sweep.
     "sonic-ping-through.yaml",
+    # §4.5-d VM-4, scope §9 row 9 (REQ-45D-5): the exec-live fixture -- one frr node and
+    # one sonic-vm guest, three declared exec tests on the guest (founder rulings S35-R1
+    # to S35-R6 of 2026-10-19). DEPLOYED by its own (VM) step, which tears the lab down
+    # on every exit. Registered under founder ruling S27-R5 of 2026-10-09 (SP #1: one
+    # entry and its comment per new §4.5-d SONiC fixture, in the change that adds it) so
+    # the enumeration-drop guard (F-45C-C3-3) sees it; its router_id and link addresses
+    # (192.0.2.101, .102; 198.51.100.60, .61) come under LEG 1's HALT-2 sweep.
+    "sonic-exec-live.yaml",
+    # §4.5-d REQ-45D-5 (handover §18 row -5; §19's second walkthrough): the refused-exec
+    # fixture. NEVER DEPLOYED -- `cassian validate` refuses it at exit 2 with the exec
+    # rejection line (founder ruling S35-R2 of 2026-10-19). Registered under founder
+    # ruling S27-R5 of 2026-10-09 (SP #1: one entry and its comment per new §4.5-d SONiC
+    # fixture, in the change that adds it) so the enumeration-drop guard (F-45C-C3-3)
+    # sees it; its two router_id addresses, 192.0.2.103 and 192.0.2.104, come under
+    # LEG 1's HALT-2 sweep.
+    "sonic-exec-refused.yaml",
 )
 
 # SONiC fixtures inherited from 4.5-a. REQ-45C-5 states these collide with
