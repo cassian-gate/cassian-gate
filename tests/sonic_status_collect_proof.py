@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """SONiC status and collect proof (REQ-45D-19 / REQ-45D-20; handover §9 row 11).
 
-This file is (VM) in the scope's §9 table. Its LAB-FREE legs land first, with the
-REQ-45D-19/-20 code (founder ruling S27-R4's order); the live legs land with the (VM)
-packet and are reported BLOCKED here until then -- a BLOCKED leg is not a pass.
+This file is (VM) in the scope's §9 table. Its LAB-FREE legs landed first, with the
+REQ-45D-19/-20 code (founder ruling S27-R4's order). Its live legs land with the (VM)
+packet, VM-5, under founder rulings S36-R1 to S36-R3 of 2026-10-20 (the session-36
+rulings note, cassian-gate-internal@ecb5da5, Ledger §159): one fixture, one boot
+(S27-R4, LD-45D-6) -- topologies/sonic-status-collect.yaml, one frr node and one sonic-vm
+guest with a declared loopback and link addresses and no BGP declared. Without live argv
+the live legs are reported BLOCKED -- a BLOCKED leg is not a pass.
 
 Founder rulings bound here (2026-10-09): S27-R8 (cmd_status's record and human-output
 guards read the capability declaration; expectations stay FRR-derived), S27-R9 (a
@@ -49,11 +53,41 @@ Proof obligations (lab-free):
              differs is caught by the parity comparator; a target that writes its own
              file is caught by the write tracer; an IMPL token with a None leg would be
              called (the guard is what keeps it silent).
+  F          the live fixture's shape, derived values only: one frr node and one sonic-vm
+             guest at runtime vm, one link carrying both addresses, no node declaring
+             BGP (no `asn`, no `bgp`), so the guest has no session; the fixture
+             validates.
+  NV-LIVE    REQ-45D-31 two-directional non-vacuity for each predicate the live legs
+             apply to the product's output: a complete synthetic observation satisfies
+             it, and a mutation in each direction -- too much and too little -- is
+             detected. Printed in handover §18's literal form, `MUTATION-FAIL: too-much
+             (<label>)` and `MUTATION-FAIL: too-little (<label>)` (S35-R3).
+
+Live legs (`live <topo> <lab>`, on a lab already up; S36-R2):
+  L1  REQ-45D-19 (VM): `cassian status <lab> --routes --json` exits 0, and s1's routes
+      record has parser_mode json, no error, and observed prefixes that include the
+      declared loopback /32 and the declared link /31.
+  L2  REQ-45D-19 (VM): `cassian status <lab> --routes --routes-verbose`, human mode,
+      exits 0, and s1's block carries its raw route lines, which carry the declared
+      loopback.
+  L3  REQ-45D-20 (VM): `cassian collect <lab>` exits 0; s1.bgp-summary.txt and
+      s1.vtysh-ip-route.txt exist and are non-empty while no BGP session is
+      established on s1 (read by the provider's own status leg through the product's
+      runtime), and the route artifact carries both declared prefixes.
+  L4  the guest-not-wrapper control: through the product's substrate_exec, which
+      reaches the vrnetlab launcher that wraps the guest, the launcher answers
+      `uname -s`, while the same reads sent there -- the two route reads, the summary
+      read and `ip -br a` -- carry neither declared prefix nor the guest's declared
+      link address; and S29-R4's collateral s1.ip-addr.txt, written by L3's collect,
+      carries that address. So L1 to L3 read the guest.
+
+usage:
+  sonic_status_collect_proof.py                    lab-free legs; L1-L4 BLOCKED; exit 0 if green
+  sonic_status_collect_proof.py live <topo> <lab>  lab-free legs, then L1-L4 on a lab already up
 
 Coverage limits, stated in-file (PBE-P2-8):
-  - Lab-free. The stub runtime replays captured guest output; no guest is contacted.
-    The live legs (`status --routes` on a booted guest, the collect artifact on a
-    booted guest) are the (VM) packet's and are BLOCKED here.
+  - Lab-free legs: the stub runtime replays captured guest output; no guest is
+    contacted.
   - SC-PARITY's inputs are a fixed set; outputs equal on it do not prove equality on
     every possible input. Both functions are verbatim bodies; the set exercises each
     branch.
@@ -67,8 +101,17 @@ Coverage limits, stated in-file (PBE-P2-8):
     (rc 127, no stdout) is a stand-in: what the vrnetlab wrapper returns for a guest
     command has not been measured. The legs before SC-RUNTIME replace get_runtime
     with a stub that ignores its argument.
+  - Live legs: one boot of one fixture with no BGP declared, on one SONiC image. They
+    prove `cassian status --routes` and `cassian collect` read the guest through the
+    product's path; they do not prove a status read with an established session
+    (row 15's proof does), and a SONiC node's expected routes stay FRR-derived
+    (S27-R8), so L1 judges observed prefixes, not the record's `ok`.
+  - L3 judges "no session established" by the provider's status leg, not by parsing
+    the artifact, whose normaliser is FRR's (S27-R10, S27-R12); the artifact's content
+    is checked for presence only.
+  - L4 reads the launcher through substrate_exec; it does not inspect the wrapper chain.
 
-Exit 0 when every check passes (BLOCKED legs are listed); exit 1 otherwise.
+Exit 0 when every check passes (BLOCKED or NOT ATTEMPTED legs are listed); exit 1 otherwise.
 """
 import argparse
 import builtins
@@ -94,9 +137,9 @@ import cassian_nos_frr as F  # noqa: E402
 import cassian_nos_sonic as S  # noqa: E402
 from cassian_nos_types import CAP_IMPL, capability_for  # noqa: E402
 
-if len(sys.argv) > 1:
-    print("The (VM) legs of this proof land with the (VM) packet; no live argv is accepted yet.")
-    sys.exit(2)
+ARGV = sys.argv[1:]
+if ARGV and not (ARGV[0] == "live" and len(ARGV) == 3):
+    sys.exit("usage: sonic_status_collect_proof.py [live <topo> <lab>]")
 
 FIX_SUMMARY = os.path.join(ROOT, "tests", "fixtures", "sonic-4_5d-h1b1", "bgp_summary.out")
 FIX_RIB = os.path.join(ROOT, "tests", "fixtures", "sonic-4_5d-h1b3", "h1b3_rib_table_after.out")
@@ -609,10 +652,265 @@ if _src_s is not None and _src_c is not None:
 
 shutil.rmtree(WORK, ignore_errors=True)
 
-blocked.append(("SC-LIVE-ROUTES (VM): `cassian status --routes` on a booted SONiC guest",
-                "lands with the (VM) packet"))
-blocked.append(("SC-LIVE-COLLECT (VM): collect artifacts for a booted SONiC node with zero sessions",
-                "lands with the (VM) packet"))
+# ==== VM-5 (founder rulings S36-R1 to S36-R3, 2026-10-20): F, NV-LIVE, live legs ======
+import ipaddress  # noqa: E402
+import subprocess  # noqa: E402
+
+SRC = os.path.join(ROOT, "src")
+FIXTURE = os.path.join(ROOT, "topologies", "sonic-status-collect.yaml")
+VERBOSE_MARK = "--- show ip route ---"
+LAUNCHER_PROBE = ["uname", "-s"]
+LAUNCHER_READS = (["vtysh", "-c", "show ip route json"], ["vtysh", "-c", "show ip route"],
+                  ["vtysh", "-c", "show bgp summary"], ["sh", "-lc", "ip -br a"])
+BGP_ART, RIB_ART, IPADDR_ART = "bgp-summary.txt", "vtysh-ip-route.txt", "ip-addr.txt"
+
+
+def _text(x):
+    return x.decode("utf-8", "replace") if isinstance(x, bytes) else (x or "")
+
+
+# ---- declared values: derived from the fixture, never carried as literals -----------------
+def declared(doc):
+    nodes = {n.get("name"): n for n in (doc.get("nodes") or []) if isinstance(n, dict)}
+    son = [n for n in nodes.values() if str(n.get("type")) == "sonic-vm"]
+    frr = [n for n in nodes.values() if str(n.get("type")) == "frr"]
+    links = [lk for lk in (doc.get("links") or []) if isinstance(lk, dict)]
+    if len(son) != 1 or len(frr) != 1 or len(nodes) != 2 or len(links) != 1:
+        return None
+    sn, rn = son[0]["name"], frr[0]["name"]
+    eps = [str(e).split(":", 1)[0] for e in (links[0].get("endpoints") or [])]
+    ips = links[0].get("ipv4") or []
+    if sorted(eps) != sorted([sn, rn]) or len(ips) != 2:
+        return None
+    try:
+        s_if = ipaddress.ip_interface(str(ips[eps.index(sn)]))
+        loop = ipaddress.ip_network("%s/32" % son[0].get("router_id"))
+    except ValueError:
+        return None
+    return {"s": son[0], "s_name": sn, "r_name": rn, "loopback": str(loop),
+            "link": str(s_if.network), "s_addr": str(s_if.ip),
+            "bgp_declared": sorted(str(n.get("name")) for n in nodes.values() if "asn" in n or "bgp" in n)}
+
+
+# ---- predicates applied to the product's output (each one has a two-directional NV) -------
+def _node(doc, node):
+    return {n.get("name"): n for n in ((doc or {}).get("nodes") or [])}.get(node) or {}
+
+
+def routes_json_ok(doc, node, prefixes):
+    """L1: the node's routes record: parser json, no error, every declared prefix observed."""
+    r = _node(doc, node).get("routes") or {}
+    return (r.get("parser_mode") == "json" and "error" not in r
+            and set(prefixes) <= set(r.get("observed") or []))
+
+
+def node_block(human, node):
+    """The lines of `node`'s block in cassian status's human output (`  - <node> ...` up to the next node)."""
+    out, inside = [], False
+    for ln in human.split("\n"):
+        if ln.startswith("  - "):
+            inside = ln[4:].split(" ", 1)[0] == node
+            continue
+        if inside:
+            if not ln.startswith("      ") and ln.strip():
+                inside = False
+                continue
+            out.append(ln)
+    return out
+
+
+def verbose_ok(human, node, prefix):
+    """L2: the node's block carries one raw route-lines section, and its lines carry the prefix."""
+    blk = node_block(human, node)
+    marks = [k for k, ln in enumerate(blk) if ln.strip() == VERBOSE_MARK]
+    if len(marks) != 1:
+        return False
+    return any(prefix in ln for ln in blk[marks[0] + 1:])
+
+
+def artifacts_ok(arts, node, prefixes):
+    """L3: both of the node's collect artifacts exist and are non-empty, and the route
+    artifact carries every declared prefix. `arts`: file name -> text."""
+    b, r = arts.get("%s.%s" % (node, BGP_ART)), arts.get("%s.%s" % (node, RIB_ART))
+    return bool(b and b.strip()) and bool(r and r.strip()) and all(p in r for p in prefixes)
+
+
+def zero_sessions_ok(observed):
+    """L3's condition: the provider's status read answered, and no session is established."""
+    return isinstance(observed, dict) and not any(v.get("established") for v in observed.values())
+
+
+def launcher_lacks(probe, outs, values):
+    """L4: the launcher answers a plain command (probe = (rc, text)), and none of its outputs
+    for the guest's reads carries a guest value."""
+    return probe[0] == 0 and bool(probe[1].strip()) and all(
+        v not in out for (_rc, out) in outs for v in values)
+
+
+def guest_addr_ok(ipaddr_art, addr):
+    """L4: the collateral artifact s1.ip-addr.txt, written by collect, carries the guest's address."""
+    return bool(ipaddr_art) and addr in ipaddr_art
+
+
+def cassian(*args, timeout=1800):
+    r = subprocess.run([sys.executable, os.path.join(SRC, "cassian.py")] + list(args), cwd=ROOT,
+                       env=dict(os.environ, PYTHONPATH="src"), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                       timeout=timeout)
+    out = _text(r.stdout)
+    print("---- cassian %s -> rc=%d" % (" ".join(args), r.returncode))
+    for ln in out.rstrip("\n").split("\n")[-25:]:
+        print("     | " + ln)
+    return r.returncode, out
+
+
+# ---- F: the fixture --------------------------------------------------------------------
+FDOC = (yaml.safe_load(open(FIXTURE, encoding="utf-8").read()) or {}) if os.path.isfile(FIXTURE) else {}
+FD = declared(FDOC)
+check("F one frr node and one sonic-vm node, one link carrying both addresses", FD is not None)
+if FD is not None:
+    check("F the sonic-vm node runs as vm (one guest)", FD["s"].get("runtime") == "vm")
+    check("F no node declares BGP (no asn, no bgp): zero sessions by construction", not FD["bgp_declared"],
+          "%s" % FD["bgp_declared"])
+    check("F the declared loopback and the declared link prefix are distinct", FD["loopback"] != FD["link"])
+_rc, _out = cassian("validate", FIXTURE)
+check("F the fixture validates", _rc == 0, "rc=%d" % _rc)
+
+
+# ---- NV-LIVE: two-directional non-vacuity per predicate (synthetic, device-independent) ---
+def nv(label, pred, complete, too_much, too_little):
+    a, b, c = pred(complete), pred(too_much), pred(too_little)
+    ok_ = bool(a and not b and not c)
+    check("NV-LIVE %s: complete passes, too-much and too-little are detected" % label, ok_,
+          "complete=%s too-much=%s too-little=%s" % (a, b, c))
+    if ok_:
+        print("  MUTATION-FAIL: too-much (%s)" % label)
+        print("  MUTATION-FAIL: too-little (%s)" % label)
+
+
+SN, RN = "s1", "r1"
+LO, LK, AD = "192.0.2.250/32", "198.51.100.250/31", "198.51.100.251"
+_NF = "OCI runtime exec failed: exec: \"vtysh\": executable file not found in $PATH"
+
+
+def sdoc(routes=None, node=SN):
+    rec = {"name": node, "type": "sonic-vm", "running": True}
+    if routes is not None:
+        rec["routes"] = routes
+    return {"nodes": [{"name": RN, "type": "frr", "running": True}, rec]}
+
+
+_R = {"expected": [], "observed": sorted([LO, LK, "10.250.0.0/24"]), "missing": [], "ok": True,
+      "parser_mode": "json"}
+nv("routes_json_ok", lambda x: routes_json_ok(x, SN, (LO, LK)), sdoc(_R),
+   sdoc(dict(_R, error="vtysh: connection refused")), sdoc(dict(_R, observed=[LK, "10.250.0.0/24"])))
+nv("routes_json_ok (parser)", lambda x: routes_json_ok(x, SN, (LO, LK)), sdoc(_R),
+   sdoc(dict(_R, parser_mode="text")), sdoc(None))
+_HB = "  - %s       (clab-x-%s) : running\n"
+_VB = "      %s\n      {\n      \"%s\":[\n      }\n" % (VERBOSE_MARK, LO)
+nv("verbose_ok", lambda x: verbose_ok(x, SN, LO), _HB % (RN, RN) + _HB % (SN, SN) + _VB,
+   _HB % (RN, RN) + _VB + _HB % (SN, SN),
+   _HB % (RN, RN) + _HB % (SN, SN) + _VB.replace(LO, LK))
+_ARTS = {"%s.%s" % (SN, BGP_ART): "No BGP neighbors found\n",
+         "%s.%s" % (SN, RIB_ART): "C>* %s is directly connected, Loopback0\nC>* %s is directly connected, "
+                                  "Ethernet0\n" % (LO, LK)}
+nv("artifacts_ok", lambda x: artifacts_ok(x, SN, (LO, LK)), _ARTS,
+   {k.replace(SN + ".", RN + "."): v for k, v in _ARTS.items()},
+   dict(_ARTS, **{"%s.%s" % (SN, RIB_ART): "C>* %s is directly connected, Loopback0\n" % LO}))
+nv("artifacts_ok (summary)", lambda x: artifacts_ok(x, SN, (LO, LK)), _ARTS,
+   dict(_ARTS, **{"%s.%s" % (SN, BGP_ART): "\n"}), {"%s.%s" % (SN, RIB_ART): _ARTS["%s.%s" % (SN, RIB_ART)]})
+nv("zero_sessions_ok", zero_sessions_ok, {"10.0.0.1": {"established": False, "raw": "Active"}},
+   {"10.0.0.1": {"established": True, "raw": "Established"}}, None)
+nv("launcher_lacks", lambda x: launcher_lacks(x[0], x[1], (LO, LK, AD)),
+   ((0, "Linux\n"), [(127, _NF), (127, _NF), (127, _NF), (0, "eth0 UP 172.20.20.3/24\n")]),
+   ((0, "Linux\n"), [(0, '{"%s":[]}' % LO), (127, _NF), (127, _NF), (0, "eth0 UP 172.20.20.3/24\n")]),
+   ((1, ""), [(127, ""), (127, ""), (127, ""), (127, "")]))
+nv("guest_addr_ok", lambda x: guest_addr_ok(x, AD), "Ethernet0 UP %s/31\n" % AD,
+   "eth0 UP 172.20.20.3/24\neth1 UP\n", None)
+
+
+# ---- live legs ---------------------------------------------------------------------------
+def read_artifacts(lab):
+    d = os.path.join(ROOT, "labs", "clab-%s" % lab, "artifacts")
+    out = {}
+    if os.path.isdir(d):
+        for f in sorted(os.listdir(d)):
+            p = os.path.join(d, f)
+            if os.path.isfile(p):
+                out[f] = open(p, encoding="utf-8", errors="replace").read()
+    return out
+
+
+def live(topo, lab):
+    if os.path.realpath(topo) != os.path.realpath(FIXTURE) or lab != FDOC.get("name") or FD is None:
+        check("LIVE argv names the status-and-collect fixture and its lab", False, "%s %s" % (topo, lab))
+        return
+    sn, prefixes = FD["s_name"], (FD["loopback"], FD["link"])
+
+    rc, out = cassian("status", lab, "--routes", "--json")
+    try:
+        doc = json.loads(out[out.index("{"):])
+    except Exception:  # noqa: BLE001 -- judged below
+        doc = {}
+    print("     %s routes record: %s" % (sn, json.dumps(_node(doc, sn).get("routes"), sort_keys=True)))
+    check("L1 REQ-45D-19 (VM): `cassian status %s --routes --json` exits 0; %s's routes record: parser json, "
+          "no error, %s and %s observed" % (lab, sn, prefixes[0], prefixes[1]),
+          rc == 0 and routes_json_ok(doc, sn, prefixes), "rc=%d" % rc)
+
+    rc, out = cassian("status", lab, "--routes", "--routes-verbose")
+    check("L2 REQ-45D-19 (VM): `cassian status %s --routes --routes-verbose` exits 0, and %s's raw route lines "
+          "carry %s" % (lab, sn, prefixes[0]), rc == 0 and verbose_ok(out, sn, prefixes[0]),
+          "rc=%d; block %r" % (rc, node_block(out, sn)[:3]))
+
+    for f in (BGP_ART, RIB_ART, IPADDR_ART):  # never judge a previous run's artifact
+        p = os.path.join(ROOT, "labs", "clab-%s" % lab, "artifacts", "%s.%s" % (sn, f))
+        if os.path.exists(p):
+            os.remove(p)
+    rc, out = cassian("collect", lab)
+    arts = read_artifacts(lab)
+    for f in sorted(arts):
+        if f.startswith(sn + "."):
+            body = arts[f].rstrip("\n").split("\n")
+            print("     artifact %s (%d bytes):" % (f, len(arts[f].encode("utf-8"))))
+            for ln in body[:15]:
+                print("       | " + ln)
+    import cassian_runtime_vm as RV  # the product's runtime seam, as the other (VM) proofs use it
+    rt = RV.build_runtime(FDOC)
+    sobs = S.SONIC_PROVIDER.status_bgp_summary(rt, lab, sn, want_raw=False)
+    observed = sobs.data.get("observed")
+    print("     %s sessions by the provider's status leg (parser %s): %s"
+          % (sn, sobs.data.get("parser_mode"), json.dumps(observed, sort_keys=True)))
+    check("L3 REQ-45D-20 (VM): `cassian collect %s` exits 0; %s.%s and %s.%s exist and are non-empty with no "
+          "session established, and the route artifact carries %s and %s"
+          % (lab, sn, BGP_ART, sn, RIB_ART, prefixes[0], prefixes[1]),
+          rc == 0 and artifacts_ok(arts, sn, prefixes) and zero_sessions_ok(observed),
+          "rc=%d; artifacts %s" % (rc, sorted(f for f in arts if f.startswith(sn + "."))))
+
+    def launcher(cmd):
+        cp = rt.substrate_exec(lab, sn, cmd, check=False, capture_output=True, timeout_s=30)
+        o = _text(cp.stdout) + _text(getattr(cp, "stderr", ""))
+        print("     launcher(%s)$ %s -> rc=%s\n%s" % (sn, " ".join(cmd), cp.returncode,
+                                                    "\n".join("       " + ln for ln in o.rstrip("\n").split("\n")[:12])))
+        return cp.returncode, o
+
+    probe = launcher(LAUNCHER_PROBE)
+    outs = [launcher(c) for c in LAUNCHER_READS]
+    check("L4 the guest-not-wrapper control: the launcher answers `%s`; the same reads through substrate_exec "
+          "carry neither prefix nor %s, and %s.%s, written by collect, carries %s"
+          % (" ".join(LAUNCHER_PROBE), FD["s_addr"], sn, IPADDR_ART, FD["s_addr"]),
+          launcher_lacks(probe, outs, prefixes + (FD["s_addr"],))
+          and guest_addr_ok(arts.get("%s.%s" % (sn, IPADDR_ART)), FD["s_addr"]),
+          "probe rc=%s; rcs %s" % (probe[0], [o[0] for o in outs]))
+    if not (checks and all(p for n, p in checks if n.startswith(("L1 ", "L2 ", "L3 ")))):
+        print("FINDING (S36-R1): a live status or collect leg did not read the guest as declared on this "
+              "boot; the packet lands nothing and returns to the founder as a new card.")
+
+
+if not ARGV:
+    for leg in ("L1 REQ-45D-19 status --routes --json", "L2 REQ-45D-19 status --routes --routes-verbose",
+                "L3 REQ-45D-20 collect with zero sessions", "L4 guest-not-wrapper control"):
+        blocked.append((leg, "no live argv: run `live <topo> <lab>` on a lab that is up"))
+else:
+    live(ARGV[1], ARGV[2])
 
 ok = True
 for name, passed in checks:
@@ -622,5 +920,5 @@ for name, why in blocked:
     print("[BLOCKED] %s -- %s" % (name, why))
 print("=" * 60)
 print("cases:", len(checks), "blocked:", len(blocked))
-print("RESULT:", "PASS" if ok else "FAIL", "(a BLOCKED leg is not a pass)")
+print("RESULT:", "PASS" if ok else "FAIL", "(a BLOCKED or NOT ATTEMPTED leg is not a pass)")
 sys.exit(0 if ok else 1)

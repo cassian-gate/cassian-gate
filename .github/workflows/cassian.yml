@@ -898,6 +898,27 @@ jobs:
           ./src/cassian.py up topologies/sonic-exec-live.yaml --reconfigure
           python tests/sonic_exec_live_proof.py live topologies/sonic-exec-live.yaml sonic-exec-live
 
+      # §4.5-d VM-5 -- scope §9 row 11 (founder rulings S36-R1 to S36-R3, 2026-10-20):
+      # one fixture, one boot -- one frr node and one sonic-vm guest, no BGP declared.
+      # The proof re-runs its lab-free legs, then reads the guest through `cassian
+      # status --routes` (JSON, and human with the raw route lines) and `cassian
+      # collect` (the SONiC node's two collect artifacts with zero sessions), and runs
+      # the guest-not-wrapper control through the product's substrate_exec. The trap
+      # tears the lab down on every exit, so the teardown sweep below needs no entry for
+      # it (additions only, REQ-45D-27).
+      - name: SONiC status and collect (VM) — sonic_status_collect_proof.py (§4.5-d, REQ-45D-19/-20)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-status-collect || true' EXIT
+          ./src/cassian.py validate topologies/sonic-status-collect.yaml
+          ./src/cassian.py up topologies/sonic-status-collect.yaml --reconfigure
+          python tests/sonic_status_collect_proof.py live topologies/sonic-status-collect.yaml sonic-status-collect
+
       - name: SONiC (VM) teardown sweep (§4.5-c WI-3)
         if: always()
         env:
