@@ -761,10 +761,33 @@ def _reconcile_bgp(rt: "Runtime", lab: str, node: str) -> None:
 _ROUTING_DAEMON_WAIT_S = 30
 
 
+def _declared_connected_prefixes(overlay: "Mapping[str, Any] | None") -> "list[str]":
+    """The connected prefixes an applied overlay declares (S37-R9; BL-P2-4.5c-236).
+
+    Each `LOOPBACK_INTERFACE` and `INTERFACE` key of the form `<name>|<address>/<len>`
+    names an address the guest will carry; its network, as `_normalize_prefix` gives
+    it, is the connected prefix the guest's routing table carries once that address is
+    installed (`192.0.2.81/32` for a loopback, `198.51.100.32/31` for a link address
+    `198.51.100.33/31`). A key with no address part (`Loopback0`, `Ethernet0`) declares
+    no prefix; an address `_normalize_prefix` rejects (IPv6, malformed) is not one the
+    IPv4 RIB read can show, and is left out rather than waited for.
+    """
+    out = set()
+    for table in ("LOOPBACK_INTERFACE", "INTERFACE"):
+        for key in ((overlay or {}).get(table) or {}):
+            name, sep, addr = str(key).partition("|")
+            norm = _normalize_prefix(addr) if sep else None
+            if norm:
+                out.add(norm)
+    return sorted(out)
+
+
 def _await_routing_daemon(rt: "Runtime", lab: str, node: str,
-                          timeout: int = _ROUTING_DAEMON_WAIT_S) -> None:
+                          timeout: int = _ROUTING_DAEMON_WAIT_S,
+                          expected: "tuple[str, ...] | list[str]" = ()) -> None:
     """Bounded wait, after the reconcile restart, until the guest's routing
-    daemons answer the provider's own RIB read (S29-R7; BL-P2-4.5c-224).
+    daemons answer the provider's own RIB read with every declared connected
+    prefix in it (S29-R7, amended forward by S37-R9; BL-P2-4.5c-224, -236).
 
     WHY THIS EXISTS. `systemctl restart bgp` returns when the service reports
     started; the daemons inside the container answer seconds later. Measured
@@ -776,9 +799,20 @@ def _await_routing_daemon(rt: "Runtime", lab: str, node: str,
     no BGP the verdict of a `cassian test` run straight after `up` depended on
     timing. Founder ruling S29-R7 amends founder ruling 2026-08-25 forward.
 
+    WHY IT WAITS FOR THE DECLARED PREFIXES. Answering is not enough: the
+    guest's stock routes make a non-empty table before the overlay's addresses
+    are installed. Seen once, in CI run 39554772668 attempt 2 at
+    cassian-gate@9fe1c23 (2026-10-21), on two labs: a route test straight
+    after `up` found the declared loopback absent, and a read about a second
+    later found it; a status read straight after `up` held only 0.0.0.0/0 and
+    10.0.0.0/24 (BL-P2-4.5c-236). Founder ruling S37-R9 amends S29-R7 forward.
+
     PREDICATE: `_RIB_ARGV` exits 0 with a table `_rib_prefixes` accepts -- the
-    read the RIB kinds themselves make (single-sourced, PBE-P2-6). A non-zero
-    exit, an empty answer or an unparseable one is NOT-YET, never ready.
+    read the RIB kinds themselves make (single-sourced, PBE-P2-6) -- and every
+    prefix in `expected` is in it; `provision` passes the connected prefixes
+    its overlay declares (`_declared_connected_prefixes`). A non-zero exit, an
+    empty answer, an unparseable one, or a table missing a declared prefix is
+    NOT-YET, never ready.
 
     BOUND: `timeout` seconds (default `_ROUTING_DAEMON_WAIT_S`), polled every
     `_CONVERGENCE_POLL_INTERVAL_S`; at least one read is always issued. A
@@ -786,27 +820,49 @@ def _await_routing_daemon(rt: "Runtime", lab: str, node: str,
     never a hang, never silence (Doctrine 1.11).
 
     COVERAGE LIMITS (PBE-P2-8), stated rather than implied:
-      1. The read proves zebra answers. It does not prove staticd or bgpd do;
-         bgpd's readiness for declared peers stays `convergence_wait`'s.
-      2. The gap was measured once, between 0 and 15 s. The 30 s bound is the
-         precheck's, not a measured distribution.
+      1. The read proves zebra answers and carries the declared connected
+         prefixes. It does not prove staticd or bgpd do; bgpd's readiness for
+         declared peers stays `convergence_wait`'s, and routes learned from a
+         peer are not waited for.
+      2. The daemons' gap was measured once, between 0 and 15 s; the declared
+         prefixes' gap is measured by the S37-R10 pre-run. The 30 s bound is
+         the precheck's, not a measured distribution.
       3. Generated mode only. `_provision_preconfigured` applies with
          `config reload`, which also restarts bgp; that path is unmeasured
          and carries no wait.
     """
+    want = sorted(set(expected or ()))
     deadline = time.time() + max(int(timeout), 0)
     last = "no read issued"
+    served = False
     while True:
         rc, out = _sonic_read(rt, lab, node, _RIB_ARGV)
         if rc == 0:
-            last = _rib_prefixes(out)[1]
-            if not last:
-                return
+            prefixes, last = _rib_prefixes(out)
+            served = not last
+            if served:
+                missing = [p for p in want if p not in set(prefixes)]
+                if not missing:
+                    return
+                last = "declared prefix(es) not in the table: " + ", ".join(missing)
         else:
+            served = False
             last = f"RIB read failed (rc {rc})"
         if time.time() >= deadline:
             break
         time.sleep(_CONVERGENCE_POLL_INTERVAL_S)
+    if served:
+        _fail(
+            "SONiC routing table lacks the declared prefixes after the reconcile restart",
+            node,
+            f"`{' '.join(_RIB_ARGV)}` did not carry every declared connected "
+            f"prefix within {max(int(timeout), 0)}s; last result: {last}",
+            "the routing daemons answer, but the addresses the overlay declares "
+            "are not installed, so a RIB-reading test on this node would read a "
+            "table without them",
+            "report this with the guest's `show ip interface brief` and "
+            "`sonic-cfggen -d --var-json INTERFACE` output",
+        )
     _fail(
         "SONiC routing daemons did not answer after the reconcile restart",
         node,
@@ -1254,7 +1310,10 @@ def provision(rt: "Runtime", lab: str, node: str, node_d: dict,
     changed router_id as the sentinel: PORT count unchanged, hwsku unchanged,
     platform unchanged, mac unchanged, /etc/sonic/config_db.json md5
     unchanged. A first injection onto a stock guest is not measured by that
-    proof. The containerlab boot
+    proof. The first injection's PORT count, hwsku, platform and mac are
+    compared, persisted file against running database after `up`'s apply, by
+    the `:490` leg of tests/sonic_routing_mode_precondition_proof.py. The
+    containerlab boot
     mount is NOT used: vrnetlab resolves it to `config replace` + `config save`,
     which is wholesale replacement and is what LD-45C-2 forbids.
 
@@ -1328,8 +1387,11 @@ def provision(rt: "Runtime", lab: str, node: str, node_d: dict,
 
     # S29-R7 (founder ruling 2026-10-13, amending 2026-08-25 forward;
     # BL-P2-4.5c-224): the restart returns before the routing daemons answer.
-    # Wait, bounded, until the RIB read the route tests make is served.
-    _await_routing_daemon(rt, lab, node)
+    # Wait, bounded, until the RIB read the route tests make is served -- and,
+    # by S37-R9 (2026-10-21; BL-P2-4.5c-236), until it carries every connected
+    # prefix this overlay declares, which the stock routes alone do not.
+    _await_routing_daemon(rt, lab, node,
+                          expected=_declared_connected_prefixes(overlay))
 
     return out
 

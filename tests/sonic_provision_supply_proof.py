@@ -16,6 +16,16 @@ daemons that never answer -- on a fake clock, so no leg sleeps. COVERAGE LIMIT:
 the fake clock proves the bound and the interval as counted reads and sleeps,
 not wall-clock time; the gap the wait absorbs is measured on the guest by
 `tests/sonic_rib_collection_live_proof.py` (VM), which is its regression test.
+
+S37-R9 (founder ruling 2026-10-21; BL-P2-4.5c-236) amends S29-R7 forward: the
+wait returns only once the table carries every connected prefix the overlay
+declares, because the guest's stock routes make a non-empty table first. TOPO
+therefore declares the addresses of the guest the H1-b3 table was captured
+from (`topologies/probe-sonic-bgp-pair.yaml`'s s1: loopback 192.0.2.11, link
+198.51.100.0/31), so the captured table carries the declared prefixes; the
+"stock-only" tables the X legs use are derived from that capture by removing
+keys, never retyped. `tests/sonic_status_collect_proof.py` (VM) is the second
+regression test.
 """
 import contextlib
 import inspect
@@ -114,9 +124,16 @@ TOPO = {
     "name": "sonic-supply-proof",
     "nodes": [{"name": "s1", "type": "sonic-vm", "router_id": "192.0.2.11"}],
     "links": [{"endpoints": ["s1:eth1", "r1:eth1"],
-               "ipv4": ["192.0.2.0/31", "192.0.2.1/31"]}],
+               "ipv4": ["198.51.100.0/31", "198.51.100.1/31"]}],
 }
 NODE = TOPO["nodes"][0]
+# S37-R9: the connected prefixes TOPO declares for s1, and the captured table
+# with them removed (what the guest serves before its addresses are installed),
+# and with only the two routes attempt 2 of CI run 39554772668 read first.
+DECLARED = ["192.0.2.11/32", "198.51.100.0/31"]
+_RIB_DOC = json.loads(_RIB_TABLE)
+_RIB_STOCK = json.dumps({k: v for k, v in _RIB_DOC.items() if k not in DECLARED})
+_RIB_TWO = json.dumps({k: v for k, v in _RIB_DOC.items() if k in ("0.0.0.0/0", "10.0.0.0/24")})
 
 # --- probe ------------------------------------------------------------------
 rt = FakeRuntime()
@@ -222,7 +239,7 @@ def _leg(name, thunk):
 def _w2_order():
     src = inspect.getsource(S.provision)
     i_rec, i_wait, i_ret = (src.find("_reconcile_bgp(rt, lab, node)"),
-                            src.find("_await_routing_daemon(rt, lab, node)"), src.rfind("return out"))
+                            src.find("_await_routing_daemon(rt, lab, node,"), src.rfind("return out"))
     return -1 < i_rec < i_wait < i_ret, "rec=%d wait=%d return=%d" % (i_rec, i_wait, i_ret)
 
 
@@ -249,9 +266,11 @@ def _w2_interval():
             and "_sonic_read(rt, lab, node, _RIB_ARGV)" in src and "_rib_prefixes(out)" in src), ""
 
 
-def _w_run(script, timeout=None):
+def _w_run(script, timeout=None, expected=None):
     rt_ = FakeRuntime(rib_script=script)
     kw = {} if timeout is None else {"timeout": timeout}
+    if expected is not None:
+        kw["expected"] = expected
     code, err, clk = _on_fake_clock(lambda: S._await_routing_daemon(rt_, "lab", "s1", **kw))
     return code, err, clk, len(_rib_reads(rt_))
 
@@ -315,6 +334,90 @@ _leg("W6 S29-R7 a zero bound issues one read and no sleep", _w6)
 _leg("W7 S29-R7 provision returns its applied mapping once the daemons answer", _w7_late)
 _leg("W7 S29-R7 NON-VACUITY: provision on a guest whose daemons never answer fails loud, exit 2",
      _w7_never)
+
+
+# --- S37-R9 / BL-P2-4.5c-236: the wait also waits for the declared prefixes ----
+def _x1_prefixes():
+    got = S._declared_connected_prefixes(applied["config_db.json"])
+    return got == DECLARED, "declared %r" % (got,)
+
+
+def _x1_shapes():
+    ov = {"LOOPBACK_INTERFACE": {"Loopback0": {}, "Loopback0|192.0.2.81/32": {}},
+          "INTERFACE": {"Ethernet0": {}, "Ethernet0|198.51.100.33/31": {},
+                        "Ethernet4|2001:db8::1/64": {}, "Ethernet8|not-an-address": {}},
+          "PORT": {"Ethernet0|10.9.9.9/32": {}}}
+    got = S._declared_connected_prefixes(ov)
+    return (got == ["192.0.2.81/32", "198.51.100.32/31"] and S._declared_connected_prefixes(None) == []
+            and S._declared_connected_prefixes({}) == []), "got %r" % (got,)
+
+
+def _x2_control():
+    stock = json.loads(_RIB_STOCK)
+    return (len(stock) == len(_RIB_DOC) - 2 and not set(DECLARED) & set(stock)
+            and set(DECLARED) <= set(_RIB_DOC) and S._rib_prefixes(_RIB_STOCK)[1] == ""
+            and sorted(json.loads(_RIB_TWO)) == ["0.0.0.0/0", "10.0.0.0/24"]), \
+        "stock %d keys, capture %d" % (len(stock), len(_RIB_DOC))
+
+
+def _x3_late():
+    code, err, clk, n = _w_run([(0, _RIB_TWO), (0, _RIB_STOCK), (0, _RIB_TABLE)], expected=DECLARED)
+    return code is None and n == 3 and clk.sleeps == [1, 1], "exit %r, reads %d, sleeps %r" % (code, n, clk.sleeps)
+
+
+def _x4_never():
+    code, err, clk, n = _w_run([(0, _RIB_STOCK)], expected=DECLARED)
+    return (code == 2 and n == 31 and clk.now == 30
+            and "lacks the declared prefixes" in err
+            and "not in the table: 192.0.2.11/32, 198.51.100.0/31" in err), \
+        "exit %r, reads %d, elapsed %r; %s" % (code, n, clk.now, err.strip().replace("\n", " | ")[:200])
+
+
+def _x5_partial():
+    part = json.dumps({k: v for k, v in _RIB_DOC.items() if k != "198.51.100.0/31"})
+    code, err, clk, n = _w_run([(0, part)], timeout=3, expected=DECLARED)
+    return code == 2 and "not in the table: 198.51.100.0/31" in err and "192.0.2.11/32," not in err, \
+        "exit %r; %s" % (code, err.strip().replace("\n", " | ")[:200])
+
+
+def _x6_empty_expected():
+    code, err, clk, n = _w_run([(0, _RIB_STOCK)], expected=[])
+    return code is None and n == 1, "exit %r, reads %d" % (code, n)
+
+
+def _x7_provision_late():
+    rt_, box = FakeRuntime(rib_script=[(0, _RIB_TWO), (0, _RIB_STOCK), (0, _RIB_TABLE)]), {}
+    code, err, clk = _on_fake_clock(lambda: box.setdefault("a", S.provision(rt_, "lab", "s1", NODE, TOPO)))
+    n = len(_rib_reads(rt_))
+    return code is None and isinstance(box.get("a"), dict) and n == 3, "exit %r, reads %d" % (code, n)
+
+
+def _x7_provision_never():
+    rt_ = FakeRuntime(rib_script=[(0, _RIB_TWO)])
+    code, err, clk = _on_fake_clock(lambda: S.provision(rt_, "lab", "s1", NODE, TOPO))
+    return (code == 2 and "lacks the declared prefixes" in err
+            and "192.0.2.11/32, 198.51.100.0/31" in err), "exit %r" % (code,)
+
+
+_leg("X1 S37-R9 the declared connected prefixes are the overlay's loopback /32 and link network", _x1_prefixes)
+_leg("X1 S37-R9 a key without an address, an IPv6 address, a malformed address and a table other "
+     "than LOOPBACK_INTERFACE and INTERFACE declare no prefix", _x1_shapes)
+_leg("X2 S37-R9 control: the stock-only table is the capture less exactly the two declared prefixes, "
+     "and is itself a table the parser accepts", _x2_control)
+# X3: two stock routes (what attempt 2's status read held), then the stock
+# table, then the declared prefixes. The wait returns only on the third read.
+_leg("X3 S37-R9 a table without the declared prefixes is not ready; the wait returns once they arrive",
+     _x3_late)
+# X4: never -- bounded, then a §13-grade failure naming the missing prefixes.
+_leg("X4 S37-R9 NON-VACUITY: a served table that never carries them fails loud, exit 2, after the "
+     "bound, naming both", _x4_never)
+_leg("X5 S37-R9 a table carrying one declared prefix of two names only the missing one", _x5_partial)
+_leg("X6 S37-R9 with nothing declared, the first served table is ready (S29-R7's predicate)",
+     _x6_empty_expected)
+# X7: through provision itself -- the overlay's prefixes reach the wait.
+_leg("X7 S37-R9 provision returns once the declared prefixes are in the table", _x7_provision_late)
+_leg("X7 S37-R9 NON-VACUITY: provision on a guest whose table never carries them fails loud, exit 2",
+     _x7_provision_never)
 
 # --- report -----------------------------------------------------------------
 _failed = [c for c in _checks if not c[1]]
