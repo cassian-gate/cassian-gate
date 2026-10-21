@@ -241,6 +241,17 @@ SECTION_45C_FIXTURES = (
     # it; its router_id and link addresses (192.0.2.121, .122; 198.51.100.68, .69) come
     # under LEG 1's HALT-2 sweep.
     "sonic-within-boot.yaml",
+    # §4.5-d VM-7, scope §9 row 12 (REQ-45D-29): the init_cfg layering fixture -- one frr
+    # node and one sonic-vm guest in preconfigured mode, whose operator artifact,
+    # sonic-init-cfg-layering-config-db.json, carries arms F and E and the controls A and D
+    # (founder ruling S37-R4 of 2026-10-20) and declares no IP address; no BGP session
+    # declared.
+    # DEPLOYED by its own (VM) step, which tears the lab down on every exit. Registered under
+    # founder ruling S27-R5 of 2026-10-09 (SP #1: one entry and its comment per new §4.5-d
+    # SONiC fixture, in the change that adds it) so the enumeration-drop guard (F-45C-C3-3)
+    # sees it; its router_id and link addresses (192.0.2.131, .132; 198.51.100.72, .73) come
+    # under LEG 1's HALT-2 sweep.
+    "sonic-init-cfg-layering.yaml",
 )
 
 # SONiC fixtures inherited from 4.5-a. REQ-45C-5 states these collide with

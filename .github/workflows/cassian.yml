@@ -941,6 +941,26 @@ jobs:
           ./src/cassian.py up topologies/sonic-within-boot.yaml --reconfigure
           python tests/sonic_within_boot_reprovision_proof.py live topologies/sonic-within-boot.yaml sonic-within-boot
 
+      # §4.5-d VM-7 -- scope §9 row 12 (founder ruling S37-R4, 2026-10-20): one fixture, one
+      # boot -- one frr node and one sonic-vm guest in preconfigured mode, whose operator
+      # artifact carries arms F and E of REQ-45D-29 and the two controls, arms A and D. The
+      # proof runs its lab-free legs, reads init_cfg.json and, through sonic-cfggen, the
+      # tables the arms name, checks the controls, records arms F and E as measured, then
+      # runs the guest-not-wrapper control. The trap tears the lab down on every exit, so the
+      # teardown sweep below needs no entry for it (additions only, REQ-45D-27).
+      - name: SONiC init_cfg layering (VM) — sonic_init_cfg_layering_proof.py (§4.5-d, REQ-45D-29)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-init-cfg-layering || true' EXIT
+          ./src/cassian.py validate topologies/sonic-init-cfg-layering.yaml
+          ./src/cassian.py up topologies/sonic-init-cfg-layering.yaml --reconfigure
+          python tests/sonic_init_cfg_layering_proof.py live topologies/sonic-init-cfg-layering.yaml sonic-init-cfg-layering
+
       - name: SONiC (VM) teardown sweep (§4.5-c WI-3)
         if: always()
         env:
