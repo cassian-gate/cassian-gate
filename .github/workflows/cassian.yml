@@ -919,6 +919,28 @@ jobs:
           ./src/cassian.py up topologies/sonic-status-collect.yaml --reconfigure
           python tests/sonic_status_collect_proof.py live topologies/sonic-status-collect.yaml sonic-status-collect
 
+      # §4.5-d VM-6 -- scope §9 row 13 (founder rulings S37-R1 to S37-R3, 2026-10-20):
+      # one fixture, one boot -- one frr node and one sonic-vm guest in generated mode, no
+      # BGP declared. The proof runs its lab-free legs, reads the guest's metadata, PORT
+      # table, config_db.json md5 and loopback table, re-runs the product's provision for
+      # the guest with its router_id changed (the sentinel), reads them again and compares
+      # what changed with the provision docstring's claim (REQ-45D-30), then runs the
+      # guest-not-wrapper control and the saved file's read-only control. The trap tears the
+      # lab down on every exit, so the teardown sweep below needs no entry for it
+      # (additions only, REQ-45D-27).
+      - name: SONiC within-boot reprovision (VM) — sonic_within_boot_reprovision_proof.py (§4.5-d, REQ-45D-30)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-within-boot || true' EXIT
+          ./src/cassian.py validate topologies/sonic-within-boot.yaml
+          ./src/cassian.py up topologies/sonic-within-boot.yaml --reconfigure
+          python tests/sonic_within_boot_reprovision_proof.py live topologies/sonic-within-boot.yaml sonic-within-boot
+
       - name: SONiC (VM) teardown sweep (§4.5-c WI-3)
         if: always()
         env:

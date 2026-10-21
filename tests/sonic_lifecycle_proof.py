@@ -231,6 +231,16 @@ SECTION_45C_FIXTURES = (
     # router_id and link addresses (192.0.2.111, .112; 198.51.100.64, .65) come under
     # LEG 1's HALT-2 sweep.
     "sonic-status-collect.yaml",
+    # §4.5-d VM-6, scope §9 row 13 (REQ-45D-30): the within-boot fixture -- one frr node
+    # and one sonic-vm guest in generated mode with a declared loopback and link addresses
+    # and no BGP declared; the guest is re-provisioned once with its router_id changed to
+    # the sentinel, 192.0.2.123 (founder rulings S37-R1 to S37-R3 of 2026-10-20). DEPLOYED
+    # by its own (VM) step, which tears the lab down on every exit. Registered under founder
+    # ruling S27-R5 of 2026-10-09 (SP #1: one entry and its comment per new §4.5-d SONiC
+    # fixture, in the change that adds it) so the enumeration-drop guard (F-45C-C3-3) sees
+    # it; its router_id and link addresses (192.0.2.121, .122; 198.51.100.68, .69) come
+    # under LEG 1's HALT-2 sweep.
+    "sonic-within-boot.yaml",
 )
 
 # SONiC fixtures inherited from 4.5-a. REQ-45C-5 states these collide with

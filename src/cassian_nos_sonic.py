@@ -1249,8 +1249,12 @@ def provision(rt: "Runtime", lab: str, node: str, node_d: dict,
     reaches the guest through the supported `exec` verb -- write, then
     `config load -y`, which
     dispatches to `sonic-cfggen --write-to-db` and MERGES at field level.
-    Measured 2026-08-18 on sonic-vm:202405: PORT 32 -> 32, hwsku/platform/mac
-    intact, `/etc/sonic/config_db.json` md5 unchanged. The containerlab boot
+    Measured by tests/sonic_within_boot_reprovision_proof.py on sonic-vm:202405
+    (REQ-45D-30), re-injecting the overlay into an already-booted guest with a
+    changed router_id as the sentinel: PORT count unchanged, hwsku unchanged,
+    platform unchanged, mac unchanged, /etc/sonic/config_db.json md5
+    unchanged. A first injection onto a stock guest is not measured by that
+    proof. The containerlab boot
     mount is NOT used: vrnetlab resolves it to `config replace` + `config save`,
     which is wholesale replacement and is what LD-45C-2 forbids.
 
