@@ -961,6 +961,27 @@ jobs:
           ./src/cassian.py up topologies/sonic-init-cfg-layering.yaml --reconfigure
           python tests/sonic_init_cfg_layering_proof.py live topologies/sonic-init-cfg-layering.yaml sonic-init-cfg-layering
 
+      # §4.5-d VM-8 -- scope §9 row 14 (founder rulings S37-R5, S37-R6 and S37-R14): one fixture,
+      # one boot -- r1 (frr) and s1 (sonic-vm) with one declared eBGP session. The proof runs its
+      # lab-free legs, reads s1's negotiated hold time against the scenario's wait, runs the
+      # declared invariant by name (the control: it passes), then the fixture's scenario through
+      # `cassian test --scenario`: 100% loss is applied to s1:eth1, the wait runs out, and the
+      # invariant fails -- the detection, its observed state read from results.json. The trap
+      # tears the lab down on every exit, so the teardown sweep below needs no entry for it
+      # (additions only, REQ-45D-27).
+      - name: SONiC grey failure (VM) — sonic_grey_failure_proof.py (§4.5-d, REQ-45D-22)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-grey-failure || true' EXIT
+          ./src/cassian.py validate topologies/sonic-grey-failure.yaml
+          ./src/cassian.py up topologies/sonic-grey-failure.yaml --reconfigure
+          python tests/sonic_grey_failure_proof.py live topologies/sonic-grey-failure.yaml sonic-grey-failure
+
       - name: SONiC (VM) teardown sweep (§4.5-c WI-3)
         if: always()
         env:

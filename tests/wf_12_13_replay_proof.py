@@ -175,7 +175,8 @@ for _p in ("sonic_exec_allowlist_proof.py",   # H1-a2-ii, REQ-45D-5
            # the file name alone is already named, by its lab-free step, above
            "sonic_status_collect_proof.py live topologies/sonic-status-collect.yaml",
            "sonic_within_boot_reprovision_proof.py",  # S37-R1 to S37-R3, row 13, REQ-45D-30 (VM)
-           "sonic_init_cfg_layering_proof.py"):  # S37-R4, row 12, REQ-45D-29 (VM)
+           "sonic_init_cfg_layering_proof.py",  # S37-R4, row 12, REQ-45D-29 (VM)
+           "sonic_grey_failure_proof.py"):  # S37-R5, S37-R6, S37-R14, row 14, REQ-45D-22 (VM)
     check(f"§4.5-d proof is CI-wired: {_p} present in the gate", _p in gate)
 
 fails = [n for n, ok in checks if not ok]

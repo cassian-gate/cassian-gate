@@ -252,6 +252,16 @@ SECTION_45C_FIXTURES = (
     # sees it; its router_id and link addresses (192.0.2.131, .132; 198.51.100.72, .73) come
     # under LEG 1's HALT-2 sweep.
     "sonic-init-cfg-layering.yaml",
+    # §4.5-d VM-8, scope §9 row 14 (REQ-45D-22): the grey-failure fixture -- r1 (frr) and s1
+    # (sonic-vm) with one declared eBGP session, one declared bgp_session_up invariant, run by
+    # name before the fault, and one scenario that applies 100% loss to s1:eth1, waits and runs
+    # it again (founder rulings S37-R5, S37-R6 and S37-R14).
+    # DEPLOYED by its own (VM) step, which tears the lab down on every exit. Registered under
+    # founder ruling S27-R5 of 2026-10-09 (SP #1: one entry and its comment per new §4.5-d
+    # SONiC fixture, in the change that adds it) so the enumeration-drop guard (F-45C-C3-3)
+    # sees it; its router_id and link addresses (192.0.2.141, .142; 198.51.100.76, .77) come
+    # under LEG 1's HALT-2 sweep.
+    "sonic-grey-failure.yaml",
 )
 
 # SONiC fixtures inherited from 4.5-a. REQ-45C-5 states these collide with
