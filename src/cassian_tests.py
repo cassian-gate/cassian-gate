@@ -520,7 +520,8 @@ def compare_expected_vs_observed_bgp(expected: set[str], observed: dict[str, dic
         "ok": ok,
     }
 
-def wait_for_bgp(rt: Runtime, lab: str, node: str, timeout: int = 30, require_evpn: bool = False) -> None:
+def wait_for_bgp(rt: Runtime, lab: str, node: str, timeout: int = 30, require_evpn: bool = False,
+                 stats: "dict | None" = None) -> int:
     """
     Wait for BGP to be Established-ish on a node.
 
@@ -533,11 +534,19 @@ def wait_for_bgp(rt: Runtime, lab: str, node: str, timeout: int = 30, require_ev
 
     Anything like Idle/Active/Connect/OpenSent/OpenConfirm is not OK.
     "(Policy)" is not OK.
+
+    S30-R13, S30-R18 and S30-R20 (founder rulings 2026-10-14, BL-P2-4.5c-216's
+    fix): returns the number of attempts it made. When `stats` is given it is
+    updated with that number on every attempt (`stats["attempts"]`) and, just
+    before the timeout's die, with `stats["timed_out"] = True`, so the caller can
+    record the count on either exit. Bounds, interval and timeout are unchanged.
+    Declared under DC v2.1 §14 item 8.
     """
     import json
     import time
 
     start = time.time()
+    attempts = 0
     last_summary = ""
     last_neigh_lines: list[str] = []
     last_evpn_details = ""
@@ -587,6 +596,9 @@ def wait_for_bgp(rt: Runtime, lab: str, node: str, timeout: int = 30, require_ev
         return True
 
     while True:
+        attempts += 1
+        if stats is not None:
+            stats["attempts"] = attempts
         cp = rt.exec(lab, node, ["vtysh", "-c", "show bgp summary"], check=False, capture_output=True)
         last_summary = cp.stdout or ""
         out = last_summary
@@ -612,12 +624,14 @@ def wait_for_bgp(rt: Runtime, lab: str, node: str, timeout: int = 30, require_ev
 
                 if all(is_up(s) for s in states):
                     if not require_evpn or evpn_neighbors_up():
-                        return
+                        return attempts
 
         if time.time() - start > timeout:
             details = "\n".join(last_neigh_lines) if last_neigh_lines else "(no neighbor lines found)"
             if require_evpn and last_evpn_details:
                 details = f"{details}\nEVPN:\n{last_evpn_details}"
+            if stats is not None:
+                stats["timed_out"] = True
             die(f"{node}: BGP did not converge within {timeout}s:\n{details}")
 
         time.sleep(1)

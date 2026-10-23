@@ -6,7 +6,30 @@ sonic-vm:202405 (2026-08-18), so the supply sequence is provable on hosted CI.
 COVERAGE LIMIT (PBE-P2-8): this proves the SEQUENCE Cassian issues and the
 payload it builds. It does NOT prove the guest merges rather than replaces --
 that is settled by the §18(8) VM probe and the REQ-45C-5 provisioning proof.
+
+S29-R7 (founder ruling 2026-10-13; BL-P2-4.5c-224): `provision` now ends with a
+bounded wait for the guest's routing daemons, polling the provider's own RIB
+read. The fake answers that read with the RIB table captured from the guest at
+H1-b3 (`tests/fixtures/sonic-4_5d-h1b3/h1b3_rib_table_after.out`), and the W
+legs below drive the wait in both directions -- daemons that answer late, and
+daemons that never answer -- on a fake clock, so no leg sleeps. COVERAGE LIMIT:
+the fake clock proves the bound and the interval as counted reads and sleeps,
+not wall-clock time; the gap the wait absorbs is measured on the guest by
+`tests/sonic_rib_collection_live_proof.py` (VM), which is its regression test.
+
+S37-R9 (founder ruling 2026-10-21; BL-P2-4.5c-236) amends S29-R7 forward: the
+wait returns only once the table carries every connected prefix the overlay
+declares, because the guest's stock routes make a non-empty table first. TOPO
+therefore declares the addresses of the guest the H1-b3 table was captured
+from (`topologies/probe-sonic-bgp-pair.yaml`'s s1: loopback 192.0.2.11, link
+198.51.100.0/31), so the captured table carries the declared prefixes; the
+"stock-only" tables the X legs use are derived from that capture by removing
+keys, never retyped. `tests/sonic_status_collect_proof.py` (VM) is the second
+regression test.
 """
+import contextlib
+import inspect
+import io
 import json
 import os
 import sys
@@ -32,12 +55,20 @@ class _CP:
 
 _PORT_TABLE = {f"Ethernet{i * 4}": {"index": str(i)} for i in range(32)}
 
+# The guest's RIB as captured at H1-b3 (byte-exact fixture, never retyped).
+_RIB_TABLE = io.open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures",
+                                  "sonic-4_5d-h1b3", "h1b3_rib_table_after.out"),
+                     encoding="utf-8").read()
+_RIB_JOINED = " ".join(S._RIB_ARGV)
+
 
 class FakeRuntime:
-    def __init__(self, hwsku="Force10-S6000", fail_on=None):
+    def __init__(self, hwsku="Force10-S6000", fail_on=None, rib_script=None):
         self.calls = []
         self._hwsku = hwsku
         self._fail_on = fail_on
+        # (rc, stdout) answers to the RIB read, in order; the last repeats.
+        self._rib = list(rib_script) if rib_script else [(0, _RIB_TABLE)]
 
     def exec(self, lab, node, argv, check=False, capture_output=True,
              interactive=False, timeout_s=None):
@@ -49,16 +80,60 @@ class FakeRuntime:
             return _CP(out=self._hwsku + "\n")
         if "--var-json" in joined and "PORT" in joined:
             return _CP(out=json.dumps(_PORT_TABLE))
+        if joined == _RIB_JOINED:
+            rc, out = self._rib.pop(0) if len(self._rib) > 1 else self._rib[0]
+            return _CP(rc=rc, out=out)
         return _CP(out="")
+
+
+class _Clock:
+    """Fake clock for the wait: `time()` reads it, `sleep()` advances it."""
+
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps = []
+
+    def time(self):
+        return self.now
+
+    def sleep(self, s):
+        self.sleeps.append(s)
+        self.now += s
+
+
+def _on_fake_clock(fn):
+    """Run fn() with the provider's clock replaced; return (exit code or None,
+    stderr text, clock). The real clock is restored whatever happens."""
+    real, clock, err, code = S.time, _Clock(), io.StringIO(), None
+    S.time = clock
+    try:
+        with contextlib.redirect_stderr(err):
+            fn()
+    except SystemExit as e:
+        code = e.code
+    finally:
+        S.time = real
+    return code, err.getvalue(), clock
+
+
+def _rib_reads(rt):
+    return [c for c in rt.calls if " ".join(c) == _RIB_JOINED]
 
 
 TOPO = {
     "name": "sonic-supply-proof",
     "nodes": [{"name": "s1", "type": "sonic-vm", "router_id": "192.0.2.11"}],
     "links": [{"endpoints": ["s1:eth1", "r1:eth1"],
-               "ipv4": ["192.0.2.0/31", "192.0.2.1/31"]}],
+               "ipv4": ["198.51.100.0/31", "198.51.100.1/31"]}],
 }
 NODE = TOPO["nodes"][0]
+# S37-R9: the connected prefixes TOPO declares for s1, and the captured table
+# with them removed (what the guest serves before its addresses are installed),
+# and with only the two routes attempt 2 of CI run 39554772668 read first.
+DECLARED = ["192.0.2.11/32", "198.51.100.0/31"]
+_RIB_DOC = json.loads(_RIB_TABLE)
+_RIB_STOCK = json.dumps({k: v for k, v in _RIB_DOC.items() if k not in DECLARED})
+_RIB_TWO = json.dumps({k: v for k, v in _RIB_DOC.items() if k in ("0.0.0.0/0", "10.0.0.0/24")})
 
 # --- probe ------------------------------------------------------------------
 rt = FakeRuntime()
@@ -88,6 +163,15 @@ check("R-C3-12 NON-VACUITY: copy_to_node is never called",
       "REQ-45a-8/B10 UNSUP stands; §4.5-f owns guest file transfer")
 check("R-C3-12 staging precedes apply",
       rt.calls.index(_stage[0]) < rt.calls.index(_load[0]))
+
+# --- S29-R7 / BL-P2-4.5c-224: provision ends by waiting for the daemons ------
+_rec = list(S._BGP_RECONCILE_ARGV)
+check("W1 S29-R7 provision's last guest call is the RIB read, after the reconcile",
+      rt.calls and rt.calls[-1] == list(S._RIB_ARGV) and _rec in rt.calls
+      and rt.calls.index(_rec) < len(rt.calls) - 1,
+      "last call %s" % (rt.calls[-1:],))
+check("W1 S29-R7 a guest that answers at once is read exactly once",
+      len(_rib_reads(rt)) == 1, "reads %d" % len(_rib_reads(rt)))
 
 # --- payload is canonical ---------------------------------------------------
 _overlay = applied["config_db.json"]
@@ -140,6 +224,200 @@ except SystemExit:
     _caught = True
 check("R-C3-13 an unlisted HwSKU is SUPPORTED end to end, not refused",
       not _caught, "derivation is authoritative; the table is a drift witness")
+
+# --- S29-R7 / BL-P2-4.5c-224: the wait, both directions ------------------------
+# Every W leg is guarded: on a provider without the wait it records a FAIL with
+# the exception, never a traceback (a crash is not a verdict).
+def _leg(name, thunk):
+    try:
+        ok, detail = thunk()
+    except Exception as e:  # noqa: BLE001
+        ok, detail = False, "raised %r" % (e,)
+    check(name, ok, detail)
+
+
+def _w2_order():
+    src = inspect.getsource(S.provision)
+    i_rec, i_wait, i_ret = (src.find("_reconcile_bgp(rt, lab, node)"),
+                            src.find("_await_routing_daemon(rt, lab, node,"), src.rfind("return out"))
+    return -1 < i_rec < i_wait < i_ret, "rec=%d wait=%d return=%d" % (i_rec, i_wait, i_ret)
+
+
+def _w2_bound():
+    d = inspect.signature(S._await_routing_daemon).parameters["timeout"].default
+    return d == S._ROUTING_DAEMON_WAIT_S == 30, "default %r, constant %r" % (d, S._ROUTING_DAEMON_WAIT_S)
+
+
+def _w2_parity():
+    import ast
+    eng = ast.parse(io.open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src",
+                                         "cassian_engine.py"), encoding="utf-8").read())
+    pt = [n.value for n in ast.walk(eng) if isinstance(n, ast.Assign) and len(n.targets) == 1
+          and isinstance(n.targets[0], ast.Name) and n.targets[0].id == "precheck_timeout"]
+    ok = (len(pt) == 1 and isinstance(pt[0], ast.IfExp) and isinstance(pt[0].orelse, ast.Constant)
+          and pt[0].orelse.value == S._ROUTING_DAEMON_WAIT_S)
+    return ok, "engine precheck_timeout orelse %r" % (pt[0].orelse.value if ok or (pt and isinstance(
+        getattr(pt[0], "orelse", None), ast.Constant)) else None,)
+
+
+def _w2_interval():
+    src = inspect.getsource(S._await_routing_daemon)
+    return (S._CONVERGENCE_POLL_INTERVAL_S == 1 and "sleep(_CONVERGENCE_POLL_INTERVAL_S)" in src
+            and "_sonic_read(rt, lab, node, _RIB_ARGV)" in src and "_rib_prefixes(out)" in src), ""
+
+
+def _w_run(script, timeout=None, expected=None):
+    rt_ = FakeRuntime(rib_script=script)
+    kw = {} if timeout is None else {"timeout": timeout}
+    if expected is not None:
+        kw["expected"] = expected
+    code, err, clk = _on_fake_clock(lambda: S._await_routing_daemon(rt_, "lab", "s1", **kw))
+    return code, err, clk, len(_rib_reads(rt_))
+
+
+def _w3():
+    code, err, clk, n = _w_run([(1, ""), (0, ""), (0, "{ not json"), (0, _RIB_TABLE)])
+    return (code is None and n == 4 and clk.sleeps == [1, 1, 1],
+            "exit %r, reads %d, sleeps %r" % (code, n, clk.sleeps))
+
+
+def _w4():
+    code, err, clk, n = _w_run([(1, "")])
+    return code == 2 and n == 31 and clk.now == 30, "exit %r, reads %d, elapsed %r" % (code, n, clk.now)
+
+
+def _w4_text():
+    code, err, clk, n = _w_run([(1, "")])
+    return ("vtysh -c show ip route json" in err and "within 30s" in err
+            and "last result: RIB read failed (rc 1)" in err), err.strip().replace("\n", " | ")[:300]
+
+
+def _w5():
+    code, err, clk, n = _w_run([(0, "")])
+    return code == 2 and "last result: empty RIB read" in err, "exit %r" % (code,)
+
+
+def _w6():
+    code, err, clk, n = _w_run([(1, "")], timeout=0)
+    return code == 2 and n == 1 and clk.sleeps == [], "exit %r, reads %d, sleeps %r" % (code, n, clk.sleeps)
+
+
+def _w7_late():
+    rt_, box = FakeRuntime(rib_script=[(1, ""), (1, ""), (0, _RIB_TABLE)]), {}
+    code, err, clk = _on_fake_clock(lambda: box.setdefault("a", S.provision(rt_, "lab", "s1", NODE, TOPO)))
+    n = len(_rib_reads(rt_))
+    return code is None and isinstance(box.get("a"), dict) and n == 3, "exit %r, reads %d" % (code, n)
+
+
+def _w7_never():
+    rt_ = FakeRuntime(rib_script=[(1, "")])
+    code, err, clk = _on_fake_clock(lambda: S.provision(rt_, "lab", "s1", NODE, TOPO))
+    return code == 2 and "routing daemons did not answer" in err, "exit %r" % (code,)
+
+
+_leg("W2 S29-R7 provision calls the wait after the reconcile and before it returns", _w2_order)
+_leg("W2 S29-R7 the bound defaults to _ROUTING_DAEMON_WAIT_S, which is 30", _w2_bound)
+_leg("W2 S29-R7 the bound is the BGP precheck's own non-EVPN bound, reused not invented", _w2_parity)
+_leg("W2 S29-R7 the interval is _CONVERGENCE_POLL_INTERVAL_S (1 s), and the read and its "
+     "parser are the RIB kinds' own (PBE-P2-6)", _w2_interval)
+# W3: daemons that answer late -- the measured shape (rc 1, 0 B), then two
+# answers that are not a table, then the table. The wait returns.
+_leg("W3 S29-R7 daemons that answer late: the wait returns once the table is served", _w3)
+# W4: daemons that never answer -- bounded, then a §13-grade failure naming the read.
+_leg("W4 S29-R7 NON-VACUITY: daemons that never answer fail loud, exit 2, after the bound", _w4)
+_leg("W4 S29-R7 the failure names the read, the bound and the last result", _w4_text)
+# W5: an empty answer with rc 0 is NOT-YET, never ready.
+_leg("W5 S29-R7 NON-VACUITY: an rc-0 empty answer is not a served table", _w5)
+# W6: a zero bound still issues exactly one read and never sleeps.
+_leg("W6 S29-R7 a zero bound issues one read and no sleep", _w6)
+# W7: through provision itself -- the wiring, not only the function.
+_leg("W7 S29-R7 provision returns its applied mapping once the daemons answer", _w7_late)
+_leg("W7 S29-R7 NON-VACUITY: provision on a guest whose daemons never answer fails loud, exit 2",
+     _w7_never)
+
+
+# --- S37-R9 / BL-P2-4.5c-236: the wait also waits for the declared prefixes ----
+def _x1_prefixes():
+    got = S._declared_connected_prefixes(applied["config_db.json"])
+    return got == DECLARED, "declared %r" % (got,)
+
+
+def _x1_shapes():
+    ov = {"LOOPBACK_INTERFACE": {"Loopback0": {}, "Loopback0|192.0.2.81/32": {}},
+          "INTERFACE": {"Ethernet0": {}, "Ethernet0|198.51.100.33/31": {},
+                        "Ethernet4|2001:db8::1/64": {}, "Ethernet8|not-an-address": {}},
+          "PORT": {"Ethernet0|10.9.9.9/32": {}}}
+    got = S._declared_connected_prefixes(ov)
+    return (got == ["192.0.2.81/32", "198.51.100.32/31"] and S._declared_connected_prefixes(None) == []
+            and S._declared_connected_prefixes({}) == []), "got %r" % (got,)
+
+
+def _x2_control():
+    stock = json.loads(_RIB_STOCK)
+    return (len(stock) == len(_RIB_DOC) - 2 and not set(DECLARED) & set(stock)
+            and set(DECLARED) <= set(_RIB_DOC) and S._rib_prefixes(_RIB_STOCK)[1] == ""
+            and sorted(json.loads(_RIB_TWO)) == ["0.0.0.0/0", "10.0.0.0/24"]), \
+        "stock %d keys, capture %d" % (len(stock), len(_RIB_DOC))
+
+
+def _x3_late():
+    code, err, clk, n = _w_run([(0, _RIB_TWO), (0, _RIB_STOCK), (0, _RIB_TABLE)], expected=DECLARED)
+    return code is None and n == 3 and clk.sleeps == [1, 1], "exit %r, reads %d, sleeps %r" % (code, n, clk.sleeps)
+
+
+def _x4_never():
+    code, err, clk, n = _w_run([(0, _RIB_STOCK)], expected=DECLARED)
+    return (code == 2 and n == 31 and clk.now == 30
+            and "lacks the declared prefixes" in err
+            and "not in the table: 192.0.2.11/32, 198.51.100.0/31" in err), \
+        "exit %r, reads %d, elapsed %r; %s" % (code, n, clk.now, err.strip().replace("\n", " | ")[:200])
+
+
+def _x5_partial():
+    part = json.dumps({k: v for k, v in _RIB_DOC.items() if k != "198.51.100.0/31"})
+    code, err, clk, n = _w_run([(0, part)], timeout=3, expected=DECLARED)
+    return code == 2 and "not in the table: 198.51.100.0/31" in err and "192.0.2.11/32," not in err, \
+        "exit %r; %s" % (code, err.strip().replace("\n", " | ")[:200])
+
+
+def _x6_empty_expected():
+    code, err, clk, n = _w_run([(0, _RIB_STOCK)], expected=[])
+    return code is None and n == 1, "exit %r, reads %d" % (code, n)
+
+
+def _x7_provision_late():
+    rt_, box = FakeRuntime(rib_script=[(0, _RIB_TWO), (0, _RIB_STOCK), (0, _RIB_TABLE)]), {}
+    code, err, clk = _on_fake_clock(lambda: box.setdefault("a", S.provision(rt_, "lab", "s1", NODE, TOPO)))
+    n = len(_rib_reads(rt_))
+    return code is None and isinstance(box.get("a"), dict) and n == 3, "exit %r, reads %d" % (code, n)
+
+
+def _x7_provision_never():
+    rt_ = FakeRuntime(rib_script=[(0, _RIB_TWO)])
+    code, err, clk = _on_fake_clock(lambda: S.provision(rt_, "lab", "s1", NODE, TOPO))
+    return (code == 2 and "lacks the declared prefixes" in err
+            and "192.0.2.11/32, 198.51.100.0/31" in err), "exit %r" % (code,)
+
+
+_leg("X1 S37-R9 the declared connected prefixes are the overlay's loopback /32 and link network", _x1_prefixes)
+_leg("X1 S37-R9 a key without an address, an IPv6 address, a malformed address and a table other "
+     "than LOOPBACK_INTERFACE and INTERFACE declare no prefix", _x1_shapes)
+_leg("X2 S37-R9 control: the stock-only table is the capture less exactly the two declared prefixes, "
+     "and is itself a table the parser accepts", _x2_control)
+# X3: two stock routes (what attempt 2's status read held), then the stock
+# table, then the declared prefixes. The wait returns only on the third read.
+_leg("X3 S37-R9 a table without the declared prefixes is not ready; the wait returns once they arrive",
+     _x3_late)
+# X4: never -- bounded, then a §13-grade failure naming the missing prefixes.
+_leg("X4 S37-R9 NON-VACUITY: a served table that never carries them fails loud, exit 2, after the "
+     "bound, naming both", _x4_never)
+_leg("X5 S37-R9 a table carrying one declared prefix of two names only the missing one", _x5_partial)
+_leg("X6 S37-R9 with nothing declared, the first served table is ready (S29-R7's predicate)",
+     _x6_empty_expected)
+# X7: through provision itself -- the overlay's prefixes reach the wait.
+_leg("X7 S37-R9 provision returns once the declared prefixes are in the table", _x7_provision_late)
+_leg("X7 S37-R9 NON-VACUITY: provision on a guest whose table never carries them fails loud, exit 2",
+     _x7_provision_never)
 
 # --- report -----------------------------------------------------------------
 _failed = [c for c in _checks if not c[1]]

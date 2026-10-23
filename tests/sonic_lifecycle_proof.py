@@ -157,6 +157,111 @@ SECTION_45C_FIXTURES = (
     # by tests/sonic_preconfigured_proof.py req26 instead. Stated because the
     # division is not obvious from either file alone.
     "sonic-preconfigured-boot.yaml",
+    # §4.5-d REQ-45D-24 (item 5, BL-P2-4.5c-46): the sonic-vm node declaring an
+    # explicit `runtime: container`, added at cassian-gate e28145a. NEVER
+    # DEPLOYED -- `cassian validate` refuses it at exit 2. Registered under
+    # founder Decision 4 (a) of 2026-09-28 (SP #1) so the enumeration-drop
+    # guard (F-45C-C3-3) sees it, and its two router_id addresses come under
+    # LEG 1's HALT-2 sweep.
+    "sonic-runtime-container.yaml",
+    # §4.5-d REQ-45D-12 (founder ruling D-2 = A of 2026-09-30): H1-b3 script 2b-ii's
+    # deliberately invalid validate-time fixture (handover §18, the -11/-12 row).
+    # NEVER DEPLOYED -- `cassian validate` refuses it at exit 2. Registered under
+    # founder ruling S24-R1 of 2026-10-06 (SP #1, as amended: Decision 4 (a)'s
+    # placement) so the enumeration-drop guard (F-45C-C3-3) sees it; it declares
+    # no address, so LEG 1's HALT-2 sweep passes over it.
+    "sonic-route-absent-stock.yaml",
+    # §4.5-d REQ-45D-17 (D-047.VAL): the hosted packet's deliberately invalid
+    # validate-time fixture (handover §18 row -17; §19.2). NEVER DEPLOYED --
+    # `cassian validate` refuses it at exit 2 with the UNSUPPORTED message.
+    # Registered under founder ruling S27-R5 of 2026-10-09 (SP #1: one entry and
+    # its comment per new §4.5-d SONiC fixture, in the change that adds it) so the
+    # enumeration-drop guard (F-45C-C3-3) sees it; its two router_id addresses,
+    # 192.0.2.31 and 192.0.2.41, come under LEG 1's HALT-2 sweep.
+    "sonic-ospf-unsup.yaml",
+    # §4.5-d VM-1, scope §9 row 15 (REQ-45D-1/-8/-16/-19): the row-15 fixture -- one
+    # frr node and one sonic-vm guest, one declared eBGP session. DEPLOYED by its own
+    # (VM) step, which tears the lab down on every exit. Registered under founder
+    # ruling S27-R5 of 2026-10-09 (SP #1: one entry and its comment per new §4.5-d
+    # SONiC fixture, in the change that adds it) so the enumeration-drop guard
+    # (F-45C-C3-3) sees it; its router_id and link addresses (192.0.2.71, .72;
+    # 198.51.100.28, .29) come under LEG 1's HALT-2 sweep.
+    "sonic-bgp-session-live.yaml",
+    # §4.5-d VM-2, scope §9 row 8 (REQ-45D-2/-11/-12): the RIB fixture §19 Walkthrough 1
+    # names -- one sonic-vm guest with a declared loopback and its frr link partner,
+    # three declared tests that pass at boot and one static-route scenario (founder
+    # ruling S29-R6 of 2026-10-12). DEPLOYED by its own (VM) step, which tears the lab
+    # down on every exit. Registered under founder ruling S27-R5 of 2026-10-09 (SP #1:
+    # one entry and its comment per new §4.5-d SONiC fixture, in the change that adds
+    # it) so the enumeration-drop guard (F-45C-C3-3) sees it; its router_id and link
+    # addresses (192.0.2.81, .82; 198.51.100.32, .33) come under LEG 1's HALT-2 sweep.
+    "sonic-rib.yaml",
+    # §4.5-d VM-3, scope §9 row 10 (REQ-45D-3/-4/-26): the ping-through fixture -- one
+    # sonic-vm guest and two hosts attached directly to it, four declared ping tests,
+    # the four quadrants of REQ-45D-4 (founder rulings S34-R1 to S34-R4 of 2026-10-19).
+    # DEPLOYED by its own (VM) step, which tears the lab down on every exit. Registered
+    # under founder ruling S27-R5 of 2026-10-09 (SP #1: one entry and its comment per new
+    # §4.5-d SONiC fixture, in the change that adds it) so the enumeration-drop guard
+    # (F-45C-C3-3) sees it; its router_id and link addresses (192.0.2.91; 198.51.100.41,
+    # .42, .49, .50) come under LEG 1's HALT-2 sweep.
+    "sonic-ping-through.yaml",
+    # §4.5-d VM-4, scope §9 row 9 (REQ-45D-5): the exec-live fixture -- one frr node and
+    # one sonic-vm guest, three declared exec tests on the guest (founder rulings S35-R1
+    # to S35-R6 of 2026-10-19). DEPLOYED by its own (VM) step, which tears the lab down
+    # on every exit. Registered under founder ruling S27-R5 of 2026-10-09 (SP #1: one
+    # entry and its comment per new §4.5-d SONiC fixture, in the change that adds it) so
+    # the enumeration-drop guard (F-45C-C3-3) sees it; its router_id and link addresses
+    # (192.0.2.101, .102; 198.51.100.60, .61) come under LEG 1's HALT-2 sweep.
+    "sonic-exec-live.yaml",
+    # §4.5-d REQ-45D-5 (handover §18 row -5; §19's second walkthrough): the refused-exec
+    # fixture. NEVER DEPLOYED -- `cassian validate` refuses it at exit 2 with the exec
+    # rejection line (founder ruling S35-R2 of 2026-10-19). Registered under founder
+    # ruling S27-R5 of 2026-10-09 (SP #1: one entry and its comment per new §4.5-d SONiC
+    # fixture, in the change that adds it) so the enumeration-drop guard (F-45C-C3-3)
+    # sees it; its two router_id addresses, 192.0.2.103 and 192.0.2.104, come under
+    # LEG 1's HALT-2 sweep.
+    "sonic-exec-refused.yaml",
+    # §4.5-d VM-5, scope §9 row 11 (REQ-45D-19/-20): the status-and-collect fixture --
+    # one frr node and one sonic-vm guest with a declared loopback and link addresses
+    # and no BGP declared, read by `cassian status --routes` and `cassian collect`
+    # (founder rulings S36-R1 to S36-R3 of 2026-10-20). DEPLOYED by its own (VM) step,
+    # which tears the lab down on every exit. Registered under founder ruling S27-R5 of
+    # 2026-10-09 (SP #1: one entry and its comment per new §4.5-d SONiC fixture, in the
+    # change that adds it) so the enumeration-drop guard (F-45C-C3-3) sees it; its
+    # router_id and link addresses (192.0.2.111, .112; 198.51.100.64, .65) come under
+    # LEG 1's HALT-2 sweep.
+    "sonic-status-collect.yaml",
+    # §4.5-d VM-6, scope §9 row 13 (REQ-45D-30): the within-boot fixture -- one frr node
+    # and one sonic-vm guest in generated mode with a declared loopback and link addresses
+    # and no BGP declared; the guest is re-provisioned once with its router_id changed to
+    # the sentinel, 192.0.2.123 (founder rulings S37-R1 to S37-R3 of 2026-10-20). DEPLOYED
+    # by its own (VM) step, which tears the lab down on every exit. Registered under founder
+    # ruling S27-R5 of 2026-10-09 (SP #1: one entry and its comment per new §4.5-d SONiC
+    # fixture, in the change that adds it) so the enumeration-drop guard (F-45C-C3-3) sees
+    # it; its router_id and link addresses (192.0.2.121, .122; 198.51.100.68, .69) come
+    # under LEG 1's HALT-2 sweep.
+    "sonic-within-boot.yaml",
+    # §4.5-d VM-7, scope §9 row 12 (REQ-45D-29): the init_cfg layering fixture -- one frr
+    # node and one sonic-vm guest in preconfigured mode, whose operator artifact,
+    # sonic-init-cfg-layering-config-db.json, carries arms F and E and the controls A and D
+    # (founder ruling S37-R4 of 2026-10-20) and declares no IP address; no BGP session
+    # declared.
+    # DEPLOYED by its own (VM) step, which tears the lab down on every exit. Registered under
+    # founder ruling S27-R5 of 2026-10-09 (SP #1: one entry and its comment per new §4.5-d
+    # SONiC fixture, in the change that adds it) so the enumeration-drop guard (F-45C-C3-3)
+    # sees it; its router_id and link addresses (192.0.2.131, .132; 198.51.100.72, .73) come
+    # under LEG 1's HALT-2 sweep.
+    "sonic-init-cfg-layering.yaml",
+    # §4.5-d VM-8, scope §9 row 14 (REQ-45D-22): the grey-failure fixture -- r1 (frr) and s1
+    # (sonic-vm) with one declared eBGP session, one declared bgp_session_up invariant, run by
+    # name before the fault, and one scenario that applies 100% loss to s1:eth1, waits and runs
+    # it again (founder rulings S37-R5, S37-R6 and S37-R14).
+    # DEPLOYED by its own (VM) step, which tears the lab down on every exit. Registered under
+    # founder ruling S27-R5 of 2026-10-09 (SP #1: one entry and its comment per new §4.5-d
+    # SONiC fixture, in the change that adds it) so the enumeration-drop guard (F-45C-C3-3)
+    # sees it; its router_id and link addresses (192.0.2.141, .142; 198.51.100.76, .77) come
+    # under LEG 1's HALT-2 sweep.
+    "sonic-grey-failure.yaml",
 )
 
 # SONiC fixtures inherited from 4.5-a. REQ-45C-5 states these collide with

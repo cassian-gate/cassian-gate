@@ -12,7 +12,7 @@ import yaml
 
 from cassian_common import LABS_DIR, TOPO_DIR, run, die
 from cassian_artifacts import lab_dir, load_yaml, write_file
-from cassian_model import ensure_valid_topology, resolve_topology, topo_to_containerlab
+from cassian_model import ensure_valid_topology, nos_known_types, resolve_topology, topo_to_containerlab
 
 def gen_nft_fw_rules(node: dict) -> str:
     """
@@ -988,7 +988,7 @@ def configure_frr_interfaces_from_topology(rt: "Runtime", lab: str, topo: dict[s
             # bring up + set address
             rt.exec(lab, node, ["ip", "link", "set", iface, "up"], check=False, capture_output=False)
             rt.exec(lab, node, ["ip", "addr", "flush", "dev", iface], check=False, capture_output=False)
-            rt.exec(lab, node, ["ip", "addr", "add", ipcidr, "dev", iface], check=True, capture_output=False)
+            rt.exec(lab, node, ["ip", "addr", "replace", ipcidr, "dev", iface], check=True, capture_output=False)
 
     # 2) Router-id loopback (router_id/32) if provided
     for node, n in nodes.items():
@@ -1001,7 +1001,7 @@ def configure_frr_interfaces_from_topology(rt: "Runtime", lab: str, topo: dict[s
         rt.exec(lab, node, ["ip", "link", "set", "lo", "up"], check=False, capture_output=False)
         # Keep it simple: flush + set router_id/32
         rt.exec(lab, node, ["ip", "addr", "flush", "dev", "lo"], check=False, capture_output=False)
-        rt.exec(lab, node, ["ip", "addr", "add", f"{rid}/32", "dev", "lo"], check=True, capture_output=False)
+        rt.exec(lab, node, ["ip", "addr", "replace", f"{rid}/32", "dev", "lo"], check=True, capture_output=False)
 
 def configure_hosts_from_topology(rt: "Runtime", lab_name: str, topo: dict) -> None:
     """
@@ -1032,7 +1032,7 @@ def configure_hosts_from_topology(rt: "Runtime", lab_name: str, topo: dict) -> N
         ip2 = ips[1]  # e.g. 192.168.1.1/24
 
         # Host on side 1?
-        if node_type.get(n1) == "host" and node_type.get(n2) in ("frr", "linux", "nft-fw"):
+        if node_type.get(n1) == "host" and node_type.get(n2) in (set(nos_known_types()) | {"linux"}):
             host_configure(
                 rt,
                 lab_name,
@@ -1044,7 +1044,7 @@ def configure_hosts_from_topology(rt: "Runtime", lab_name: str, topo: dict) -> N
             )
 
         # Host on side 2?
-        if node_type.get(n2) == "host" and node_type.get(n1) in ("frr", "linux", "nft-fw"):
+        if node_type.get(n2) == "host" and node_type.get(n1) in (set(nos_known_types()) | {"linux"}):
             host_configure(
                 rt,
                 lab_name,

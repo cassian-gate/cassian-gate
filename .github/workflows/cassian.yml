@@ -680,6 +680,308 @@ jobs:
             topologies/vm-assertion-smoke.yaml vm-assertion-smoke
           ./src/cassian.py down vm-assertion-smoke
 
+      - name: SONiC exec allow-list proof — sonic_exec_allowlist_proof.py (§4.5-d, REQ-45D-5)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/sonic_exec_allowlist_proof.py
+
+      - name: exec rule parity proof, FRR + nft-fw — exec_rule_parity_proof.py (§4.5-d, REQ-45D-6/-7)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/exec_rule_parity_proof.py
+
+      - name: VM guest-probe rc=5 transient proof — vm_guest_probe_rc5_proof.py (§4.5-d, BL-P2-4.5c-32, R1/D-i)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/vm_guest_probe_rc5_proof.py
+
+      - name: SONiC observation-kinds proof — sonic_observation_kinds_proof.py (§4.5-d, REQ-45D-1/-8/-9/-10/-15/-16)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/sonic_observation_kinds_proof.py
+
+      - name: SONiC observed-state render proof — sonic_observed_state_render_proof.py (§4.5-d, REQ-45D-21)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/sonic_observed_state_render_proof.py
+
+      - name: route_prefix seam parity proof — route_prefix_seam_parity_proof.py (§4.5-d, REQ-45D-2, D-1, Q-A)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/route_prefix_seam_parity_proof.py
+
+      - name: EVPN precheck MAC-route poll proof — evpn_precheck_mac_poll_proof.py (§4.5-d, S24-R5, BL-P2-4.5c-53)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/evpn_precheck_mac_poll_proof.py
+
+      - name: EVPN route-reflector next-hop-self proof — evpn_rr_next_hop_self_proof.py (§4.5-d, S26-R8/R9, BL-P2-4.5c-219)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          rc=0
+          # Lab-free leg: the declared rendered-config change over every EVPN
+          # topology the product resolves (S26-R8, S26-R9; DC v2.1 §14 item 8).
+          python tests/evpn_rr_next_hop_self_proof.py || rc=1
+          # Hosted leg: one booted FRR EVPN lab, read on leaf2 and spine1 through
+          # the product's vty path. The trap tears the lab down on every exit, so
+          # the teardown sweep below needs no entry for it.
+          trap './src/cassian.py down evpn-mac-route-absent-expect-fail || true' EXIT
+          ./src/cassian.py up topologies/evpn_mac_route_absent_expect_fail.yaml --reconfigure
+          python tests/evpn_rr_next_hop_self_proof.py --hosted evpn-mac-route-absent-expect-fail || rc=1
+          exit "$rc"
+
+      - name: SONiC ospf_neighbor_up UNSUPPORTED proof — sonic_ospf_unsupported_proof.py (§4.5-d, REQ-45D-17)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/sonic_ospf_unsupported_proof.py
+
+      - name: added-step if-key proof — wf_added_steps_if_key_proof.py (§4.5-d, REQ-45D-28)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/wf_added_steps_if_key_proof.py
+
+      - name: SONiC status and collect proof, lab-free legs — sonic_status_collect_proof.py (§4.5-d, REQ-45D-19/-20)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/sonic_status_collect_proof.py
+
+      # §4.5-d S30-R5 readiness packet (founder rulings S31-R10 to S31-R19):
+      # FRR's nos_ready leg. Lab-free legs, then a Docker leg that starts the
+      # pinned FRR image privileged, as containerlab starts lab containers
+      # (S31-R16), and removes it in a finally. Additions only (REQ-45D-27).
+      - name: FRR daemon readiness proof — frr_nos_ready_proof.py (§4.5-d, S30-R5, S31-R10 to S31-R19, BL-P2-4.5c-226)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/frr_nos_ready_proof.py
+
+      # §4.5-d S33-R4 (founder rulings S33-R1 to S33-R5, 2026-10-19; BL-P2-4.5c-233):
+      # the FRR interface step's address window. Lab-free legs, then a Docker leg that
+      # starts the pinned FRR image privileged and opens the window between the
+      # product's flush and its address call; the container is removed in a finally.
+      # Additions only (REQ-45D-27).
+      - name: FRR address-step window proof — frr_address_step_window_proof.py (§4.5-d, S33-R4, BL-P2-4.5c-233)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/frr_address_step_window_proof.py
+
+      # §4.5-d VM-1 -- scope §9 row 15: one fixture, one boot, one declared FRR<->SONiC
+      # session carrying REQ-45D-8 first, then -1, -16 and -19 (S29-R5), and the two
+      # §15.2 negatives. The proof drives `cassian test --name` and `cassian status`
+      # itself, in order; `cassian test` without --name is not run here, because two
+      # declared tests are negative controls. The trap tears the lab down on every
+      # exit, so the teardown sweep below needs no entry for it (additions only,
+      # REQ-45D-27).
+      - name: SONiC FRR-to-SONiC BGP session (VM) — sonic_bgp_session_live_proof.py (§4.5-d, REQ-45D-1/-8/-16/-19)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-bgp-session-live || true' EXIT
+          ./src/cassian.py validate topologies/sonic-bgp-session-live.yaml
+          ./src/cassian.py up topologies/sonic-bgp-session-live.yaml --reconfigure
+          python tests/sonic_bgp_session_live_proof.py live topologies/sonic-bgp-session-live.yaml sonic-bgp-session-live
+
+      # §4.5-d VM-2 -- scope §9 row 8: one fixture, one boot (founder ruling S29-R6).
+      # The proof runs the plain `cassian test` (§19 Walkthrough 1: the three declared
+      # tests pass), configures one static route on the guest through the product's
+      # runtime, runs the static-route scenario, then the synthetic-complete control on
+      # the live RIB. The trap tears the lab down on every exit, so the teardown sweep
+      # below needs no entry for it (additions only, REQ-45D-27).
+      - name: SONiC RIB collection (VM) — sonic_rib_collection_live_proof.py (§4.5-d, REQ-45D-2/-11/-12)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-rib || true' EXIT
+          ./src/cassian.py validate topologies/sonic-rib.yaml
+          ./src/cassian.py up topologies/sonic-rib.yaml --reconfigure
+          python tests/sonic_rib_collection_live_proof.py live topologies/sonic-rib.yaml sonic-rib
+
+      # §4.5-d VM-3 -- scope §9 row 10 (founder rulings S34-R1 to S34-R4, 2026-10-19):
+      # one fixture, one boot -- a sonic-vm guest and two hosts attached directly to it.
+      # The proof asserts each host's data-plane address, MAC and default route
+      # (REQ-45D-26), drives the four declared ping tests one at a time with
+      # `cassian test --name` (REQ-45D-3/-4; two quadrants fail by design, so the plain
+      # `cassian test` is not run here), then shows the verify_host_ready trap on the live
+      # host. The trap tears the lab down on every exit, so the teardown sweep below
+      # needs no entry for it (additions only, REQ-45D-27).
+      - name: SONiC ping through a SONiC node (VM) — sonic_ping_through_proof.py (§4.5-d, REQ-45D-3/-4/-26)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-ping-through || true' EXIT
+          ./src/cassian.py validate topologies/sonic-ping-through.yaml
+          ./src/cassian.py up topologies/sonic-ping-through.yaml --reconfigure
+          python tests/sonic_ping_through_proof.py live topologies/sonic-ping-through.yaml sonic-ping-through
+
+      # §4.5-d VM-4 -- scope §9 row 9 (founder rulings S35-R1 to S35-R6, 2026-10-19):
+      # one fixture, one boot -- one frr node and one sonic-vm guest. The proof runs the
+      # refused-exec fixture's validate leg (REQ-45D-5, S35-R2), the three declared exec
+      # tests on the guest one at a time with `cassian test --name` (`show …` and
+      # `vtysh -c "show …"`, their output recorded as evidence; a live negative), and
+      # the guest-not-wrapper control through the product's substrate_exec. The trap
+      # tears the lab down on every exit, so the teardown sweep below needs no entry for
+      # it (additions only, REQ-45D-27).
+      - name: SONiC exec on the guest (VM) — sonic_exec_live_proof.py (§4.5-d, REQ-45D-5)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-exec-live || true' EXIT
+          ./src/cassian.py validate topologies/sonic-exec-live.yaml
+          ./src/cassian.py up topologies/sonic-exec-live.yaml --reconfigure
+          python tests/sonic_exec_live_proof.py live topologies/sonic-exec-live.yaml sonic-exec-live
+
+      # §4.5-d VM-5 -- scope §9 row 11 (founder rulings S36-R1 to S36-R3, 2026-10-20):
+      # one fixture, one boot -- one frr node and one sonic-vm guest, no BGP declared.
+      # The proof re-runs its lab-free legs, then reads the guest through `cassian
+      # status --routes` (JSON, and human with the raw route lines) and `cassian
+      # collect` (the SONiC node's two collect artifacts with zero sessions), and runs
+      # the guest-not-wrapper control through the product's substrate_exec. The trap
+      # tears the lab down on every exit, so the teardown sweep below needs no entry for
+      # it (additions only, REQ-45D-27).
+      - name: SONiC status and collect (VM) — sonic_status_collect_proof.py (§4.5-d, REQ-45D-19/-20)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-status-collect || true' EXIT
+          ./src/cassian.py validate topologies/sonic-status-collect.yaml
+          ./src/cassian.py up topologies/sonic-status-collect.yaml --reconfigure
+          python tests/sonic_status_collect_proof.py live topologies/sonic-status-collect.yaml sonic-status-collect
+
+      # §4.5-d VM-6 -- scope §9 row 13 (founder rulings S37-R1 to S37-R3, 2026-10-20):
+      # one fixture, one boot -- one frr node and one sonic-vm guest in generated mode, no
+      # BGP declared. The proof runs its lab-free legs, reads the guest's metadata, PORT
+      # table, config_db.json md5 and loopback table, re-runs the product's provision for
+      # the guest with its router_id changed (the sentinel), reads them again and compares
+      # what changed with the provision docstring's claim (REQ-45D-30), then runs the
+      # guest-not-wrapper control and the saved file's read-only control. The trap tears the
+      # lab down on every exit, so the teardown sweep below needs no entry for it
+      # (additions only, REQ-45D-27).
+      - name: SONiC within-boot reprovision (VM) — sonic_within_boot_reprovision_proof.py (§4.5-d, REQ-45D-30)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-within-boot || true' EXIT
+          ./src/cassian.py validate topologies/sonic-within-boot.yaml
+          ./src/cassian.py up topologies/sonic-within-boot.yaml --reconfigure
+          python tests/sonic_within_boot_reprovision_proof.py live topologies/sonic-within-boot.yaml sonic-within-boot
+
+      # §4.5-d VM-7 -- scope §9 row 12 (founder ruling S37-R4, 2026-10-20): one fixture, one
+      # boot -- one frr node and one sonic-vm guest in preconfigured mode, whose operator
+      # artifact carries arms F and E of REQ-45D-29 and the two controls, arms A and D. The
+      # proof runs its lab-free legs, reads init_cfg.json and, through sonic-cfggen, the
+      # tables the arms name, checks the controls, records arms F and E as measured, then
+      # runs the guest-not-wrapper control. The trap tears the lab down on every exit, so the
+      # teardown sweep below needs no entry for it (additions only, REQ-45D-27).
+      - name: SONiC init_cfg layering (VM) — sonic_init_cfg_layering_proof.py (§4.5-d, REQ-45D-29)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-init-cfg-layering || true' EXIT
+          ./src/cassian.py validate topologies/sonic-init-cfg-layering.yaml
+          ./src/cassian.py up topologies/sonic-init-cfg-layering.yaml --reconfigure
+          python tests/sonic_init_cfg_layering_proof.py live topologies/sonic-init-cfg-layering.yaml sonic-init-cfg-layering
+
+      # §4.5-d VM-8 -- scope §9 row 14 (founder rulings S37-R5, S37-R6 and S37-R14): one fixture,
+      # one boot -- r1 (frr) and s1 (sonic-vm) with one declared eBGP session. The proof runs its
+      # lab-free legs, reads s1's negotiated hold time against the scenario's wait, runs the
+      # declared invariant by name (the control: it passes), then the fixture's scenario through
+      # `cassian test --scenario`: 100% loss is applied to s1:eth1, the wait runs out, and the
+      # invariant fails -- the detection, its observed state read from results.json. The trap
+      # tears the lab down on every exit, so the teardown sweep below needs no entry for it
+      # (additions only, REQ-45D-27).
+      - name: SONiC grey failure (VM) — sonic_grey_failure_proof.py (§4.5-d, REQ-45D-22)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-grey-failure || true' EXIT
+          ./src/cassian.py validate topologies/sonic-grey-failure.yaml
+          ./src/cassian.py up topologies/sonic-grey-failure.yaml --reconfigure
+          python tests/sonic_grey_failure_proof.py live topologies/sonic-grey-failure.yaml sonic-grey-failure
+
       - name: SONiC (VM) teardown sweep (§4.5-c WI-3)
         if: always()
         env:
@@ -723,3 +1025,17 @@ jobs:
             labs/**
           if-no-files-found: ignore
 
+      # §4.5-d S32-R3 (founder ruling 2026-10-18; BL-P2-4.5c-230, S30-R33): the job's
+      # final step. Every results.json present under labs/ is re-verified against its
+      # own tamper seal, by the recipe the docs page states and by the engine's
+      # function. A bundle overwritten earlier in the job by a later run of the same
+      # lab is not seen (stated in the proof's header; the step prints the count).
+      # Additions only (REQ-45D-27).
+      - name: results.json tamper-seal proof — results_tamper_check_bundle_proof.py (§4.5-d, S32-R3, BL-P2-4.5c-230)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/results_tamper_check_bundle_proof.py labs

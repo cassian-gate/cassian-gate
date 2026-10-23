@@ -1,0 +1,116 @@
+name: sonic-bgp-session-live
+
+# §4.5-d VM-1 -- scope §9 row 15, the row-15 fixture (handover §14.2: "FRR asn /
+# bgp.neighbors / networks + SONiC asn / bgp.neighbors"). One fixture, one boot,
+# one declared FRR<->SONiC eBGP session carrying every converted assertion:
+# REQ-45D-8 first, then REQ-45D-1, -16 and -19 (scope §2.1 rev 6; LD-45D-6).
+#
+# RUN ONLY THROUGH tests/sonic_bgp_session_live_proof.py. The proof runs each
+# declared test by name, in order, behind bgp_session_up. Two declared tests are
+# negative controls that are meant to fail on a healthy lab, so a plain
+# `cassian test sonic-bgp-session-live` reports a failure by design:
+#   row15_as_path_unadvertised        -- expect: fail on a prefix nobody
+#                                        advertises (-16 negative, §15.2)
+#   row15_session_after_neighbour_removed
+#                                     -- expect: fail, run only through the
+#                                        scenario below after the proof removes
+#                                        r1's neighbour (-8 negative, §15.2).
+#                                        --scenario skips the global BGP
+#                                        precheck, which would otherwise stop
+#                                        `cassian test` before the test runs.
+#
+# Declaration surface is FRR's, key for key (REQ-45C-23), as in
+# topologies/bgp_as_path.yaml. SONiC renders asn and bgp.neighbors (Ledger §33
+# R1); it does not render networks or route-maps (R2, BL-P2-4.5c-55), so only
+# r1 declares `networks` and nothing here asserts a SONiC-set attribute.
+#
+# HALT-2 address discipline (founder ruling 2026-08-15, surface S-9): every
+# address is RFC 5737, outside the stock canned ranges 10.0.0.0/26 and
+# 10.1.0.0/24, and unused by every other fixture in topologies/ when chosen
+# (192.0.2.71, .72; 198.51.100.28, .29; 203.0.113.77). ASNs avoid 65100, the
+# stock DEVICE_METADATA bgp_asn. The ranges are named in
+# tests/sonic_lifecycle_proof.py, not here.
+#
+# REGISTERED in SECTION_45C_FIXTURES (tests/sonic_lifecycle_proof.py) in the
+# SAME commit that adds this file (founder ruling S27-R5).
+#
+# ONE sonic-vm guest, inside the single-SONiC-node ceiling. Image resolves from
+# the contrib-owned local tag (REQ-45C-11, REQ-45C-32); no registry pull.
+
+nodes:
+  - name: r1
+    type: frr
+    asn: 65071
+    router_id: 192.0.2.71
+    networks:
+      - 192.0.2.71/32
+    bgp:
+      neighbors:
+        - peer: s1
+          remote_as: 65072
+
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    asn: 65072
+    router_id: 192.0.2.72
+    bgp:
+      neighbors:
+        - peer: r1
+          remote_as: 65071
+
+links:
+  - endpoints: ["r1:eth1", "s1:eth1"]
+    ipv4: ["198.51.100.28/31", "198.51.100.29/31"]
+
+tests:
+  # B04 / REQ-45D-8 -- asserted FIRST; nothing below runs unless it passes.
+  - name: row15_session_up
+    kind: invariant
+    type: bgp_session_up
+    node: s1
+    neighbor: 198.51.100.28
+    expect: pass
+    timeout_s: 60
+
+  # B05 / REQ-45D-1
+  - name: row15_bgp_neighbor
+    kind: bgp_neighbor
+    src: s1
+    dst: 198.51.100.28
+    expect: pass
+    timeout_s: 60
+    retry_interval_s: 1.0
+
+  # B05 / REQ-45D-16 -- the AS path of r1's declared network, received on s1.
+  - name: row15_as_path
+    kind: invariant
+    type: bgp_as_path
+    node: s1
+    prefix: 192.0.2.71/32
+    as_path: "_65071_"
+    expect: pass
+
+  # §15.2 -16 negative -- a prefix nobody advertises.
+  - name: row15_as_path_unadvertised
+    kind: invariant
+    type: bgp_as_path
+    node: s1
+    prefix: 203.0.113.77/32
+    as_path: "_65071_"
+    expect: fail
+
+  # §15.2 -8 negative -- run only through the scenario, after the neighbour is removed.
+  - name: row15_session_after_neighbour_removed
+    kind: invariant
+    type: bgp_session_up
+    node: s1
+    neighbor: 198.51.100.28
+    expect: fail
+
+scenarios:
+  - id: row15_neighbour_removed
+    description: "REQ-45D-8 negative: r1's neighbour removed, the session on s1 must not read Established"
+    steps:
+      - run: row15_session_after_neighbour_removed

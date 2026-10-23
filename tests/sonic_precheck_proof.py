@@ -303,16 +303,18 @@ check("REQ-45C-2 the reconcile reaches the guest via the single-sourced argv",
       _rt_rec.calls and _rt_rec.calls[0] == S._BGP_RECONCILE_ARGV,
       "calls: %s" % (_rt_rec.calls[:1],))
 
-# --- the ruled shape: NO readiness wait here (founder ruling 2026-08-25) -----
+# --- the ruled shape: no readiness wait INSIDE the reconcile (2026-08-25); the
+# wait follows it in provision (founder ruling S29-R7, 2026-10-13) ------------
 check("REQ-45C-29 reconcile does NOT re-poll for readiness",
       "_CONVERGENCE_POLL_INTERVAL_S" not in ast.dump(_fns["_reconcile_bgp"]),
-      "nos_ready assigns bgp readiness to convergence_wait; re-polling here "
-      "would wait for something already waited for")
+      "the reconcile issues one restart; the bounded wait is "
+      "_await_routing_daemon, which provision calls after it (S29-R7)")
 check("REQ-45C-2 the during-boot limit is stated in-file, not implied",
-      "DURING-BOOT RESTART IS UNMEASURED" in (_fns["_reconcile_bgp"].body[0].value.value
-                                              if isinstance(_fns["_reconcile_bgp"].body[0], ast.Expr)
-                                              else ""),
-      "PBE-P2-8: bgp arrives up to ~90s after CONFIG_DB and provision runs earlier")
+      "DURING-BOOT RESTART, MEASURED ONCE" in (_fns["_reconcile_bgp"].body[0].value.value
+                                               if isinstance(_fns["_reconcile_bgp"].body[0], ast.Expr)
+                                               else ""),
+      "PBE-P2-8: bgp arrives up to ~90s after CONFIG_DB and provision runs earlier; "
+      "one during-boot restart measured 2026-10-13 (S29-R7)")
 
 # --- REQ-45C-24: undeclared-neighbor asymmetry, named never silent ----------
 # CORE-side, founder ruling 2026-08-25: the asymmetry is a TOPOLOGY property and

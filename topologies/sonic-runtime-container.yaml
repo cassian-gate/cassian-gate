@@ -1,0 +1,21 @@
+name: sonic-runtime-container
+
+# §4.5-d REQ-45D-24 (item 5, BL-P2-4.5c-46) negative fixture -- handover §18 row
+# -24 and §19.2 walkthrough 1. Declares type sonic-vm with an EXPLICIT
+# runtime: container, which `cassian validate` must refuse at exit 2 with the
+# item-5 message, distinct from the VM runtime contract message. It is not a
+# deployable topology and no proof deploys it.
+
+nodes:
+  - name: s1
+    type: sonic-vm
+    runtime: container
+    image: local/sonic-vm:202405
+    router_id: 192.0.2.11
+
+  - name: r1
+    type: frr
+    router_id: 192.0.2.21
+
+links:
+  - endpoints: ["s1:eth1", "r1:eth1"]

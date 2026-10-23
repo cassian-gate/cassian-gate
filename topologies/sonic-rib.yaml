@@ -1,0 +1,78 @@
+name: sonic-rib
+
+# §4.5-d VM-2 -- scope §9 row 8 (REQ-45D-2, -11, -12), founder ruling S29-R6 of
+# 2026-10-12. The RIB fixture handover §19 Walkthrough 1 names: one sonic-vm guest
+# with a declared loopback, and its FRR link partner (every SONiC fixture CI boots
+# has one). Booted once by tests/sonic_rib_collection_live_proof.py.
+#
+# S29-R6: three declared tests, all expected to pass at boot, so
+# `cassian test topologies/sonic-rib.yaml` (the walkthrough) reports every declared
+# test passing and exits 0 -- §19's "1/1" read as "every declared test passes":
+#   rib_route_prefix_loopback  route_prefix on the declared loopback /32 -- the
+#                              walkthrough's test; REQ-45D-2's connected prefix
+#   rib_route_present_link     route_present on the declared link /31 -- REQ-45D-11
+#   rib_route_absent_unused    route_absent on a prefix nothing declares and the
+#                              stock image does not carry -- REQ-45D-12
+# and one scenario, run only with --scenario (a plain `cassian test` runs none):
+#   rib_static                 wait_for route_prefix on the static prefix, read
+#                              through the seam (founder ruling D-1) after the proof
+#                              configures `ip route 198.18.0.0/24 blackhole` on the
+#                              guest -- REQ-45D-2's static prefix. SONiC renders no
+#                              static route, so nothing here declares one.
+#
+# HALT-2 address discipline: every declared address is an RFC 5737 documentation
+# address, outside the stock ranges of sonic-vm:202405 (checked by LEG 1 of
+# tests/sonic_lifecycle_proof.py, where this fixture is registered). The static
+# and absent prefixes are RFC 2544 benchmarking ranges -- the two the H1-b3 RIB
+# capture of record measured (session-17 note §5) -- and neither is stock.
+#
+# Image resolves from the contrib-owned local tag (REQ-45C-11, REQ-45C-32).
+
+nodes:
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    router_id: 192.0.2.81
+
+  - name: r1
+    type: frr
+    router_id: 192.0.2.82
+
+links:
+  - endpoints: ["s1:eth1", "r1:eth1"]
+    ipv4: ["198.51.100.32/31", "198.51.100.33/31"]
+
+tests:
+  - name: rib_route_prefix_loopback
+    kind: route_prefix
+    src: s1
+    prefix: 192.0.2.81/32
+    expect: pass
+
+  - name: rib_route_present_link
+    kind: invariant
+    type: route_present
+    node: s1
+    prefix: 198.51.100.32/31
+    expect: pass
+
+  - name: rib_route_absent_unused
+    kind: invariant
+    type: route_absent
+    node: s1
+    prefix: 198.18.1.0/24
+    expect: pass
+
+scenarios:
+  - id: rib_static
+    description: "REQ-45D-2 static prefix: present through the seam after the proof configures it"
+    steps:
+      - wait_for:
+          type: route_prefix
+          from: s1
+          src: s1
+          prefix: 198.18.0.0/24
+          expect: pass
+          timeout: 30
+          interval_s: 2.0

@@ -146,6 +146,39 @@ for _p in ("sonic_leaf_import_proof.py", "sonic_configgen_determinism_proof.py",
            "sonic_preconfigured_proof.py"):
     check(f"§4.5-c proof is CI-wired: {_p} present in the gate", _p in gate)
 
+# §4.5-d (REQ-45D-27; founder ruling (B), 2026-09-24): §4.5-d's hosted proofs
+# are gate-wired in lockstep with the cassian.yml steps that run them, in a
+# section loop of their own beside §4.5-b's and §4.5-c's, so each check names
+# the section that owns the proof. Coverage limit (PBE-P2-8), as stated for
+# §4.5-c above: this substring test proves each proof is NAMED in the gate; it
+# does NOT prove the step executes, that the runner reaches it, or that the
+# proof passes.
+for _p in ("sonic_exec_allowlist_proof.py",   # H1-a2-ii, REQ-45D-5
+           "vm_guest_probe_rc5_proof.py",    # S7, BL-P2-4.5c-32 (R1/D-i)
+           "sonic_observation_kinds_proof.py",  # H1-b1 script 1, REQ-45D-1/-8/-9/-10/-15/-16
+           "sonic_observed_state_render_proof.py",  # H1-b1 script 2, REQ-45D-21 (ruling (i))
+           "exec_rule_parity_proof.py",       # H1-a2-ii, REQ-45D-6/-7
+           "route_prefix_seam_parity_proof.py",  # H1-b3 script 1b, REQ-45D-2 (ruling Q-B)
+           "evpn_precheck_mac_poll_proof.py",  # S24-R5, BL-P2-4.5c-53 (S25-R4)
+           "evpn_rr_next_hop_self_proof.py",  # S26-R8/R9, BL-P2-4.5c-219 (S25-R5)
+           "sonic_ospf_unsupported_proof.py",  # S27-R4, REQ-45D-17
+           "wf_added_steps_if_key_proof.py",  # S27-R4, REQ-45D-28
+           "sonic_status_collect_proof.py",  # S27-R4, REQ-45D-19/-20 (lab-free legs)
+           "sonic_bgp_session_live_proof.py",  # S29-R1, row 15, REQ-45D-1/-8/-16/-19 (VM)
+           "sonic_rib_collection_live_proof.py",  # S29-R6, row 8, REQ-45D-2/-11/-12 (VM)
+           "frr_nos_ready_proof.py",  # S31-R10 to S31-R19, S30-R5 readiness packet
+           "results_tamper_check_bundle_proof.py",  # S32-R3, BL-P2-4.5c-230 (tamper seal)
+           "frr_address_step_window_proof.py",  # S33-R4, BL-P2-4.5c-233 (address-step window)
+           "sonic_ping_through_proof.py",  # S34-R1 to S34-R4, row 10, REQ-45D-3/-4/-26 (VM)
+           "sonic_exec_live_proof.py",  # S35-R1 to S35-R6, row 9, REQ-45D-5 (VM)
+           # S36-R1 to S36-R3, row 11, REQ-45D-19/-20 (VM): the (VM) step's invocation;
+           # the file name alone is already named, by its lab-free step, above
+           "sonic_status_collect_proof.py live topologies/sonic-status-collect.yaml",
+           "sonic_within_boot_reprovision_proof.py",  # S37-R1 to S37-R3, row 13, REQ-45D-30 (VM)
+           "sonic_init_cfg_layering_proof.py",  # S37-R4, row 12, REQ-45D-29 (VM)
+           "sonic_grey_failure_proof.py"):  # S37-R5, S37-R6, S37-R14, row 14, REQ-45D-22 (VM)
+    check(f"§4.5-d proof is CI-wired: {_p} present in the gate", _p in gate)
+
 fails = [n for n, ok in checks if not ok]
 print(f"PO-B3-fold (WF-12/13 replay): {len(checks) - len(fails)}/{len(checks)} checks passed.")
 for n, ok in checks:

@@ -23,12 +23,13 @@ That's the whole anatomy. The four moving parts are the **node**, the **command*
 
 ## Step by step
 
-**1. Name it and point it at a node.** `src` is the node the command runs on — it must be a node in your `nodes:` list. Cassian works out the node's type itself; today that type has to be `frr` or `nft-fw`.
+**1. Name it and point it at a node.** `src` is the node the command runs on — it must be a node in your `nodes:` list. Cassian works out the node's type itself; today that type has to be `frr`, `nft-fw` or `sonic-vm`.
 
 **2. Give it a read-only command.** Cassian only allows commands that *read* state, never change it:
 
 - on an `frr` node: `vtysh -c "show …"` (any `show` command)
 - on an `nft-fw` node: `nft list …` (e.g. `nft list ruleset`)
+- on a `sonic-vm` node: `show …` (SONiC's own `show` commands, except `show techsupport`) or `vtysh -c "show …"`
 
 Anything else — a config change, a raw shell — is rejected when you run `cassian validate`, before anything is deployed.
 

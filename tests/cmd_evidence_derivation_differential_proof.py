@@ -71,7 +71,8 @@ check("derivation idiom present at record sites",
       # idiom so a future provider denial carrying a real cmd is picked
       # up rather than misreported by a literal. Reachability rows for
       # the six are filed in the per-site addendum.
-      _engine_src.count('last_evidence.get("cmd") or ') == 30)
+      # 30 -> 31 by founder ruling Decision A of 2026-10-03 (SP #1): ruling Q20-3's collection-failure record site in run_invariant_test's route_present / route_absent consumer (H1-b3 script 2a).
+      _engine_src.count('last_evidence.get("cmd") or ') == 31)
 
 _ns = dict(E.__dict__)
 

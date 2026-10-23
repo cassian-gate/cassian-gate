@@ -41,6 +41,16 @@ To keep the digest meaningful, fields that vary by environment or wall-clock rat
 
 To confirm a stored `results.json` has not been altered, recompute a SHA-256 over the same canonical domain and compare it to the recorded `digest`. Because gate runs are deterministic, re-running the same authoritative evidence yields a byte-identical bundle and therefore the same digest — replay is itself a verification path.
 
+The recipe, exactly, so the check needs nothing but the file and a SHA-256 tool:
+
+1. Parse `results.json` as JSON.
+2. Remove every object member, at any depth, whose name is one of `duration_ms`, `started_at`, `finished_at`, `resolved_topology_mtime`, `resolved_topology_path` or `tamper_check`.
+3. Remove the members at these paths: `timing`, `blast_radius.path` and `authority.supporting_evidence.path`. A path names object members from the top of the file; an array does not add a step, so `authority.supporting_evidence.path` is the `path` member of every entry in the `authority.supporting_evidence` array.
+4. Serialize what remains as JSON with the keys of every object sorted, an indent of two spaces, `,` between items and `: ` after keys, and non-ASCII characters written as themselves rather than as `\u` escapes — what Python's `json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False)` produces. End the text with exactly one line feed.
+5. Compute the SHA-256 of that text's UTF-8 bytes. The bundle is unaltered when the lowercase hex digest equals `tamper_check.digest` and `tamper_check.state` is `verified`.
+
+A stamp whose `state` is `unverifiable` carries no digest and cannot be checked this way. Bundles written by earlier versions of Cassian Gate recorded the digest before the run's last edits to the record, so they do not verify by this recipe; re-running the same evidence produces a bundle that does.
+
 ## Declaring intent
 
 `intent` lets an operator record *why* a run happened — a change ticket, a pre-production check, a named validation — directly in the evidence. Declare it as a single top-level string in the topology:

@@ -27,7 +27,7 @@ from cassian_model import (
     nos_default_image,
     NOS_PROVIDERS,
 )
-from cassian_nos_types import CAP_UNSUP, Observation, ObservationRequest, capability_for
+from cassian_nos_types import CAP_IMPL, CAP_UNSUP, Observation, ObservationRequest, capability_for
 from cassian_tests import (
     validate_scenarios,
     _preflight_default_out,
@@ -251,10 +251,12 @@ def _command_uses_workspace_labs(cmd: str) -> bool:
     }
 
 def _provision_nos_providers(rt, lab_name: str, topo: dict) -> None:
-    """Dispatch `provision` for every node whose provider wires it.
+    """Dispatch `nos_ready` and `provision` for every node whose provider wires them.
 
     Deferred legs are skipped by inspecting the LD-H2 placeholder marker, so an
     unwired provider is never invoked and never fails loud for merely existing.
+    A provider with `provision` deferred but `nos_ready` wired (FRR, S31-R10)
+    is dispatched for `nos_ready` only.
     """
     for n in topo.get("nodes", []) or []:
         if not isinstance(n, dict):
@@ -262,7 +264,8 @@ def _provision_nos_providers(rt, lab_name: str, topo: dict) -> None:
         prov = NOS_PROVIDERS.get(n.get("type"))
         if prov is None:
             continue
-        if getattr(prov.provision, "cassian_deferred_leg", None) is not None:
+        provision_deferred = getattr(prov.provision, "cassian_deferred_leg", None) is not None
+        if provision_deferred and getattr(prov.nos_ready, "cassian_deferred_leg", None) is not None:
             continue
         name = str(n.get("name") or "").strip()
         if not name:
@@ -278,14 +281,26 @@ def _provision_nos_providers(rt, lab_name: str, topo: dict) -> None:
             verify_sonic_vm_ready(rt, lab_name, name)
 
         # NOS-readiness leg at the engine -> adapter boundary (design :188).
-        # Marker-guarded exactly as `provision` is above: a provider whose
+        # Marker-guarded exactly as `provision` is: a provider whose
         # `nos_ready` is still a deferred placeholder is SKIPPED, never
-        # invoked. The guard is forward-looking -- today the `provision`
-        # skip already excludes FRR and nft-fw, whose `provision` legs are
-        # themselves deferred -- and becomes load-bearing the moment a
-        # provider lands `provision` without `nos_ready`.
+        # invoked. nft-fw, with both legs deferred, is skipped above; FRR,
+        # with `provision` deferred and `nos_ready` wired (S31-R10), reaches
+        # here and stops after it; the guard is load-bearing for a provider
+        # that lands `provision` without `nos_ready`.
         if getattr(prov.nos_ready, "cassian_deferred_leg", None) is None:
-            prov.nos_ready(rt, lab_name, name)
+            try:
+                prov.nos_ready(rt, lab_name, name)
+            except SystemExit as exc:
+                # S31-R12 / S31-R18: a provider that fails readiness with a
+                # `provision: ` MESSAGE hands it to core, which renders it,
+                # records it for the gate's hard-failure record and exits in
+                # the hard-failure band (CLI reference §6). Any other exit
+                # (SONiC's `_fail` exits 2 with its own text) passes through.
+                if isinstance(exc.code, str) and exc.code.startswith("provision: "):
+                    die(exc.code, code=1)
+                raise
+        if provision_deferred:
+            continue
 
         applied = prov.provision(rt, lab_name, name, n, topo)
         if not applied:
@@ -294,6 +309,25 @@ def _provision_nos_providers(rt, lab_name: str, topo: dict) -> None:
             out_path = node_cfg_dir(lab_name, name) / str(fname)
             out_path.parent.mkdir(parents=True, exist_ok=True)
             write_json_canonical(out_path, content)
+
+
+def _gate_hard_failure_phase(gate_phase, err_msg) -> str:
+    """The phase a gate-mode hard-failure record carries.
+
+    WI (Gate failure clarity): map netsim-owned resolve-time validation/coverage
+    failures to RESOLVE, even if they occur during the gate-style cmd_up() path;
+    and (S31-R12) a provider's readiness failure, `provision: <node>: ...`, to
+    PROVISION. Deterministic: purely string-based on netsim-owned error
+    messages; no probing. Outside the deploy stage the phase is unchanged.
+    """
+    phase_report = str(gate_phase or "").strip().lower()
+    if phase_report == "deploy":
+        em = str(err_msg or "").lower()
+        if em.startswith("coverage:") or em.startswith("schema:") or em.startswith("invalid yaml:") or em.startswith("topology "):
+            phase_report = "resolve"
+        elif em.startswith("provision:"):
+            phase_report = "provision"
+    return phase_report
 
 
 def _bind_workspace_labs_dir(workspace: Path) -> None:
@@ -2403,7 +2437,6 @@ def cmd_status(args: argparse.Namespace) -> None:
            "container not running: r2 (container=clab-<lab>-r2)"
     """
     import json
-    rt = get_runtime()
 
     # Phase 3 (P3-A): accept either lab name OR topology path deterministically.
     # - No Docker scanning.
@@ -2518,6 +2551,14 @@ def cmd_status(args: argparse.Namespace) -> None:
     # Expected intent checks are only available when resolved topology exists.
     expected_bgp_by_node = derive_expected_bgp_neighbors_from_links(topo) if topo else {}
     expected_routes_by_frr = derive_expected_routes_for_frr(topo) if (topo and routes_enabled) else {}
+
+    # S29-R4 (founder ruling 2026-10-12; BL-P2-4.5c-223): built from the topology
+    # loaded above, as cmd_test builds its runtime, so a vm-runtime node's status
+    # legs read the guest NOS and not the vrnetlab wrapper. With no resolved
+    # topology, or no vm-runtime node in it, get_runtime returns the same
+    # ContainerRuntime the bare call returned. Declared under DC v2.1 §14 item 8:
+    # on a sonic-vm node, --interfaces now reads the guest as well.
+    rt = get_runtime(topo)
 
     def _node_exec(node: str, cmd: list[str]) -> str:
         cp = rt.exec(lab, node, cmd, check=False, capture_output=True)
@@ -2639,8 +2680,12 @@ def cmd_status(args: argparse.Namespace) -> None:
             except Exception as e:
                 node_rec["interfaces_error"] = str(e)
 
-        # BGP
-        if running and bgp_enabled and ntype == "frr":
+        # BGP -- REQ-45D-19 (B09; founder rulings S27-R8 and S27-R9): capability-
+        # guarded, never a node-type literal. A type with no provider is never
+        # looked up; a provider that does not declare the leg IMPL keeps today's
+        # silence (no record, no line), so a None leg is never called.
+        if (running and bgp_enabled and ntype in NOS_PROVIDERS
+                and capability_for(NOS_PROVIDERS[ntype], "status_bgp_summary").state == CAP_IMPL):
             expected = expected_bgp_by_node.get(name, set())
             bgp_rec: dict[str, Any] = {
                 "expected": sorted(expected),
@@ -2687,8 +2732,9 @@ def cmd_status(args: argparse.Namespace) -> None:
 
             node_rec["bgp"] = bgp_rec
 
-        # ROUTES
-        if running and routes_enabled and ntype == "frr":
+        # ROUTES -- REQ-45D-19: the same capability guard as BGP above.
+        if (running and routes_enabled and ntype in NOS_PROVIDERS
+                and capability_for(NOS_PROVIDERS[ntype], "status_routes").state == CAP_IMPL):
             expected_routes = expected_routes_by_frr.get(name, set())
             routes_rec: dict[str, Any] = {
                 "expected": sorted(expected_routes),
@@ -2858,7 +2904,10 @@ def cmd_status(args: argparse.Namespace) -> None:
             for line in node_rec["interfaces"]:
                 print(f"      {line}")
 
-        if running and bgp_enabled and node_rec.get("type") == "frr":
+        # Human output (founder ruling S27-R8): the record guard's capability check.
+        if (running and bgp_enabled and node_rec.get("type") in NOS_PROVIDERS
+                and capability_for(NOS_PROVIDERS[node_rec.get("type")],
+                                   "status_bgp_summary").state == CAP_IMPL):
             bgp = node_rec.get("bgp") or {}
             expected = bgp.get("expected") or []
             pm = str(bgp.get("parser_mode") or "none")
@@ -2886,7 +2935,9 @@ def cmd_status(args: argparse.Namespace) -> None:
                     for line in raw_text:
                         print(f"      {line}")
 
-        if running and routes_enabled and node_rec.get("type") == "frr":
+        if (running and routes_enabled and node_rec.get("type") in NOS_PROVIDERS
+                and capability_for(NOS_PROVIDERS[node_rec.get("type")],
+                                   "status_routes").state == CAP_IMPL):
             rts = node_rec.get("routes") or {}
             expected = rts.get("expected") or []
             pm = str(rts.get("parser_mode") or "none")
@@ -2931,7 +2982,6 @@ def cmd_collect(args: argparse.Namespace) -> None:
     from typing import Any
 
     lab = args.lab
-    rt = get_runtime()
 
     tpath = topo_path_for_lab(lab)
     if not tpath.exists():
@@ -2939,6 +2989,13 @@ def cmd_collect(args: argparse.Namespace) -> None:
 
     topo = load_yaml(tpath)
     ensure_valid_topology(topo)
+    # S29-R4 (founder ruling 2026-10-12; BL-P2-4.5c-223): built from the topology
+    # loaded above, as cmd_test builds its runtime, so a vm-runtime node's collect
+    # targets read the guest NOS and not the vrnetlab wrapper. With no vm-runtime
+    # node, get_runtime returns the same ContainerRuntime the bare call returned.
+    # Declared under DC v2.1 §14 item 8: on a sonic-vm node, <node>.ip-addr.txt
+    # and <node>.ip-route.txt now carry the guest's output as well.
+    rt = get_runtime(topo)
 
     outdir = lab_dir(lab) / "artifacts"
     outdir.mkdir(parents=True, exist_ok=True)
@@ -3506,6 +3563,173 @@ def _nos_collect(rt, lab, node, ntype, request, seam):
     return provider.collect(rt, lab, node, request)
 
 
+# =============================================================================
+# The global control-plane precheck's entry decision and its record.
+#
+# BL-P2-4.5c-216's fix (§4.5-d session 30; founder rulings S30-R1, S30-R2,
+# S30-R9 to S30-R11, S30-R13, S30-R16 to S30-R21 and S30-R23 to S30-R25,
+# 2026-10-14). Measured in
+# the session-30 capture: for every `fabric.evpn` topology the precheck derived
+# no BGP participant, so the whole block -- session waits, the S24-R5 route poll
+# with S28's window, even the fixed sleep -- was skipped and tests read EVPN
+# state with nothing gating them. Module-level so the precheck proof exercises
+# the real decision, not a copy. Declared under DC v2.1 §14 item 8.
+# =============================================================================
+
+_PRECHECK_GUARD_TEXT = (
+    "Control-plane precheck: lab {lab} declares BGP on {nodes} (`asn` or `bgp`), but no "
+    "linked BGP peer is derived, so there is no session to wait for.\n"
+    "A precheck that waits on nothing would let tests read a control plane that has not "
+    "converged; it fails instead.\n"
+    "Action: give each declared BGP node a link to a peer that also declares `asn`, then "
+    "re-run `cassian test`."
+)
+
+
+def _precheck_entry(topo: dict, bgp_participants: list, selected: bool):
+    """Whether `cmd_test`'s global control-plane precheck is entered.
+
+    Returns (enter, not_entered_reason, guard). `guard` is the text of the S30-R2
+    hard-fail, raised inside the precheck so the run is recorded as blocked.
+      - not selected (a scenario run without --precheck-controlplane): not entered.
+      - node-level BGP intent (a node with `asn` or a `bgp` mapping) and no
+        participant derived: entered, with the guard (S30-R2).
+      - any participant, or `fabric.evpn` enabled (replay labs included): entered
+        (S30-R1, S30-R16).
+      - otherwise: not entered, "no-bgp-intent".
+    """
+    if not selected:
+        return False, "not-selected", None
+    intent = sorted(
+        str(n.get("name") or "")
+        for n in (topo.get("nodes") or [])
+        if isinstance(n, dict) and ("asn" in n or isinstance(n.get("bgp"), dict))
+    )
+    if intent and not bgp_participants:
+        return True, None, _PRECHECK_GUARD_TEXT.format(
+            lab=str(topo.get("name") or ""), nodes=", ".join(intent))
+    fabric = bool((((topo.get("fabric") or {}).get("evpn") or {}).get("enabled")))
+    if bgp_participants or fabric:
+        return True, None, None
+    return False, "no-bgp-intent", None
+
+
+class _PrecheckRecord:
+    """`summary.precheck` (facts that are the same for the same outcome) and
+    `timing.precheck` (run-variant values, inside the subtree the tamper digest
+    and the replay comparison already exclude) -- S30-R9, S30-R10, S30-R11,
+    S30-R17, S30-R19 to S30-R21, S30-R23 and S30-R24. Session waits are listed
+    one per wait started, in the order they run (S30-R23). The dicts are attached
+    to `results` and mutated in place, so every later write of `results.json`
+    carries them."""
+
+    def __init__(self) -> None:
+        self.summary = {
+            "entered": False,
+            "not_entered_reason": "not-reached",
+            "participants": [],
+            "session_wait": [],
+            "settle": None,
+            "outcome": "not-entered",
+            "failure": None,
+        }
+        self.timing = None
+        self._t0 = None
+        self._wait_t0 = None
+        self._sleep_t0 = None
+        self._failure = None
+
+    def attach(self, results: dict) -> None:
+        results["summary"]["precheck"] = self.summary
+        if self.timing is not None:
+            results.setdefault("timing", {})["precheck"] = self.timing
+
+    def not_entered(self, reason: str) -> None:
+        self.summary["entered"] = False
+        self.summary["not_entered_reason"] = reason
+
+    def enter(self, participants: list, now: float) -> None:
+        self.summary["entered"] = True
+        self.summary["not_entered_reason"] = None
+        self.summary["participants"] = sorted(str(n.get("name") or "") for n in participants)
+        self.summary["outcome"] = None
+        self.timing = {"duration_ms": None, "session_wait": [], "settle": None}
+        self._t0 = now
+
+    def wait_start(self, node: str, leg: str, bound_s: int, now: float) -> None:
+        self.summary["session_wait"].append(
+            {"node": node, "leg": leg, "bound_s": int(bound_s), "interval_s": 1, "outcome": None})
+        self.timing["session_wait"].append(
+            {"node": node, "elapsed_ms": None, "attempts": None, "attempts_reported": leg == "frr"})
+        self._wait_t0 = now
+
+    def _close_wait(self, outcome: str, now: float, stats: dict) -> None:
+        self.summary["session_wait"][-1]["outcome"] = outcome
+        t = self.timing["session_wait"][-1]
+        t["elapsed_ms"] = int(round((now - self._wait_t0) * 1000))
+        if t["attempts_reported"]:
+            t["attempts"] = stats.get("attempts")
+        self._wait_t0 = None
+
+    def wait_end(self, now: float, stats: dict) -> None:
+        self._close_wait("established", now, stats)
+
+    def poll_start(self, leaves: list, declared: list, k: int, bound_s: int) -> None:
+        self.summary["settle"] = {
+            "kind": "evpn-route-poll",
+            "leaves": list(leaves),
+            "declared": [{"host": h, "mac": m, "vni": v} for h, m, v in declared],
+            "k_required": int(k),
+            "bound_s": int(bound_s),
+            "interval_s": 1,
+            "outcome": None,
+            "absent_at_last": [],
+        }
+
+    def poll_end(self, ok: bool, absent: list, attempts: int, elapsed_ms: int, final_consecutive: int) -> None:
+        s = self.summary["settle"]
+        if ok:
+            s["outcome"] = "accepted"
+        elif absent:
+            s["outcome"] = "timeout-absent"
+            s["absent_at_last"] = [{"leaf": l, "host": h, "mac": m, "vni": v} for l, h, m, v in absent]
+        else:
+            s["outcome"] = "timeout-unstable"
+        self.timing["settle"] = {"elapsed_ms": int(elapsed_ms), "attempts": int(attempts),
+                                 "final_consecutive": int(final_consecutive)}
+        if not ok:
+            self._failure = "evpn-route-timeout"
+
+    def sleep_start(self, seconds: int, now: float) -> None:
+        self.summary["settle"] = {"kind": "fixed-sleep", "seconds": int(seconds)}
+        self._sleep_t0 = now
+
+    def sleep_end(self, now: float) -> None:
+        self.timing["settle"] = {"elapsed_ms": int(round((now - self._sleep_t0) * 1000))}
+        self._sleep_t0 = None
+
+    def failing(self, failure: str) -> None:
+        """Set immediately before a die the precheck raises itself."""
+        self._failure = failure
+
+    def passed(self, now: float) -> None:
+        self.summary["outcome"] = "passed"
+        self.timing["duration_ms"] = int(round((now - self._t0) * 1000))
+
+    def failed(self, now: float, stats: "dict | None" = None) -> None:
+        """On SystemExit inside the precheck. A session wait still open ended in its
+        own die: "timeout" only when the waiting code reported one (S30-R20),
+        otherwise "failed"; never read from message text. An exit the precheck does
+        not classify leaves `failure` null and, if the poll had started, its
+        outcome and timing null (S30-R24)."""
+        if self._wait_t0 is not None:
+            timed_out = bool((stats or {}).get("timed_out"))
+            self._close_wait("timeout" if timed_out else "failed", now, stats or {})
+            self._failure = "session-timeout" if timed_out else "session-failed"
+        self.summary["outcome"] = "failed"
+        self.summary["failure"] = self._failure
+        self.timing["duration_ms"] = int(round((now - self._t0) * 1000))
+
 def cmd_test(args: argparse.Namespace) -> None:
     """
     v1 update (Section C): Scenarios wired into cmd_test (minimal invasive).
@@ -3714,6 +3938,12 @@ def cmd_test(args: argparse.Namespace) -> None:
                     "failed": 0,
                 },
             }
+            # S30-R9, S30-R17 and S30-R25 (founder rulings 2026-10-14): this writer is a
+            # `cmd_test` exit path too -- a gate-mode deploy or provision failure
+            # ends before the precheck's decision, so its results.json carries the
+            # "not-reached" record (and, S30-R21, no timing.precheck). Declared
+            # under DC v2.1 §14 item 8.
+            _PrecheckRecord().attach(results)
 
             # Collect-time schema stabilization (best-effort; additive-only)
             try:
@@ -3771,6 +4001,12 @@ def cmd_test(args: argparse.Namespace) -> None:
             out = lab_dir(lab_name) / "results.json"
             try:
                 out.parent.mkdir(parents=True, exist_ok=True)
+                # S32-R2 (founder ruling 2026-10-18, BL-P2-4.5c-230): the tamper seal
+                # is recomputed LAST, by assignment, over exactly the object written
+                # (§4.13: "computed last") -- the schema floor above edits the record
+                # after _finalize_results_schema stamped it. Algorithm, domain and
+                # exclusion set unchanged. Declared under DC v2.1 §14 item 8.
+                results["tamper_check"] = _audit_compute_tamper_check(results)
                 write_json_canonical(out, results)
                 _invocation_record_written_artifact(out)
 
@@ -3931,15 +4167,9 @@ def cmd_test(args: argparse.Namespace) -> None:
                 # Best-effort: render a gate-style hard failure record under the derived lab name.
                 # Phase must reflect whether failure happened during deploy/provision or during test execution.
                 try:
-                    phase_report = str(gate_phase or "").strip().lower()
-
-                    # WI (Gate failure clarity): map netsim-owned resolve-time validation/coverage failures
-                    # to RESOLVE, even if they occur during the gate-style cmd_up() path.
-                    # Deterministic: purely string-based on netsim-owned error messages; no probing.
-                    if phase_report == "deploy":
-                        em = err_msg.lower()
-                        if em.startswith("coverage:") or em.startswith("schema:") or em.startswith("invalid yaml:") or em.startswith("topology "):
-                            phase_report = "resolve"
+                    # Resolve-time failures map to RESOLVE and a provider's
+                    # readiness failure to PROVISION (S31-R12).
+                    phase_report = _gate_hard_failure_phase(gate_phase, err_msg)
 
                     _gate_write_hard_failure_results(
                         phase=str(phase_report),
@@ -4165,6 +4395,12 @@ def cmd_test(args: argparse.Namespace) -> None:
         "scenarios": [],
         "events": [],
     }
+
+    # S30-R17 (founder ruling 2026-10-14): the precheck's record exists from here,
+    # so every exit path that writes results.json carries it -- "not-reached"
+    # until the precheck's entry decision. Declared under DC v2.1 §14 item 8.
+    _pcr = _PrecheckRecord()
+    _pcr.attach(results)
 
     # v1.5 EVPN Awareness (presence-only): informational results metadata.
     # Authority remains tests/scenarios only; this must never affect verdict or exit code.
@@ -4781,6 +5017,13 @@ def cmd_test(args: argparse.Namespace) -> None:
             except Exception:
                 # Never allow observed_state stabilization to break gate execution.
                 pass
+            # S32-R2 (founder ruling 2026-10-18, BL-P2-4.5c-230): the tamper seal is
+            # recomputed LAST, by assignment, over exactly the object written
+            # (§4.13: "computed last") -- the schema floor and the observed_state
+            # step above edit the record after _finalize_results_schema stamped it.
+            # Algorithm, domain and exclusion set unchanged. Declared under DC v2.1
+            # §14 item 8.
+            results["tamper_check"] = _audit_compute_tamper_check(results)
             write_json_canonical(out, results)
             _invocation_record_written_artifact(out)
 
@@ -5177,7 +5420,8 @@ def cmd_test(args: argparse.Namespace) -> None:
         - src: vantage node name (runs check here)
         - prefix: CIDR string
         - expect: pass|fail (negative semantics preserved)
-        Current v1.5 support: frr nodes only (vtysh).
+        Collected through the NOS seam for every node type (REQ-45D-2); the
+        presence rule stays core.
         """
         prefix = str(t.get("prefix") or "").strip()
 
@@ -5185,71 +5429,73 @@ def cmd_test(args: argparse.Namespace) -> None:
         if expected not in ("pass", "fail"):
             expected = "pass"
 
-        # Resolve node type deterministically from resolved topology
-        node_type = ""
-        for n in (topo.get("nodes") or []):
-            if isinstance(n, dict) and n.get("name") == src:
-                node_type = str(n.get("type") or "").strip().lower()
-                break
+        # REQ-45D-2 / LD-45D-1: route_prefix is collected through the NOS seam for
+        # every node type; the provider reads, and the presence rule (present <=>
+        # non-empty) stays core. Founder ruling Q-A (A), 2026-10-01: an unregistered
+        # vantage type meets the registry UNSUP die inside _nos_collect; a registered
+        # provider that does not declare route_prefix is an explicit UNSUP-fail,
+        # verdict fail regardless of expect. A read the provider cannot vouch for
+        # (probe_ok False) is a collection failure, verdict fail regardless of expect
+        # (ruling (I) of 2026-10-01). Never an implicit pass.
+        node_type = _nos_ntype(topo, src)
 
         start = time.time()
 
-        if node_type != "frr":
+        try:
+            _obs = _nos_collect(
+                rt, lab, src, node_type,
+                ObservationRequest(kind="route_prefix", params={"prefix": prefix}),
+                "cmd_test route_prefix collection",
+            )
+        except NosCapabilityUnsupported as _unsup:
             dur_ms = int((time.time() - start) * 1000)
-            observed = "fail"
-            verdict = "fail" if expected == "pass" else "pass"
             record_fn(
                 name=test_name,
                 kind="route_prefix",
                 src=src,
                 dst="",
                 expected=expected,
-                observed=observed,
-                verdict=verdict,
+                observed="fail",
+                verdict="fail",
                 duration_ms=dur_ms,
-                error=f"route_prefix unsupported on node type '{node_type}' (supported: frr only)",
-                evidence={"reason": "unsupported_node_type"},
+                error=f"route_prefix unsupported on node type '{node_type}': {_unsup.message}",
+                evidence={
+                    "cmd": "",
+                    "rc": None,
+                    "parse_error": _unsup.message,
+                    "reason": "unsupported_provider_capability",
+                    "node_type": _unsup.ntype,
+                },
                 meta={"prefix": prefix, "node_type": node_type},
             )
-            return verdict
+            return "fail"
 
-        # Deterministic route presence check (kernel FIB)
-        # Rationale: connected routes + installed routes are observable here even if FRR daemons/vtysh view differs.
-        try:
-            nw = ipaddress.ip_network(prefix, strict=False)
-            ipver = nw.version
-        except Exception:
-            # Should have been caught in resolve-time validation; keep deterministic failure here.
-            ipver = 4
+        _ev = _obs.evidence
+        _parse_error = str(_ev.get("parse_error") or "")
+        evidence = {"cmd": _ev.get("cmd"), "rc": _ev.get("rc")}
+        if _parse_error:
+            evidence["parse_error"] = _parse_error
 
-        ip_cmd = ["ip", f"-{ipver}", "route", "show", prefix]
-        cp = rt.exec(lab, src, ip_cmd, check=False, capture_output=True)
+        if not _ev.get("probe_ok"):
+            dur_ms = int((time.time() - start) * 1000)
+            record_fn(
+                name=test_name,
+                kind="route_prefix",
+                src=src,
+                dst="",
+                expected=expected,
+                observed="fail",
+                verdict="fail",
+                duration_ms=dur_ms,
+                error=f"route_prefix collection failed on '{src}': {_parse_error or 'probe not ok'}",
+                evidence=evidence,
+                meta={"prefix": prefix, "present": False},
+            )
+            return "fail"
 
-        # rt.exec() may return a CompletedProcess-like object OR a raw string.
-        if isinstance(cp, str):
-            out = cp
-            rc = None
-        else:
-            out = ""
-            if hasattr(cp, "stdout") and cp.stdout is not None:
-                out = cp.stdout
-            elif hasattr(cp, "output") and cp.output is not None:
-                out = cp.output
-
-            # Normalize bytes -> str (defensive)
-            if isinstance(out, (bytes, bytearray)):
-                try:
-                    out = out.decode("utf-8", errors="replace")
-                except Exception:
-                    out = str(out)
-
-            rc = getattr(cp, "returncode", None)
-
-        out = str(out or "")
-        # Deterministic presence rule for `ip route show <prefix>`:
-        # - present => prints one or more lines
-        # - absent  => prints nothing
-        present = bool(out.strip())
+        # Deterministic presence rule (core, REQ-45D-2): present <=> the provider
+        # handed back one or more route lines / entries for the prefix.
+        present = bool(_obs.data.get("routes"))
 
         observed = "pass" if present else "fail"
         verdict = "pass" if observed == expected else "fail"
@@ -5265,7 +5511,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             verdict=verdict,
             duration_ms=dur_ms,
             error="" if verdict == "pass" else f"route_prefix mismatch (expected {expected}, observed {observed})",
-            evidence={"cmd": " ".join(ip_cmd), "rc": rc},
+            evidence=evidence,
             meta={"prefix": prefix, "present": bool(present)},
         )
         return verdict
@@ -6452,6 +6698,37 @@ def cmd_test(args: argparse.Namespace) -> None:
                     },
                 )
                 raise SystemExit(2)
+
+            # Q20-3 (founder ruling (i) of 2026-10-02, an SP #1 bounded-scope amendment;
+            # finding F-S20-1): a read the provider cannot vouch for (probe_ok False)
+            # is an explicit collection failure for both NOSes -- verdict fail
+            # regardless of expect, never an absent answer (Doctrine 1.11). The shape
+            # of run_route_prefix_test's collection-failure record.
+            if not _vtysh_ok:
+                _parse_error = str(last_evidence.get("parse_error") or "")
+                _cf_evidence = {
+                    "cmd": last_evidence.get("cmd") or "vtysh -c 'show ip route json'",
+                    "rc": rc,
+                }
+                if _parse_error:
+                    _cf_evidence["parse_error"] = _parse_error
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    duration_ms=int((time.time() - start) * 1000),
+                    error=f"{inv_type} collection failed on '{src}': {_parse_error or 'probe not ok'}",
+                    evidence=_cf_evidence,
+                    meta={
+                        "type": inv_type,
+                        "prefix": norm_prefix,
+                    },
+                )
+                return "fail"
 
             if inv_type == "route_present":
                 observed = "pass" if present else "fail"
@@ -8837,27 +9114,43 @@ def cmd_test(args: argparse.Namespace) -> None:
                 if not isinstance(prefix, str) or not prefix.strip():
                     raise ValueError("wait_for route_prefix: requires prefix as CIDR")
 
-                # Deterministic: ip route lookup should be fast; per_attempt_timeout_s is recorded.
-                cmd = ["sh", "-lc", f"ip -4 route show {prefix.strip()} 2>/dev/null || true"]
-                cp = rt.exec(lab, str(vantage).strip(), cmd, check=False)
+                # REQ-45D-2 / founder ruling D-1 (2026-09-30): the same seam observation
+                # and the same core presence rule as run_route_prefix_test. Founder ruling
+                # Q-A (A), 2026-10-01: an unregistered vantage type meets the registry UNSUP
+                # die inside _nos_collect; NosCapabilityUnsupported from a provider that
+                # does not declare route_prefix propagates, so the wait fails
+                # deterministically with the UNSUP reason. A read the provider cannot vouch
+                # for (probe_ok False) is a collection failure: it raises, so the wait fails
+                # regardless of expect -- never an implicit pass (ruling (I), 2026-10-01).
+                _vantage = str(vantage).strip()
+                _prefix = prefix.strip()
+                _obs = _nos_collect(
+                    rt, lab, _vantage, _nos_ntype(topo, _vantage),
+                    ObservationRequest(kind="route_prefix", params={"prefix": _prefix}),
+                    "scenario wait_for route_prefix collection",
+                )
+                _ev = _obs.evidence
+                _rc = _ev.get("rc")
+                _parse_error = str(_ev.get("parse_error") or "")
+                if not _ev.get("probe_ok"):
+                    raise RuntimeError(
+                        f"wait_for route_prefix: collection failed on '{_vantage}': "
+                        f"{_parse_error or 'probe not ok'}"
+                    )
+                # last_rc reports the provider read's own rc (founder ruling Q20-2 (A),
+                # 2026-10-02; declared under DC v2.1 §14 item 8).
+                cp = subprocess.CompletedProcess(args=str(_ev.get("cmd") or ""), returncode=_rc)
                 last_cp = cp
 
-                out = getattr(cp, "stdout", "") or ""
-                if isinstance(out, (bytes, bytearray)):
-                    try:
-                        out = out.decode("utf-8", errors="replace")
-                    except Exception:
-                        out = str(out)
-
-                present = (prefix.strip() in str(out))
+                present = bool(_obs.data.get("routes"))
 
                 # Underlying success for route_prefix is: present == True (uniform success definition)
                 last_obs = "pass" if present else "fail"
                 last_evidence = {
-                    "cmd": f"ip -4 route show {prefix.strip()}",
-                    "prefix": prefix.strip(),
+                    "cmd": _ev.get("cmd"),
+                    "prefix": _prefix,
                     "present": bool(present),
-                    "last_rc": getattr(cp, "returncode", None),
+                    "last_rc": _rc,
                 }
 
                 attempt_success = (last_obs == "pass")
@@ -8900,6 +9193,16 @@ def cmd_test(args: argparse.Namespace) -> None:
                         src=str(src).strip(),
                     )
                 )
+                if not vtysh_ok:
+                    # F-S21-1 (founder ruling (A) of 2026-10-03, an SP #1 bounded-scope
+                    # amendment): a read the provider cannot vouch for, or a provider
+                    # that does not declare the kind, fails the wait step regardless
+                    # of expect -- the scenario behaviour script 1b gave route_prefix.
+                    _parse_error = str((evidence or {}).get("parse_error") or "")
+                    raise RuntimeError(
+                        f"wait_for route_present: collection failed on '{str(src).strip()}': "
+                        f"{_parse_error or 'probe not ok'}"
+                    )
                 last_cp = None
                 last_obs = "pass" if predicate_ok else "fail"
                 last_evidence = dict(evidence or {})
@@ -10357,13 +10660,31 @@ def cmd_test(args: argparse.Namespace) -> None:
             bgp_participants.append(n)
 
     # Convergence semantics:
-    # - Default tests: keep legacy behavior (precheck BGP if participants exist)
+    # - Default tests: the precheck is selected; whether it runs is
+    #   `_precheck_entry`'s decision below (BL-P2-4.5c-216's fix, S30-R1/R2)
     # - Scenarios: skip global precheck unless user explicitly requests it
     do_global_cp_precheck = (not want_scenarios) or precheck_controlplane
     results["summary"]["precheck_controlplane"] = bool(do_global_cp_precheck)
 
-    if do_global_cp_precheck and bgp_participants:
+    # BL-P2-4.5c-216's fix (§4.5-d session 30; founder rulings S30-R1, S30-R2 and
+    # S30-R16, 2026-10-14). The entry decision is `_precheck_entry`: a fabric.evpn
+    # lab, replay included, is gated although it derives no node-level participant
+    # (measured: every fabric topology derived none, so the block below never ran
+    # for them), and node-level BGP intent with no participant fails here instead
+    # of skipping. Declared under DC v2.1 §14 item 8.
+    _pc_enter, _pc_reason, _pc_guard = _precheck_entry(topo, bgp_participants, bool(do_global_cp_precheck))
+    if _pc_enter:
+        _pcr.enter(bgp_participants, time.time())
+        _pcr.attach(results)
+    else:
+        _pcr.not_entered(_pc_reason)
+    _pc_stats: dict = {}
+
+    if _pc_enter:
         try:
+            if _pc_guard is not None:
+                _pcr.failing("bgp-intent-without-participants")
+                die(_pc_guard)
             require_evpn_bgp = bool((((topo.get("fabric") or {}).get("evpn") or {}).get("enabled")))
             is_replay_lab = "-replay-" in str(topo.get("name", ""))
             precheck_timeout = 60 if (require_evpn_bgp and is_replay_lab) else 30
@@ -10380,14 +10701,139 @@ def cmd_test(args: argparse.Namespace) -> None:
                 # launcher on a vm-runtime node, not the NOS.
                 _ntype = str(n.get("type") or "")
                 _prov = NOS_PROVIDERS.get(_ntype)
+                # S30-R9 to S30-R11, S30-R13 and S30-R18 (2026-10-14): each session
+                # wait is recorded -- its bound and outcome in summary.precheck, its
+                # elapsed time and, for FRR's inline wait, which reports them through
+                # `stats`, its attempts in timing.precheck.
+                _pc_stats = {}
+                _pcr.wait_start(n["name"], "frr" if (_ntype == "frr" or _prov is None) else _ntype,
+                                precheck_timeout, time.time())
                 if _ntype == "frr" or _prov is None:
-                    wait_for_bgp(rt, lab, n["name"], timeout=precheck_timeout, require_evpn=require_evpn_bgp)
+                    wait_for_bgp(rt, lab, n["name"], timeout=precheck_timeout, require_evpn=require_evpn_bgp, stats=_pc_stats)
                 else:
                     _prov.convergence_wait(
                         rt, lab, n["name"], precheck_timeout, _expected_peer_ips(n["name"])
                     )
-            time.sleep(post_precheck_sleep)
+                _pcr.wait_end(time.time(), _pc_stats)
+            # S24-R5 (founder ruling 2026-10-06, BL-P2-4.5c-53's named fix) as
+            # applied by S25-R4 (2026-10-08), and amended for replay labs by
+            # S30-R16 (2026-10-14). For an EVPN lab, replay or not, the fixed
+            # post-precheck sleep is replaced by a bounded poll for
+            # the declared EVPN MAC routes: every host attachment of the resolved
+            # `fabric.evpn` (DC §1 authoritative input), on every EVPN leaf.
+            # Predicate: the product's existing presence read, unchanged --
+            # `_evaluate_invariant_attempt` with kind `evpn_mac_route_present`,
+            # consumed as the REQ-WF-6 wait_for consumes it (predicate only).
+            # Bound: the existing `precheck_timeout`; interval 1 s, as
+            # wait_for_bgp polls. A timeout fails loud, naming the lab and each
+            # leaf, host, MAC and VNI still absent, with elapsed time against the
+            # bound. Non-EVPN labs, replay or not, keep
+            # `time.sleep(post_precheck_sleep)` byte-identically; for this branch
+            # the computed 10 s (15 s for a replay lab) is no longer slept. S24-R5
+            # left replay labs on the sleep; S30-R16 gates a replay as the run it
+            # reproduces was, at its 60 s bound. Declared under DC v2.1 §14 item 8.
+            if require_evpn_bgp:
+                _evpn_fab = (topo.get("fabric") or {}).get("evpn") or {}
+                _evpn_vni = {
+                    str(_k): (_v or {}).get("vni")
+                    for _k, _v in (_evpn_fab.get("vlans") or {}).items()
+                }
+                _evpn_leaves = sorted(str(_l) for _l in (_evpn_fab.get("leaf_nodes") or []))
+                _evpn_decl = []
+                for _a in (_evpn_fab.get("host_attachments") or []):
+                    _a = _a if isinstance(_a, dict) else {}
+                    _evpn_decl.append(
+                        (
+                            str(_a.get("host") or ""),
+                            str(_a.get("mac") or "").strip().lower(),
+                            _evpn_vni.get(str(_a.get("vlan"))),
+                        )
+                    )
+                _evpn_decl.sort(key=lambda _d: (_d[1], _d[0]))
+                if (
+                    not _evpn_leaves
+                    or not _evpn_decl
+                    or any((not _m) or (not isinstance(_v, int)) or isinstance(_v, bool) for _h, _m, _v in _evpn_decl)
+                ):
+                    _pcr.failing("evpn-declaration-incomplete")
+                    die(
+                        f"EVPN precheck: lab {lab}'s resolved topology declares no EVPN leaf, no host "
+                        "attachment, or a host without a MAC or VNI under fabric.evpn, so the declared "
+                        "MAC routes cannot be waited for.\n"
+                        "Action: re-run `cassian up <topology> --reconfigure` so topology.resolved.yaml "
+                        "is regenerated from the declared topology, then re-run `cassian test`."
+                    )
+
+                def _evpn_decl_attempt():
+                    _absent = []
+                    for _leaf in _evpn_leaves:
+                        for _host, _mac, _vni in _evpn_decl:
+                            _present = _evaluate_invariant_attempt(
+                                inv_type="evpn_mac_route_present",
+                                t={"_mac": _mac, "_vni_i": _vni},
+                                src=_leaf,
+                            )[1]
+                            if not _present:
+                                _absent.append((_leaf, _host, _mac, _vni))
+                    return (not _absent), _absent
+
+                # S28-R1 and S28-R2 (founder rulings 2026-10-11, BL-P2-4.5c-220's
+                # fix; an SP #1 bounded-scope amendment of S26-R3): the declared set
+                # is accepted only once it is present on every EVPN leaf on
+                # `_evpn_stable_k` consecutive attempts; an attempt with anything
+                # absent starts the count again. Interval, bound and predicate are
+                # unchanged. On timeout the message names what was absent at the
+                # last attempt or, when nothing was, how many consecutive full
+                # attempts were reached out of `_evpn_stable_k`. Declared under DC
+                # v2.1 §14 item 8.
+                _evpn_stable_k = 3
+                _evpn_streak = [0]
+                _pcr.poll_start(_evpn_leaves, _evpn_decl, _evpn_stable_k, precheck_timeout)
+
+                def _evpn_stable_attempt():
+                    _all_present, _absent = _evpn_decl_attempt()
+                    _evpn_streak[0] = (_evpn_streak[0] + 1) if _all_present else 0
+                    return (_evpn_streak[0] >= _evpn_stable_k), _absent
+
+                _evpn_ok, _evpn_absent, _evpn_attempts, _evpn_ms = retry_until(
+                    precheck_timeout, 1.0, _evpn_stable_attempt
+                )
+                _pcr.poll_end(_evpn_ok, [] if _evpn_ok else _evpn_absent, _evpn_attempts, _evpn_ms, _evpn_streak[0])
+                if not _evpn_ok and not _evpn_absent:
+                    die(
+                        f"EVPN precheck: declared host MAC routes not stable after "
+                        f"{_evpn_ms / 1000:.1f}s (bound {precheck_timeout}s, {_evpn_attempts} attempts) "
+                        f"in lab {lab}: every declared host MAC route was present on every EVPN leaf "
+                        f"at the last attempt, but on only {_evpn_streak[0]} consecutive full "
+                        f"attempt(s) of the {_evpn_stable_k} required.\n"
+                        "Every host declared under fabric.evpn must stay present on every EVPN leaf for "
+                        f"{_evpn_stable_k} consecutive attempts before tests read EVPN state; reading "
+                        "earlier would give verdicts from a fabric whose routes are still changing.\n"
+                        "Action: check that each leaf's EVPN session to the route reflector is "
+                        "Established and not resetting, then re-run `cassian test`."
+                    )
+                if not _evpn_ok:
+                    die(
+                        f"EVPN precheck: declared host MAC routes still absent after "
+                        f"{_evpn_ms / 1000:.1f}s (bound {precheck_timeout}s, {_evpn_attempts} attempts) "
+                        f"in lab {lab}:\n"
+                        + "".join(
+                            f"  {_leaf}: {_host} {_mac} (VNI {_vni}) is not in the EVPN MAC-route read\n"
+                            for _leaf, _host, _mac, _vni in _evpn_absent
+                        )
+                        + "Every host declared under fabric.evpn must be present on every EVPN leaf before "
+                        "tests read EVPN state; reading earlier would give verdicts from an unconverged fabric.\n"
+                        "Action: check that each listed host is up and has sent traffic on its access link, "
+                        "and that each leaf's EVPN session to the route reflector is Established; then re-run "
+                        "`cassian test`."
+                    )
+            else:
+                _pcr.sleep_start(post_precheck_sleep, time.time())
+                time.sleep(post_precheck_sleep)
+                _pcr.sleep_end(time.time())
+            _pcr.passed(time.time())
         except SystemExit:
+            _pcr.failed(time.time(), _pc_stats)
             results["result"] = "fail"
             finished_at = time.time()
             results["summary"]["finished_at"] = finished_at
