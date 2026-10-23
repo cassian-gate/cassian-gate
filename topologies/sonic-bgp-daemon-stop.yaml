@@ -1,0 +1,58 @@
+name: sonic-bgp-daemon-stop
+
+# §4.5-c WI-3, REQ-45C-9 (--precheck-controlplane): healthy control plane
+# passes; a downed daemon fails NAMED. Founder rulings LD-45C-R3 (homing),
+# LD-45C-R4 (shape), LD-45C-R5 (harness).
+#
+# ITS OWN FIXTURE, NOT SHARED. Rev 13 §2 records the (VM) legs running across
+# four fixtures with NO SHARING, and req9 is the only leg that MUTATES guest
+# state -- it stops and restarts `bgp`. Sharing a lab with a non-mutating leg
+# would couple them through the guest.
+#
+# HALT-2 address discipline (founder ruling 2026-08-15, surface S-9): every
+# §4.5-c SONiC fixture declares data addresses OUTSIDE the stock canned ranges
+# of sonic-vm:202405. Measured stock: Ethernet0..124 carry 10.0.0.0/31 ..
+# 10.0.0.62/31, Loopback0 carries 10.1.0.1/32, eth0 management is 10.0.0.15/24
+# (sonic-guest-probe-reference.md §4.1). The addresses below are RFC 5737
+# TEST-NET-1 (192.0.2.0/24) and TEST-NET-3 (203.0.113.0/24), provably outside
+# 10.0.0.0/26 and 10.1.0.0/24. TEST-NET-3 is used for the link rather than
+# TEST-NET-2 so this lab's data plane cannot be confused with
+# probe-sonic-bgp-pair's in an artifact read.
+#
+# ASNs are deliberately NOT 65100 -- the stock DEVICE_METADATA.localhost.bgp_asn
+# measured on the un-provisioned guest. A leg using the stock ASN could not
+# distinguish Cassian's rendering from the factory default.
+#
+# Image resolves from the contrib-owned local tag (REQ-45C-11, REQ-45C-32).
+# No registry pull.
+
+nodes:
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    asn: 65011
+    router_id: 192.0.2.21
+    networks:
+      - 192.0.2.21/32
+    bgp:
+      neighbors:
+        - peer: s2
+          remote_as: 65012
+
+  - name: s2
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    asn: 65012
+    router_id: 192.0.2.22
+    networks:
+      - 192.0.2.22/32
+    bgp:
+      neighbors:
+        - peer: s1
+          remote_as: 65011
+
+links:
+  - endpoints: ["s1:eth1", "s2:eth1"]
+    ipv4: ["203.0.113.0/31", "203.0.113.1/31"]

@@ -88,6 +88,7 @@ Rules:
 * `mac` fields MUST be canonical lowercase colon-separated form (e.g. `00:11:22:33:44:55`)
 * `vni` MUST be a positive integer matching a VNI declared in the topology's `vlans:` map
 * `route_absent` and `route_not_advertised_to` and `evpn_mac_route_absent` are the negative complements of their `_present` / `_advertised_to` peers; the verdict semantics flip accordingly (`expect: pass` means the route IS NOT present / IS NOT advertised / IS NOT in the EVPN MAC table)
+* In a `fabric.evpn` lab, the EVPN kinds read state only after the control-plane precheck's route poll has accepted (every host declared under `fabric.evpn` present on every EVPN leaf on 3 consecutive polls); the precheck runs for every run without scenarios, and for a scenario run with `--precheck-controlplane`. If the poll does not accept within its bound, the run fails before any test reads state (see `--precheck-controlplane` in `docs/cli-reference-v1.md`)
 
 ---
 
@@ -126,7 +127,7 @@ Unlike `kind: invariant`, an `exec` test has no `type:` field, and there is no o
 
 ### 2a.2) Target node and derived type
 
-`src` MUST reference a node declared in `nodes:`. The engine **derives** the node's type from the topology — the operator does not declare it. In v1 the derived type MUST be one of `frr` or `nft-fw`; a target whose derived type is anything else is rejected at validation. The derived type also selects the read-only allow-list.
+`src` MUST reference a node declared in `nodes:`. The engine **derives** the node's type from the topology — the operator does not declare it. In v1 the derived type MUST be one of `frr`, `nft-fw` or `sonic-vm`; a target whose derived type is anything else is rejected at validation. The derived type also selects the read-only allow-list.
 
 ### 2a.3) Read-only allow-list
 
@@ -136,6 +137,7 @@ Commands are constrained to a node-type-aware read-only allow-list at a single v
 |---|---|
 | `frr` | `vtysh -c "show …"` (read-only `show` commands) |
 | `nft-fw` | `nft list …` (e.g. `nft list ruleset`; mutating verbs such as `add` / `delete` / `flush` / `insert` / `replace` are denied) |
+| `sonic-vm` | `show …` (SONiC's own read-only `show` commands; `show techsupport` is denied) or `vtysh -c "show …"` (exactly one `-c` with a `show` payload) |
 
 A command outside the allow-list for the target's derived type is rejected at validation (exit code `2`) with a deterministic error; it never reaches runtime.
 
@@ -446,7 +448,7 @@ The retry loop driving `expect: pass` evaluation uses LD-2 defaults: `timeout_s=
 
 The test record additionally carries a `meta` audit-trail dict on every record (PASS or FAIL), with seven keys: `type`, `interface`, `expected_state`, `attempts`, `timeout_s`, `retry_interval_s`, `last_rc`. The `meta` dict is a sibling field of `observed_state` and is NOT subject to the FAIL-only emission gate; it is present on PASS records as well. Note that `meta` does NOT carry a `state` key — operators read the three orthogonal axes `admin_state`, `operstate`, `carrier` from the FAIL record's `observed_state` instead.
 
-iproute2 capability dependency (companion schema constraint): the runtime probe uses `ip -j link show <iface>` and requires an `ip` binary that supports the `-j` JSON flag. BusyBox `ip` (the default in `alpine:latest`, which is the engine's default image for `host` and `nft-fw` node types) does NOT support `-j` and produces non-JSON help-text output on the unrecognized flag. Topologies exercising `interface_state` on `host` or `nft-fw` nodes MUST pin an image with full iproute2 (e.g. `nicolaka/netshoot:v0.15`) explicitly in the node declaration. FRR's default image (`frrouting/frr:latest`) already includes full iproute2 and requires no override. The engine performs a per-(lab, node) capability probe at first use; on capability-probe failure, the per-test record fails with `last_error: "ip -j flag not supported by node's iproute2"` and the operator is directed to pin a compatible image.
+iproute2 capability dependency (companion schema constraint): the runtime probe uses `ip -j link show <iface>` and requires an `ip` binary that supports the `-j` JSON flag. BusyBox `ip` (the default in `alpine:latest`, which is the engine's default image for `host` and `nft-fw` node types) does NOT support `-j` and produces non-JSON help-text output on the unrecognized flag. Topologies exercising `interface_state` on `host` or `nft-fw` nodes MUST pin an image with full iproute2 (e.g. `nicolaka/netshoot:v0.15`) explicitly in the node declaration. FRR's default image (`quay.io/frrouting/frr:10.7.1@sha256:e995beaa50fdc9edb35eadcfefa29b7f062cc06f2b812613789b68fa541554d2`) already includes full iproute2 and requires no override. The engine performs a per-(lab, node) capability probe at first use; on capability-probe failure, the per-test record fails with `last_error: "ip -j flag not supported by node's iproute2"` and the operator is directed to pin a compatible image.
 
 ### 4.10) `bgp_community`
 

@@ -1,0 +1,36 @@
+name: sonic-within-boot
+
+# §4.5-d VM-6 -- scope §9 row 13 (REQ-45D-30, Ledger BL-P2-4.5c-36), founder rulings
+# S37-R1 to S37-R3 of 2026-10-20. One frr node and one sonic-vm guest in generated mode,
+# linked once, with a declared loopback (the guest's router_id) and link addresses, and no
+# BGP declared. Booted once by tests/sonic_within_boot_reprovision_proof.py (LD-45D-6).
+#
+# No test is declared: the proof reads the guest's DEVICE_METADATA, PORT table,
+# /etc/sonic/config_db.json md5 and LOOPBACK_INTERFACE table, re-runs the product's own
+# provision for the guest with its router_id changed to the sentinel (the declared one
+# plus 2, 192.0.2.123), reads them again, and compares what changed with what the
+# provision docstring claims.
+#
+# HALT-2 address discipline: every declared address is an RFC 5737 documentation address,
+# outside the stock ranges of sonic-vm:202405 (checked by LEG 1 of
+# tests/sonic_lifecycle_proof.py, where this fixture is registered), and used by no other
+# fixture. The sentinel is not declared here, so LEG 1 does not sweep it: it is an RFC 5737
+# address used by no fixture, and the proof's leg F checks it is no declared address. No
+# link is left for auto-addressing.
+#
+# Image resolves from the contrib-owned local tag (REQ-45C-11, REQ-45C-32).
+
+nodes:
+  - name: r1
+    type: frr
+    router_id: 192.0.2.122
+
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    router_id: 192.0.2.121
+
+links:
+  - endpoints: ["r1:eth1", "s1:eth1"]
+    ipv4: ["198.51.100.68/31", "198.51.100.69/31"]

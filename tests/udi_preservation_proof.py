@@ -24,23 +24,26 @@ import hashlib
 import pathlib
 import sys
 
+from preservation_manifest import MODULE_ROSTER
+
 # v484 fork-point per-module SHA-256 baselines (merge-base 8e87e640).
 # Full set recorded for the module-set check; only non-scoped modules are enforced.
 V484_BASELINE = {
     "src/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "src/cassian.py": "cbc931d2f977c37249599bf63229b507ce6ea4d58eb6ca5525b7269b70d4c895",
+    "src/cassian.py": "2da8db410415bb4e77fc6da1e944ff0919a5b6c03e1e630d42a99e5e10cbc664",  # re-baselined from 588fbed5 (phase2 §4.5-b WI-F dead-code sweep (ensure_ip_tools import) + guardrail comment correction); orig cbc931d2
     "src/cassian_ai.py": "6900c52ea52f2a4a588b99478f10e967603b7a1a5f87b3b257878d4fde569361",
     "src/cassian_artifacts.py": "ae8a54302e4fa8fe2f89e3af0e1e16dcda0ff2ae7bc4a805b671f69029fbb04c",
-    "src/cassian_candidate.py": "93db9b61e9fd22c74156fc0492119fc4e170a7a192684354c8a31c70876ff52d",
+    "src/cassian_candidate.py": "217d8f08621db367a0d0666470793ff2335136846a4663ce95b4d0d3110330bc",  # re-baselined from 7775a062 (undef remediation: _cand_misuse helper, vty import, cmd_test rebinds + scenarios reads, resolve_topology names); orig 93db9b61
     "src/cassian_cli.py": "9234f3fdb76b5432bac8bf22a9807f234da9dff3a72d7c334ed9e2508183898a",  # re-baselined from 920e0e7f (F3): section 4.8 --tag flag (dc89591, REQ-TAG-CLI-1)
     "src/cassian_import.py": "604c8d8ff2bc461f8b43d7e5be6f63bd00f653ce6f83b64ffff9cf90450cf71c",  # §4.14 new module, enforced (LD-8/LD-9)
-    "src/cassian_common.py": "a0469a2a1b3cdcc5a1fffc7cd02198447cf1e0cb1ee8657469c3fb2c57139a10",
-    "src/cassian_engine.py": "946f25da4a69cf914ae4bac8dabd86ba7021790415bc76f47d8f79500a6fc9d2",
-    "src/cassian_model.py": "a7e38daa43db386ed651fd9d1f14ee634b52a429a5c7760d6c9c695c7aa260a7",
-    "src/cassian_runtime_container.py": "b2a493f947c121416c992b8b9788a60acead190d305d58654c3c457def116ba3",
-    "src/cassian_state.py": "aec4d412ee53555156cb5275c5d7a1329f54aaef298d4409feebcad2c198a9d6",
-    "src/cassian_tests.py": "743eeb988c6be4e4cf0b088840fc84dfa818340b2cd2374275fe9cd75b04aa08",
-    "src/cassian_two_run.py": "694f4e0d8ca7e07e7f4843e4f269a697d74d19bcdece60adf6f339952e471452",
+    "src/cassian_nos_frr.py": "d037bc2fb81e918da2c284baceab4c768b074fa8186fc1aba2e4b5d9a82c9d0e",  # re-baselined from 8e303f0a (phase2 §4.5-d S30-R5 readiness packet (founder rulings S31-R10 to S31-R19 of 2026-10-16), touched module src/cassian_nos_frr.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from b9b5bb53 (phase2 §4.5-d BL-P2-4.5c-229 fix (founder rulings S31-R3 of 2026-10-15, S31-R6 and S31-R7 of 2026-10-16), touched module src/cassian_nos_frr.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 8ecb147b (phase2 §4.5-d H1-b3 script 1b (founder rulings A of 2026-09-25, D-1 and D-4 of 2026-09-30, Q-A, Q-B and Q13 a of 2026-10-01, and Q20-1 A and Q20-2 A of 2026-10-02), touched module src/cassian_nos_frr.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 0b48fba1 (phase2 §4.5-d REQ-45D-33 early re-baseline at c619814 (founder ruling 2026-09-24), touched module src/cassian_nos_frr.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 898eb296 (§4.5-c WI-7: supplementary EVPN text collect leg, REQ-45C-14); §4.5-b new module (WI-B NOS provider structure); enforced (REQ-45b-13; LD-9)
+    "src/cassian_nos_sonic.py": "d612f835422bad84b86b7e080b722f589b1c5d5186a04b4d6a806b12fa1c5f9a",  # re-baselined from d7ed7cdf (phase2 §4.5-d readiness-wait packet BL-P2-4.5c-236 (founder rulings S37-R9, S37-R10 and S37-R13 of 2026-10-21), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 71b3235f (phase2 §4.5-d VM-6 within-boot packet REQ-45D-30 (founder rulings S37-R1 to S37-R3 of 2026-10-20), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from db7b3048 (phase2 §4.5-d BL-P2-4.5c-224 and -225 fix (founder rulings S29-R7 to S29-R9 of 2026-10-13), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 9ed99ffe (phase2 §4.5-d hosted packet REQ-45D-19/-20 (founder rulings S27-R4 and S27-R8 to S27-R12 of 2026-10-09), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from a7c212fa (phase2 §4.5-d H1-b3 script 2b-ii (founder rulings D-2 A of 2026-09-30 and Decision 2 of 2026-10-05), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 7d715dce (phase2 §4.5-d H1-b3 script 2b-i (founder rulings R2 of 2026-10-03 and Decision 2, Decision 3 i and the REQ-45D-2 render ruling ii of 2026-10-05), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from a3f904eb (phase2 §4.5-d H1-b3 script 1b (founder rulings A of 2026-09-25, D-1 and D-4 of 2026-09-30, Q-A, Q-B and Q13 a of 2026-10-01, and Q20-1 A and Q20-2 A of 2026-10-02), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 7306690b (phase2 §4.5-d H1-b3 script 1a (founder rulings A of 2026-09-25, D-3 and D-4 of 2026-09-30, and Q13 a, IPv6 I and B of 2026-10-01), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from b86372da (phase2 §4.5-d H1-b2 script 2 (founder rulings A of 2026-09-25, D2 A-prime of 2026-09-29 and 1 of 2026-09-29), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 765ad929 (phase2 §4.5-d H1-b2 script 1 (founder rulings A of 2026-09-25, D1 P1 and D2 A-prime of 2026-09-29, and the session-15 two-script split of 2026-09-29), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 775c7c54 (phase2 §4.5-d H1-b1 script 2 (founder rulings A of 2026-09-25, alpha of 2026-09-25, D1 of 2026-09-26 and A-prime of 2026-09-28), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 14180f56 (phase2 §4.5-d H1-b1 script 1 (founder rulings A of 2026-09-25 and D1 of 2026-09-26), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 12ba458e (phase2 §4.5-d REQ-45D-33 early re-baseline at c619814 (founder ruling 2026-09-24), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 0cd5bc21 (LD-45C-R36: REQ-45C-44(b) abort message names the key and its value), itself from 44aae825 (WI-3 REQ-45C-9: gated daemon observation on convergence_wait's timeout path; LD-45C-R4); §4.5-c new module (WI-1 SONiC provider); enforced (REQ-45C-39; LD-9)
+    "src/cassian_nos_types.py": "49246567d0b5b8b475001fb3a52cfc262206036b8f38f75fdfe46f24607f420d",  # re-baselined from 470ea87f (phase2 §4.5-d REQ-45D-33 early re-baseline at c619814 (founder ruling 2026-09-24), touched module src/cassian_nos_types.py; named check DC v2.1 §14 item 8: No silent mutation introduced); §4.5-b new module (WI-B NOS provider structure); enforced (REQ-45b-13; LD-9)
+    "src/cassian_common.py": "0f5a326f3407811ba9afa8c449a15a9526e101a0ba258998b29bd633e48223bb",  # re-baselined from a0469a2a (phase2 §4.5-b WI-C1/C2 NOS-neutral re-homes + A-S6 provenance comment); orig a0469a2a
+    "src/cassian_runtime_container.py": "2603f8fdf04b95a605bc4bf3e7c1b9c66438ab70ffac0261439d28af08d228bb",  # re-baselined from c6d36548 (phase2 §4.5-d VM-3 ping-through packet, REQ-45D-26 (founder rulings S34-R1 to S34-R4 of 2026-10-19), touched module src/cassian_runtime_container.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 1863184e (phase2 §4.5-d BL-P2-4.5c-233 fix (founder rulings S33-R1 to S33-R5 of 2026-10-19), touched module src/cassian_runtime_container.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from b3e45fa2 (phase2 §4.5-b WI-C1 _normalize_prefix shim + WI-F ensure_ip_tools removal); orig b2a493f9
+    "src/cassian_runtime_vm.py": "a4c48685a81a47407587c502f0a9e730c03236abfd9a73e470f79095dd3d0aea",  # re-baselined from 3832ad07 (phase2 §4.5-d BL-P2-4.5c-32 rc=5 fix under founder rulings R1 and D-i (2026-09-24), touched module src/cassian_runtime_vm.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 865545e4 (phase2 §4.5-b WI-D2 node_runtime_map model-homing); orig 865545e4
+    "src/cassian_state.py": "771d8c069e1cdd48c002d5ff3edd25912a8941912395b56844ef6f4df041bf57",  # re-baselined from aec4d412 (phase2 §4.5-d REQ-45D-33 early re-baseline at c619814 (founder ruling 2026-09-24), touched module src/cassian_state.py; named check DC v2.1 §14 item 8: No silent mutation introduced)
+    "src/cassian_two_run.py": "a6432665dbfee699713fe60c2e42d427c3c3fd9f82be7ec0ab65caa8b34c3ed9",  # re-baselined from cfafdfa6 (phase2 4.4 F-1 canonical serializer); orig 694f4e0d
 }
 
 # §4.7 scoped set — modifiable; excluded from the v484 byte-identity enforcement.
@@ -49,6 +52,8 @@ SCOPED = {
     "src/cassian_engine.py",
     "src/cassian_tests.py",
 }
+
+ALLOWED_NEW = set()  # #1 udi: no allowed-new; cassian_import is enforced
 
 
 def sha256(path):
@@ -61,23 +66,27 @@ def main():
         sys.exit("FAIL: run from the repo root (src/ not found)")
 
     head_modules = {f"src/{p.name}" for p in src.glob("*.py")}
-    known = set(V484_BASELINE)
 
-    # (1) module-set drift — a new or removed src/ module must not slip past the guard
-    added, removed = head_modules - known, known - head_modules
+    # (1) module-set drift — read the roster (bidirectional); a new or removed
+    #     src/ module must not slip past the guard (LD-9 leg).
+    added, removed = head_modules - MODULE_ROSTER, MODULE_ROSTER - head_modules
     if added or removed:
         if added:
-            print(f"FAIL: src/ modules absent from the v484 baseline (unverified): {sorted(added)}")
+            print(f"FAIL: src/ modules absent from the module roster (unregistered): {sorted(added)}")
         if removed:
-            print(f"FAIL: v484 baseline modules missing at HEAD: {sorted(removed)}")
+            print(f"FAIL: rostered src/ modules missing at HEAD: {sorted(removed)}")
         sys.exit(1)
 
-    # (2) PRES-1 — non-scoped modules byte-identical to v484
+    # (2) PRES-1 — enforced set derived FROM THE ROSTER (not baseline keys); a
+    #     rostered-enforced module absent from the baseline fails loud, never
+    #     skipped, never auto-baselined.
+    enforced = MODULE_ROSTER - SCOPED - ALLOWED_NEW
     failures = []
     checked = 0
-    for mod in sorted(head_modules):
-        if mod in SCOPED:
-            continue
+    for mod in sorted(enforced):
+        if mod not in V484_BASELINE:
+            print(f"FAIL: re-baseline required: {mod} (rostered + enforced, absent from the v484 baseline)")
+            sys.exit(1)
         checked += 1
         actual, expected = sha256(mod), V484_BASELINE[mod]
         if actual != expected:

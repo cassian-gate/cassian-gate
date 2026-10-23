@@ -94,6 +94,9 @@ cassian vty <lab> <node> "<command>"
 cassian collect <lab>
 ```
 
+`cassian vty` is FRR-only. On a non-FRR node it exits `2` and redirects you to
+`cassian exec` (NOS-agnostic, allow-listed).
+
 ### DevOps Integration
 
 ```bash
@@ -408,7 +411,7 @@ cassian test <topology.yaml>
 ```bash
 cassian status <lab>
 cassian exec <lab> <node>
-cassian vty <lab> <node>
+cassian vty <lab> <node>          # FRR-only; non-FRR redirects to cassian exec
 cassian collect <lab>
 cassian down <lab>
 ```
@@ -659,6 +662,93 @@ Supported node types:
 | host     | Linux host        |
 | nft-fw   | nftables firewall |
 | sonic-vm | SONiC VM runtime  |
+
+Important current boundary for vendor NOS VM nodes:
+
+- **ping tests are supported** on `sonic-vm` / NOS VM nodes: a ping with `src:` the guest runs against the guest NOS and produces an authoritative verdict
+- **`tcp` tests, and every invariant type the node's NOS provider does not declare implemented, are not supported** on vm-runtime nodes (deferred, DC v2.1 §10) and are rejected explicitly at validation time; the deferred list is **derived** from the provider's capability declarations (see below)
+- current truthful behavior for an unsupported NOS VM test kind is:
+  - misuse / unsupported test surface
+  - exit code `2`
+
+Substrate vs NOS (exec target): bare `exec` / `sh` / `copy_*` reach the **guest NOS**; `substrate_exec` / `substrate_sh` / `substrate_copy_from` reach the **vrnetlab substrate** (the wrapper). Default is bare = NOS.
+
+Routing config on `sonic-vm` nodes — two modes, `sonic_mode`:
+
+```yaml
+nodes:
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    sonic_mode: preconfigured        # or: generated (the default)
+    sonic_config_db: ./s1-config-db.json   # required iff preconfigured
+```
+
+- `generated` (default): Cassian Gate writes a `config_db.json` overlay; platform tables are never touched
+- `preconfigured`: you supply the **complete** `config_db.json`; it must carry `PORT` and `DEVICE_METADATA`, and no generation runs
+- a relative `sonic_config_db` resolves against the **topology file's** directory, never the working directory
+- declaring `sonic_config_db` without `sonic_mode: preconfigured` is rejected, exit `2`
+- full field reference: `topology-schema-v1.md` §3.1
+
+File copy on vm nodes: guest `copy_*` is UNSUPPORTED (deferred to §4.5-f); `substrate_copy_from` works; `substrate_copy_to` is intentionally absent (demand-led).
+
+Example of an unsupported test kind (tcp on a vm node):
+
+```yaml
+nodes:
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    image: <vrnetlab-built image>
+
+tests:
+  - name: reach
+    kind: tcp
+    src: s1
+    to: 10.0.0.1
+    port: 179
+```
+
+Expected outcome (message abridged):
+
+```text
+ERROR: tests[1] (reach): tcp test references src node 's1', whose resolved runtime
+is 'vm'; running a tcp test against a vm-runtime node is NOT SUPPORTED in this
+release. ... Valid: give src a node whose resolved runtime is 'container'. vm-runtime
+nodes support lifecycle (up/status/down), node readiness, ping tests (executed against
+the guest), and each test kind and invariant type their NOS provider declares
+implemented; on node type 'sonic-vm' the deferred ones, derived from its provider's
+capability declarations, are: tests tcp; invariant types ... (DC v2.1 §10, ...).
+exit code: 2
+```
+
+The deferred list is **derived** from the node's provider capability declarations,
+not maintained by hand. For `sonic-vm` the implemented set is currently `bgp_neighbor`
+and `route_prefix` tests and the invariant types `bgp_session_up`,
+`bgp_localpref_equals`, `bgp_med_equals`, `bgp_community`, `bgp_as_path`,
+`route_present`, `route_absent`, `route_advertised_to` and
+`route_not_advertised_to`. A `sonic-vm` node with an
+explicit `runtime: container` is rejected at validation (exit 2): set `runtime: vm`,
+or omit it.
+
+Meaning: for the gated kinds, container exec would reach the vrnetlab launcher container, not the guest NOS, so a verdict from it would describe the wrong entity. A ping does not have this problem -- it is executed against the guest and is supported.
+
+Which references are rejected:
+
+- rejected: `src` (or `from`) on `tcp`, `bgp_neighbor`, and every invariant type, and `dst` (or `to`) on `tcp`
+- not rejected: `src` on `ping` -- ping is supported on vm nodes and runs against the guest
+- not rejected: `dst` / `to` / `to_ip` on `ping` -- addressing only, not a node the framework execs into
+- not rejected: IP literals -- only node names resolve to a runtime
+
+Support boundary:
+
+- supported current surfaces for `sonic-vm`: lifecycle (`up` / `status` / `down`), node readiness, **ping tests** (executed against the guest), **`exec` tests** that run a read-only `show …` (except `show techsupport`) or `vtysh -c "show …"` command on the guest, and the test kinds and invariant types in the implemented set above
+- unsupported current surfaces: test kinds and invariant types outside the implemented set above (the deferred list the validation rejection message derives), guest-file `copy_*`, and candidate-config input against `sonic-vm` / NOS VM nodes
+
+Scope boundary:
+
+- this does not currently establish test or invariant support for `sonic-vm` beyond the supported surfaces listed above, or any test support beyond ping for other vendor NOS VM node types
+- any future NOS VM test/exec support requires an explicit contract surface and proof
 
 ---
 
@@ -929,13 +1019,13 @@ cassian up topologies/evpn_runtime_generation.yaml
 Run authoritative gate proof:
 
 ```bash
-cassian test topologies/evpn_runtime_generation.yaml
+cassian test topologies/evpn_mac_route_present.yaml
 ```
 
 Replay deterministically:
 
 ```bash
-cassian replay labs/clab-evpn-runtime-generation --gate --verify-results
+cassian replay labs/clab-evpn-mac-route-present --gate --verify-results
 ```
 
 Negative misuse proofs:
@@ -944,6 +1034,33 @@ Negative misuse proofs:
 cassian test topologies/neg/evpn_invalid_vni.yaml
 cassian test topologies/neg/evpn_invalid_roles.yaml
 ```
+
+---
+
+## Convergence Gate Before Tests
+
+Before `cassian test` lets any test read EVPN state in a `fabric.evpn` lab, the control-plane precheck waits for the fabric to converge:
+
+- it polls every EVPN leaf, once a second, for the MAC route of every host declared under `fabric.evpn` (the host's `mac`, in its VLAN's `vni`)
+- it accepts only when every declared route is present on every leaf on 3 consecutive polls; a poll with any route missing starts the count again
+- the bound is 30 s, or 60 s when replaying; replays are gated too
+- if the routes are not present and stable within the bound, the run fails before any test, naming each missing route (leaf, host, MAC, VNI) or how many consecutive full polls were reached, and every declared test is recorded `observed: blocked`, `verdict: fail`
+
+The precheck runs for every run without scenarios, and for a scenario run with `--precheck-controlplane`.
+
+Inspect what it did:
+
+```bash
+python -m json.tool labs/clab-<lab>/results.json
+```
+
+Look for:
+
+- `summary.precheck.settle.kind: evpn-route-poll` and `outcome: accepted`
+- `summary.precheck.settle.absent_at_last` after a timeout
+- `timing.precheck.settle` for attempts, elapsed time and the final consecutive count (these vary from run to run and are excluded from the tamper digest)
+
+The gate decides only whether tests run; it never alters what a test that runs observes. When it fails, check that each listed host is up and has sent traffic on its access link, and that each leaf's EVPN session to the route reflector is Established. The full record is described under `--precheck-controlplane` in `docs/cli-reference-v1.md`.
 
 ---
 
@@ -1089,8 +1206,8 @@ When the built-in invariant catalog can't express the check you need, an `exec` 
 ```yaml
 - name: bgp_peer_established
   kind: exec
-  src: r1                                    # target node; type derived (frr | nft-fw)
-  command: vtysh -c "show bgp summary json"  # read-only: frr -> vtysh -c "show …"; nft-fw -> nft list …
+  src: r1                                    # target node; type derived (frr | nft-fw | sonic-vm)
+  command: vtysh -c "show bgp summary json"  # read-only: frr -> vtysh -c "show …"; nft-fw -> nft list …; sonic-vm -> show … or vtysh -c "show …" (not show techsupport)
   assertion:
     field:
       path: [ipv4Unicast, peers, "10.0.0.2", state]
@@ -1787,7 +1904,7 @@ This is useful for validating OSPF adjacency establishment such as:
 - post-change OSPF re-adjacency
 - guarded assertion of OSPF Full adjacency before further routing-policy invariants
 
-This invariant is **FRR-only**; declaring `ospf_neighbor_up` against a non-FRR `src` node is rejected at validation with exit code `2`.
+This invariant is **FRR-only**; declaring `ospf_neighbor_up` against a non-FRR `src` node is rejected at validation with exit code `2`. On a `sonic-vm` `src` the rejection is a deterministic unsupported error naming the invariant and the node: OSPF on SONiC is not supported in this release (see `docs/cli-reference-v1.md` §7).
 
 Required fields:
 

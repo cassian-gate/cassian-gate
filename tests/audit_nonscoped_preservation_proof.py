@@ -4,21 +4,27 @@ Per-module SHA-256 byte-identity vs the v9 baseline for EVERY non-scoped src/ mo
 Scoped set {cassian_engine.py, cassian_model.py} is excluded (free to modify per LD-5);
 every other module must be byte-identical to v9."""
 import sys, os, hashlib
-SRCDIR = os.path.join(os.path.dirname(__file__), "..", "src")
+from preservation_manifest import MODULE_ROSTER
+# REQ-45b-14: baseline keys carry the src/ prefix (manifest convention), so
+# paths join from the repo root, not from src/.
+ROOTDIR = os.path.join(os.path.dirname(__file__), "..")
 
-SCOPED = {"cassian_engine.py", "cassian_model.py"}
+SCOPED = {"src/cassian_engine.py", "src/cassian_model.py"}
 # v9 baselines (computed from the declared v9 consolidated snapshot).
 V9 = {
-    "cassian_ai.py":                "6900c52ea52f2a4a588b99478f10e967603b7a1a5f87b3b257878d4fde569361",
-    "cassian_artifacts.py":         "ae8a54302e4fa8fe2f89e3af0e1e16dcda0ff2ae7bc4a805b671f69029fbb04c",
-    "cassian_candidate.py":         "93db9b61e9fd22c74156fc0492119fc4e170a7a192684354c8a31c70876ff52d",
-    "cassian_cli.py":               "9234f3fdb76b5432bac8bf22a9807f234da9dff3a72d7c334ed9e2508183898a",
-    "cassian_common.py":            "a0469a2a1b3cdcc5a1fffc7cd02198447cf1e0cb1ee8657469c3fb2c57139a10",
-    "cassian_runtime_container.py": "b2a493f947c121416c992b8b9788a60acead190d305d58654c3c457def116ba3",
-    "cassian_state.py":             "aec4d412ee53555156cb5275c5d7a1329f54aaef298d4409feebcad2c198a9d6",
-    "cassian_tests.py":             "ba0a1f36245de1ac01853fca4e8a3100ff5aad28525e91ef26ebaf24f404b0af",
-    "cassian_two_run.py":           "694f4e0d8ca7e07e7f4843e4f269a697d74d19bcdece60adf6f339952e471452",
-    "cassian.py":                   "cbc931d2f977c37249599bf63229b507ce6ea4d58eb6ca5525b7269b70d4c895",
+    "src/cassian_ai.py":                "6900c52ea52f2a4a588b99478f10e967603b7a1a5f87b3b257878d4fde569361",
+    "src/cassian_artifacts.py":         "ae8a54302e4fa8fe2f89e3af0e1e16dcda0ff2ae7bc4a805b671f69029fbb04c",
+    "src/cassian_candidate.py":         "217d8f08621db367a0d0666470793ff2335136846a4663ce95b4d0d3110330bc",  # re-baselined from 7775a062 (undef remediation: _cand_misuse helper, vty import, cmd_test rebinds + scenarios reads, resolve_topology names); orig 93db9b61
+    "src/cassian_cli.py":               "9234f3fdb76b5432bac8bf22a9807f234da9dff3a72d7c334ed9e2508183898a",
+    "src/cassian_common.py":            "0f5a326f3407811ba9afa8c449a15a9526e101a0ba258998b29bd633e48223bb",  # re-baselined from a0469a2a (phase2 §4.5-b WI-C1/C2 NOS-neutral re-homes + A-S6 provenance comment); orig a0469a2a
+    "src/cassian_nos_frr.py": "d037bc2fb81e918da2c284baceab4c768b074fa8186fc1aba2e4b5d9a82c9d0e",  # re-baselined from 8e303f0a (phase2 §4.5-d S30-R5 readiness packet (founder rulings S31-R10 to S31-R19 of 2026-10-16), touched module src/cassian_nos_frr.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from b9b5bb53 (phase2 §4.5-d BL-P2-4.5c-229 fix (founder rulings S31-R3 of 2026-10-15, S31-R6 and S31-R7 of 2026-10-16), touched module src/cassian_nos_frr.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 8ecb147b (phase2 §4.5-d H1-b3 script 1b (founder rulings A of 2026-09-25, D-1 and D-4 of 2026-09-30, Q-A, Q-B and Q13 a of 2026-10-01, and Q20-1 A and Q20-2 A of 2026-10-02), touched module src/cassian_nos_frr.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 0b48fba1 (phase2 §4.5-d REQ-45D-33 early re-baseline at c619814 (founder ruling 2026-09-24), touched module src/cassian_nos_frr.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 898eb296 (§4.5-c WI-7: supplementary EVPN text collect leg, REQ-45C-14); §4.5-b new module (WI-B NOS provider structure); enforced (REQ-45b-13; LD-9)
+    "src/cassian_nos_types.py": "49246567d0b5b8b475001fb3a52cfc262206036b8f38f75fdfe46f24607f420d",  # re-baselined from 470ea87f (phase2 §4.5-d REQ-45D-33 early re-baseline at c619814 (founder ruling 2026-09-24), touched module src/cassian_nos_types.py; named check DC v2.1 §14 item 8: No silent mutation introduced); §4.5-b new module (WI-B NOS provider structure); enforced (REQ-45b-13; LD-9)
+    "src/cassian_runtime_container.py": "2603f8fdf04b95a605bc4bf3e7c1b9c66438ab70ffac0261439d28af08d228bb",  # re-baselined from c6d36548 (phase2 §4.5-d VM-3 ping-through packet, REQ-45D-26 (founder rulings S34-R1 to S34-R4 of 2026-10-19), touched module src/cassian_runtime_container.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 1863184e (phase2 §4.5-d BL-P2-4.5c-233 fix (founder rulings S33-R1 to S33-R5 of 2026-10-19), touched module src/cassian_runtime_container.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from b3e45fa2 (phase2 §4.5-b WI-C1 _normalize_prefix shim + WI-F ensure_ip_tools removal); orig b2a493f9
+    "src/cassian_runtime_vm.py": "a4c48685a81a47407587c502f0a9e730c03236abfd9a73e470f79095dd3d0aea",  # re-baselined from 3832ad07 (phase2 §4.5-d BL-P2-4.5c-32 rc=5 fix under founder rulings R1 and D-i (2026-09-24), touched module src/cassian_runtime_vm.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 865545e4 (phase2 §4.5-b WI-D2 node_runtime_map model-homing); orig 865545e4
+    "src/cassian_state.py":             "771d8c069e1cdd48c002d5ff3edd25912a8941912395b56844ef6f4df041bf57",  # re-baselined from aec4d412 (phase2 §4.5-d REQ-45D-33 early re-baseline at c619814 (founder ruling 2026-09-24), touched module src/cassian_state.py; named check DC v2.1 §14 item 8: No silent mutation introduced)
+    "src/cassian_tests.py":             "9db9074568418580e8671719e083f876b0f7f111201284b889e483ef92388af7",  # re-baselined from d977b4b1 (phase2 §4.5-d BL-P2-4.5c-216 fix (founder rulings S30-R13, S30-R18 and S30-R20 of 2026-10-14), touched module src/cassian_tests.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from b8dc8534 (phase2 §4.5-c Unit B: wait_for_bgp gate predicate + LD-45C-R10 header import; LD-45C-R9/R10/R11); prior dd56046b; orig ba0a1f36
+    "src/cassian_two_run.py":           "a6432665dbfee699713fe60c2e42d427c3c3fd9f82be7ec0ab65caa8b34c3ed9",  # re-baselined from cfafdfa6 (phase2 4.4 F-1 canonical serializer); orig 694f4e0d
+    "src/cassian.py":                   "2da8db410415bb4e77fc6da1e944ff0919a5b6c03e1e630d42a99e5e10cbc664",  # re-baselined from 588fbed5 (phase2 §4.5-b WI-F dead-code sweep (ensure_ip_tools import) + guardrail comment correction); orig cbc931d2
 }
 
 fails = []
@@ -27,8 +33,13 @@ def ck(c, msg):
     if not c: fails.append(msg)
 
 ck(not (SCOPED & set(V9)), "scoped modules excluded from preservation set (engine/model free)")
+# REQ-43-5: subset consistency -- the curated subset may not reference a non-rostered module.
+# REQ-45b-14: keys are src/<n>.py (the manifest convention); the "src/"+k
+# adapter shim is removed -- no bare-name key survives.
+ck(set(V9) <= MODULE_ROSTER,
+   "curated subset registered in module roster (no non-rostered key)")
 for mod, baseline in V9.items():
-    p = os.path.join(SRCDIR, mod)
+    p = os.path.join(ROOTDIR, mod)
     if not os.path.isfile(p):
         ck(False, f"{mod} present"); continue
     sha = hashlib.sha256(open(p, "rb").read()).hexdigest()

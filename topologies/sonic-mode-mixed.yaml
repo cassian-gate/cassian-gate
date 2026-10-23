@@ -1,0 +1,83 @@
+name: sonic-mode-mixed
+
+# §4.5-c WI-1 packet 2 — §15.2 row 4 (`:451`, positive (VM)):
+# "Mixed-mode topology resolves per-node; topology.resolved.yaml shows modes",
+# expected "Modes visible per-node". REQ-45C-4.
+#
+# ⚑ THIS FIXTURE IS NEVER DEPLOYED. Founder ruling LD-45C-R29 R1: row 4's
+# evidence is `topology.resolved.yaml`, which `write_containerlab_file`
+# (src/cassian_runtime_container.py:894, :905) writes BEFORE deploy — reached
+# by `cassian gen` (cassian_engine.py:534-537) with no deploy at all, and in
+# the deploy path at :1366 ahead of `containerlab deploy` at :1379. The leg
+# runs `gen` and asserts on the emitted artifact.
+#
+# WHY THAT MATTERS HERE: two sonic-vm guests do not fit the CI host.
+# docs/vm-runtime-capabilities.md records a single-SONiC-node ceiling —
+# "the assertion topology DEPLOYS exactly one sonic-vm node" — grounded in
+# memory, ~4 GiB per guest against ~9.5 GiB available. LD-45C-R29 R2: a
+# topology that is resolved and never deployed consumes no guest memory, so
+# the ceiling is not engaged. This fixture must therefore NEVER be added to
+# a `cassian up` step or to the if:always() teardown sweep (LD-45C-R14 R6's
+# shape: a step that deploys nothing takes no up/down).
+#
+# WHY TWO sonic-vm NODES AND NOT ONE: `sonic_mode` is admitted for sonic-vm
+# nodes ONLY (LD-45C-R17 R1). Demonstrating that the mode resolves PER-NODE
+# — which is the property REQ-45C-4's anti-requirement guards, "not per-node
+# in mixed topologies" — requires two nodes whose sonic_mode values differ.
+# Pairing one sonic-vm with an frr node carrying frr_mode would exercise two
+# DIFFERENT KEYS and would not demonstrate it. "Mixed-mode" here means mixed
+# MODES; mixed NODE TYPES are §15.2 rows 6 and 7 (REQ-45C-6/-7), which are
+# separate rows with their own fixtures.
+#
+# SHAPE MEASURED, NOT ASSUMED: a topology with no `links` is REJECTED by
+# `ensure_valid_topology` — "Missing required key: 'links'", exit 2 — as
+# topologies/sonic-control-unprovisioned.yaml records. The link below carries
+# ipv4 on both ends; it is resolved, never brought up.
+#
+# HALT-2 address discipline (founder ruling 2026-08-15, surface S-9): every
+# §4.5-c-authored SONiC fixture declares data addresses OUTSIDE the stock
+# canned ranges of sonic-vm:202405. The addresses below are RFC 5737
+# documentation ranges, enumerated against every fixture in topologies/ and
+# colliding with none — including LD-45C-R12 R4's six values. The ranges
+# themselves are named in tests/sonic_lifecycle_proof.py, not here: a guard
+# whose constants live in the file it guards is not a guard.
+#
+# REGISTERED in SECTION_45C_FIXTURES (tests/sonic_lifecycle_proof.py) in the
+# SAME commit that adds this file. LD-45C-R12 R5: registration is ENFORCED,
+# not conventional — LEG 2's enumeration-drop guard is an explicit list, not
+# a glob, and an unregistered SONiC fixture FAILS rather than passing unseen
+# (F-45C-C3-3). Registration also puts these addresses under LEG 1's sweep.
+#
+# Image resolves from the contrib-owned local tag (REQ-45C-11, REQ-45C-32);
+# build it via contrib/sonic-image-build/build.sh. No registry pull. The tag
+# is declared for schema parity with the deployable fixtures even though no
+# image is ever pulled here — `_assert_vm_images_present` runs at
+# cassian_engine.py:1373, AFTER the resolved artifact is written at :1366.
+
+nodes:
+  # s1 — DEFAULTED mode. sonic_mode is absent, so resolve must supply
+  # "generated" (LD-45C-R17 R1's enum default). Asserting the default here
+  # rather than declaring it explicitly is deliberate: it proves resolve
+  # WRITES the mode rather than merely echoing a declaration.
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    router_id: 192.0.2.51
+
+  # s2 — EXPLICIT preconfigured mode with the operator's complete artifact.
+  # `sonic_config_db` is relative and resolves against THIS FILE'S directory,
+  # never the process CWD (LD-45C-R21 R1). A relative value with no topology
+  # path in scope is refused §13-grade, exit 2 (R21 R3) — so a `gen` run from
+  # any working directory must still find the artifact beside this file.
+  - name: s2
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    router_id: 192.0.2.52
+    sonic_mode: preconfigured
+    sonic_config_db: sonic-mode-mixed-config-db.json
+
+links:
+  - endpoints: ["s1:eth1", "s2:eth1"]
+    ipv4: ["198.51.100.20/31", "198.51.100.21/31"]

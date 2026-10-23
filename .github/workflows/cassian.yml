@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   gate:
@@ -25,6 +26,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # C1 (LD-UN-1) ruled Option B for the name-resolution guard: it runs
+      # the 3.10/3.11/3.12 matrix. This step provisions the two extra
+      # interpreters and runs BEFORE the pinned setup, so `python` still
+      # resolves to 3.11 for every other step. NG-4 -- the gate-wide matrix
+      # and requires-python policy -- is NOT decided here.
+      - name: Setup Python (guard matrix - 3.10, 3.12)
+        uses: actions/setup-python@v5
+        with:
+          python-version: |
+            3.10
+            3.12
 
       - name: Setup Python (pinned)
         uses: actions/setup-python@v5
@@ -59,11 +72,136 @@ jobs:
             python -m pip install .
           fi
 
+      - name: Install dependencies into the guard-matrix interpreters
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The step above installs into the PINNED interpreter only. The guard
+          # matrix runs "python$v" for 3.10/3.11/3.12, and REQ-45C-33's
+          # import-clean leg imports product modules carrying a third-party
+          # dependency -- src/cassian_model.py:13 is `import yaml`. Run
+          # 33860280463 measured tests/sonic_leaf_import_proof.py failing at
+          # python3.10 with ModuleNotFoundError: No module named 'yaml'.
+          # LD-45C-R33 R2 surfaced it; BL-P2-4.5c-140 records it.
+          #
+          # 3.11 is INCLUDED, not skipped: nothing measured establishes that
+          # "python3.11" is the interpreter the pinned step installed into, and
+          # the matrix never reached 3.11 before failing at 3.10. Assuming they
+          # are the same would be the inference this failure punished.
+          #
+          # LD-UN-1 C1 Option B: provisioning the runner is in scope for a
+          # runner-setup step; a fall back to single-version is forbidden.
+          for v in 3.10 3.11 3.12; do
+            "python$v" -m pip install --upgrade pip
+            if [ -f requirements.txt ]; then
+              "python$v" -m pip install -r requirements.txt
+            else
+              "python$v" -m pip install .
+            fi
+          done
+          # Assert the install TOOK, per interpreter. A silent pip failure would
+          # otherwise resurface later as the same ModuleNotFoundError, which is
+          # the shape this step exists to close.
+          for v in 3.10 3.11 3.12; do
+            "python$v" -c "import sys, yaml; print('python%d.%d PyYAML %s' % (sys.version_info[0], sys.version_info[1], yaml.__version__))"
+          done
+
       - name: Syntax sanity (fast)
         shell: bash
         run: |
           set -euo pipefail
           python -m py_compile src/*.py
+
+      - name: Name-resolution class-closure guard (undefined-name remediation)
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=""
+          for v in 3.10 3.11 3.12; do
+            command -v "python$v" >/dev/null 2>&1 || missing="$missing python$v"
+          done
+          if [ -n "$missing" ]; then
+            echo "ERROR: guard interpreter matrix incomplete; missing:$missing"
+            echo "C1 (LD-UN-1) ruled Option B. Provisioning the runner is in"
+            echo "scope for a runner-setup step; anything beyond that is a HALT"
+            echo "to the founder, never a fall back to single-version."
+            exit 2
+          fi
+          for v in 3.10 3.11 3.12; do
+            echo "=== python$v selftest (REQ-UNDEF-13 non-vacuity) ==="
+            "python$v" tests/name_resolution_guard.py --selftest
+            echo "=== python$v gate (REQ-UNDEF-12) ==="
+            "python$v" tests/name_resolution_guard.py
+            echo "=== python$v import-clean (LD-45C-R33 R2, REQ-45C-33) ==="
+            "python$v" tests/wheel_import_proof.py
+            "python$v" tests/nos_leaf_import_proof.py
+            "python$v" tests/sonic_leaf_import_proof.py
+          done
+          echo "=== replay determinism (DS-1; MS amendment A1) ==="
+          python3.11 tests/name_resolution_guard.py > "$RUNNER_TEMP/nrg1.txt"
+          python3.11 tests/name_resolution_guard.py > "$RUNNER_TEMP/nrg2.txt"
+          diff "$RUNNER_TEMP/nrg1.txt" "$RUNNER_TEMP/nrg2.txt"
+          echo "replay: byte-identical"
+
+      - name: Observed-state absence-render proof harness (§4.1)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/bl6_observed_state_absence_render_proof.py
+
+      - name: Renderer regression proof harness (§4.3)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/bl_h3_8_scenarios_summary_existing_type_render_proof.py
+
+      - name: Engine validation hardening proof harnesses (§4.4)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/h53_resolve_interface_existence_proof.py
+          python tests/h57_scenario_invariant_dispatch_generalization_proof.py
+
+      - name: NOS provider structure proof harnesses (§4.5-b)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/nos_leaf_import_proof.py
+          python tests/nos_deny_by_default_proof.py
+          python tests/nos_census_instrument.py
+
+      - name: SONiC base lifecycle proof harnesses (§4.5-c)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/sonic_leaf_import_proof.py
+          python tests/sonic_configgen_determinism_proof.py
+          python tests/sonic_provision_supply_proof.py
+          python tests/sonic_image_lifecycle_proof.py
+          python tests/sonic_lifecycle_proof.py
+          python tests/sonic_routing_mode_precondition_proof.py
+          python tests/sonic_status_probe_sequence_proof.py
+          python tests/wheel_import_proof.py
+          python tests/reconfigure_clean_state_proof.py
+          python tests/sonic_provision_readiness_gate_proof.py
+          python tests/sonic_nos_ready_proof.py
+          # §4.5-c WI-1 packet 2 C2, entry 1 of 3 (LD-45C-R30 R2). No argv =
+          # LEGs 1-9, lab-free, byte-identical to what packet 1 landed. The
+          # file's two (VM) arms take their own steps below; LD-45C-R27 R1's
+          # "single CI entry" is one EDIT OCCASION, not one step (R30 §5).
+          python tests/sonic_preconfigured_proof.py
+
+      - name: cmd evidence derivation differential (§4.5-c WI-8, REQ-45C-36)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/cmd_evidence_derivation_differential_proof.py
+
+      - name: unsupported-capability disposition (§4.5-c BL-P2-4.5c-44)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/sonic_unsupported_capability_disposition_proof.py
 
       - name: User-defined invariant (exec) proof harnesses (§4.7)
         shell: bash
@@ -158,6 +296,21 @@ jobs:
           python tests/importer/backend_seam_proof.py
           python tests/importer/preservation_proof.py
 
+      - name: Two-run behavioural-equivalence proof harnesses (Phase 2 4.4)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/two_run_injected_difference_proof.py
+          python tests/two_run_verdict_substitution_proof.py
+          python tests/two_run_config_vs_behaviour_proof.py
+          python tests/two_run_canonical_serialization_proof.py
+
+      - name: VM-runtime exec-into gate proof harness (R-O1 remediation)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/vm_runtime_validate_rejection_proof.py
+
       - name: Project gate (up -> test -> down)
         shell: bash
         run: |
@@ -191,6 +344,665 @@ jobs:
           fi
           echo "B-9 OK: observed_state render byte-identical across replay."
 
+      - name: EVPN collection migration differential (§4.5-c WI-7, REQ-45C-14)
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT=/tmp/wi7-postside
+          rm -rf "$OUT"; mkdir -p "$OUT"
+          # Two of the three topologies are by-design authoritative FAILs
+          # (Doctrine §1.8: negative outcomes are first-class), so the verdict
+          # is carried by || true and the proof asserts the ARTIFACT, the way
+          # the B-9 step above asserts the rendered surface rather than the
+          # exit code. results.json absent => the proof hard-fails on it.
+          for PAIR in \
+            "topologies/evpn_mac_route_present.yaml|evpn-mac-route-present" \
+            "topologies/evpn_mac_route_absent_expected_present.yaml|evpn-mac-route-absent-expected-present" \
+            "topologies/evpn_mac_route_absent_expect_fail.yaml|evpn-mac-route-absent-expect-fail" ; do
+            TOPO="${PAIR%%|*}"; LAB="${PAIR##*|}"
+            ./src/cassian.py up "$TOPO" --reconfigure
+            ./src/cassian.py test "$TOPO" || true
+            cp "labs/clab-${LAB}/results.json" "$OUT/${LAB}.results.json"
+            ./src/cassian.py down "$LAB"
+          done
+          # --artifacts discharges §15.2 row 1 as well as rows 2-4. A missing
+          # artifact is a hard fail inside the proof, never a silent skip.
+          python tests/evpn_collection_migration_proof.py --artifacts "$OUT"
+
+      - name: Two-run baseline_diff real-run positive + replay (Phase 2 4.4, REQ-44-5)
+        shell: bash
+        run: |
+          set -euo pipefail
+          T=topologies/rw-bgp-tenant30-change.yaml
+          C=tests/fixtures/rw-bgp-tenant30-change/
+          B=topologies/rw-bgp-tenant30-baseline.yaml
+          BUNDLE=labs/clab-rw-bgp-tenant30-change/two_run
+          # two-run's own exit reflects the CHANGE verdict; baseline_diff is written regardless (|| true).
+          # Replay leg mirrors B-9: run twice, assert byte-identical baseline_diff across real runs.
+          ./src/cassian.py test --two-run --two-run-topology "$T" --candidate-config "$C" "$B" || true
+          cp -r "$BUNDLE" /tmp/two_run_gate_run1
+          ./src/cassian.py test --two-run --two-run-topology "$T" --candidate-config "$C" "$B" || true
+          python tests/two_run_real_run_positive_proof.py /tmp/two_run_gate_run1 "$BUNDLE"
+
+      - name: Log in to ghcr.io (private CI image; O-4 GITHUB_TOKEN)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: VM-runtime assertion leg — validate/up/test/down (§4.5-a, REQ-45a-5)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Image resolves from the contrib-owned local tag (REQ-45C-11); no registry
+          # pull. A missing image fails at up/ with the REQ-45C-31 (a)/(b)/(c) error.
+          ./src/cassian.py validate topologies/vm-assertion-smoke.yaml
+          ./src/cassian.py up topologies/vm-assertion-smoke.yaml --reconfigure
+          ./src/cassian.py test vm-assertion-smoke
+          ./src/cassian.py down vm-assertion-smoke
+
+      - name: SONiC endpoint recognition — mixed host/linux (§4.5-c WI-2, REQ-45C-6/-7)
+        if: success() || failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          # (VM) proof per §15.2. Artifacts are copied aside BEFORE `down`,
+          # following tests/two_run_real_run_positive_proof.py's shape earlier
+          # in this workflow — the proof must not depend on what `down` leaves.
+          rm -rf /tmp/wi2_host /tmp/wi2_linux
+
+          ./src/cassian.py validate topologies/sonic-mixed-host.yaml
+          ./src/cassian.py up topologies/sonic-mixed-host.yaml --reconfigure
+          ./src/cassian.py test sonic-mixed-host
+          cp -r labs/clab-sonic-mixed-host /tmp/wi2_host
+          ./src/cassian.py down sonic-mixed-host
+
+          ./src/cassian.py validate topologies/sonic-mixed-linux.yaml
+          ./src/cassian.py up topologies/sonic-mixed-linux.yaml --reconfigure
+          ./src/cassian.py test sonic-mixed-linux
+          cp -r labs/clab-sonic-mixed-linux /tmp/wi2_linux
+          ./src/cassian.py down sonic-mixed-linux
+
+          python tests/sonic_endpoint_recognition_proof.py /tmp/wi2_host /tmp/wi2_linux
+
+      # === §4.5-c WI-3 packet 4b-iii — (VM) legs ==========================
+      # Four cycles, no sharing (founder ruling 2026-08-26): each requirement
+      # gets its own fixture and its own up/test/down, so no leg's evidence
+      # depends on another leg's fixture. `if: success() || failure()` on every
+      # step per BL-P2-4.5c-62 — a skipped step is neither pass nor fail, it is
+      # no evidence (Doctrine §1.11).
+
+      # --- Cycle A: converging pair. Proofs run BETWEEN up and down: these are
+      # live-device reads through the product's runtime seam (LD-45C-R1).
+      - name: SONiC precheck (VM) — converging pair, REQ-45C-8 (§4.5-c WI-3)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          ./src/cassian.py up topologies/probe-sonic-bgp-pair.yaml --reconfigure
+          ./src/cassian.py test probe-sonic-bgp-pair
+          python tests/sonic_precheck_proof.py req8 \
+            topologies/probe-sonic-bgp-pair.yaml probe-sonic-bgp-pair
+
+      - name: SONiC rendering-to-acceptance (VM) — REQ-45C-22 (§4.5-c WI-3)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/sonic_lifecycle_proof.py req22 \
+            topologies/probe-sonic-bgp-pair.yaml probe-sonic-bgp-pair
+          ./src/cassian.py down probe-sonic-bgp-pair
+
+      # --- Cycle B: asymmetric declaration. `test` is EXPECTED to fail — the
+      # far node's expected peer set is link-derived (engine:10221-10228), so it
+      # polls and times out too. Capture the rc rather than let pipefail kill
+      # the step before the proof runs.
+      - name: SONiC precheck (VM) — asymmetric declaration, REQ-45C-24 (§4.5-c WI-3)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/wi3_asym
+          ./src/cassian.py up topologies/sonic-bgp-asymmetric.yaml --reconfigure
+          set +e
+          ./src/cassian.py test sonic-bgp-asymmetric > /tmp/wi3_asym.out 2>&1
+          echo "cassian test rc=$? (a FAIL here is expected: the pair cannot converge)"
+          set -e
+          cp -r labs/clab-sonic-bgp-asymmetric /tmp/wi3_asym
+          ./src/cassian.py down sonic-bgp-asymmetric
+          python tests/sonic_precheck_proof.py req24 /tmp/wi3_asym/results.json
+
+      # --- Cycle C: symmetric non-converging. Same capture discipline. The
+      # evidence is the §13-grade timeout text (cassian_nos_sonic.py:767-778),
+      # which lives only in the run's output.
+      - name: SONiC precheck (VM) — symmetric non-converging, REQ-45C-29 (§4.5-c WI-3)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          ./src/cassian.py up topologies/sonic-bgp-nonconverging.yaml --reconfigure
+          set +e
+          ./src/cassian.py test sonic-bgp-nonconverging > /tmp/wi3_nonconv.out 2>&1
+          echo "cassian test rc=$? (a FAIL here is expected: REQ-45C-29)"
+          set -e
+          ./src/cassian.py down sonic-bgp-nonconverging
+          python tests/sonic_precheck_proof.py req29 /tmp/wi3_nonconv.out
+
+      # --- Cycle D: REQ-45C-5 control + positive. Founder ruling 2026-08-26
+      # option 1 — BOTH labs up CONCURRENTLY, so the proof reads both guests in
+      # one invocation and §15.2's "the same address that was ABSENT in the
+      # control is now PRESENT" is structural, not dependent on CI pairing them.
+      # Lab names differ, so containerlab namespaces them separately. This is
+      # the first concurrent-lab step in this workflow.
+      - name: SONiC precheck (VM) — downed daemon named, REQ-45C-9 (§4.5-c WI-3)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          # req9 MUTATES the guest: it stops and restarts `bgp` through the
+          # product's own runtime seam (LD-45C-R5 R1 -- no ssh/systemctl enters
+          # this workflow). Restoration is structural inside the proof and is
+          # asserted on the restart's own verdict. This step DOWNS ITS OWN LAB,
+          # matching every sibling (VM) step -- :415, :435, :453, :490-491. The
+          # teardown sweep below is the if:always() safety net for a step that
+          # dies mid-way (LD-45C-R5 R4), NOT the primary cleanup.
+          ./src/cassian.py up topologies/sonic-bgp-daemon-stop.yaml --reconfigure
+          python tests/sonic_precheck_proof.py req9 \
+            topologies/sonic-bgp-daemon-stop.yaml sonic-bgp-daemon-stop
+          ./src/cassian.py down sonic-bgp-daemon-stop
+
+      - name: SONiC address control (VM) — REQ-45C-5 control + positive (§4.5-c WI-3)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          ./src/cassian.py up topologies/sonic-control-unprovisioned.yaml --reconfigure
+          ./src/cassian.py up topologies/sonic-base-lifecycle.yaml --reconfigure
+          python tests/sonic_lifecycle_proof.py req5 \
+            topologies/sonic-control-unprovisioned.yaml sonic-control-unprovisioned \
+            topologies/sonic-base-lifecycle.yaml sonic-base-lifecycle
+          ./src/cassian.py down sonic-base-lifecycle
+          ./src/cassian.py down sonic-control-unprovisioned
+
+      - name: SONiC base lifecycle (VM) — REQ-45C-1 row 1 (§4.5-c WI-1)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          ./src/cassian.py up topologies/sonic-base-lifecycle.yaml --reconfigure
+          python tests/sonic_lifecycle_proof.py req1 \
+            topologies/sonic-base-lifecycle.yaml sonic-base-lifecycle
+          ./src/cassian.py down sonic-base-lifecycle
+
+      - name: SONiC platform-key preservation (VM) — REQ-45C-44 row 44 (§4.5-c WI-1)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          ./src/cassian.py up topologies/sonic-base-lifecycle.yaml --reconfigure
+          python tests/sonic_routing_mode_precondition_proof.py req44pos \
+            topologies/sonic-base-lifecycle.yaml sonic-base-lifecycle
+          ./src/cassian.py down sonic-base-lifecycle
+
+      - name: SONiC mode precondition on a seeded guest (VM) — REQ-45C-44 row 44 negative (§4.5-c WI-1)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          ./src/cassian.py up topologies/sonic-base-lifecycle.yaml --reconfigure
+          python tests/sonic_routing_mode_precondition_proof.py req44neg \
+            topologies/sonic-base-lifecycle.yaml sonic-base-lifecycle
+          ./src/cassian.py down sonic-base-lifecycle
+
+
+      # --- Cycle E: the SCENARIO wait_for_bgp action (REQ-45C-10 / REQ-45C-30).
+      # LD-45C-R12 fixtures · R13 proof home · R14 this wiring · R15 positive
+      # non-vacuity · R16 negative two-surface assertion. Each lab-bearing step
+      # DOWNS ITS OWN LAB (R14 R2); the sweep below is the if:always() safety
+      # net for a step that dies mid-way, NOT the primary cleanup.
+      - name: SONiC scenario wait_for_bgp (VM) — converging pair, REQ-45C-10 (§4.5-c WI-3)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/wi3_wfb_pos
+          ./src/cassian.py up topologies/sonic-bgp-scenario-wait.yaml --reconfigure
+          ./src/cassian.py test sonic-bgp-scenario-wait --scenario sonic_wait_for_bgp_positive
+          cp -r labs/clab-sonic-bgp-scenario-wait /tmp/wi3_wfb_pos
+          ./src/cassian.py down sonic-bgp-scenario-wait
+          python tests/sonic_wait_for_bgp_proof.py req10 /tmp/wi3_wfb_pos/results.json
+
+      # `--scenario` by NAME, never `--all-scenarios` (founder ruling, session 13
+      # R3): a scenario added to either fixture later cannot then enter this leg
+      # silently. It also keeps this step off REQ-45C-29's surface -- with
+      # scenarios requested the global control-plane precheck does not run, and
+      # declared tests are skipped, so the two legs share a fixture and share no
+      # evidence.
+      - name: SONiC scenario wait_for_bgp (VM) — non-converging timeout, REQ-45C-10 (§4.5-c WI-3)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/wi3_wfb_neg
+          ./src/cassian.py up topologies/sonic-bgp-nonconverging.yaml --reconfigure
+          set +e
+          ./src/cassian.py test sonic-bgp-nonconverging --scenario sonic_wait_for_bgp_negative > /tmp/wi3_wfb_neg.out 2>&1
+          echo "cassian test rc=$? (a FAIL here is expected: REQ-45C-10 negative leg)"
+          set -e
+          cp -r labs/clab-sonic-bgp-nonconverging /tmp/wi3_wfb_neg
+          ./src/cassian.py down sonic-bgp-nonconverging
+          python tests/sonic_wait_for_bgp_proof.py req10neg \
+            /tmp/wi3_wfb_neg/results.json /tmp/wi3_wfb_neg.out
+
+      # LD-45C-R16 R5: this leg carries its OWN capture path. It does not reuse
+      # /tmp/wi3_nonconv.out and does not share the REQ-45C-29 step -- R14 R5's
+      # no-step-sharing half survives R16 and is honoured here.
+
+      # LD-45C-R14 R6: the lab-free schema leg stands up nothing, so it takes no
+      # up/down and is NOT added to the teardown sweep.
+      - name: SONiC scenario wait_for_bgp — schema regression, REQ-45C-30 (§4.5-c WI-3)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/sonic_wait_for_bgp_proof.py schema
+      # --- Teardown sweep. Any cycle that failed mid-step leaves a lab behind;
+      # a leaked lab poisons the next run rather than the one that caused it.
+      # `|| true` per lab: this step must not itself become a failure source.
+      # --- Cycle F: §4.5-c WI-1 packet 2 — the two preconfigured-mode (VM)
+      # rows. LD-45C-R30 R2 fixes the shape of both steps. They differ, and
+      # the difference is the point:
+      #   row 4  — resolve-time evidence, DEPLOYS NOTHING (LD-45C-R29 R1/R3),
+      #            so no up/down and NOT in the sweep below (LD-45C-R14 R6).
+      #   row 26 — boots one guest, so it DOWNS ITS OWN LAB as its last action
+      #            (R14 R2) and IS in the sweep (R14 R3).
+      # LD-45C-R20 R5: neither discharges REQ-45C-4/-26/-27 until both packets
+      # have landed and these legs are green.
+
+      - name: SONiC mixed-mode resolution (VM) — REQ-45C-4 row 4 (§4.5-c WI-1)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          # No `up` and no `down`: the leg runs `cassian gen` in a temporary
+          # workspace and asserts on topology.resolved.yaml, written before
+          # deploy. A step that deploys nothing takes no up/down (R14 R6).
+          python tests/sonic_preconfigured_proof.py mode4
+
+      - name: SONiC preconfigured boot (VM) — REQ-45C-26 row 26 (§4.5-c WI-1)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          ./src/cassian.py up topologies/sonic-preconfigured-boot.yaml --reconfigure
+          python tests/sonic_preconfigured_proof.py req26 \
+            topologies/sonic-preconfigured-boot.yaml sonic-preconfigured-boot
+          ./src/cassian.py down sonic-preconfigured-boot
+
+      - name: SONiC image lifecycle (VM) — REQ-45C-11 row 11 (§4.5-c WI-4)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          ./src/cassian.py up topologies/vm-assertion-smoke.yaml --reconfigure
+          python tests/sonic_image_lifecycle_proof.py req11 \
+            topologies/vm-assertion-smoke.yaml vm-assertion-smoke
+          ./src/cassian.py down vm-assertion-smoke
+
+      - name: SONiC exec allow-list proof — sonic_exec_allowlist_proof.py (§4.5-d, REQ-45D-5)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/sonic_exec_allowlist_proof.py
+
+      - name: exec rule parity proof, FRR + nft-fw — exec_rule_parity_proof.py (§4.5-d, REQ-45D-6/-7)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/exec_rule_parity_proof.py
+
+      - name: VM guest-probe rc=5 transient proof — vm_guest_probe_rc5_proof.py (§4.5-d, BL-P2-4.5c-32, R1/D-i)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/vm_guest_probe_rc5_proof.py
+
+      - name: SONiC observation-kinds proof — sonic_observation_kinds_proof.py (§4.5-d, REQ-45D-1/-8/-9/-10/-15/-16)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/sonic_observation_kinds_proof.py
+
+      - name: SONiC observed-state render proof — sonic_observed_state_render_proof.py (§4.5-d, REQ-45D-21)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/sonic_observed_state_render_proof.py
+
+      - name: route_prefix seam parity proof — route_prefix_seam_parity_proof.py (§4.5-d, REQ-45D-2, D-1, Q-A)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/route_prefix_seam_parity_proof.py
+
+      - name: EVPN precheck MAC-route poll proof — evpn_precheck_mac_poll_proof.py (§4.5-d, S24-R5, BL-P2-4.5c-53)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/evpn_precheck_mac_poll_proof.py
+
+      - name: EVPN route-reflector next-hop-self proof — evpn_rr_next_hop_self_proof.py (§4.5-d, S26-R8/R9, BL-P2-4.5c-219)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          rc=0
+          # Lab-free leg: the declared rendered-config change over every EVPN
+          # topology the product resolves (S26-R8, S26-R9; DC v2.1 §14 item 8).
+          python tests/evpn_rr_next_hop_self_proof.py || rc=1
+          # Hosted leg: one booted FRR EVPN lab, read on leaf2 and spine1 through
+          # the product's vty path. The trap tears the lab down on every exit, so
+          # the teardown sweep below needs no entry for it.
+          trap './src/cassian.py down evpn-mac-route-absent-expect-fail || true' EXIT
+          ./src/cassian.py up topologies/evpn_mac_route_absent_expect_fail.yaml --reconfigure
+          python tests/evpn_rr_next_hop_self_proof.py --hosted evpn-mac-route-absent-expect-fail || rc=1
+          exit "$rc"
+
+      - name: SONiC ospf_neighbor_up UNSUPPORTED proof — sonic_ospf_unsupported_proof.py (§4.5-d, REQ-45D-17)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/sonic_ospf_unsupported_proof.py
+
+      - name: added-step if-key proof — wf_added_steps_if_key_proof.py (§4.5-d, REQ-45D-28)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/wf_added_steps_if_key_proof.py
+
+      - name: SONiC status and collect proof, lab-free legs — sonic_status_collect_proof.py (§4.5-d, REQ-45D-19/-20)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/sonic_status_collect_proof.py
+
+      # §4.5-d S30-R5 readiness packet (founder rulings S31-R10 to S31-R19):
+      # FRR's nos_ready leg. Lab-free legs, then a Docker leg that starts the
+      # pinned FRR image privileged, as containerlab starts lab containers
+      # (S31-R16), and removes it in a finally. Additions only (REQ-45D-27).
+      - name: FRR daemon readiness proof — frr_nos_ready_proof.py (§4.5-d, S30-R5, S31-R10 to S31-R19, BL-P2-4.5c-226)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/frr_nos_ready_proof.py
+
+      # §4.5-d S33-R4 (founder rulings S33-R1 to S33-R5, 2026-10-19; BL-P2-4.5c-233):
+      # the FRR interface step's address window. Lab-free legs, then a Docker leg that
+      # starts the pinned FRR image privileged and opens the window between the
+      # product's flush and its address call; the container is removed in a finally.
+      # Additions only (REQ-45D-27).
+      - name: FRR address-step window proof — frr_address_step_window_proof.py (§4.5-d, S33-R4, BL-P2-4.5c-233)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/frr_address_step_window_proof.py
+
+      # §4.5-d VM-1 -- scope §9 row 15: one fixture, one boot, one declared FRR<->SONiC
+      # session carrying REQ-45D-8 first, then -1, -16 and -19 (S29-R5), and the two
+      # §15.2 negatives. The proof drives `cassian test --name` and `cassian status`
+      # itself, in order; `cassian test` without --name is not run here, because two
+      # declared tests are negative controls. The trap tears the lab down on every
+      # exit, so the teardown sweep below needs no entry for it (additions only,
+      # REQ-45D-27).
+      - name: SONiC FRR-to-SONiC BGP session (VM) — sonic_bgp_session_live_proof.py (§4.5-d, REQ-45D-1/-8/-16/-19)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-bgp-session-live || true' EXIT
+          ./src/cassian.py validate topologies/sonic-bgp-session-live.yaml
+          ./src/cassian.py up topologies/sonic-bgp-session-live.yaml --reconfigure
+          python tests/sonic_bgp_session_live_proof.py live topologies/sonic-bgp-session-live.yaml sonic-bgp-session-live
+
+      # §4.5-d VM-2 -- scope §9 row 8: one fixture, one boot (founder ruling S29-R6).
+      # The proof runs the plain `cassian test` (§19 Walkthrough 1: the three declared
+      # tests pass), configures one static route on the guest through the product's
+      # runtime, runs the static-route scenario, then the synthetic-complete control on
+      # the live RIB. The trap tears the lab down on every exit, so the teardown sweep
+      # below needs no entry for it (additions only, REQ-45D-27).
+      - name: SONiC RIB collection (VM) — sonic_rib_collection_live_proof.py (§4.5-d, REQ-45D-2/-11/-12)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-rib || true' EXIT
+          ./src/cassian.py validate topologies/sonic-rib.yaml
+          ./src/cassian.py up topologies/sonic-rib.yaml --reconfigure
+          python tests/sonic_rib_collection_live_proof.py live topologies/sonic-rib.yaml sonic-rib
+
+      # §4.5-d VM-3 -- scope §9 row 10 (founder rulings S34-R1 to S34-R4, 2026-10-19):
+      # one fixture, one boot -- a sonic-vm guest and two hosts attached directly to it.
+      # The proof asserts each host's data-plane address, MAC and default route
+      # (REQ-45D-26), drives the four declared ping tests one at a time with
+      # `cassian test --name` (REQ-45D-3/-4; two quadrants fail by design, so the plain
+      # `cassian test` is not run here), then shows the verify_host_ready trap on the live
+      # host. The trap tears the lab down on every exit, so the teardown sweep below
+      # needs no entry for it (additions only, REQ-45D-27).
+      - name: SONiC ping through a SONiC node (VM) — sonic_ping_through_proof.py (§4.5-d, REQ-45D-3/-4/-26)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-ping-through || true' EXIT
+          ./src/cassian.py validate topologies/sonic-ping-through.yaml
+          ./src/cassian.py up topologies/sonic-ping-through.yaml --reconfigure
+          python tests/sonic_ping_through_proof.py live topologies/sonic-ping-through.yaml sonic-ping-through
+
+      # §4.5-d VM-4 -- scope §9 row 9 (founder rulings S35-R1 to S35-R6, 2026-10-19):
+      # one fixture, one boot -- one frr node and one sonic-vm guest. The proof runs the
+      # refused-exec fixture's validate leg (REQ-45D-5, S35-R2), the three declared exec
+      # tests on the guest one at a time with `cassian test --name` (`show …` and
+      # `vtysh -c "show …"`, their output recorded as evidence; a live negative), and
+      # the guest-not-wrapper control through the product's substrate_exec. The trap
+      # tears the lab down on every exit, so the teardown sweep below needs no entry for
+      # it (additions only, REQ-45D-27).
+      - name: SONiC exec on the guest (VM) — sonic_exec_live_proof.py (§4.5-d, REQ-45D-5)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-exec-live || true' EXIT
+          ./src/cassian.py validate topologies/sonic-exec-live.yaml
+          ./src/cassian.py up topologies/sonic-exec-live.yaml --reconfigure
+          python tests/sonic_exec_live_proof.py live topologies/sonic-exec-live.yaml sonic-exec-live
+
+      # §4.5-d VM-5 -- scope §9 row 11 (founder rulings S36-R1 to S36-R3, 2026-10-20):
+      # one fixture, one boot -- one frr node and one sonic-vm guest, no BGP declared.
+      # The proof re-runs its lab-free legs, then reads the guest through `cassian
+      # status --routes` (JSON, and human with the raw route lines) and `cassian
+      # collect` (the SONiC node's two collect artifacts with zero sessions), and runs
+      # the guest-not-wrapper control through the product's substrate_exec. The trap
+      # tears the lab down on every exit, so the teardown sweep below needs no entry for
+      # it (additions only, REQ-45D-27).
+      - name: SONiC status and collect (VM) — sonic_status_collect_proof.py (§4.5-d, REQ-45D-19/-20)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-status-collect || true' EXIT
+          ./src/cassian.py validate topologies/sonic-status-collect.yaml
+          ./src/cassian.py up topologies/sonic-status-collect.yaml --reconfigure
+          python tests/sonic_status_collect_proof.py live topologies/sonic-status-collect.yaml sonic-status-collect
+
+      # §4.5-d VM-6 -- scope §9 row 13 (founder rulings S37-R1 to S37-R3, 2026-10-20):
+      # one fixture, one boot -- one frr node and one sonic-vm guest in generated mode, no
+      # BGP declared. The proof runs its lab-free legs, reads the guest's metadata, PORT
+      # table, config_db.json md5 and loopback table, re-runs the product's provision for
+      # the guest with its router_id changed (the sentinel), reads them again and compares
+      # what changed with the provision docstring's claim (REQ-45D-30), then runs the
+      # guest-not-wrapper control and the saved file's read-only control. The trap tears the
+      # lab down on every exit, so the teardown sweep below needs no entry for it
+      # (additions only, REQ-45D-27).
+      - name: SONiC within-boot reprovision (VM) — sonic_within_boot_reprovision_proof.py (§4.5-d, REQ-45D-30)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-within-boot || true' EXIT
+          ./src/cassian.py validate topologies/sonic-within-boot.yaml
+          ./src/cassian.py up topologies/sonic-within-boot.yaml --reconfigure
+          python tests/sonic_within_boot_reprovision_proof.py live topologies/sonic-within-boot.yaml sonic-within-boot
+
+      # §4.5-d VM-7 -- scope §9 row 12 (founder ruling S37-R4, 2026-10-20): one fixture, one
+      # boot -- one frr node and one sonic-vm guest in preconfigured mode, whose operator
+      # artifact carries arms F and E of REQ-45D-29 and the two controls, arms A and D. The
+      # proof runs its lab-free legs, reads init_cfg.json and, through sonic-cfggen, the
+      # tables the arms name, checks the controls, records arms F and E as measured, then
+      # runs the guest-not-wrapper control. The trap tears the lab down on every exit, so the
+      # teardown sweep below needs no entry for it (additions only, REQ-45D-27).
+      - name: SONiC init_cfg layering (VM) — sonic_init_cfg_layering_proof.py (§4.5-d, REQ-45D-29)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-init-cfg-layering || true' EXIT
+          ./src/cassian.py validate topologies/sonic-init-cfg-layering.yaml
+          ./src/cassian.py up topologies/sonic-init-cfg-layering.yaml --reconfigure
+          python tests/sonic_init_cfg_layering_proof.py live topologies/sonic-init-cfg-layering.yaml sonic-init-cfg-layering
+
+      # §4.5-d VM-8 -- scope §9 row 14 (founder rulings S37-R5, S37-R6 and S37-R14): one fixture,
+      # one boot -- r1 (frr) and s1 (sonic-vm) with one declared eBGP session. The proof runs its
+      # lab-free legs, reads s1's negotiated hold time against the scenario's wait, runs the
+      # declared invariant by name (the control: it passes), then the fixture's scenario through
+      # `cassian test --scenario`: 100% loss is applied to s1:eth1, the wait runs out, and the
+      # invariant fails -- the detection, its observed state read from results.json. The trap
+      # tears the lab down on every exit, so the teardown sweep below needs no entry for it
+      # (additions only, REQ-45D-27).
+      - name: SONiC grey failure (VM) — sonic_grey_failure_proof.py (§4.5-d, REQ-45D-22)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          trap './src/cassian.py down sonic-grey-failure || true' EXIT
+          ./src/cassian.py validate topologies/sonic-grey-failure.yaml
+          ./src/cassian.py up topologies/sonic-grey-failure.yaml --reconfigure
+          python tests/sonic_grey_failure_proof.py live topologies/sonic-grey-failure.yaml sonic-grey-failure
+
+      - name: SONiC (VM) teardown sweep (§4.5-c WI-3)
+        if: always()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          ./src/cassian.py down probe-sonic-bgp-pair || true
+          ./src/cassian.py down sonic-bgp-asymmetric || true
+          ./src/cassian.py down sonic-bgp-nonconverging || true
+          ./src/cassian.py down sonic-base-lifecycle || true
+          ./src/cassian.py down sonic-control-unprovisioned || true
+          ./src/cassian.py down sonic-bgp-daemon-stop || true
+          ./src/cassian.py down sonic-bgp-scenario-wait || true
+          # §4.5-c WI-1 packet 2: row 26's lab only. sonic-mode-mixed is NOT
+          # here and must not be added -- it is never deployed, so there is
+          # nothing to leak (LD-45C-R14 R6, LD-45C-R29 R1).
+          ./src/cassian.py down sonic-preconfigured-boot || true
+          # §4.5-c WI-4 piece A: row 11's lab. Deployed by the step above,
+          # so it can leak; LD-45C-R30 R3 puts a deployed lab in the sweep.
+          ./src/cassian.py down vm-assertion-smoke || true
+
       - name: Upload artifacts (always; bounded on success)
         if: always()
         uses: actions/upload-artifact@v4
@@ -213,3 +1025,17 @@ jobs:
             labs/**
           if-no-files-found: ignore
 
+      # §4.5-d S32-R3 (founder ruling 2026-10-18; BL-P2-4.5c-230, S30-R33): the job's
+      # final step. Every results.json present under labs/ is re-verified against its
+      # own tamper seal, by the recipe the docs page states and by the engine's
+      # function. A bundle overwritten earlier in the job by a later run of the same
+      # lab is not seen (stated in the proof's header; the step prints the count).
+      # Additions only (REQ-45D-27).
+      - name: results.json tamper-seal proof — results_tamper_check_bundle_proof.py (§4.5-d, S32-R3, BL-P2-4.5c-230)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/results_tamper_check_bundle_proof.py labs

@@ -120,6 +120,11 @@ Behavior:
 
 **Purpose:** Run a vtysh command on an FRR node.
 
+**FRR-only.** `cassian vty` is a vtysh shortcut. If `<node>` resolves to any
+node type other than `frr`, the command exits `2` before running anything and
+redirects you to `cassian exec <lab> <node> "<command>"`, which is NOS-agnostic
+and allow-listed.
+
 Arguments:
 
 * `<lab>`: lab name
@@ -130,18 +135,18 @@ Arguments:
 
 ### `cassian status <lab> [flags]`
 
-**Purpose:** Show lab status (containers + optional FRR info).
+**Purpose:** Show lab status (containers, plus optional BGP and route information for each node whose NOS provider implements the status legs: today `frr` and `sonic-vm`).
 
 Flags:
 
 * `--bgp`  
-  Include `show bgp summary` for FRR nodes.
+  Include `show bgp summary` for `frr` and `sonic-vm` nodes. Expected peers are derived only from links between two `frr` nodes, so a `sonic-vm` node prints `BGP (none)`; its observed sessions are in `--json` and `--bgp-verbose`.
 
 * `--bgp-verbose`  
   Print full `show bgp summary` output.
 
 * `--strict`  
-  Exit non-zero if any FRR peers are not `Established`.
+  Exit non-zero if any expected peer (derived from links between two `frr` nodes) is not `Established`.
 
 * `--interfaces`  
   Include `ip -br a` output per node.
@@ -224,8 +229,31 @@ Scenario flags:
 Convergence control:
 
 * `--precheck-controlplane`  
-  Run global control-plane prechecks (e.g., BGP wait) before executing scenarios.  
-  Default: off when `--scenario` / `--all-scenarios` is used.
+  Run the global control-plane precheck before executing scenarios.  
+  Default: off when `--scenario` / `--all-scenarios` is used. A run without scenarios always runs it.
+
+Control-plane precheck:
+
+* Runs, when selected, if the topology declares BGP: a node with `asn` or a `bgp` mapping, or `fabric.evpn.enabled: true` (replay labs included).
+* Waits for each derived BGP participant's sessions, polling once a second (bound 30 s; 60 s for an EVPN replay lab).
+* In a `fabric.evpn` lab, then polls once a second within the same bound until every host declared under `fabric.evpn` has its MAC route on every EVPN leaf on 3 consecutive attempts. Any other lab sleeps a fixed 5 s instead.
+* Fails the run before any test reads state, recording every declared test `observed: blocked`, when a session wait fails or times out; when the routes are not present and stable within the bound; when the EVPN declaration names no leaf, no host, or a host without a MAC or VNI; or when nodes declare BGP but no BGP participant at all is derived (no declaring node has a link to a peer that also declares `asn`). A declaring node without such a link, in a lab where other nodes do peer, is not waited on.
+
+Precheck record (`results.json`, `summary.precheck`; the same for the same outcome):
+
+* `entered`: `true` or `false`.
+* `not_entered_reason`: `null` when entered; otherwise `"not-selected"`, `"no-bgp-intent"`, or `"not-reached"` (the run ended before the precheck).
+* `participants`: sorted node names; `[]` in a `fabric.evpn` lab.
+* `session_wait`: one entry per wait the precheck started, in the order it waits (the topology's node order), with `node`, `leg` (`frr` or the NOS type), `bound_s`, `interval_s` and `outcome` (`"established"`, `"timeout"` or `"failed"`). After a failed wait, the remaining participants have no entry.
+* `settle`: `null` if not reached. For the route poll: `kind: "evpn-route-poll"`, `leaves`, `declared` (host, MAC, VNI), `k_required`, `bound_s`, `interval_s`, `outcome` (`"accepted"`, `"timeout-absent"` or `"timeout-unstable"`; `null` if the poll did not finish) and `absent_at_last`. Otherwise `kind: "fixed-sleep"` with `seconds`.
+* `outcome`: `"passed"`, `"failed"` or `"not-entered"`.
+* `failure`: `"bgp-intent-without-participants"`, `"session-timeout"`, `"session-failed"`, `"evpn-route-timeout"` or `"evpn-declaration-incomplete"` when `outcome` is `"failed"`; `null` otherwise, and also when the precheck exited from code it does not classify (`outcome` still reads `"failed"`; the run's error output carries the cause).
+
+Precheck timing (`results.json`, `timing.precheck`; present only when the precheck was entered; varies from run to run, and the tamper digest excludes the `timing` subtree):
+
+* `duration_ms`.
+* `session_wait`: per wait, `node`, `elapsed_ms`, `attempts` and `attempts_reported`. For a wait a NOS provider drives, `attempts` is `null` and `attempts_reported` is `false`.
+* `settle`: `elapsed_ms`; for the route poll, also `attempts` and `final_consecutive`.
 
 Listing:
 
@@ -309,6 +337,34 @@ Notes:
 
 * non-zero (other)  
   Hard execution failure (deploy/provision/runtime failure), or strict status failure.
+  An FRR node whose generated `daemons` file enables a daemon that vtysh still does not list after 30 s, once the lab is deployed, fails here as a provision failure that names the node and the daemons (`provision: <node>: FRR daemon not running after 30s: <daemon>`).
+
+---
+
+## 7) VM-runtime behaviour (partial — completeness closes at §4.5-g)
+
+`sonic-vm` nodes run a SONiC guest inside a vrnetlab wrapper. Two exec-target verb families address the two layers:
+
+* bare `exec` / `sh` / `copy_*` reach the **guest NOS**
+* `substrate_exec` / `substrate_sh` / `substrate_copy_from` reach the **vrnetlab substrate** (the wrapper)
+
+Default is bare = NOS.
+
+Supported surfaces on a vm-runtime node: lifecycle (`up` / `status` / `down`), node readiness, **ping tests** (executed against the guest), **`exec` tests** that run a read-only command on the guest (on `sonic-vm`: `show …` except `show techsupport`, or `vtysh -c "show …"`), and each test kind and invariant type the node's NOS provider declares implemented. The set is **derived**, not maintained by hand: validation reads the provider's capability declarations, and its rejection message lists what is still deferred. For `sonic-vm` this is currently `bgp_neighbor` and `route_prefix` tests and the invariant types `bgp_session_up`, `bgp_localpref_equals`, `bgp_med_equals`, `bgp_community`, `bgp_as_path`, `route_present`, `route_absent`, `route_advertised_to` and `route_not_advertised_to`; `tcp` tests and every other invariant type are deferred (DC v2.1 §10) and are rejected at validation time with exit code `2`. An `ospf_neighbor_up` invariant whose `src` is a `sonic-vm` node is rejected at validation time with a deterministic unsupported error naming the invariant and the node (exit code `2`): OSPF on SONiC is not supported in this release; point `src` at an `frr` node, or remove the invariant. A `sonic-vm` node declared with an explicit `runtime: container` is rejected at validation time with exit code `2` (set `runtime: vm`, or omit it). Guest-file `copy_*` is unsupported (deferred to §4.5-f); `substrate_copy_from` works; `substrate_copy_to` is intentionally absent (demand-led).
+
+Credentials are a boot-time launcher property (`admin` / `admin`; no schema key). See `docs/vm-runtime-capabilities.md` and `contrib/sonic-image-build/`.
+
+## 8) Environment readiness
+
+### `cassian doctor`
+
+Read-only environment readiness checks. Reports gate-critical dependencies (docker, containerlab) and advisory checks. For the VM-runtime path it additionally reports, as advisory:
+
+* sonic-vm image present-or-pullable (`ghcr.io/cassian-gate/sonic-vm:202405`)
+* KVM available (`/dev/kvm`)
+* containerlab version
+
+A missing advisory prerequisite is reported but does not by itself fail the command; gate-critical failures (docker / containerlab absent) do.
 
 ---
 
