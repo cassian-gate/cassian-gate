@@ -2160,6 +2160,53 @@ def _compile_frr_as_path_regex(pattern):
     return re.compile(translated)
 
 
+builtin_invariant_packs = {
+    "datacenter-bgp-safety": {
+        "pack_id": "datacenter-bgp-safety",
+        "invariants": [
+            {
+                "name": "leaf1_evpn_session_to_spine1_up",
+                "kind": "invariant",
+                "type": "evpn_bgp_session_up",
+                "node": "leaf1",
+                "peer": "spine1",
+                "expect": "pass",
+            },
+            {
+                "name": "leaf2_evpn_session_to_spine1_up",
+                "kind": "invariant",
+                "type": "evpn_bgp_session_up",
+                "node": "leaf2",
+                "peer": "spine1",
+                "expect": "pass",
+            },
+        ],
+    },
+    "pack_incompatible_fixture": {
+        "pack_id": "pack_incompatible_fixture",
+        "invariants": [
+            {
+                "name": "invalid_pack_entry",
+                "kind": "invariant",
+                "type": "not_a_supported_invariant_type",
+                "node": "leaf1",
+                "expect": "pass",
+            }
+        ],
+    },
+}
+
+supported_pack_invariant_types = {
+    "evpn_bgp_session_up",
+    "evpn_mac_route_present",
+    "evpn_mac_route_absent",
+    "evpn_vni_route_present",
+    "bgp_localpref_equals",
+    "route_advertised_to",
+    "route_not_advertised_to",
+}
+
+
 def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
     """
     Return a copy of topo with missing link IPv4 addresses allocated.
@@ -2500,52 +2547,6 @@ def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
     packs = resolved.get("packs", []) or []
     if not isinstance(packs, list):
         die("packs: must be a list")
-
-    builtin_invariant_packs = {
-        "datacenter-bgp-safety": {
-            "pack_id": "datacenter-bgp-safety",
-            "invariants": [
-                {
-                    "name": "leaf1_evpn_session_to_spine1_up",
-                    "kind": "invariant",
-                    "type": "evpn_bgp_session_up",
-                    "node": "leaf1",
-                    "peer": "spine1",
-                    "expect": "pass",
-                },
-                {
-                    "name": "leaf2_evpn_session_to_spine1_up",
-                    "kind": "invariant",
-                    "type": "evpn_bgp_session_up",
-                    "node": "leaf2",
-                    "peer": "spine1",
-                    "expect": "pass",
-                },
-            ],
-        },
-        "pack_incompatible_fixture": {
-            "pack_id": "pack_incompatible_fixture",
-            "invariants": [
-                {
-                    "name": "invalid_pack_entry",
-                    "kind": "invariant",
-                    "type": "not_a_supported_invariant_type",
-                    "node": "leaf1",
-                    "expect": "pass",
-                }
-            ],
-        },
-    }
-
-    supported_pack_invariant_types = {
-        "evpn_bgp_session_up",
-        "evpn_mac_route_present",
-        "evpn_mac_route_absent",
-        "evpn_vni_route_present",
-        "bgp_localpref_equals",
-        "route_advertised_to",
-        "route_not_advertised_to",
-    }
 
     expanded_pack_tests = []
     for i, pack_name in enumerate(packs, start=1):
