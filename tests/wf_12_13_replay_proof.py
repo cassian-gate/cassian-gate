@@ -179,6 +179,15 @@ for _p in ("sonic_exec_allowlist_proof.py",   # H1-a2-ii, REQ-45D-5
            "sonic_grey_failure_proof.py"):  # S37-R5, S37-R6, S37-R14, row 14, REQ-45D-22 (VM)
     check(f"§4.5-d proof is CI-wired: {_p} present in the gate", _p in gate)
 
+# Stage-1 gap item (d)(2) (handover WI-9, Am-1; founder rulings of 2026-10-27): the item's
+# hosted proofs are gate-wired in lockstep with the cassian.yml steps that run them, in a
+# section loop of their own. HS-7 is entered with WI-13 (ruling D4); WI-9 adds HS-1 to HS-6.
+# Coverage limit (PBE-P2-8), as stated for §4.5-c above: this substring test proves each
+# proof is NAMED in the gate; it does NOT prove the step executes, that the runner reaches
+# it, or that the proof passes.
+for _p in ("probe_unusable_verdict_proof.py",):  # HS-7, WI-13, PO-30 (ruling D4)
+    check(f"(d)(2) proof is CI-wired: {_p} present in the gate", _p in gate)
+
 fails = [n for n, ok in checks if not ok]
 print(f"PO-B3-fold (WF-12/13 replay): {len(checks) - len(fails)}/{len(checks)} checks passed.")
 for n, ok in checks:

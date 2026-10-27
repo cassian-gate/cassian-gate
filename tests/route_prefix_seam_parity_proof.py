@@ -600,7 +600,10 @@ try:
     import json as _json
 
     RIT_ORACLE_SHA256 = "2a2fa73c2fb47283e1dbdbb6486dced205999473972b511af4eaab0a640e5d2a"
-    WFP_ORACLE_SHA256 = "f90862ca977f6193ba3607ae8fe01f024cc988345036a32485e9b11b41499529"
+    # Re-baselined by Stage-1 gap item (d)(2) WI-13 (founder ruling D5, 2026-10-27): the oracle
+    # is now the f015801 extraction plus WI-13's probe guards in the ping and tcp branches. HS-7
+    # (tests/probe_unusable_verdict_proof.py) pins those branches' pre-WI-13 form to 02669cd.
+    WFP_ORACLE_SHA256 = "0b751f315492161411b5f94c4ec380f4899b9cb4f54a4fa739e9147051854d32"
     GUARD_RIT = '''\
         # Q20-3 (founder ruling (i) of 2026-10-02, an SP #1 bounded-scope amendment;
         # finding F-S20-1): a read the provider cannot vouch for (probe_ok False)
