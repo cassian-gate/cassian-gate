@@ -2,7 +2,9 @@
 """probe_unusable_verdict_proof.py -- HS-7, Stage-1 gap item (d)(2), `cassian checks`.
 
 WI-13 (finding F-S1D2-C3-5; founder rulings of 2026-10-27: WI-13 D1 to D8, recorded in the
-second session-1 rulings note, and the D3 amendment (a), recorded in the third).
+second session-1 rulings note, and the D3 amendment (a), recorded in the third) -- PO-30.
+WI-14 (findings F-S1D2-C3-6 and F-S1D2-C3-10; founder rulings E1 to E6 of 2026-10-27, recorded in
+the third session-1 rulings note, and ruling 1, recorded in the fourth) -- PO-31, below.
 
 PO-30. A dataplane probe that cannot run is never read as the network's answer. On the ping
 and tcp test paths and in scenario wait_for, a probe fails whatever `expect` says when:
@@ -37,6 +39,24 @@ Legs:
                 healthy probe, the ruled reason for a missing tool, a missing src_if and a
                 non-local src_ip, and no reason for an in-range network answer. An absent
                 docker or image is a FAIL, never a skip.
+
+PO-31. An exec whose output was not judged fails whatever `expect` says: the call raised; the
+command exited non-zero; or, on exit 0, the assertion could not be evaluated (output not JSON, a
+missing path, an ordering on a non-number). An answer whose assertion evaluated keeps its
+four-quadrant verdict; a backend that reports no exit status is judged on its output.
+  O  ORACLE     also run_exec_test: the live function with exactly the WI-14 edits reversed is
+                its cassian-gate@02669cd extraction (sha256 pinned).
+  X  EXEC       the live run_exec_test against a mock runtime, for seventeen outcomes (M1 to
+                M17, from the measurements of 2026-10-27) x expect: each verdict, error text,
+                `exec_unusable` evidence key and `stderr_excerpt` (present exactly when the output
+                was not judged) as ruled.
+  E  DETECTION  the 02669cd form passes the five F-S1D2-C3-6 false passes, the F-S1D2-C3-10
+                unevaluable assertions under expect: fail, and the two absent-object reads that
+                are now failed loudly; every judged answer keeps its 02669cd verdict.
+  R  RENDER     DC v2.1 section 13(b)(c) (rulings note 3 section 4, E4): a failed exec renders
+                identity, expectation and observed state through the real
+                cassian_tests._format_test_summary, with stderr_excerpt exactly when the output
+                was not judged.
 
 COVERAGE LIMIT (sonic-vm). The guest path is not exercised here: no lab run (founder ruling
 D4). It was measured on 2026-10-27 on a live sonic-vm guest (SONiC 202405.1033627-fecd4ec81,
@@ -518,6 +538,252 @@ def _k_image(role, image):
 
 
 leg("K", _leg_k)
+
+
+# =================================================================== PO-31 (WI-14)
+# WI-14 (findings F-S1D2-C3-6 and F-S1D2-C3-10; founder rulings E1 to E6 of 2026-10-27, rulings
+# note 3, and ruling 1 of rulings note 4): an exec whose output was not judged -- the call
+# raised, the command exited non-zero, or the assertion could not be evaluated -- fails
+# whatever `expect` says. Exit 0 with an assertion that evaluated keeps its four-quadrant
+# verdict; a backend that reports no exit status is judged on its output.
+import json  # noqa: E402
+
+import cassian_tests as T  # noqa: E402
+
+ORACLE_SHA256["run_exec_test"] = "f71ebdcc0374f23d25b918e82f2558263fb9a1c3bf18854dcb6966417a659306"
+# The WI-14 edits, as (02669cd text, WI-14 text) pairs at the engine's own indentation.
+WI14_EDITS = [
+    (r'''        verdict = "pass" if observed == expected else "fail"
+
+''',
+     r'''        verdict = "pass" if observed == expected else "fail"
+
+        # Stage-1 gap item (d)(2) WI-14 (F-S1D2-C3-6). The command's exit status was ignored, so a
+        # command that did not answer (unknown command, stopped daemon, ssh down) left empty or
+        # error output that a not_contains, or any expect: fail, read as a pass; an exec that
+        # raised (timeout) also passed under expect: fail. Measured 2026-10-27 on every allowed
+        # exec form of every node type that has one: each answer exits 0, including the routing
+        # shell's answers about absent objects; a non-zero exit is a command error, a stopped
+        # daemon or a transport failure -- or, for SONiC's show CLI and nft, an absent object,
+        # which the exit status cannot tell apart from a usage error. An exec that raised or
+        # exited non-zero is never judged on its output: verdict fail whatever expect says. A
+        # backend that reports no exit status (rt.exec returning str) is judged on its output.
+        # F-S1D2-C3-10: an assertion that could not be evaluated on an answer (output not JSON,
+        # a missing path, an ordering on a non-number) is not judged either; its error is the
+        # evaluator's own.
+        _exec_unusable = exec_error or None
+        if _exec_unusable is None and isinstance(returncode, int) and not isinstance(returncode, bool) \
+                and returncode != 0:
+            _exec_unusable = f"exited {returncode}"
+            observed = "fail"
+            eval_error = f"exec command exited {returncode} on {src}; its output is not judged"
+        if _exec_unusable is not None or eval_error:
+            verdict = "fail"
+
+'''),
+    (r'''            "returncode": returncode,
+            "truncated": _truncated,
+''',
+     r'''            "returncode": returncode,
+            "truncated": _truncated,
+            **({"exec_unusable": _exec_unusable} if _exec_unusable is not None else {}),
+'''),
+    (r'''            if eval_error:
+                observed_state_payload["eval_error"] = eval_error
+''',
+     r'''            if eval_error:
+                observed_state_payload["eval_error"] = eval_error
+            if _exec_unusable is not None:
+                # WI-14: the output was not judged, so the reason is in stderr (a stopped
+                # daemon, a usage error, the transport); render it in the failure block.
+                observed_state_payload["stderr_excerpt"] = stderr[:_EXEC_EVIDENCE_CAP]
+'''),
+]
+
+
+def _leg_o14():
+    _live = raw("run_exec_test")
+    _old = _live
+    _ok = True
+    for _before, _after in WI14_EDITS:
+        _ok = _ok and _old.count(_after) == 1
+        _old = _old.replace(_after, _before, 1)
+    LIVE["run_exec_test"] = textwrap.dedent(_live)
+    OLD["run_exec_test"] = textwrap.dedent(_old)
+    check("O run_exec_test is the 02669cd extraction with exactly the WI-14 edits applied (sha256 pinned)",
+          _ok and sha(OLD["run_exec_test"]) == ORACLE_SHA256["run_exec_test"], sha(OLD["run_exec_test"]))
+
+
+leg("O", _leg_o14)
+
+
+class ExecRT:
+    """`r` is (rc, stdout, stderr) for a CompletedProcess, ("str", text) for a backend that
+    returns a string, or "timeout" for a call that raises."""
+
+    def __init__(self, r):
+        self.r = r
+
+    def exec(self, lab, node, cmd, *, check=False, capture_output=True, interactive=False, timeout_s=None):
+        if self.r == "timeout":
+            raise subprocess.TimeoutExpired(cmd, timeout_s or 30)
+        if self.r[0] == "str":
+            return self.r[1]
+        rc, out, err = self.r
+        return CP(cmd, rc, out, err)
+
+
+GUEST = SONIC_PRE.rstrip("\n") + "\n"
+FIELD_IDLE = {"field": {"path": ["ipv4Unicast", "peers", "10.0.0.2", "state"], "op": "==", "value": "Idle"}}
+# tag, runtime outcome, assertion, verdict for expect pass / expect fail, how the output is taken:
+#   "judged" (exit 0, evaluated), "exited" (non-zero exit), "raised" (the call raised),
+#   "unevaluable" (exit 0, the assertion could not be evaluated: the evaluator's own text)
+EXEC_CASES = [
+    ("M1 answer, assertion holds", (0, "FRRouting 10.7.1", ""), {"contains": "FRRouting"}, ("pass", "fail"),
+     "judged", None),
+    ("M2 answer about an absent object", (0, "% Network not in table\n", ""), {"not_contains": "203.0.113.200/32"},
+     ("pass", "fail"), "judged", None),
+    ("M3 empty answer on a guest", (0, "", GUEST), {"not_contains": "203.0.113.200"}, ("pass", "fail"), "judged", None),
+    ("M4 daemon not running", (1, "", "ospfd is not running\n"), {"not_contains": "10.0.0.1"}, ("fail", "fail"),
+     "exited", None),
+    ("M5 unknown command", (1, "% Unknown command: show bgp nbr\n", ""), {"contains": "Established"},
+     ("fail", "fail"), "exited", None),
+    ("M6 usage error on a guest", (2, "", GUEST + "Error: Got unexpected extra argument (json)\n"),
+     {"not_contains": "Active"}, ("fail", "fail"), "exited", None),
+    ("M7 neighbour not configured on a guest", (2, "", GUEST + "Error:  Bgp neighbor 203.0.113.200 not configured\n"),
+     {"contains": "Established"}, ("fail", "fail"), "exited", None),
+    ("M8 absent nft table", (1, "", "Error: No such file or directory\n"), {"contains": "table inet t"},
+     ("fail", "fail"), "exited", None),
+    ("M9 transport down", (255, "", "ssh: connect to host x port 22: Connection refused\n"),
+     {"not_contains": "Established"}, ("fail", "fail"), "exited", None),
+    ("M10 the call timed out", "timeout", {"not_contains": "x"}, ("fail", "fail"), "raised", None),
+    ("M11 backend with no exit status", ("str", "FRRouting 10.7.1"), {"contains": "FRRouting"}, ("pass", "fail"),
+     "judged", None),
+    ("M12 empty JSON object, missing path", (0, "{}", ""), FIELD_IDLE, ("fail", "fail"), "unevaluable",
+     "field: path segment 'ipv4Unicast' missing or parent not a dict"),
+    ("M13 output not JSON", (0, "BGP table version is 3\n", ""), FIELD_IDLE, ("fail", "fail"), "unevaluable",
+     "field: stdout is not valid JSON"),
+    ("M14 ordering on a string", (0, '{"x": "abc"}', ""), {"field": {"path": ["x"], "op": ">=", "value": 1}},
+     ("fail", "fail"), "unevaluable", "field: ordering comparison requires numeric operands"),
+    ("M15 field evaluated, predicate false", (0, '{"ipv4Unicast": {"peers": {"10.0.0.2": {"state": "Active"}}}}', ""),
+     FIELD_IDLE, ("fail", "pass"), "judged", None),
+    ("M16 field == across types (judged)", (0, '{"x": 5}', ""), {"field": {"path": ["x"], "op": "==", "value": "5"}},
+     ("fail", "pass"), "judged", None),
+    ("M17 no exit status, missing path", ("str", "{}"), FIELD_IDLE, ("fail", "fail"), "unevaluable",
+     "field: path segment 'ipv4Unicast' missing or parent not a dict"),
+]
+
+
+def run_exec(text, r, assertion, expect):
+    cap = {}
+    ns = ns_with(text, ExecRT(r), cap)
+    t = {"kind": "exec", "command": "show ip route", "assertion": assertion, "expect": expect}
+    v = ns["run_exec_test"](test_name="t", src="s1", t=t, record_fn=lambda **kw: cap.update(kw))
+    return v, cap
+
+
+def _exec_record_ok(rec, r, how, expect, want, text):
+    ev = rec.get("evidence") or {}
+    os_ = rec.get("observed_state") or {}
+    if rec.get("verdict") != want:
+        return False
+    if how == "exited":
+        rc = r[0]
+        return (ev.get("exec_unusable") == "exited %d" % rc and rec.get("observed") == "fail"
+                and rec.get("error") == "exec command exited %d on s1; its output is not judged" % rc
+                and os_.get("returncode") == rc and os_.get("stderr_excerpt") == r[2])
+    if how == "raised":
+        return (str(ev.get("exec_unusable") or "").startswith("exec failed: ") and rec.get("observed") == "fail"
+                and rec.get("error") == ev.get("exec_unusable") and os_.get("stderr_excerpt") == "")
+    if how == "unevaluable":
+        return ("exec_unusable" not in ev and rec.get("observed") == "fail" and rec.get("error") == text
+                and os_.get("eval_error") == text and "stderr_excerpt" not in os_)
+    # judged
+    if "exec_unusable" in ev or "stderr_excerpt" in os_:
+        return False
+    if want == "pass":
+        return rec.get("error") == ""
+    return rec.get("error") == "exec assertion not satisfied (observed %s, expected %s)" % (
+        rec.get("observed"), expect)
+
+
+# ------------------------------------------------------------------- X: exec verdicts and texts
+def _leg_x():
+    for name, r, assertion, (want_p, want_f), how, text in EXEC_CASES:
+        for expect, want in (("pass", want_p), ("fail", want_f)):
+            v, rec = run_exec(LIVE["run_exec_test"], r, assertion, expect)
+            check("X exec %-40s expect %-4s -> %s (%s)" % (name, expect, want, how),
+                  v == want and _exec_record_ok(rec, r, how, expect, want, text),
+                  "%r %r %r" % (v, rec.get("error"), (rec.get("evidence") or {}).get("exec_unusable")))
+
+
+leg("X", _leg_x)
+
+
+# ------------------------------------------------------------------- E: exec detection
+def _leg_e():
+    false_passes = [("M4", "pass"), ("M5", "fail"), ("M6", "pass"), ("M9", "pass"), ("M10", "fail")]
+    unevaluable = [("M12", "fail"), ("M13", "fail"), ("M14", "fail"), ("M17", "fail")]
+    absent_loud = [("M7", "fail"), ("M8", "fail")]
+    by_tag = {c[0].split()[0]: c for c in EXEC_CASES}
+
+    def old_verdict(tag, expect):
+        c = by_tag[tag]
+        return run_exec(OLD["run_exec_test"], c[1], c[2], expect)[0]
+
+    for label, cells in (("the five F-S1D2-C3-6 false passes", false_passes),
+                         ("the F-S1D2-C3-10 unevaluable assertions under expect: fail", unevaluable),
+                         ("absent objects reported by a non-zero exit, now failed loudly", absent_loud)):
+        missed = ["%s/%s" % c for c in cells if old_verdict(*c) != "pass"]
+        check("E the 02669cd form passes %s (%s): the defect is reproduced, so X is not vacuous"
+              % (label, ", ".join("%s/%s" % c for c in cells)), not missed, ", ".join(missed))
+    same = []
+    for name, r, assertion, _w, how, _t in EXEC_CASES:
+        if how != "judged":
+            continue
+        for expect in ("pass", "fail"):
+            if run_exec(OLD["run_exec_test"], r, assertion, expect)[0] != run_exec(LIVE["run_exec_test"], r, assertion,
+                                                                                   expect)[0]:
+                same.append("%s/%s" % (name.split()[0], expect))
+    check("E every judged answer keeps its 02669cd verdict (M1, M2, M3, M11, M15, M16, both expects)",
+          not same, ", ".join(same))
+
+
+leg("E", _leg_e)
+
+
+# ------------------------------------------------------------------- R: render (DC v2.1 section 13(b)(c))
+def _summary_for(rec):
+    t = {"name": rec["name"], "kind": rec["kind"], "from": rec["src"], "to": rec["dst"],
+         "expected": rec["expected"], "observed": rec["observed"], "verdict": rec["verdict"],
+         "duration_ms": rec["duration_ms"], "error": rec["error"], "evidence": rec["evidence"],
+         "meta": rec.get("meta")}
+    if rec.get("observed_state") is not None:
+        t["observed_state"] = rec["observed_state"]
+    res = {"lab": "hs7", "result": "fail", "summary": {"total": 1, "passed": 0, "failed": 1},
+           "tests": [t], "scenarios": [], "events": []}
+    return T._format_test_summary(res).split("\n")
+
+
+def _leg_r():
+    by_tag = {c[0].split()[0]: c for c in EXEC_CASES}
+    for tag, expect in (("M4", "pass"), ("M6", "fail"), ("M10", "pass"), ("M12", "fail")):
+        _n, r, assertion, _w, how, text = by_tag[tag]
+        _v, rec = run_exec(LIVE["run_exec_test"], r, assertion, expect)
+        lines = _summary_for(rec)
+        os_ = rec.get("observed_state") or {}
+        want = [" - t (exec) s1-> : %s" % rec["error"], "    exec:", "      command: show ip route",
+                "      assertion: %s" % json.dumps(assertion, sort_keys=True),
+                "      expected: %s" % expect, "    observed:", "      eval_error: %s" % os_.get("eval_error"),
+                "      returncode: %s" % ("null" if os_.get("returncode") is None else os_.get("returncode"))]
+        missing = [w for w in want if w not in lines]
+        has_stderr = any(ln.startswith("      stderr_excerpt:") for ln in lines)
+        stderr_ok = has_stderr if how in ("exited", "raised") else not has_stderr
+        check("R %s expect %s renders identity, expectation and observed state (%s)" % (tag, expect, how),
+              not missing and stderr_ok, "missing %r stderr_excerpt=%s" % (missing, has_stderr))
+
+
+leg("R", _leg_r)
 
 
 # ------------------------------------------------------------------- result

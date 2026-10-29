@@ -8333,12 +8333,35 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         verdict = "pass" if observed == expected else "fail"
 
+        # Stage-1 gap item (d)(2) WI-14 (F-S1D2-C3-6). The command's exit status was ignored, so a
+        # command that did not answer (unknown command, stopped daemon, ssh down) left empty or
+        # error output that a not_contains, or any expect: fail, read as a pass; an exec that
+        # raised (timeout) also passed under expect: fail. Measured 2026-10-27 on every allowed
+        # exec form of every node type that has one: each answer exits 0, including the routing
+        # shell's answers about absent objects; a non-zero exit is a command error, a stopped
+        # daemon or a transport failure -- or, for SONiC's show CLI and nft, an absent object,
+        # which the exit status cannot tell apart from a usage error. An exec that raised or
+        # exited non-zero is never judged on its output: verdict fail whatever expect says. A
+        # backend that reports no exit status (rt.exec returning str) is judged on its output.
+        # F-S1D2-C3-10: an assertion that could not be evaluated on an answer (output not JSON,
+        # a missing path, an ordering on a non-number) is not judged either; its error is the
+        # evaluator's own.
+        _exec_unusable = exec_error or None
+        if _exec_unusable is None and isinstance(returncode, int) and not isinstance(returncode, bool) \
+                and returncode != 0:
+            _exec_unusable = f"exited {returncode}"
+            observed = "fail"
+            eval_error = f"exec command exited {returncode} on {src}; its output is not judged"
+        if _exec_unusable is not None or eval_error:
+            verdict = "fail"
+
         _truncated = len(stdout) > _EXEC_EVIDENCE_CAP or len(stderr) > _EXEC_EVIDENCE_CAP
         evidence = {
             "stdout": stdout[:_EXEC_EVIDENCE_CAP],
             "stderr": stderr[:_EXEC_EVIDENCE_CAP],
             "returncode": returncode,
             "truncated": _truncated,
+            **({"exec_unusable": _exec_unusable} if _exec_unusable is not None else {}),
         }
 
         observed_state_payload = None
@@ -8350,6 +8373,10 @@ def cmd_test(args: argparse.Namespace) -> None:
             }
             if eval_error:
                 observed_state_payload["eval_error"] = eval_error
+            if _exec_unusable is not None:
+                # WI-14: the output was not judged, so the reason is in stderr (a stopped
+                # daemon, a usage error, the transport); render it in the failure block.
+                observed_state_payload["stderr_excerpt"] = stderr[:_EXEC_EVIDENCE_CAP]
 
         record_fn(
             name=test_name,
