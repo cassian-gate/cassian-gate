@@ -2927,6 +2927,16 @@ def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
                 if not isinstance(peer, str) or not peer.strip():
                     die(f"{ctx}: evpn_bgp_session_up requires non-empty 'peer'")
                 t["peer"] = peer.strip()
+                if t["peer"] not in nodes_by_name:
+                    die(
+                        f"{ctx}: invariant 'evpn_bgp_session_up' references unknown 'peer' value "
+                        f"{t['peer']!r} (node not declared in topology 'nodes:' section)"
+                    )
+                if t["peer"] == src.strip():
+                    die(
+                        f"{ctx}: invariant 'evpn_bgp_session_up' 'peer' value "
+                        f"{t['peer']!r} is the test's own 'node' (an EVPN session needs a different node)"
+                    )
 
             elif inv_type == "ospf_neighbor_up":
                 # H4: OSPF neighbor-state invariant (FRR-only NOS-tag).
