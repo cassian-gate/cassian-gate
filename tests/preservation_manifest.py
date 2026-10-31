@@ -32,6 +32,8 @@ MODULE_ROSTER = frozenset({
     "src/cassian_ai.py",
     "src/cassian_artifacts.py",
     "src/cassian_candidate.py",
+    # Stage-1 gap item (d)(2) new module; enforced (REQ-S1D2-35; LD-9).
+    "src/cassian_catalogue.py",
     "src/cassian_cli.py",
     "src/cassian_common.py",
     "src/cassian_engine.py",

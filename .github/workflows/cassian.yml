@@ -817,6 +817,19 @@ jobs:
           set -euo pipefail
           python tests/frr_address_step_window_proof.py
 
+      # Stage-1 gap item (d)(2) WI-13 (founder rulings of 2026-10-27: D1 to D8 and the D3
+      # amendment (a); F-S1D2-C3-5): a dataplane probe that cannot run is never read as the
+      # network's answer. Lab-free legs, then a Docker leg that runs the probe preconditions in
+      # throwaway containers of the frr, host and nft-fw images. Additions only.
+      - name: probe-unusable verdict proof — probe_unusable_verdict_proof.py (Stage-1 (d)(2) WI-13, HS-7, PO-30)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/probe_unusable_verdict_proof.py
+
       # §4.5-d VM-1 -- scope §9 row 15: one fixture, one boot, one declared FRR<->SONiC
       # session carrying REQ-45D-8 first, then -1, -16 and -19 (S29-R5), and the two
       # §15.2 negatives. The proof drives `cassian test --name` and `cassian status`

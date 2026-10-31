@@ -3730,6 +3730,78 @@ class _PrecheckRecord:
         self.summary["failure"] = self._failure
         self.timing["duration_ms"] = int(round((now - self._t0) * 1000))
 
+# Stage-1 gap item (d)(2) WI-13 (F-S1D2-C3-5). A dataplane probe (ping, nc) that cannot run
+# exits non-zero exactly like one the network answered "no", so on a must-not test the run
+# read a broken probe as "unreachable" and passed. Measured 2026-10-27 on the images Cassian
+# runs: busybox ping and nc exit 1 for every failure; iputils ping exits 2 for "no route" and
+# for a bad -I argument alike; docker exec into a missing container exits 1; ssh that cannot
+# connect exits 255. The exit status alone cannot tell them apart, so the probe's own
+# preconditions are checked first, and an exit status outside the tool's range, or a node that
+# stopped, is never read as the network's answer. Verdict fail regardless of expect.
+_PROBE_EXIT_CODES = {"ping": (0, 1, 2), "nc": (0, 1)}
+
+
+def _probe_addrs(text: str) -> set:
+    out = set()
+    for line in (text or "").splitlines():
+        parts = line.split()
+        for k in range(len(parts) - 1):
+            if parts[k] in ("inet", "inet6"):
+                try:
+                    out.add(ipaddress.ip_address(parts[k + 1].split("/", 1)[0]))
+                except ValueError:
+                    pass
+    return out
+
+
+def _probe_last_stderr(cp) -> str:
+    """': <last non-empty stderr line>', or ''. The last line, not the first: on a sonic-vm node
+    the ssh transport writes its own lines (known-hosts warning, login banner) before the
+    command's, so the first line is never the tool's (measured 2026-10-27)."""
+    lines = [ln.strip() for ln in (getattr(cp, "stderr", "") or "").splitlines() if ln.strip()]
+    return f": {lines[-1]}" if lines else ""
+
+
+def _probe_unusable(rt, lab: str, node: str, tool: str, *, src_if=None, src_ip=None):
+    """Why a `tool` probe on `node` cannot be trusted to report "unreachable", or None."""
+    try:
+        if not rt.is_running(lab, node):
+            return f"node {node!r} is not running"
+    except Exception as e:
+        return f"cannot tell whether node {node!r} is running ({e})"
+    cp = rt.exec(lab, node, ["sh", "-c", f"command -v {tool}"], check=False)
+    rc = getattr(cp, "returncode", None)
+    if rc in (1, 127):
+        return f"{tool} is not available on node {node!r}"
+    if rc != 0:
+        return f"cannot run a command on node {node!r} (exited {rc}{_probe_last_stderr(cp)})"
+    if src_if:
+        name = str(src_if).strip()
+        cp = rt.exec(lab, node, ["ip", "link", "show", "dev", name], check=False)
+        if getattr(cp, "returncode", 1) != 0:
+            return f"src_if {name!r} is not an interface of node {node!r}"
+    if src_ip:
+        want = ipaddress.ip_address(str(src_ip).strip())
+        cp = rt.exec(lab, node, ["ip", "-o", "addr", "show"], check=False)
+        if getattr(cp, "returncode", 1) != 0 or want not in _probe_addrs(getattr(cp, "stdout", "")):
+            return f"src_ip {str(want)!r} is not an address of node {node!r}"
+    return None
+
+
+def _probe_exit_unexplained(rt, lab: str, node: str, tool: str, cp):
+    """After a non-zero probe: why that exit is not the network's answer, or None."""
+    rc = getattr(cp, "returncode", None)
+    if rc not in _PROBE_EXIT_CODES[tool]:
+        _last = _probe_last_stderr(cp)
+        return f"{tool} exited {rc}" + (f" ({_last[2:]})" if _last else "")
+    try:
+        if not rt.is_running(lab, node):
+            return f"node {node!r} stopped during the probe"
+    except Exception as e:
+        return f"cannot tell whether node {node!r} is running ({e})"
+    return None
+
+
 def cmd_test(args: argparse.Namespace) -> None:
     """
     v1 update (Section C): Scenarios wired into cmd_test (minimal invasive).
@@ -5277,19 +5349,28 @@ def cmd_test(args: argparse.Namespace) -> None:
             )
             return (cp.returncode == 0), cp
 
-        if expected == "fail":
+        # WI-13 (F-S1D2-C3-5): a probe that cannot run is not the network's answer.
+        _unusable = _probe_unusable(rt, lab, src, "ping", src_if=src_if, src_ip=src_ip)
+        if _unusable is not None:
+            ok, last_cp, attempts, dur_ms = False, None, 0, 0
+        elif expected == "fail":
             # v1 gate semantics: expected fail is fail-fast (single attempt)
             ok, last_cp = attempt()
             attempts = 1
             dur_ms = 0
         else:
             ok, last_cp, attempts, dur_ms = retry_until(retry_timeout_s, retry_interval_s, attempt)
+        if _unusable is None and not ok:
+            _unusable = _probe_exit_unexplained(rt, lab, src, "ping", last_cp)
 
         observed = "pass" if ok else "fail"
         should_succeed = (expected == "pass")
-        verdict = "pass" if (ok == should_succeed) else "fail"
+        verdict = "pass" if (ok == should_succeed and _unusable is None) else "fail"
 
-        err = "" if verdict == "pass" else _format_ping_ctx(expected_s=expected, observed_s=observed)
+        if _unusable is not None:
+            err = f"ping probe unusable on {src}: {_unusable}; never read as unreachable"
+        else:
+            err = "" if verdict == "pass" else _format_ping_ctx(expected_s=expected, observed_s=observed)
 
         rec = {
             "name": test_name,
@@ -5329,6 +5410,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 "src_ip": (str(src_ip).strip() if src_ip else ""),
                 "src_if": (str(src_if).strip() if src_if else ""),
                 "dst_ip": str(dst_ip),
+                **({"probe_unusable": _unusable} if _unusable is not None else {}),
             },
             duration_ms=rec["duration_ms"],
             error=rec["error"],
@@ -5372,16 +5454,22 @@ def cmd_test(args: argparse.Namespace) -> None:
             return (cp.returncode == 0), cp
 
         start = time.time()
-        if expected == "pass" and timeout_s > 0:
+        # WI-13 (F-S1D2-C3-5): a probe that cannot run is not the network's answer.
+        _unusable = _probe_unusable(rt, lab, src, "nc")
+        if _unusable is not None:
+            ok, last_cp, attempts, dur_ms = False, None, 0, 0
+        elif expected == "pass" and timeout_s > 0:
             ok, last_cp, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
         else:
             cp = rt.exec(lab, src, ["sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"], check=False)
             ok, last_cp, attempts = (cp.returncode == 0), cp, 1
             dur_ms = int((time.time() - start) * 1000)
+        if _unusable is None and not ok:
+            _unusable = _probe_exit_unexplained(rt, lab, src, "nc", last_cp)
 
         observed = "pass" if ok else "fail"
         should_succeed = (expected == "pass")
-        verdict = "pass" if (ok == should_succeed) else "fail"
+        verdict = "pass" if (ok == should_succeed and _unusable is None) else "fail"
 
         record_fn(
             name=test_name,
@@ -5391,9 +5479,10 @@ def cmd_test(args: argparse.Namespace) -> None:
             expected=expected,
             observed=observed,
             verdict=verdict,
-            evidence={"cmd": "nc -z"},
+            evidence={"cmd": "nc -z", **({"probe_unusable": _unusable} if _unusable is not None else {})},
             duration_ms=dur_ms,
-            error="" if verdict == "pass" else f"tcp mismatch (expected {expected}, observed {observed})",
+            error=(f"tcp probe unusable on {src}: {_unusable}; never read as unreachable" if _unusable is not None
+                   else ("" if verdict == "pass" else f"tcp mismatch (expected {expected}, observed {observed})")),
             meta={
                 "dst_ip": dst_ip,
                 "port": int(port),
@@ -8244,12 +8333,35 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         verdict = "pass" if observed == expected else "fail"
 
+        # Stage-1 gap item (d)(2) WI-14 (F-S1D2-C3-6). The command's exit status was ignored, so a
+        # command that did not answer (unknown command, stopped daemon, ssh down) left empty or
+        # error output that a not_contains, or any expect: fail, read as a pass; an exec that
+        # raised (timeout) also passed under expect: fail. Measured 2026-10-27 on every allowed
+        # exec form of every node type that has one: each answer exits 0, including the routing
+        # shell's answers about absent objects; a non-zero exit is a command error, a stopped
+        # daemon or a transport failure -- or, for SONiC's show CLI and nft, an absent object,
+        # which the exit status cannot tell apart from a usage error. An exec that raised or
+        # exited non-zero is never judged on its output: verdict fail whatever expect says. A
+        # backend that reports no exit status (rt.exec returning str) is judged on its output.
+        # F-S1D2-C3-10: an assertion that could not be evaluated on an answer (output not JSON,
+        # a missing path, an ordering on a non-number) is not judged either; its error is the
+        # evaluator's own.
+        _exec_unusable = exec_error or None
+        if _exec_unusable is None and isinstance(returncode, int) and not isinstance(returncode, bool) \
+                and returncode != 0:
+            _exec_unusable = f"exited {returncode}"
+            observed = "fail"
+            eval_error = f"exec command exited {returncode} on {src}; its output is not judged"
+        if _exec_unusable is not None or eval_error:
+            verdict = "fail"
+
         _truncated = len(stdout) > _EXEC_EVIDENCE_CAP or len(stderr) > _EXEC_EVIDENCE_CAP
         evidence = {
             "stdout": stdout[:_EXEC_EVIDENCE_CAP],
             "stderr": stderr[:_EXEC_EVIDENCE_CAP],
             "returncode": returncode,
             "truncated": _truncated,
+            **({"exec_unusable": _exec_unusable} if _exec_unusable is not None else {}),
         }
 
         observed_state_payload = None
@@ -8261,6 +8373,10 @@ def cmd_test(args: argparse.Namespace) -> None:
             }
             if eval_error:
                 observed_state_payload["eval_error"] = eval_error
+            if _exec_unusable is not None:
+                # WI-14: the output was not judged, so the reason is in stderr (a stopped
+                # daemon, a usage error, the transport); render it in the failure block.
+                observed_state_payload["stderr_excerpt"] = stderr[:_EXEC_EVIDENCE_CAP]
 
         record_fn(
             name=test_name,
@@ -9046,9 +9162,17 @@ def cmd_test(args: argparse.Namespace) -> None:
                     ping_cmd += ["-I", str(src_if).strip()]
                 ping_cmd += [str(dst_ip)]
 
+                # WI-13 (F-S1D2-C3-5): a probe that cannot run fails the step, whatever expect says.
+                _unusable = _probe_unusable(rt, lab, str(src).strip(), "ping", src_if=src_if, src_ip=src_ip)
+                if _unusable is not None:
+                    raise ValueError(f"wait_for ping: probe unusable: {_unusable}")
                 cp = rt.exec(lab, str(src).strip(), ping_cmd, check=False)
                 last_cp = cp
                 ping_ok = (cp.returncode == 0)
+                if not ping_ok:
+                    _unusable = _probe_exit_unexplained(rt, lab, str(src).strip(), "ping", cp)
+                    if _unusable is not None:
+                        raise ValueError(f"wait_for ping: probe unusable: {_unusable}")
 
                 last_obs = "pass" if ping_ok else "fail"
                 last_evidence = {
@@ -9080,6 +9204,10 @@ def cmd_test(args: argparse.Namespace) -> None:
                 dst_ip = resolve_dst_to_ip(topo, to.strip())
                 ensure_nc(rt, lab, str(src).strip())
 
+                # WI-13 (F-S1D2-C3-5): a probe that cannot run fails the step, whatever expect says.
+                _unusable = _probe_unusable(rt, lab, str(src).strip(), "nc")
+                if _unusable is not None:
+                    raise ValueError(f"wait_for tcp: probe unusable: {_unusable}")
                 # Deterministic connect check; attempt timeout is explicit via -w
                 cp = rt.exec(
                     lab,
@@ -9089,6 +9217,10 @@ def cmd_test(args: argparse.Namespace) -> None:
                 )
                 last_cp = cp
                 tcp_ok = (cp.returncode == 0)
+                if not tcp_ok:
+                    _unusable = _probe_exit_unexplained(rt, lab, str(src).strip(), "nc", cp)
+                    if _unusable is not None:
+                        raise ValueError(f"wait_for tcp: probe unusable: {_unusable}")
 
                 last_obs = "pass" if tcp_ok else "fail"
                 last_evidence = {

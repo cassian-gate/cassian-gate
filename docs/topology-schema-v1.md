@@ -335,6 +335,8 @@ Rules:
 * negative intent supported
 * deterministic timeout handling
 
+**A probe that cannot run fails.** For `ping` and `tcp`, and for scenario `wait_for` steps of those types, Cassian first checks that the probe can run on the source node: the node is running, the probe tool (`ping`, or `nc` for `tcp`) is present, a declared `src_if` is one of the node's interfaces and a declared `src_ip` is one of its addresses. A probe that cannot run, that exits with a status its tool never gives for a network answer (`ping`: 0, 1 or 2; `nc`: 0 or 1), or whose node stops during the probe, is never read as "unreachable": the test fails whatever `expect` says, its error reads `<kind> probe unusable on <node>: <reason>; never read as unreachable`, and its evidence carries the reason as `probe_unusable` (a `wait_for` step fails with `wait_for <kind>: probe unusable: <reason>`). A `sonic-vm` guest has no `nc`, so a `tcp` test from a `sonic-vm` node always fails this way.
+
 ---
 
 ### `bgp_neighbor` (v1.x)
