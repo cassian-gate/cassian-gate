@@ -291,6 +291,23 @@ def parse_frr_bgp_summary_neighbors(out: str) -> dict[str, dict[str, Any]]:
 # preserved byte-for-byte (REQ-45b-P2).
 
 
+def _output_is_not_json(out) -> bool:
+    """Stage-1 gap item (d)(2) WI-15 script 1a (S1D2-S9-R1, -R2; S1D2-S10-R3).
+
+    A JSON reader whose output is present but is not JSON produced no answer: the reader
+    reports it with probe_ok False, and the core decides. Empty output keeps the reader's
+    existing reading.
+    """
+    text = str(out or "").strip()
+    if not text:
+        return False
+    try:
+        json.loads(text)
+    except ValueError:
+        return True
+    return False
+
+
 def _collect_bgp_session_up(rt, lab, node, req: ObservationRequest) -> Observation:
     """Probe + normalize FRR BGP summary for one declared neighbor."""
     neighbor = str(req.params.get("neighbor") or "").strip()
@@ -350,6 +367,9 @@ def _collect_bgp_session_up(rt, lab, node, req: ObservationRequest) -> Observati
         last_error = "vtysh command failed"
         parse_error = "vtysh command failed"
 
+    # S1D2-S9-R2: output that is not JSON is no answer (probe_ok False).
+    if _output_is_not_json(out):
+        probe_ok = False
     return Observation(
         kind="bgp_session_up",
         data={
@@ -501,6 +521,9 @@ def _collect_bgp_med_equals(rt, lab, node, req: ObservationRequest) -> Observati
         "empty_first_doc": empty_first_doc,
     }
 
+    # S1D2-S9-R2: output that is not JSON is no answer (probe_ok False).
+    if _output_is_not_json(out):
+        probe_ok = False
     return Observation(
         kind="bgp_med_equals",
         data=observed_state,
@@ -619,6 +642,9 @@ def _collect_bgp_localpref_equals(rt, lab, node, req: ObservationRequest) -> Obs
         "parse_error": parse_error,
     }
 
+    # S1D2-S9-R2: output that is not JSON is no answer (probe_ok False).
+    if _output_is_not_json(out):
+        probe_ok = False
     return Observation(
         kind="bgp_localpref_equals",
         data=observed_state,
@@ -714,6 +740,9 @@ def _collect_bgp_community(rt, lab, node, req: ObservationRequest) -> Observatio
         "empty_first_doc": empty_first_doc,
     }
 
+    # S1D2-S9-R2: output that is not JSON is no answer (probe_ok False).
+    if _output_is_not_json(out):
+        probe_ok = False
     return Observation(
         kind="bgp_community",
         data=observed_state,
@@ -809,6 +838,9 @@ def _collect_bgp_as_path(rt, lab, node, req: ObservationRequest) -> Observation:
         "empty_first_doc": empty_first_doc,
     }
 
+    # S1D2-S9-R2: output that is not JSON is no answer (probe_ok False).
+    if _output_is_not_json(out):
+        probe_ok = False
     return Observation(
         kind="bgp_as_path",
         data=observed_state,
@@ -864,6 +896,9 @@ def _collect_route_prefix_table(rt, lab, node, req: ObservationRequest) -> Obser
         "rc": rc,
     }
 
+    # S1D2-S9-R2: output that is not JSON is no answer (probe_ok False).
+    if _output_is_not_json(out):
+        probe_ok = False
     return Observation(
         kind=req.kind,
         data=observed_state,
@@ -874,14 +909,16 @@ def _collect_route_prefix_table(rt, lab, node, req: ObservationRequest) -> Obser
 def _collect_route_prefix(rt, lab, node, req: ObservationRequest) -> Observation:
     """REQ-45D-2 / LD-45D-1: FRR's route_prefix read, moved out of the engine.
 
-    The read and its rc handling are the engine's former run_route_prefix_test
+    The read and its output handling are the engine's former run_route_prefix_test
     lines, unchanged in behaviour: the kernel FIB read for the prefix, the IP
     version taken from the prefix (4 when it does not parse), str / bytes /
     stdout / output normalisation as before. The presence rule (present <=>
     non-empty) stays core: this handler hands core the non-empty output lines.
-    probe_ok is True on every completed read because the engine never consulted
-    rc for route_prefix, and REQ-45D-2 moves that behaviour unchanged.
-    parse_error is always "": FRR's route_prefix output is not parsed. The keys
+    probe_ok is False when `ip` exits non-zero, which is no answer (S1D2-S9-R1;
+    Stage-1 gap item (d)(2) WI-15 script 1a); until then it was True on every
+    completed read, as REQ-45D-2 moved it from the engine. parse_error is "" on
+    an answer and names the exit otherwise: FRR's route_prefix output is not
+    parsed. The keys
     are the core's route_prefix contract (ruling (B) of 2026-10-01), shared with
     SONiC's handler.
     """
@@ -915,7 +952,9 @@ def _collect_route_prefix(rt, lab, node, req: ObservationRequest) -> Observation
     return Observation(
         kind=req.kind,
         data={"prefix": prefix, "routes": routes},
-        evidence=dict({"cmd": " ".join(ip_cmd), "rc": rc, "parse_error": ""}, probe_ok=True),
+        evidence=dict({"cmd": " ".join(ip_cmd), "rc": rc,
+                       "parse_error": "" if rc in (0, None) else f"ip exited {rc}"},
+                      probe_ok=(rc in (0, None))),
     )
 
 
@@ -994,6 +1033,9 @@ def _collect_advertised_routes(rt, lab, node, req: ObservationRequest) -> Observ
         "parse_error": parse_error,
     }
 
+    # S1D2-S9-R2: output that is not JSON is no answer (probe_ok False).
+    if _output_is_not_json(out):
+        probe_ok = False
     return Observation(
         kind=req.kind,
         data=observed_state,
@@ -1093,6 +1135,9 @@ def _collect_evpn_bgp_summary(rt, lab, node, req: ObservationRequest) -> Observa
         "neighbors": evidence_entries,
     }
 
+    # S1D2-S9-R2: output that is not JSON is no answer (probe_ok False).
+    if _output_is_not_json(out):
+        probe_ok = False
     return Observation(
         kind=req.kind,
         data=observed_state,
@@ -1236,6 +1281,9 @@ def _collect_evpn_routes(rt, lab, node, req: ObservationRequest) -> Observation:
         "parse_error": parse_error,
     }
 
+    # S1D2-S9-R2: output that is not JSON is no answer (probe_ok False).
+    if _output_is_not_json(out):
+        probe_ok = False
     return Observation(
         kind=req.kind,
         data=observed_state,
@@ -1418,6 +1466,9 @@ def _collect_ospf_neighbors(rt, lab, node, req: ObservationRequest) -> Observati
         "returncode": getattr(cp, "returncode", None),
     }
 
+    # S1D2-S9-R2: output that is not JSON is no answer (probe_ok False).
+    if _output_is_not_json(out):
+        probe_ok = False
     return Observation(
         kind=req.kind,
         data=observed_state,
@@ -1492,6 +1543,9 @@ def _collect_bgp_neighbor(rt, lab, node, req: ObservationRequest) -> Observation
     else:
         parse_error = "vtysh command failed"
 
+    # S1D2-S9-R2: output that is not JSON is no answer (probe_ok False).
+    if _output_is_not_json(out):
+        probe_ok = False
     return Observation(
         kind="bgp_neighbor",
         data={"observed": observed, "state": state},

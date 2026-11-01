@@ -533,16 +533,23 @@ try:
           a[0] == ("verdict", "pass", "pass") and b[0][0] == "raise"
           and b[0][1] == "NosCapabilityUnsupported" and "route_prefix" in b[0][2] and "nft-fw" in b[0][2])
 
-    # Q20-2, last_rc on a failed ip read.
+    # Q20-2, a failed ip read (exit 2). S1D2-S10-R4 (Stage-1 gap item (d)(2) WI-15 script 1a): under
+    # S1D2-S9-R1 a non-zero ip exit is no answer, so the seam form fails the read, naming its exit; the
+    # retired form's forced last_rc 0 stays asserted on the OLD side.
     fib4 = {"r1": [line_for("192.0.2.0/24")]}
     a = run_wait(OLD_WFP, R1, FakeRt(fib4, rc=2), wf_for("192.0.2.0/24", "fail"))
     b = run_wait(NEW_WFP, R1, FakeRt(fib4, rc=2), wf_for("192.0.2.0/24", "fail"))
-    check("P-DECL Q20-2 (scenario): last_rc 0 (forced by || true) -> 2, the read's own rc; verdict unchanged",
-          a[0] == b[0] and a[1]["last_rc"] == 0 and b[1]["last_rc"] == 2
-          and a[1]["evidence"]["last_rc"] == 0 and b[1]["evidence"]["last_rc"] == 2)
-    check("P-DECL Q20-2 (test path): no delta -- both forms recorded the read's own rc",
-          run_test(OLD_RPT, R1, FakeRt(fib4, rc=2), t_for("192.0.2.0/24", "pass"), "r1")
-          == run_test(NEW_RPT, R1, FakeRt(fib4, rc=2), t_for("192.0.2.0/24", "pass"), "r1"))
+    check("P-DECL Q20-2 (scenario): last_rc 0 (forced by || true) -> the seam form raises on the failed read, "
+          "naming its exit (S1D2-S10-R4)",
+          a[1] is not None and a[1]["last_rc"] == 0 and a[1]["evidence"]["last_rc"] == 0
+          and b[0][0] == "raise" and "wait_for route_prefix: collection failed on 'r1': ip exited 2" in b[0][2])
+    ta = run_test(NEW_RPT, R1, FakeRt(fib4, rc=2), t_for("192.0.2.0/24", "pass"), "r1")
+    tb = run_test(NEW_RPT, R1, FakeRt(fib4, rc=2), t_for("192.0.2.0/24", "fail"), "r1")
+    check("P-DECL Q20-2 (test path): a failed ip read is verdict fail for expect pass AND expect fail, "
+          "naming its exit (S1D2-S10-R4)",
+          ta[0] == ("verdict", "fail") and tb[0] == ("verdict", "fail")
+          and ta[1]["error"] == "route_prefix collection failed on 'r1': ip exited 2"
+          and tb[1]["error"] == "route_prefix collection failed on 'r1': ip exited 2")
 
     # ----------------------------------------------------------------- P-NEVER
     def stub_collect(rt, lab, node, ntype, request, seam):
