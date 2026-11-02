@@ -335,7 +335,7 @@ Rules:
 * negative intent supported
 * deterministic timeout handling
 
-**A probe that cannot run fails.** For `ping` and `tcp`, and for scenario `wait_for` steps of those types, Cassian first checks that the probe can run on the source node: the node is running, the probe tool (`ping`, or `nc` for `tcp`) is present, a declared `src_if` is one of the node's interfaces and a declared `src_ip` is one of its addresses. A probe that cannot run, that exits with a status its tool never gives for a network answer (`ping`: 0, 1 or 2; `nc`: 0 or 1), or whose node stops during the probe, is never read as "unreachable": the test fails whatever `expect` says, its error reads `<kind> probe unusable on <node>: <reason>; never read as unreachable`, and its evidence carries the reason as `probe_unusable` (a `wait_for` step fails with `wait_for <kind>: probe unusable: <reason>`). A `sonic-vm` guest has no `nc`, so a `tcp` test from a `sonic-vm` node always fails this way.
+**A probe that cannot run fails.** For `ping` and `tcp`, and for scenario `wait_for` steps of those types, Cassian first checks that the probe can run on the source node: the node is running, the probe tool (`ping`, or `nc` for `tcp`) is present, a declared `src_if` is one of the node's interfaces and a declared `src_ip` is one of its addresses. A probe that cannot run, that exits with a status its tool never gives for a network answer (`ping`: 0, 1 or 2; `nc`: 0 or 1), or whose node stops during the probe, is never read as "unreachable": the test fails whatever `expect` says, its error reads `<kind> probe unusable on <node>: <reason>; never read as unreachable`, and its evidence carries the reason as `read_unusable` (a `wait_for` step fails with `wait_for <kind>: probe unusable: <reason>`). A `sonic-vm` guest has no `nc`, so a `tcp` test from a `sonic-vm` node always fails this way.
 
 ---
 
@@ -358,6 +358,8 @@ Important:
 * does **not** validate routing correctness, policies, or prefixes
 * `node:` is the source node; `neighbor:` is the peer and is normalized internally to the `dst:` alias (see the alias note at `cassian_model.py:2029`)
 * this **v1.x `bgp_neighbor` test type** (authored as `type: bgp_neighbor`, above) is distinct from the **v1.5 `bgp_session_up` invariant** (authored as `kind: invariant` with `type: bgp_session_up`, documented in `docs/topology-schema-v1.5.md`); they are separate surfaces that coexist and must not be conflated — a `bgp_neighbor` test is not a `bgp_session_up` invariant
+
+**A read that gives no answer fails.** If `vtysh` exits non-zero or its output is not JSON (empty output included), the read gave no answer: the test fails whatever `expect` says and is never read as "down". Its error reads `bgp_neighbor collection failed on '<node>': <reason>`, and its evidence carries the reason as `read_unusable`. With `expect: pass` and a timeout, Cassian re-reads until the read answers or the timeout ends, then judges the last read. "No BGP instance" and a neighbour missing from the summary are answers and still read as "down".
 
 ---
 

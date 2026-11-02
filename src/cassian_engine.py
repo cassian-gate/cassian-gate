@@ -3802,6 +3802,20 @@ def _probe_exit_unexplained(rt, lab: str, node: str, tool: str, cp):
     return None
 
 
+def _read_unusable(read_ok, evidence):
+    """S1D2-S9-R1 to -R3 (WI-15): why a read produced no answer, or None when it answered.
+
+    A provider sets probe_ok False when its read raised, exited outside its answer codes, or gave
+    output that is not in the reader's format (for a JSON reader, empty output included); the core
+    decides here, at each check and wait_for site that reads the flag. The reason is the provider's
+    parse_error, or "probe not ok" when it gives none: the text a collection-failure record quotes
+    (`<check> collection failed on '<node>': <reason>`) and the value of its `read_unusable` key.
+    """
+    if read_ok:
+        return None
+    return str((evidence or {}).get("parse_error") or "") or "probe not ok"
+
+
 def cmd_test(args: argparse.Namespace) -> None:
     """
     v1 update (Section C): Scenarios wired into cmd_test (minimal invasive).
@@ -5410,7 +5424,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 "src_ip": (str(src_ip).strip() if src_ip else ""),
                 "src_if": (str(src_if).strip() if src_if else ""),
                 "dst_ip": str(dst_ip),
-                **({"probe_unusable": _unusable} if _unusable is not None else {}),
+                **({"read_unusable": _unusable} if _unusable is not None else {}),
             },
             duration_ms=rec["duration_ms"],
             error=rec["error"],
@@ -5479,7 +5493,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             expected=expected,
             observed=observed,
             verdict=verdict,
-            evidence={"cmd": "nc -z", **({"probe_unusable": _unusable} if _unusable is not None else {})},
+            evidence={"cmd": "nc -z", **({"read_unusable": _unusable} if _unusable is not None else {})},
             duration_ms=dur_ms,
             error=(f"tcp probe unusable on {src}: {_unusable}; never read as unreachable" if _unusable is not None
                    else ("" if verdict == "pass" else f"tcp mismatch (expected {expected}, observed {observed})")),
@@ -5567,6 +5581,8 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         if not _ev.get("probe_ok"):
             dur_ms = int((time.time() - start) * 1000)
+            # S1D2-S14-R2 (WI-15): the shared helper names the unanswered read in the evidence.
+            evidence["read_unusable"] = _read_unusable(_ev.get("probe_ok"), _ev)
             record_fn(
                 name=test_name,
                 kind="route_prefix",
@@ -5694,6 +5710,15 @@ def cmd_test(args: argparse.Namespace) -> None:
             "parse_error": parse_error,
         }
 
+        # S1D2-S9-R1 to -R3, S1D2-S14-R3 (WI-15, F-S1D2-C3-11; rulings note 4 ruling 2): the retry loop
+        # above is kept; a last read that produced no answer (vtysh exited non-zero, or its output is
+        # not JSON) fails whatever expect says and is never read as "down". "No BGP instance" and a
+        # neighbour absent from the summary are answers, judged as before.
+        _unusable = _read_unusable(last_obs.evidence.get("probe_ok"), last_obs.evidence)
+        if _unusable is not None:
+            verdict = "fail"
+            evidence["read_unusable"] = _unusable
+
         record_fn(
             name=test_name,
             kind="bgp_neighbor",
@@ -5703,7 +5728,8 @@ def cmd_test(args: argparse.Namespace) -> None:
             observed=observed,
             verdict=verdict,
             duration_ms=int(dur_ms),
-            error="" if verdict == "pass" else f"bgp neighbor mismatch (expected {expected}, observed {observed})",
+            error=(f"bgp_neighbor collection failed on '{src}': {_unusable}" if _unusable is not None
+                   else ("" if verdict == "pass" else f"bgp neighbor mismatch (expected {expected}, observed {observed})")),
             meta=meta,
             evidence=evidence,
         )
@@ -6801,6 +6827,8 @@ def cmd_test(args: argparse.Namespace) -> None:
                 }
                 if _parse_error:
                     _cf_evidence["parse_error"] = _parse_error
+                # S1D2-S14-R2 (WI-15): the shared helper names the unanswered read in the evidence.
+                _cf_evidence["read_unusable"] = _read_unusable(_vtysh_ok, last_evidence)
                 record_fn(
                     name=test_name,
                     kind="invariant",
@@ -8361,7 +8389,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             "stderr": stderr[:_EXEC_EVIDENCE_CAP],
             "returncode": returncode,
             "truncated": _truncated,
-            **({"exec_unusable": _exec_unusable} if _exec_unusable is not None else {}),
+            **({"read_unusable": _exec_unusable} if _exec_unusable is not None else {}),
         }
 
         observed_state_payload = None
@@ -9302,6 +9330,11 @@ def cmd_test(args: argparse.Namespace) -> None:
                         src=str(src).strip(),
                     )
                 )
+                # S1D2-S9-R1 to -R3 (WI-15, F-S1D2-C3-12; rulings note 4 ruling 3): a read that produced no
+                # answer fails the step whatever expect says, as route_present's does.
+                _unusable = _read_unusable(vtysh_ok, evidence)
+                if _unusable is not None:
+                    raise RuntimeError(f"wait_for bgp_session_up: collection failed on '{str(src).strip()}': {_unusable}")
                 last_cp = None
                 last_obs = "pass" if predicate_ok else "fail"
                 last_evidence = dict(evidence or {})
@@ -9399,6 +9432,11 @@ def cmd_test(args: argparse.Namespace) -> None:
                         src=node_s,
                     )
                 )
+                # S1D2-S9-R1 to -R3 (WI-15, F-S1D2-C3-12; rulings note 4 ruling 3): a read that produced no
+                # answer fails the step whatever expect says, as route_present's does.
+                _unusable = _read_unusable(vtysh_ok, evidence)
+                if _unusable is not None:
+                    raise RuntimeError(f"wait_for route_advertised_to: collection failed on '{node_s}': {_unusable}")
                 last_cp = None
                 last_obs = "pass" if predicate_ok else "fail"
                 last_evidence = dict(evidence or {})
@@ -9421,6 +9459,11 @@ def cmd_test(args: argparse.Namespace) -> None:
                         src=str(src).strip(),
                     )
                 )
+                # S1D2-S9-R1 to -R3 (WI-15, F-S1D2-C3-12; rulings note 4 ruling 3): a read that produced no
+                # answer fails the step whatever expect says, as route_present's does.
+                _unusable = _read_unusable(vtysh_ok, evidence)
+                if _unusable is not None:
+                    raise RuntimeError(f"wait_for evpn_bgp_session_up: collection failed on '{str(src).strip()}': {_unusable}")
                 last_cp = None
                 last_obs = "pass" if predicate_ok else "fail"
                 last_evidence = dict(evidence or {})
@@ -9443,6 +9486,11 @@ def cmd_test(args: argparse.Namespace) -> None:
                         src=str(src).strip(),
                     )
                 )
+                # S1D2-S9-R1 to -R3 (WI-15, F-S1D2-C3-12; rulings note 4 ruling 3): a read that produced no
+                # answer fails the step whatever expect says, as route_present's does.
+                _unusable = _read_unusable(vtysh_ok, evidence)
+                if _unusable is not None:
+                    raise RuntimeError(f"wait_for evpn_vni_route_present: collection failed on '{str(src).strip()}': {_unusable}")
                 last_cp = None
                 last_obs = "pass" if predicate_ok else "fail"
                 last_evidence = dict(evidence or {})
@@ -9468,6 +9516,11 @@ def cmd_test(args: argparse.Namespace) -> None:
                         src=str(src).strip(),
                     )
                 )
+                # S1D2-S9-R1 to -R3 (WI-15, F-S1D2-C3-12; rulings note 4 ruling 3): a read that produced no
+                # answer fails the step whatever expect says, as route_present's does.
+                _unusable = _read_unusable(vtysh_ok, evidence)
+                if _unusable is not None:
+                    raise RuntimeError(f"wait_for evpn_mac_route_present: collection failed on '{str(src).strip()}': {_unusable}")
                 last_cp = None
                 last_obs = "pass" if predicate_ok else "fail"
                 last_evidence = dict(evidence or {})

@@ -20,10 +20,12 @@ Legs:
   O  ORACLE     each WI-13 site (run_ping_test, run_tcp_test, wait_for_predicate) is the live
                 function with exactly the WI-13 edits reversed, and the reversal reproduces the
                 cassian-gate@02669cd extraction byte for byte (sha256 pinned). The WI-13 edits
-                are therefore the only change at these sites.
+                are therefore the only change at these sites; wait_for_predicate also carries
+                WI-15's five C3-12 collection-failure raises (S1D2-S14-R1), reversed with them.
   V  VERDICT    the live run_ping_test and run_tcp_test, executed from their source text in the
                 engine's namespace against a mock runtime, for every probe outcome x expect:
-                each verdict, error text and `probe_unusable` evidence key is as ruled.
+                each verdict, error text and `read_unusable` evidence key is as ruled
+                (WI-13's `probe_unusable`, renamed by S1D2-S9-R3).
   W  WAIT       the live wait_for_predicate's ping and tcp branches: a broken probe raises
                 "wait_for <kind>: probe unusable: <reason>" for both expects; a network answer
                 does not raise and keeps its verdict.
@@ -48,7 +50,8 @@ four-quadrant verdict; a backend that reports no exit status is judged on its ou
                 its cassian-gate@02669cd extraction (sha256 pinned).
   X  EXEC       the live run_exec_test against a mock runtime, for seventeen outcomes (M1 to
                 M17, from the measurements of 2026-10-27) x expect: each verdict, error text,
-                `exec_unusable` evidence key and `stderr_excerpt` (present exactly when the output
+                `read_unusable` evidence key (WI-14's `exec_unusable`, renamed by S1D2-S9-R3) and
+                `stderr_excerpt` (present exactly when the output
                 was not judged) as ruled.
   E  DETECTION  the 02669cd form passes the five F-S1D2-C3-6 false passes, the F-S1D2-C3-10
                 unevaluable assertions under expect: fail, and the two absent-object reads that
@@ -168,7 +171,7 @@ WI13_EDITS = {
                 "src_ip": (str(src_ip).strip() if src_ip else ""),
                 "src_if": (str(src_if).strip() if src_if else ""),
                 "dst_ip": str(dst_ip),
-                **({"probe_unusable": _unusable} if _unusable is not None else {}),
+                **({"read_unusable": _unusable} if _unusable is not None else {}),
             },
 '''),
     ],
@@ -207,7 +210,7 @@ WI13_EDITS = {
             duration_ms=dur_ms,
             error="" if verdict == "pass" else f"tcp mismatch (expected {expected}, observed {observed})",
 ''',
-         r'''            evidence={"cmd": "nc -z", **({"probe_unusable": _unusable} if _unusable is not None else {})},
+         r'''            evidence={"cmd": "nc -z", **({"read_unusable": _unusable} if _unusable is not None else {})},
             duration_ms=dur_ms,
             error=(f"tcp probe unusable on {src}: {_unusable}; never read as unreachable" if _unusable is not None
                    else ("" if verdict == "pass" else f"tcp mismatch (expected {expected}, observed {observed})")),
@@ -261,6 +264,107 @@ WI13_EDITS = {
     ],
 }
 
+# WI-15 script 1b-i(i) (S1D2-S9-R1 to -R3; rulings note 4 ruling 3; S1D2-S14-R1): the five C3-12
+# wait_for branches raise on a read that produced no answer. Their edits are reversed with the
+# WI-13 edits, so the wait_for_predicate oracle stays the 02669cd extraction.
+WI13_EDITS["wait_for_predicate"] += [
+    (r'''                        inv_type="bgp_session_up",
+                        t=t_for_helper,
+                        src=str(src).strip(),
+                    )
+                )
+                last_cp = None
+''',
+     r'''                        inv_type="bgp_session_up",
+                        t=t_for_helper,
+                        src=str(src).strip(),
+                    )
+                )
+                # S1D2-S9-R1 to -R3 (WI-15, F-S1D2-C3-12; rulings note 4 ruling 3): a read that produced no
+                # answer fails the step whatever expect says, as route_present's does.
+                _unusable = _read_unusable(vtysh_ok, evidence)
+                if _unusable is not None:
+                    raise RuntimeError(f"wait_for bgp_session_up: collection failed on '{str(src).strip()}': {_unusable}")
+                last_cp = None
+'''),
+    (r'''                        inv_type="route_advertised_to",
+                        t=t_for_helper,
+                        src=node_s,
+                    )
+                )
+                last_cp = None
+''',
+     r'''                        inv_type="route_advertised_to",
+                        t=t_for_helper,
+                        src=node_s,
+                    )
+                )
+                # S1D2-S9-R1 to -R3 (WI-15, F-S1D2-C3-12; rulings note 4 ruling 3): a read that produced no
+                # answer fails the step whatever expect says, as route_present's does.
+                _unusable = _read_unusable(vtysh_ok, evidence)
+                if _unusable is not None:
+                    raise RuntimeError(f"wait_for route_advertised_to: collection failed on '{node_s}': {_unusable}")
+                last_cp = None
+'''),
+    (r'''                        inv_type="evpn_bgp_session_up",
+                        t=t_for_helper,
+                        src=str(src).strip(),
+                    )
+                )
+                last_cp = None
+''',
+     r'''                        inv_type="evpn_bgp_session_up",
+                        t=t_for_helper,
+                        src=str(src).strip(),
+                    )
+                )
+                # S1D2-S9-R1 to -R3 (WI-15, F-S1D2-C3-12; rulings note 4 ruling 3): a read that produced no
+                # answer fails the step whatever expect says, as route_present's does.
+                _unusable = _read_unusable(vtysh_ok, evidence)
+                if _unusable is not None:
+                    raise RuntimeError(f"wait_for evpn_bgp_session_up: collection failed on '{str(src).strip()}': {_unusable}")
+                last_cp = None
+'''),
+    (r'''                        inv_type="evpn_vni_route_present",
+                        t=t_for_helper,
+                        src=str(src).strip(),
+                    )
+                )
+                last_cp = None
+''',
+     r'''                        inv_type="evpn_vni_route_present",
+                        t=t_for_helper,
+                        src=str(src).strip(),
+                    )
+                )
+                # S1D2-S9-R1 to -R3 (WI-15, F-S1D2-C3-12; rulings note 4 ruling 3): a read that produced no
+                # answer fails the step whatever expect says, as route_present's does.
+                _unusable = _read_unusable(vtysh_ok, evidence)
+                if _unusable is not None:
+                    raise RuntimeError(f"wait_for evpn_vni_route_present: collection failed on '{str(src).strip()}': {_unusable}")
+                last_cp = None
+'''),
+    (r'''                        inv_type="evpn_mac_route_present",
+                        t=t_for_helper,
+                        src=str(src).strip(),
+                    )
+                )
+                last_cp = None
+''',
+     r'''                        inv_type="evpn_mac_route_present",
+                        t=t_for_helper,
+                        src=str(src).strip(),
+                    )
+                )
+                # S1D2-S9-R1 to -R3 (WI-15, F-S1D2-C3-12; rulings note 4 ruling 3): a read that produced no
+                # answer fails the step whatever expect says, as route_present's does.
+                _unusable = _read_unusable(vtysh_ok, evidence)
+                if _unusable is not None:
+                    raise RuntimeError(f"wait_for evpn_mac_route_present: collection failed on '{str(src).strip()}': {_unusable}")
+                last_cp = None
+'''),
+]
+
 ENG_SRC = open(os.path.join(_SRC, "cassian_engine.py"), encoding="utf-8").read()
 _LINES = ENG_SRC.splitlines(keepends=True)
 _FN = {n.name: n for n in ast.walk(ast.parse(ENG_SRC)) if isinstance(n, ast.FunctionDef)}
@@ -284,7 +388,8 @@ def _leg_o():
             _old = _old.replace(_after, _before, 1)
         LIVE[_name] = textwrap.dedent(_live)
         OLD[_name] = textwrap.dedent(_old)
-        check("O %s is the 02669cd extraction with exactly the WI-13 edits applied (sha256 pinned)" % _name,
+        check("O %s is the 02669cd extraction with exactly the WI-13 edits (and WI-15's wait_for raises) "
+              "applied (sha256 pinned)" % _name,
               _ok and sha(OLD[_name]) == ORACLE_SHA256[_name], sha(OLD[_name]))
 
 
@@ -416,7 +521,7 @@ def _leg_v():
         for expect, want in (("pass", want_p), ("fail", want_f)):
             v, rec = run_ping(LIVE["run_ping_test"], mk(), extras, expect)
             ev = rec.get("evidence", {})
-            ok = v == want and rec.get("verdict") == want and ev.get("probe_unusable") == r
+            ok = v == want and rec.get("verdict") == want and ev.get("read_unusable") == r
             if r is not None:
                 ok = ok and rec.get("error") == "ping probe unusable on n1: %s; never read as unreachable" % r
             check("V ping %-36s expect %-4s -> %s%s" % (name, expect, want, "" if r is None else " (unusable)"), ok,
@@ -426,7 +531,7 @@ def _leg_v():
         for expect, want in (("pass", want_p), ("fail", want_f)):
             v, rec = run_tcp(LIVE["run_tcp_test"], _tcp_case(mk), expect)
             ev = rec.get("evidence", {})
-            ok = v == want and rec.get("verdict") == want and ev.get("probe_unusable") == r
+            ok = v == want and rec.get("verdict") == want and ev.get("read_unusable") == r
             if r is not None:
                 ok = ok and rec.get("error") == "tcp probe unusable on n1: %s; never read as unreachable" % r
             check("V tcp  %-36s expect %-4s -> %s%s" % (name, expect, want, "" if r is None else " (unusable)"), ok,
@@ -586,7 +691,7 @@ WI14_EDITS = [
 ''',
      r'''            "returncode": returncode,
             "truncated": _truncated,
-            **({"exec_unusable": _exec_unusable} if _exec_unusable is not None else {}),
+            **({"read_unusable": _exec_unusable} if _exec_unusable is not None else {}),
 '''),
     (r'''            if eval_error:
                 observed_state_payload["eval_error"] = eval_error
@@ -689,17 +794,17 @@ def _exec_record_ok(rec, r, how, expect, want, text):
         return False
     if how == "exited":
         rc = r[0]
-        return (ev.get("exec_unusable") == "exited %d" % rc and rec.get("observed") == "fail"
+        return (ev.get("read_unusable") == "exited %d" % rc and rec.get("observed") == "fail"
                 and rec.get("error") == "exec command exited %d on s1; its output is not judged" % rc
                 and os_.get("returncode") == rc and os_.get("stderr_excerpt") == r[2])
     if how == "raised":
-        return (str(ev.get("exec_unusable") or "").startswith("exec failed: ") and rec.get("observed") == "fail"
-                and rec.get("error") == ev.get("exec_unusable") and os_.get("stderr_excerpt") == "")
+        return (str(ev.get("read_unusable") or "").startswith("exec failed: ") and rec.get("observed") == "fail"
+                and rec.get("error") == ev.get("read_unusable") and os_.get("stderr_excerpt") == "")
     if how == "unevaluable":
-        return ("exec_unusable" not in ev and rec.get("observed") == "fail" and rec.get("error") == text
+        return ("read_unusable" not in ev and rec.get("observed") == "fail" and rec.get("error") == text
                 and os_.get("eval_error") == text and "stderr_excerpt" not in os_)
     # judged
-    if "exec_unusable" in ev or "stderr_excerpt" in os_:
+    if "read_unusable" in ev or "stderr_excerpt" in os_:
         return False
     if want == "pass":
         return rec.get("error") == ""
@@ -714,7 +819,7 @@ def _leg_x():
             v, rec = run_exec(LIVE["run_exec_test"], r, assertion, expect)
             check("X exec %-40s expect %-4s -> %s (%s)" % (name, expect, want, how),
                   v == want and _exec_record_ok(rec, r, how, expect, want, text),
-                  "%r %r %r" % (v, rec.get("error"), (rec.get("evidence") or {}).get("exec_unusable")))
+                  "%r %r %r" % (v, rec.get("error"), (rec.get("evidence") or {}).get("read_unusable")))
 
 
 leg("X", _leg_x)

@@ -42,8 +42,8 @@ Sections:
                     scenario working read -> registry die (exit 2);
               Q-A   nft-fw vantage: refusal text changes and expect: fail stops
                     passing (explicit UNSUP-fail); scenario wait raises the UNSUP;
-              Q20-2 scenario last_rc reports the read's own rc (retired form
-                    forced 0 with `|| true`); verdict unchanged.
+              Q20-2 an ip read exiting 2 is a collection failure (S1D2-S10-R4):
+                    test path fails, scenario wait raises; retired form forced 0.
             Observed, not changed (ZERO-TOUCH meta block, D-1): an expect: pass
             wait that times out raises TypeError at time_to_success_ms
             (int(None)) in both forms, for every wait_for type (F-S20-2).
@@ -610,7 +610,9 @@ try:
     # Re-baselined by Stage-1 gap item (d)(2) WI-13 (founder ruling D5, 2026-10-27): the oracle
     # is now the f015801 extraction plus WI-13's probe guards in the ping and tcp branches. HS-7
     # (tests/probe_unusable_verdict_proof.py) pins those branches' pre-WI-13 form to 02669cd.
-    WFP_ORACLE_SHA256 = "0b751f315492161411b5f94c4ec380f4899b9cb4f54a4fa739e9147051854d32"
+    # Re-baselined by Stage-1 gap item (d)(2) WI-15 script 1b-i(i) (S1D2-S14-R1, -R4, 2026-11-02): the
+    # oracle now also carries the five C3-12 wait_for collection-failure raises (rulings note 4 ruling 3).
+    WFP_ORACLE_SHA256 = "698335648614870652d975de9fb427b69414f554979cd7402cd1c128eba78bc9"
     GUARD_RIT = '''\
         # Q20-3 (founder ruling (i) of 2026-10-02, an SP #1 bounded-scope amendment;
         # finding F-S20-1): a read the provider cannot vouch for (probe_ok False)
@@ -625,6 +627,8 @@ try:
             }
             if _parse_error:
                 _cf_evidence["parse_error"] = _parse_error
+            # S1D2-S14-R2 (WI-15): the shared helper names the unanswered read in the evidence.
+            _cf_evidence["read_unusable"] = _read_unusable(_vtysh_ok, last_evidence)
             record_fn(
                 name=test_name,
                 kind="invariant",
@@ -791,7 +795,7 @@ try:
           a[0] == ("verdict", "pass") and b[0] == ("verdict", "fail")
           and b[1].get("observed") == "fail" and b[1].get("verdict") == "fail"
           and b[1].get("error") == "route_absent collection failed on 'r1': probe not ok"
-          and b[1].get("evidence") == {"cmd": "vtysh -c 'show ip route json'", "rc": 1})
+          and b[1].get("evidence") == {"cmd": "vtysh -c 'show ip route json'", "rc": 1, "read_unusable": "probe not ok"})
     a = run_inv(OLD_RIT, R1, FakeRib({}, rc=1), inv_t("route_present", "192.0.2.0/24", "fail"), "r1")
     b = run_inv(NEW_RIT, R1, FakeRib({}, rc=1), inv_t("route_present", "192.0.2.0/24", "fail"), "r1")
     check("P-RP-DECL Q20-3 FRR non-zero rc (test path, route_present, expect fail): the retired consumer passed; "
