@@ -292,15 +292,16 @@ def parse_frr_bgp_summary_neighbors(out: str) -> dict[str, dict[str, Any]]:
 
 
 def _output_is_not_json(out) -> bool:
-    """Stage-1 gap item (d)(2) WI-15 script 1a (S1D2-S9-R1, -R2; S1D2-S10-R3).
+    """Stage-1 gap item (d)(2) WI-15 scripts 1a and 1a-ii (S1D2-S9-R1, -R2; S1D2-S10-R3, -R6;
+    S1D2-S11-R3, -R4).
 
-    A JSON reader whose output is present but is not JSON produced no answer: the reader
-    reports it with probe_ok False, and the core decides. Empty output keeps the reader's
-    existing reading.
+    A JSON reader whose output is not JSON produced no answer: the reader reports it with
+    probe_ok False, and the core decides. Empty output is not JSON either, so it is no
+    answer (S1D2-S10-R6 (i)); a text reader does not call this helper.
     """
     text = str(out or "").strip()
     if not text:
-        return False
+        return True
     try:
         json.loads(text)
     except ValueError:
