@@ -72,7 +72,8 @@ check("derivation idiom present at record sites",
       # up rather than misreported by a literal. Reachability rows for
       # the six are filed in the per-site addendum.
       # 30 -> 31 by founder ruling Decision A of 2026-10-03 (SP #1): ruling Q20-3's collection-failure record site in run_invariant_test's route_present / route_absent consumer (H1-b3 script 2a).
-      _engine_src.count('last_evidence.get("cmd") or ') == 31)
+      # 31 -> 36 by founder ruling S1D2-S16-R4 of 2026-11-03 (rulings note 29): the five collection-failure record sites of Stage-1 gap item (d)(2) WI-15 script 1b-i(ii), bgp_community, bgp_as_path, bgp_session_up, ospf_neighbor_up and interface_state (S1D2-S16-R1, -R3).
+      _engine_src.count('last_evidence.get("cmd") or ') == 36)
 
 _ns = dict(E.__dict__)
 

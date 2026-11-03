@@ -7479,6 +7479,8 @@ def cmd_test(args: argparse.Namespace) -> None:
             route_present = bool(last_state.get("route_present"))
             observed_communities = list(last_state.get("observed_communities") or [])
             empty_first_doc = bool(last_evidence.get("empty_first_doc"))
+            # S1D2-S16-R2 (WI-15 script 1b-i(ii)): the last attempt's read decides; a re-read below rebinds these.
+            _last_read_ok, _last_read_ev = _vtysh_ok, last_evidence
 
             if str(last_evidence.get("reason") or "") == "unsupported_provider_capability":
                 # BL-P2-4.5c-44: deny-by-default must not render as a negative
@@ -7538,6 +7540,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 _vtysh_ok2, _pred_ok2, last_state2, last_evidence2 = (
                     _evaluate_invariant_attempt(inv_type="bgp_community", t=t, src=node)
                 )
+                _last_read_ok, _last_read_ev = _vtysh_ok2, last_evidence2
                 if bool(last_state2.get("route_present")):
                     last_state = last_state2
                     last_evidence = last_evidence2
@@ -7545,6 +7548,33 @@ def cmd_test(args: argparse.Namespace) -> None:
                     parse_error = str(last_evidence.get("parse_error") or "")
                     route_present = bool(last_state.get("route_present"))
                     observed_communities = list(last_state.get("observed_communities") or [])
+
+            # S1D2-S9-R1 to -R3, S1D2-S14-R1, -R3, S1D2-S16-R1, -R2 (WI-15 script 1b-i(ii)): a last read that
+            # produced no answer (the read raised, exited outside its answer codes, or its output is not in the
+            # reader's format, empty output included for a JSON reader) fails whatever expect says, as
+            # route_present's collection-failure record does: no observed_state, so the summary renders the
+            # absence block. An answer is judged below as before.
+            _unusable = _read_unusable(_last_read_ok, _last_read_ev)
+            if _unusable is not None:
+                last_evidence = _last_read_ev  # S1D2-S16-R2: the decided read's evidence
+                _cf_evidence = {"cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'", "rc": last_evidence.get("rc")}
+                if str(last_evidence.get("parse_error") or ""):
+                    _cf_evidence["parse_error"] = str(last_evidence.get("parse_error") or "")
+                _cf_evidence["read_unusable"] = _unusable
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=node,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    error=f"{inv_type} collection failed on '{node}': {_unusable}",
+                    duration_ms=int((time.time() - start) * 1000),
+                    evidence=_cf_evidence,
+                    meta={"type": inv_type, "prefix": prefix},
+                )
+                return "fail"
 
             observed = _bgp_community_observed(exp_comm, match, observed_communities)
             verdict = "pass" if observed == expected else "fail"
@@ -7604,6 +7634,8 @@ def cmd_test(args: argparse.Namespace) -> None:
             route_present = bool(last_state.get("route_present"))
             observed_as_path = str(last_state.get("observed_as_path") or "")
             empty_first_doc = bool(last_evidence.get("empty_first_doc"))
+            # S1D2-S16-R2 (WI-15 script 1b-i(ii)): the last attempt's read decides; a re-read below rebinds these.
+            _last_read_ok, _last_read_ev = _vtysh_ok, last_evidence
 
             if str(last_evidence.get("reason") or "") == "unsupported_provider_capability":
                 # BL-P2-4.5c-44: deny-by-default must not render as a negative
@@ -7663,6 +7695,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 _vtysh_ok2, _pred_ok2, last_state2, last_evidence2 = (
                     _evaluate_invariant_attempt(inv_type="bgp_as_path", t=t, src=node)
                 )
+                _last_read_ok, _last_read_ev = _vtysh_ok2, last_evidence2
                 if bool(last_state2.get("route_present")):
                     last_state = last_state2
                     last_evidence = last_evidence2
@@ -7670,6 +7703,33 @@ def cmd_test(args: argparse.Namespace) -> None:
                     parse_error = str(last_evidence.get("parse_error") or "")
                     route_present = bool(last_state.get("route_present"))
                     observed_as_path = str(last_state.get("observed_as_path") or "")
+
+            # S1D2-S9-R1 to -R3, S1D2-S14-R1, -R3, S1D2-S16-R1, -R2 (WI-15 script 1b-i(ii)): a last read that
+            # produced no answer (the read raised, exited outside its answer codes, or its output is not in the
+            # reader's format, empty output included for a JSON reader) fails whatever expect says, as
+            # route_present's collection-failure record does: no observed_state, so the summary renders the
+            # absence block. An answer is judged below as before.
+            _unusable = _read_unusable(_last_read_ok, _last_read_ev)
+            if _unusable is not None:
+                last_evidence = _last_read_ev  # S1D2-S16-R2: the decided read's evidence
+                _cf_evidence = {"cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'", "rc": last_evidence.get("rc")}
+                if str(last_evidence.get("parse_error") or ""):
+                    _cf_evidence["parse_error"] = str(last_evidence.get("parse_error") or "")
+                _cf_evidence["read_unusable"] = _unusable
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=node,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    error=f"{inv_type} collection failed on '{node}': {_unusable}",
+                    duration_ms=int((time.time() - start) * 1000),
+                    evidence=_cf_evidence,
+                    meta={"type": inv_type, "prefix": prefix},
+                )
+                return "fail"
 
             observed = _bgp_as_path_observed(as_path_pat, observed_as_path) if route_present else "fail"
             verdict = "pass" if observed == expected else "fail"
@@ -7836,6 +7896,32 @@ def cmd_test(args: argparse.Namespace) -> None:
                 )
                 raise SystemExit(2)
 
+            # S1D2-S9-R1 to -R3, S1D2-S14-R1, -R3, S1D2-S16-R1, -R2 (WI-15 script 1b-i(ii)): a last read that
+            # produced no answer (the read raised, exited outside its answer codes, or its output is not in the
+            # reader's format, empty output included for a JSON reader) fails whatever expect says, as
+            # route_present's collection-failure record does: no observed_state, so the summary renders the
+            # absence block. An answer is judged below as before.
+            _unusable = _read_unusable(ok, last_evidence)
+            if _unusable is not None:
+                _cf_evidence = {"cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp summary json'", "rc": last_evidence.get("returncode")}
+                if str(last_evidence.get("parse_error") or ""):
+                    _cf_evidence["parse_error"] = str(last_evidence.get("parse_error") or "")
+                _cf_evidence["read_unusable"] = _unusable
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst=neighbor,
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    error=f"{inv_type} collection failed on '{src}': {_unusable}",
+                    duration_ms=int(dur_ms),
+                    evidence=_cf_evidence,
+                    meta={"type": inv_type, "neighbor": neighbor, "attempts": int(attempts), "timeout_s": int(timeout_s), "last_rc": last_evidence.get("returncode")},
+                )
+                return "fail"
+
             observed_state_str = str(last_state.get("state") or "Unknown")
             last_error = str(last_state.get("last_error") or "")
             parse_error = str(last_evidence.get("parse_error") or "")
@@ -7985,14 +8071,16 @@ def cmd_test(args: argparse.Namespace) -> None:
                 # Drive retry on the predicate (state == expected), not on
                 # vtysh-success alone: NotConfigured with vtysh-success is
                 # not yet a pass.
-                return _predicate_ok, (attempt_state, attempt_evidence)
+                # S1D2-S14-R3 (WI-15 script 1b-i(ii)): the loop still retries on the predicate; the read
+                # flag travels with the attempt's state so the last attempt's read is decided after it.
+                return _predicate_ok, (attempt_state, attempt_evidence, _vtysh_ok)
 
             if expected == "pass" and timeout_s > 0:
                 ok, last_payload, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
-                last_state, last_evidence = last_payload
+                last_state, last_evidence, _last_read_ok = last_payload
             else:
                 ok_a, payload_a = attempt()
-                last_state, last_evidence = payload_a
+                last_state, last_evidence, _last_read_ok = payload_a
                 attempts = 1
                 dur_ms = int((time.time() - start) * 1000)
                 ok = ok_a
@@ -8026,6 +8114,32 @@ def cmd_test(args: argparse.Namespace) -> None:
                     },
                 )
                 raise SystemExit(2)
+
+            # S1D2-S9-R1 to -R3, S1D2-S14-R1, -R3, S1D2-S16-R1, -R2 (WI-15 script 1b-i(ii)): a last read that
+            # produced no answer (the read raised, exited outside its answer codes, or its output is not in the
+            # reader's format, empty output included for a JSON reader) fails whatever expect says, as
+            # route_present's collection-failure record does: no observed_state, so the summary renders the
+            # absence block. An answer is judged below as before.
+            _unusable = _read_unusable(_last_read_ok, last_evidence)
+            if _unusable is not None:
+                _cf_evidence = {"cmd": last_evidence.get("cmd") or "vtysh -c 'show ip ospf neighbor json'", "rc": last_evidence.get("returncode")}
+                if str(last_evidence.get("parse_error") or ""):
+                    _cf_evidence["parse_error"] = str(last_evidence.get("parse_error") or "")
+                _cf_evidence["read_unusable"] = _unusable
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst=neighbor,
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    error=f"{inv_type} collection failed on '{src}': {_unusable}",
+                    duration_ms=int(dur_ms),
+                    evidence=_cf_evidence,
+                    meta={"type": inv_type, "neighbor": neighbor, "attempts": int(attempts), "timeout_s": int(timeout_s), "last_rc": last_evidence.get("returncode")},
+                )
+                return "fail"
 
             observed_state_str = str(last_state.get("state") or "Unknown")
             last_error = str(last_state.get("last_error") or "")
@@ -8182,14 +8296,16 @@ def cmd_test(args: argparse.Namespace) -> None:
                 # Drive retry on the predicate (B-RT12); a probe-success
                 # with predicate-mismatch on expect=pass should retry
                 # until timeout in case kernel state catches up.
-                return _predicate_ok, (attempt_state, attempt_evidence)
+                # S1D2-S14-R3 (WI-15 script 1b-i(ii)): the loop still retries on the predicate; the read
+                # flag travels with the attempt's state so the last attempt's read is decided after it.
+                return _predicate_ok, (attempt_state, attempt_evidence, _probe_ok)
 
             if expected == "pass" and timeout_s > 0:
                 ok, last_payload, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
-                last_state, last_evidence = last_payload
+                last_state, last_evidence, _last_read_ok = last_payload
             else:
                 ok_a, payload_a = attempt()
-                last_state, last_evidence = payload_a
+                last_state, last_evidence, _last_read_ok = payload_a
                 attempts = 1
                 dur_ms = int((time.time() - start) * 1000)
                 ok = ok_a
@@ -8223,6 +8339,32 @@ def cmd_test(args: argparse.Namespace) -> None:
                     },
                 )
                 raise SystemExit(2)
+
+            # S1D2-S9-R1 to -R3, S1D2-S14-R1, -R3, S1D2-S16-R1, -R2 (WI-15 script 1b-i(ii)): a last read that
+            # produced no answer (the read raised, exited outside its answer codes, or its output is not in the
+            # reader's format, empty output included for a JSON reader) fails whatever expect says, as
+            # route_present's collection-failure record does: no observed_state, so the summary renders the
+            # absence block. An answer is judged below as before.
+            _unusable = _read_unusable(_last_read_ok, last_evidence)
+            if _unusable is not None:
+                _cf_evidence = {"cmd": last_evidence.get("cmd") or f"ip -j link show {iface}", "rc": last_evidence.get("returncode")}
+                if str(last_evidence.get("parse_error") or ""):
+                    _cf_evidence["parse_error"] = str(last_evidence.get("parse_error") or "")
+                _cf_evidence["read_unusable"] = _unusable
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst=iface,
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    error=f"{inv_type} collection failed on '{src}': {_unusable}",
+                    duration_ms=int(dur_ms),
+                    evidence=_cf_evidence,
+                    meta={"type": inv_type, "interface": iface, "attempts": int(attempts), "timeout_s": int(timeout_s), "last_rc": last_evidence.get("returncode")},
+                )
+                return "fail"
 
             admin_state = str(last_state.get("admin_state") or "unknown")
             operstate = str(last_state.get("operstate") or "UNKNOWN")

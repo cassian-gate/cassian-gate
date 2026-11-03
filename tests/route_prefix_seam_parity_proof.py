@@ -606,7 +606,9 @@ try:
     # reproduce the f015801 extraction byte for byte.
     import json as _json
 
-    RIT_ORACLE_SHA256 = "2a2fa73c2fb47283e1dbdbb6486dced205999473972b511af4eaab0a640e5d2a"
+    # Re-baselined by Stage-1 gap item (d)(2) WI-15 script 1b-i(ii) (S1D2-S14-R1, S1D2-S16-R1 to -R3, 2026-11-03):
+    # the oracle now also carries the five invariant test-path kinds' unanswered-read decisions.
+    RIT_ORACLE_SHA256 = "ab767863c0d7528afeaf5540c963da2faf7bcc0fd206120cb02fb1ee8857b5c0"
     # Re-baselined by Stage-1 gap item (d)(2) WI-13 (founder ruling D5, 2026-10-27): the oracle
     # is now the f015801 extraction plus WI-13's probe guards in the ping and tcp branches. HS-7
     # (tests/probe_unusable_verdict_proof.py) pins those branches' pre-WI-13 form to 02669cd.
