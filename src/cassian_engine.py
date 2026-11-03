@@ -6560,6 +6560,31 @@ def cmd_test(args: argparse.Namespace) -> None:
                 )
                 raise SystemExit(2)
 
+            # S1D2-S9-R1 to -R3, S1D2-S13-R1, -R2, S1D2-S17-R1 (WI-15 script 1b-ii): a read that produced no answer (the read
+            # raised, exited outside its answer codes, or its output is not in the reader's format, empty output
+            # included for a JSON reader) fails whatever expect says, where the site has not already stopped on it
+            # above: no observed_state, so the summary renders the absence block. An answer is judged below as before.
+            _unusable = _read_unusable(_vtysh_ok, last_evidence)
+            if _unusable is not None:
+                _cf_evidence = {"cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn summary json'", "rc": rc}
+                if str(last_evidence.get("parse_error") or ""):
+                    _cf_evidence["parse_error"] = str(last_evidence.get("parse_error") or "")
+                _cf_evidence["read_unusable"] = _unusable
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    error=f"{inv_type} collection failed on '{src}': {_unusable}",
+                    duration_ms=int((time.time() - start) * 1000),
+                    evidence=_cf_evidence,
+                    meta={"type": inv_type, "peer": peer},
+                )
+                return "fail"
+
             observed = "pass" if present else "fail"
             verdict = "pass" if observed == expected else "fail"
 
@@ -7077,6 +7102,31 @@ def cmd_test(args: argparse.Namespace) -> None:
                 )
                 raise SystemExit(2)
 
+            # S1D2-S9-R1 to -R3, S1D2-S13-R1, -R2, S1D2-S17-R1 (WI-15 script 1b-ii): a read that produced no answer (the read
+            # raised, exited outside its answer codes, or its output is not in the reader's format, empty output
+            # included for a JSON reader) fails whatever expect says, where the site has not already stopped on it
+            # above: no observed_state, so the summary renders the absence block. An answer is judged below as before.
+            _unusable = _read_unusable(_vtysh_ok, last_evidence)
+            if _unusable is not None:
+                _cf_evidence = {"cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn route json'", "rc": rc}
+                if str(last_evidence.get("parse_error") or ""):
+                    _cf_evidence["parse_error"] = str(last_evidence.get("parse_error") or "")
+                _cf_evidence["read_unusable"] = _unusable
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    error=f"{inv_type} collection failed on '{src}': {_unusable}",
+                    duration_ms=int((time.time() - start) * 1000),
+                    evidence=_cf_evidence,
+                    meta={"type": inv_type, "mac": mac, "vni": vni_i},
+                )
+                return "fail"
+
             dedup = {}
             for rec in evidence_entries:
                 sig = (
@@ -7311,6 +7361,31 @@ def cmd_test(args: argparse.Namespace) -> None:
                     },
                 )
                 raise SystemExit(2)
+
+            # S1D2-S9-R1 to -R3, S1D2-S13-R1, -R2, S1D2-S17-R1 (WI-15 script 1b-ii): a read that produced no answer (the read
+            # raised, exited outside its answer codes, or its output is not in the reader's format, empty output
+            # included for a JSON reader) fails whatever expect says, where the site has not already stopped on it
+            # above: no observed_state, so the summary renders the absence block. An answer is judged below as before.
+            _unusable = _read_unusable(_vtysh_ok, last_evidence)
+            if _unusable is not None:
+                _cf_evidence = {"cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp neighbor {peer_ips[0]} advertised-routes json'", "rc": rc}
+                if str(last_evidence.get("parse_error") or ""):
+                    _cf_evidence["parse_error"] = str(last_evidence.get("parse_error") or "")
+                _cf_evidence["read_unusable"] = _unusable
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=node,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    error=f"{inv_type} collection failed on '{node}': {_unusable}",
+                    duration_ms=int((time.time() - start) * 1000),
+                    evidence=_cf_evidence,
+                    meta={"type": inv_type, "prefix": prefix, "peer": peer},
+                )
+                return "fail"
 
             observed = "pass" if present else "fail"
             if inv_type == "route_not_advertised_to":
