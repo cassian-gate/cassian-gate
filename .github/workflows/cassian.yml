@@ -830,6 +830,19 @@ jobs:
           set -euo pipefail
           python tests/probe_unusable_verdict_proof.py
 
+      # Stage-1 gap item (d)(2) WI-15 script 2 (founder rulings S1D2-S18-R1 to -R5, rulings note 31;
+      # S1D2-S9-R1 to -R6): on every check and node type the catalogue marks implemented, on the test
+      # path and in scenario wait_for, a read that produced no answer fails whatever expect says, and an
+      # answer keeps its verdict. Lab-free; its mutant legs show the sweep can fail. Additions only.
+      - name: unusable-read sweep proof — unusable_read_sweep_proof.py (Stage-1 (d)(2) WI-15, HS-8, PO-32)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/unusable_read_sweep_proof.py
+
       # §4.5-d VM-1 -- scope §9 row 15: one fixture, one boot, one declared FRR<->SONiC
       # session carrying REQ-45D-8 first, then -1, -16 and -19 (S29-R5), and the two
       # §15.2 negatives. The proof drives `cassian test --name` and `cassian status`

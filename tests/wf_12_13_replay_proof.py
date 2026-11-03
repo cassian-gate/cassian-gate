@@ -185,7 +185,8 @@ for _p in ("sonic_exec_allowlist_proof.py",   # H1-a2-ii, REQ-45D-5
 # Coverage limit (PBE-P2-8), as stated for §4.5-c above: this substring test proves each
 # proof is NAMED in the gate; it does NOT prove the step executes, that the runner reaches
 # it, or that the proof passes.
-for _p in ("probe_unusable_verdict_proof.py",):  # HS-7, WI-13, PO-30 (ruling D4)
+for _p in ("probe_unusable_verdict_proof.py",  # HS-7, WI-13, PO-30 (ruling D4)
+           "unusable_read_sweep_proof.py"):  # HS-8, WI-15 script 2, PO-32 (S1D2-S18-R1)
     check(f"(d)(2) proof is CI-wired: {_p} present in the gate", _p in gate)
 
 fails = [n for n, ok in checks if not ok]
