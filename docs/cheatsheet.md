@@ -57,6 +57,7 @@ Cassian Gate **IS NOT**
 
 ```bash
 cassian doctor
+cassian checks [--json]
 cassian validate <topology.yaml>
 cassian validate-contrib <path>
 cassian preflight <topology.yaml>
