@@ -371,13 +371,17 @@ def wiring_failures(workflow):
 
 
 def with_wi9(workflow):
-    """A copy of the workflow with section 14.2's WI-9 steps inserted before the project-gate step."""
+    """A copy of the workflow with section 14.2's WI-9 steps inserted before the project-gate step. A step that
+    already carries either name is dropped first, so the copy holds exactly one of each, before WI-9 lands and
+    after it."""
     w = copy.deepcopy(workflow)
     for job in w["jobs"].values():
-        names = [s.get("name") for s in job.get("steps") or []]
+        steps = [s for s in job.get("steps") or [] if s.get("name") not in (WI9_STEP_A["name"], WI9_STEP_B["name"])]
+        names = [s.get("name") for s in steps]
         if ANCHOR_STEP in names:
             i = names.index(ANCHOR_STEP)
-            job["steps"][i:i] = [copy.deepcopy(WI9_STEP_A), copy.deepcopy(WI9_STEP_B)]
+            steps[i:i] = [copy.deepcopy(WI9_STEP_A), copy.deepcopy(WI9_STEP_B)]
+            job["steps"] = steps
             return w
     raise SystemExit(f"no step named {ANCHOR_STEP!r} in {WORKFLOW.relative_to(ROOT)}")
 
