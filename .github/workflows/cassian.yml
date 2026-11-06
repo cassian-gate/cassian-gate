@@ -311,6 +311,27 @@ jobs:
           set -euo pipefail
           python tests/vm_runtime_validate_rejection_proof.py
 
+      # Stage-1 gap item (d)(2) WI-9 (handover v9-rev3 section 14.1 and section 14.2 WI-9; REQ-S1D2-29;
+      # PBR-11 with SLD-21): the capability-catalogue proofs HS-1 to HS-6. Step A runs HS-1 and HS-3
+      # under 3.10, 3.11 and 3.12; step B runs HS-2, HS-4, HS-5 and HS-6 on the pinned interpreter. Both
+      # are keyed, so a red step above them does not skip them. Additions only.
+      - name: Capability catalogue drift and parameter proofs, interpreter matrix (checks_catalogue_drift_proof.py, checks_param_conformance_proof.py)
+        if: success() || failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          for v in 3.10 3.11 3.12; do "python$v" tests/checks_catalogue_drift_proof.py; "python$v" tests/checks_param_conformance_proof.py; done
+
+      - name: Capability catalogue coherence, command-surface, read-only and CLI-surface proofs (checks_catalogue_coherence_proof.py, checks_command_surface_proof.py, checks_readonly_ai_free_proof.py, cli_surface_preservation_proof.py)
+        if: success() || failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/checks_catalogue_coherence_proof.py
+          python tests/checks_command_surface_proof.py
+          python tests/checks_readonly_ai_free_proof.py
+          python tests/cli_surface_preservation_proof.py
+
       - name: Project gate (up -> test -> down)
         shell: bash
         run: |

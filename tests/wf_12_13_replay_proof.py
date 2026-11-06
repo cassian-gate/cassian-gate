@@ -184,9 +184,16 @@ for _p in ("sonic_exec_allowlist_proof.py",   # H1-a2-ii, REQ-45D-5
 # section loop of their own. HS-7 is entered with WI-13 (ruling D4); WI-9 adds HS-1 to HS-6.
 # Coverage limit (PBE-P2-8), as stated for §4.5-c above: this substring test proves each
 # proof is NAMED in the gate; it does NOT prove the step executes, that the runner reaches
-# it, or that the proof passes.
+# it, or that the proof passes. It is also one-directional (BL-P2-4.5c-64): a gate step that
+# runs a proof this list does not name stays uncovered.
 for _p in ("probe_unusable_verdict_proof.py",  # HS-7, WI-13, PO-30 (ruling D4)
-           "unusable_read_sweep_proof.py"):  # HS-8, WI-15 script 2, PO-32 (S1D2-S18-R1)
+           "unusable_read_sweep_proof.py",  # HS-8, WI-15 script 2, PO-32 (S1D2-S18-R1)
+           "checks_catalogue_drift_proof.py",  # HS-1, WI-9 step A (REQ-S1D2-15, -29)
+           "checks_catalogue_coherence_proof.py",  # HS-2, WI-9 step B
+           "checks_param_conformance_proof.py",  # HS-3, WI-9 step A
+           "checks_command_surface_proof.py",  # HS-4, WI-9 step B
+           "checks_readonly_ai_free_proof.py",  # HS-5, WI-9 step B
+           "cli_surface_preservation_proof.py"):  # HS-6, WI-9 step B
     check(f"(d)(2) proof is CI-wired: {_p} present in the gate", _p in gate)
 
 fails = [n for n, ok in checks if not ok]
