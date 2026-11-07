@@ -3802,6 +3802,72 @@ def _probe_exit_unexplained(rt, lab: str, node: str, tool: str, cp):
     return None
 
 
+def _probe_declared_addrs(topo, node: str) -> set:
+    """S1D2-S25-R1 (WI-16): the addresses the topology declares for `node` -- its link ipv4
+    entries, its `interfaces` values, its `ip` and its `router_id`."""
+    out = set()
+
+    def _add(value):
+        if isinstance(value, str) and value.strip():
+            try:
+                out.add(ipaddress.ip_interface(value.strip()).ip)
+            except ValueError:
+                pass
+
+    for link in (topo or {}).get("links") or []:
+        eps, ips = link.get("endpoints") or [], link.get("ipv4") or []
+        for k, ep in enumerate(eps):
+            if isinstance(ep, str) and ep.split(":", 1)[0] == node and k < len(ips):
+                _add(ips[k])
+    for n in (topo or {}).get("nodes") or []:
+        if isinstance(n, dict) and n.get("name") == node:
+            intfs = n.get("interfaces")
+            for value in (list(intfs.values()) if isinstance(intfs, dict) else []) + [n.get("ip"), n.get("router_id")]:
+                _add(value)
+    return out
+
+
+def _probe_egress_unusable(rt, lab: str, node: str, dst_ip, topo, *, src_if=None, src_ip=None):
+    """S1D2-S25-R1 to -R3 and -R8 (WI-16, F-S1D2-C3-8): after an answered expect: pass probe, why the
+    answer did not come through the lab, or None when it did.
+
+    The source's route to dst_ip (`ip route get`, with `from <src_ip>` or `oif <src_if>` when
+    declared) must be a local route to an address the topology declares for the source, or leave
+    through an interface that carries such an address (`ip -4 -o addr show dev <dev>`). A read
+    that gives no answer makes the probe unusable (S1D2-S2-R3).
+    """
+    declared = _probe_declared_addrs(topo, node)
+    argv = ["ip", "route", "get", str(dst_ip)]
+    if src_ip:
+        argv += ["from", str(src_ip).strip()]
+    elif src_if:
+        argv += ["oif", str(src_if).strip()]
+    try:
+        cp = rt.exec(lab, node, argv, check=False)
+    except Exception as e:  # noqa: BLE001 -- a read that raised gave no answer
+        return f"cannot read the route to {dst_ip} on node {node!r} ({e})"
+    if getattr(cp, "returncode", None) != 0:
+        return f"cannot read the route to {dst_ip} on node {node!r} (ip exited {getattr(cp, 'returncode', None)}{_probe_last_stderr(cp)})"
+    out = getattr(cp, "stdout", "") or ""
+    if re.search(r"(?m)^\s*local\s", out):
+        if ipaddress.ip_address(str(dst_ip)) in declared:
+            return None
+        return f"{dst_ip} is an address of node {node!r} that the topology does not declare"
+    m = re.search(r"(?:^|\s)dev\s+(\S+)", out)
+    if not m:
+        return f"cannot read the route to {dst_ip} on node {node!r} (no route in the output)"
+    dev = m.group(1)
+    try:
+        cp = rt.exec(lab, node, ["ip", "-4", "-o", "addr", "show", "dev", dev], check=False)
+    except Exception as e:  # noqa: BLE001 -- a read that raised gave no answer
+        return f"cannot read the addresses of {dev} on node {node!r} ({e})"
+    if getattr(cp, "returncode", None) != 0:
+        return f"cannot read the addresses of {dev} on node {node!r} (ip exited {getattr(cp, 'returncode', None)}{_probe_last_stderr(cp)})"
+    if _probe_addrs(getattr(cp, "stdout", "") or "") & declared:
+        return None
+    return f"route to {dst_ip} leaves node {node!r} through {dev}, which carries no address the topology declares for it"
+
+
 def _read_unusable(read_ok, evidence):
     """S1D2-S9-R1 to -R3 (WI-15): why a read produced no answer, or None when it answered.
 
@@ -5347,6 +5413,10 @@ def cmd_test(args: argparse.Namespace) -> None:
             extra_s = f" ({', '.join(extras)})" if extras else ""
             return f"ping mismatch: from={src} dst={dst_part} expected={expected_s} observed={observed_s}{extra_s}"
 
+        # S1D2-S25-R1/-R2 (WI-16, F-S1D2-C3-8): the last answered attempt's reason when its answer
+        # did not come through the lab; such an attempt is not a success, and the window goes on.
+        _egress = [None]
+
         def attempt():
             ping_cmd = ["ping", "-c", str(count), "-W", str(per_attempt_timeout_s)]
             if src_ip:
@@ -5361,6 +5431,10 @@ def cmd_test(args: argparse.Namespace) -> None:
                 ping_cmd,
                 check=False,
             )
+            if cp.returncode == 0 and expected == "pass":
+                _egress[0] = _probe_egress_unusable(rt, lab, src, dst_ip, topo, src_if=src_if, src_ip=src_ip)
+                if _egress[0] is not None:
+                    return False, cp
             return (cp.returncode == 0), cp
 
         # WI-13 (F-S1D2-C3-5): a probe that cannot run is not the network's answer.
@@ -5376,12 +5450,20 @@ def cmd_test(args: argparse.Namespace) -> None:
             ok, last_cp, attempts, dur_ms = retry_until(retry_timeout_s, retry_interval_s, attempt)
         if _unusable is None and not ok:
             _unusable = _probe_exit_unexplained(rt, lab, src, "ping", last_cp)
+        _from_outside = _unusable is None and not ok and _egress[0] is not None
+        if _from_outside:
+            _unusable = _egress[0]
+        # S1D2-S25-R3, -R8: a reply whose route read gave no answer has its own ending.
+        _end = ("an answer whose route cannot be read" if _from_outside and _unusable.startswith("cannot read ")
+                else "an answer from outside the lab")
 
         observed = "pass" if ok else "fail"
         should_succeed = (expected == "pass")
         verdict = "pass" if (ok == should_succeed and _unusable is None) else "fail"
 
-        if _unusable is not None:
+        if _from_outside:
+            err = f"ping probe unusable on {src}: {_unusable}; {_end} is never read as reachable"
+        elif _unusable is not None:
             err = f"ping probe unusable on {src}: {_unusable}; never read as unreachable"
         else:
             err = "" if verdict == "pass" else _format_ping_ctx(expected_s=expected, observed_s=observed)
@@ -5463,8 +5545,16 @@ def cmd_test(args: argparse.Namespace) -> None:
         timeout_s = int(t.get("timeout_s") or (10 if expected == "pass" else 0))
         interval_s = float(t.get("retry_interval_s") or 1.0)
 
+        # S1D2-S25-R1/-R2 (WI-16, F-S1D2-C3-8): the last answered attempt's reason when its answer
+        # did not come through the lab; such an attempt is not a success, and the window goes on.
+        _egress = [None]
+
         def attempt():
             cp = rt.exec(lab, src, ["sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"], check=False)
+            if cp.returncode == 0 and expected == "pass":
+                _egress[0] = _probe_egress_unusable(rt, lab, src, dst_ip, topo)
+                if _egress[0] is not None:
+                    return False, cp
             return (cp.returncode == 0), cp
 
         start = time.time()
@@ -5475,11 +5565,17 @@ def cmd_test(args: argparse.Namespace) -> None:
         elif expected == "pass" and timeout_s > 0:
             ok, last_cp, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
         else:
-            cp = rt.exec(lab, src, ["sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"], check=False)
-            ok, last_cp, attempts = (cp.returncode == 0), cp, 1
+            ok, last_cp = attempt()
+            attempts = 1
             dur_ms = int((time.time() - start) * 1000)
         if _unusable is None and not ok:
             _unusable = _probe_exit_unexplained(rt, lab, src, "nc", last_cp)
+        _from_outside = _unusable is None and not ok and _egress[0] is not None
+        if _from_outside:
+            _unusable = _egress[0]
+        # S1D2-S25-R3, -R8: a reply whose route read gave no answer has its own ending.
+        _end = ("an answer whose route cannot be read" if _from_outside and _unusable.startswith("cannot read ")
+                else "an answer from outside the lab")
 
         observed = "pass" if ok else "fail"
         should_succeed = (expected == "pass")
@@ -5495,7 +5591,9 @@ def cmd_test(args: argparse.Namespace) -> None:
             verdict=verdict,
             evidence={"cmd": "nc -z", **({"read_unusable": _unusable} if _unusable is not None else {})},
             duration_ms=dur_ms,
-            error=(f"tcp probe unusable on {src}: {_unusable}; never read as unreachable" if _unusable is not None
+            error=(f"tcp probe unusable on {src}: {_unusable}; {_end} is never read as reachable"
+                   if _from_outside
+                   else f"tcp probe unusable on {src}: {_unusable}; never read as unreachable" if _unusable is not None
                    else ("" if verdict == "pass" else f"tcp mismatch (expected {expected}, observed {observed})")),
             meta={
                 "dst_ip": dst_ip,
@@ -9357,6 +9455,9 @@ def cmd_test(args: argparse.Namespace) -> None:
         last_cp = None
         last_obs = "fail"
         last_evidence: dict = {}
+        # S1D2-S25-R1/-R2 (WI-16, F-S1D2-C3-8): ping and tcp under expect: pass keep the last answered
+        # attempt's reason when its answer did not come through the lab.
+        _wf_egress = [None]
 
         start = time.time()
 
@@ -9418,6 +9519,11 @@ def cmd_test(args: argparse.Namespace) -> None:
                     _unusable = _probe_exit_unexplained(rt, lab, str(src).strip(), "ping", cp)
                     if _unusable is not None:
                         raise ValueError(f"wait_for ping: probe unusable: {_unusable}")
+                elif expected == "pass":
+                    _wf_egress[0] = _probe_egress_unusable(rt, lab, str(src).strip(), str(dst_ip), topo,
+                                                           src_if=src_if, src_ip=src_ip)
+                    if _wf_egress[0] is not None:
+                        ping_ok = False
 
                 last_obs = "pass" if ping_ok else "fail"
                 last_evidence = {
@@ -9466,6 +9572,10 @@ def cmd_test(args: argparse.Namespace) -> None:
                     _unusable = _probe_exit_unexplained(rt, lab, str(src).strip(), "nc", cp)
                     if _unusable is not None:
                         raise ValueError(f"wait_for tcp: probe unusable: {_unusable}")
+                elif expected == "pass":
+                    _wf_egress[0] = _probe_egress_unusable(rt, lab, str(src).strip(), str(dst_ip), topo)
+                    if _wf_egress[0] is not None:
+                        tcp_ok = False
 
                 last_obs = "pass" if tcp_ok else "fail"
                 last_evidence = {
@@ -9749,6 +9859,8 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         ok, last_val, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
         last_cp, last_obs = last_val  # type: ignore[misc]
+        if not ok and _wf_egress[0] is not None:
+            raise ValueError(f"wait_for {wtype}: probe unusable: {_wf_egress[0]}")
 
         # First success timing (for bounds)
         if ok:

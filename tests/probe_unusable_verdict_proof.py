@@ -61,6 +61,39 @@ four-quadrant verdict; a backend that reports no exit status is judged on its ou
                 cassian_tests._format_test_summary, with stderr_excerpt exactly when the output
                 was not judged.
 
+PO-33. Under expect: pass, a ping or tcp reply counts only if it came through the lab (WI-16,
+finding F-S1D2-C3-8; founder ruling A of 2026-10-27, rulings note 5; S1D2-S25-R1 to -R5 of
+2026-11-07, rulings note 37; S1D2-S25-R6 to -R8 of 2026-11-07, rulings note 38). After an answered
+attempt the source's route to the destination (`ip route get`, with `from <src_ip>` or
+`oif <src_if>` when declared) must be a local route to an address the topology declares for the
+source, or leave through an interface carrying such an address (`ip -4 -o addr show dev <dev>`);
+otherwise the attempt is not a success, the window goes on, and if it ends on such an answer the
+test fails with the reason (a wait_for step raises).
+A route read that gives no answer makes the probe unusable, with its own ending (R8). expect: fail is
+never checked.
+  O  ORACLE     the WI-16 edits are reversed first, then the WI-13 edits: the oracles above hold.
+  G  EGRESS     the live run_ping_test, run_tcp_test and wait_for_predicate against a mock runtime
+                answering `ip route get` and `ip -4 -o addr show dev` with forms measured on
+                2026-11-07 (iproute2 on the frr, host, nft-fw and sonic-vm images; rulings note 37
+                section 3): a reply through management and a reply aimed at an undeclared own
+                address are caught; a reply through the lab and one aimed at a declared own address
+                or router_id pass; expect: fail makes no route read; src_ip and src_if select
+                `from` and `oif`; a route or address read with no answer fails; a management reply
+                followed by a lab reply passes; a window that ends on an outside reply fails.
+  N  DETECTION  the same sites with only the WI-16 edits reversed pass the outside replies under
+                expect: pass: the check removed is reported, so G is not vacuous.
+  KG DOCKER     the helper on the real images (as K): a declared own address (lo) passes, an
+                undeclared one is caught, and a destination with no route is a read with no
+                answer.
+COVERAGE LIMIT (PO-33). The check is made at the source, so a reply that leaves the source through
+the lab counts wherever it was answered. A transit node that answers for an address it holds but
+the topology does not declare for it is not seen: produced on 2026-11-07 on
+vm-three-nodes-two-hosts-fw-outcomes, where h2's ping to fw1's 10.0.0.4 was answered by s1, which
+holds 10.0.0.4 as a stock port address, and passed (S1D2-S25-R7, rulings note 38). A reply that
+returns through a transit node's management is not seen either (not produced, rulings note 37 P6).
+The non-local route form is exercised from measured text, not live: the K containers have no
+network.
+
 COVERAGE LIMIT (sonic-vm). The guest path is not exercised here: no lab run (founder ruling
 D4). It was measured on 2026-10-27 on a live sonic-vm guest (SONiC 202405.1033627-fecd4ec81,
 lab s1d2-c3-measure on ai-netsim): every precondition and exit code as ruled, nc absent from
@@ -365,6 +398,190 @@ WI13_EDITS["wait_for_predicate"] += [
 '''),
 ]
 
+# WI-16 (S1D2-S25-R1 to -R5 and -R8, rulings notes 37 and 38): the through-the-lab check, as (WI-13/WI-15
+# text, WI-16 text) pairs at the engine's own indentation. They are reversed first, so every oracle above
+# holds.
+WI16_EDITS = {
+    "run_ping_test": [
+        (r'''        def attempt():
+            ping_cmd = ["ping", "-c", str(count), "-W", str(per_attempt_timeout_s)]
+            if src_ip:
+                ping_cmd += ["-I", str(src_ip).strip()]
+            elif src_if:
+                ping_cmd += ["-I", str(src_if).strip()]
+            ping_cmd += [dst_ip]
+
+            cp = rt.exec(
+                lab,
+                src,
+                ping_cmd,
+                check=False,
+            )
+            return (cp.returncode == 0), cp
+''',
+         r'''        # S1D2-S25-R1/-R2 (WI-16, F-S1D2-C3-8): the last answered attempt's reason when its answer
+        # did not come through the lab; such an attempt is not a success, and the window goes on.
+        _egress = [None]
+
+        def attempt():
+            ping_cmd = ["ping", "-c", str(count), "-W", str(per_attempt_timeout_s)]
+            if src_ip:
+                ping_cmd += ["-I", str(src_ip).strip()]
+            elif src_if:
+                ping_cmd += ["-I", str(src_if).strip()]
+            ping_cmd += [dst_ip]
+
+            cp = rt.exec(
+                lab,
+                src,
+                ping_cmd,
+                check=False,
+            )
+            if cp.returncode == 0 and expected == "pass":
+                _egress[0] = _probe_egress_unusable(rt, lab, src, dst_ip, topo, src_if=src_if, src_ip=src_ip)
+                if _egress[0] is not None:
+                    return False, cp
+            return (cp.returncode == 0), cp
+'''),
+        (r'''        if _unusable is None and not ok:
+            _unusable = _probe_exit_unexplained(rt, lab, src, "ping", last_cp)
+
+        observed = "pass" if ok else "fail"
+        should_succeed = (expected == "pass")
+        verdict = "pass" if (ok == should_succeed and _unusable is None) else "fail"
+
+        if _unusable is not None:
+            err = f"ping probe unusable on {src}: {_unusable}; never read as unreachable"
+''',
+         r'''        if _unusable is None and not ok:
+            _unusable = _probe_exit_unexplained(rt, lab, src, "ping", last_cp)
+        _from_outside = _unusable is None and not ok and _egress[0] is not None
+        if _from_outside:
+            _unusable = _egress[0]
+        # S1D2-S25-R3, -R8: a reply whose route read gave no answer has its own ending.
+        _end = ("an answer whose route cannot be read" if _from_outside and _unusable.startswith("cannot read ")
+                else "an answer from outside the lab")
+
+        observed = "pass" if ok else "fail"
+        should_succeed = (expected == "pass")
+        verdict = "pass" if (ok == should_succeed and _unusable is None) else "fail"
+
+        if _from_outside:
+            err = f"ping probe unusable on {src}: {_unusable}; {_end} is never read as reachable"
+        elif _unusable is not None:
+            err = f"ping probe unusable on {src}: {_unusable}; never read as unreachable"
+'''),
+    ],
+    "run_tcp_test": [
+        (r'''        def attempt():
+            cp = rt.exec(lab, src, ["sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"], check=False)
+            return (cp.returncode == 0), cp
+''',
+         r'''        # S1D2-S25-R1/-R2 (WI-16, F-S1D2-C3-8): the last answered attempt's reason when its answer
+        # did not come through the lab; such an attempt is not a success, and the window goes on.
+        _egress = [None]
+
+        def attempt():
+            cp = rt.exec(lab, src, ["sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"], check=False)
+            if cp.returncode == 0 and expected == "pass":
+                _egress[0] = _probe_egress_unusable(rt, lab, src, dst_ip, topo)
+                if _egress[0] is not None:
+                    return False, cp
+            return (cp.returncode == 0), cp
+'''),
+        (r'''        else:
+            cp = rt.exec(lab, src, ["sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"], check=False)
+            ok, last_cp, attempts = (cp.returncode == 0), cp, 1
+            dur_ms = int((time.time() - start) * 1000)
+        if _unusable is None and not ok:
+            _unusable = _probe_exit_unexplained(rt, lab, src, "nc", last_cp)
+''',
+         r'''        else:
+            ok, last_cp = attempt()
+            attempts = 1
+            dur_ms = int((time.time() - start) * 1000)
+        if _unusable is None and not ok:
+            _unusable = _probe_exit_unexplained(rt, lab, src, "nc", last_cp)
+        _from_outside = _unusable is None and not ok and _egress[0] is not None
+        if _from_outside:
+            _unusable = _egress[0]
+        # S1D2-S25-R3, -R8: a reply whose route read gave no answer has its own ending.
+        _end = ("an answer whose route cannot be read" if _from_outside and _unusable.startswith("cannot read ")
+                else "an answer from outside the lab")
+'''),
+        (r'''            error=(f"tcp probe unusable on {src}: {_unusable}; never read as unreachable" if _unusable is not None
+''',
+         r'''            error=(f"tcp probe unusable on {src}: {_unusable}; {_end} is never read as reachable"
+                   if _from_outside
+                   else f"tcp probe unusable on {src}: {_unusable}; never read as unreachable" if _unusable is not None
+'''),
+    ],
+    "wait_for_predicate": [
+        (r'''        first_success_ms = None
+        first_success_observed = None  # "pass"|"fail" (underlying)
+        last_cp = None
+        last_obs = "fail"
+        last_evidence: dict = {}
+''',
+         r'''        first_success_ms = None
+        first_success_observed = None  # "pass"|"fail" (underlying)
+        last_cp = None
+        last_obs = "fail"
+        last_evidence: dict = {}
+        # S1D2-S25-R1/-R2 (WI-16, F-S1D2-C3-8): ping and tcp under expect: pass keep the last answered
+        # attempt's reason when its answer did not come through the lab.
+        _wf_egress = [None]
+'''),
+        (r'''                cp = rt.exec(lab, str(src).strip(), ping_cmd, check=False)
+                last_cp = cp
+                ping_ok = (cp.returncode == 0)
+                if not ping_ok:
+                    _unusable = _probe_exit_unexplained(rt, lab, str(src).strip(), "ping", cp)
+                    if _unusable is not None:
+                        raise ValueError(f"wait_for ping: probe unusable: {_unusable}")
+''',
+         r'''                cp = rt.exec(lab, str(src).strip(), ping_cmd, check=False)
+                last_cp = cp
+                ping_ok = (cp.returncode == 0)
+                if not ping_ok:
+                    _unusable = _probe_exit_unexplained(rt, lab, str(src).strip(), "ping", cp)
+                    if _unusable is not None:
+                        raise ValueError(f"wait_for ping: probe unusable: {_unusable}")
+                elif expected == "pass":
+                    _wf_egress[0] = _probe_egress_unusable(rt, lab, str(src).strip(), str(dst_ip), topo,
+                                                           src_if=src_if, src_ip=src_ip)
+                    if _wf_egress[0] is not None:
+                        ping_ok = False
+'''),
+        (r'''                tcp_ok = (cp.returncode == 0)
+                if not tcp_ok:
+                    _unusable = _probe_exit_unexplained(rt, lab, str(src).strip(), "nc", cp)
+                    if _unusable is not None:
+                        raise ValueError(f"wait_for tcp: probe unusable: {_unusable}")
+''',
+         r'''                tcp_ok = (cp.returncode == 0)
+                if not tcp_ok:
+                    _unusable = _probe_exit_unexplained(rt, lab, str(src).strip(), "nc", cp)
+                    if _unusable is not None:
+                        raise ValueError(f"wait_for tcp: probe unusable: {_unusable}")
+                elif expected == "pass":
+                    _wf_egress[0] = _probe_egress_unusable(rt, lab, str(src).strip(), str(dst_ip), topo)
+                    if _wf_egress[0] is not None:
+                        tcp_ok = False
+'''),
+        (r'''        ok, last_val, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
+        last_cp, last_obs = last_val  # type: ignore[misc]
+''',
+         r'''        ok, last_val, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
+        last_cp, last_obs = last_val  # type: ignore[misc]
+        if not ok and _wf_egress[0] is not None:
+            raise ValueError(f"wait_for {wtype}: probe unusable: {_wf_egress[0]}")
+'''),
+    ],
+}
+for _n, _p in WI16_EDITS.items():
+    WI13_EDITS[_n] = _p + WI13_EDITS[_n]
+
 ENG_SRC = open(os.path.join(_SRC, "cassian_engine.py"), encoding="utf-8").read()
 _LINES = ENG_SRC.splitlines(keepends=True)
 _FN = {n.name: n for n in ast.walk(ast.parse(ENG_SRC)) if isinstance(n, ast.FunctionDef)}
@@ -375,7 +592,7 @@ def raw(name):
     return "".join(_LINES[n.lineno - 1:n.end_lineno])
 
 
-LIVE, OLD = {}, {}
+LIVE, OLD, PRE16 = {}, {}, {}
 
 
 def _leg_o():
@@ -383,13 +600,15 @@ def _leg_o():
         _live = raw(_name)
         _old = _live
         _ok = True
-        for _before, _after in _pairs:
+        for _k, (_before, _after) in enumerate(_pairs):
             _ok = _ok and _old.count(_after) == 1
             _old = _old.replace(_after, _before, 1)
+            if _k + 1 == len(WI16_EDITS.get(_name, ())):
+                PRE16[_name] = textwrap.dedent(_old)
         LIVE[_name] = textwrap.dedent(_live)
         OLD[_name] = textwrap.dedent(_old)
-        check("O %s is the 02669cd extraction with exactly the WI-13 edits (and WI-15's wait_for raises) "
-              "applied (sha256 pinned)" % _name,
+        check("O %s is the 02669cd extraction with exactly the WI-13 edits (and WI-15's wait_for raises, "
+              "and WI-16's through-the-lab check) applied (sha256 pinned)" % _name,
               _ok and sha(OLD[_name]) == ORACLE_SHA256[_name], sha(OLD[_name]))
 
 
@@ -402,14 +621,36 @@ class MockRT:
     is_running answers (the last repeats); `tool_rc` is `command -v`'s exit; `if_ok` is
     `ip link show dev`'s; `addrs` is `ip -o addr show`'s stdout; `tool_err` its stderr."""
 
-    def __init__(self, probe, running=(True,), tool_rc=0, tool_err="", if_ok=True, addrs=""):
+    def __init__(self, probe, running=(True,), tool_rc=0, tool_err="", if_ok=True, addrs="", route=None,
+                 dev_addrs=None, addr_fail=None, probes=None):
         self.probe, self.running, self.tool_rc, self.tool_err = probe, list(running), tool_rc, tool_err
         self.if_ok, self.addrs = if_ok, addrs
+        # WI-16 (PO-33): `route` is `ip route get`'s answer, or a list of successive answers (the last
+        # repeats; an exception is raised); `dev_addrs` is `ip -4 -o addr show`'s text, filtered by dev;
+        # `addr_fail` an (rc, stderr) for that read; `probes` successive probe answers (the last repeats).
+        self.route = list(route) if isinstance(route, list) else [route or ROUTE_LAB]
+        self.dev_addrs = ADDRS if dev_addrs is None else dev_addrs
+        self.addr_fail, self.probes, self.calls = addr_fail, list(probes or []), []
 
     def is_running(self, lab, node):
         return self.running[0] if len(self.running) == 1 else self.running.pop(0)
 
     def exec(self, lab, node, cmd, *, check=False, capture_output=True, interactive=False, timeout_s=None):
+        self.calls.append(list(cmd))
+        if cmd[:3] == ["ip", "route", "get"]:
+            r = self.route[0] if len(self.route) == 1 else self.route.pop(0)
+            if isinstance(r, Exception):
+                raise r
+            return CP(cmd, *r)
+        if cmd[:4] == ["ip", "-4", "-o", "addr"]:
+            if self.addr_fail:
+                return CP(cmd, self.addr_fail[0], "", self.addr_fail[1])
+            dev = cmd[cmd.index("dev") + 1]
+            return CP(cmd, 0, "".join(ln + "\n" for ln in self.dev_addrs.splitlines() if ln.split()[1:2] == [dev]), "")
+        if self.probes and not (cmd[:2] == ["sh", "-c"] or cmd[:3] in (["ip", "link", "show"], ["ip", "-o", "addr"])
+                                or "command -v nc >/dev/null" in " ".join(cmd)):
+            rc, out, err = self.probes[0] if len(self.probes) == 1 else self.probes.pop(0)
+            return CP(cmd, rc, out, err)
         j = " ".join(cmd)
         if cmd[:2] == ["sh", "-c"] and cmd[2].startswith("command -v"):
             return CP(cmd, self.tool_rc, "/usr/bin/tool\n" if self.tool_rc == 0 else "", self.tool_err)
@@ -427,6 +668,8 @@ SONIC_PRE = ("Warning: Permanently added 'clab-lab-s1' (RSA) to the list of know
              "Debian GNU/Linux 12 \\n \\l\n\n")
 ADDRS = ("1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever\n"
          "2: eth1    inet 10.0.0.1/30 brd 10.0.0.3 scope global eth1\\       valid_lft forever\n")
+# WI-16 (PO-33): `ip route get` answers, in the forms measured on 2026-11-07 (rulings note 37 section 3).
+ROUTE_LAB = (0, "10.0.0.2 dev eth1 src 10.0.0.1 uid 0 \n    cache \n", "")
 # name, mock factory, test extras, verdict wanted for expect pass / expect fail, reason (None: usable)
 CASES = [
     ("reply", lambda: MockRT((0, "2 received", "")), {}, ("pass", "fail"), None),
@@ -468,9 +711,14 @@ def _tcp_case(mk):
     return rt
 
 
+# WI-16 (PO-33): n1 is declared 10.0.0.1 on its link to n2 (the address ADDRS and ROUTE_LAB give eth1).
+TOPO = {"nodes": [{"name": "n1"}, {"name": "n2"}],
+        "links": [{"endpoints": ["n1:eth1", "n2:eth1"], "ipv4": ["10.0.0.1/30", "10.0.0.2/30"]}]}
+
+
 def ns_with(text, rt, cap):
     ns = dict(E.__dict__)
-    ns.update(rt=rt, lab="lab", topo={"nodes": []},
+    ns.update(rt=rt, lab="lab", topo=TOPO,
               node_ip_or_die=lambda n: "10.0.0.2", start_listener=lambda d, p: None,
               retry_until=lambda to, iv, fn: (lambda r: (r[0], r[1], 1, 0))(fn()),
               record_test=lambda **kw: cap.update(kw))
@@ -585,6 +833,153 @@ def _leg_d():
 leg("D", _leg_d)
 
 
+# ------------------------------------------------------------------- G: through the lab (PO-33)
+OUT = "an answer from outside the lab is never read as reachable"
+UNREAD = "an answer whose route cannot be read is never read as reachable"  # S1D2-S25-R8
+NEVER = "never read as unreachable"
+ETH0 = "2: eth0    inet 172.20.20.5/24 brd 172.20.20.255 scope global eth0\\       valid_lft forever preferred_lft forever\n"
+GUEST_ADDRS = ("2: eth0    inet 10.0.0.15/24 scope global eth0\\       valid_lft forever preferred_lft forever\n"
+               "6: Ethernet0    inet 10.0.0.0/31 scope global Ethernet0\\       valid_lft forever preferred_lft forever\n"
+               "6: Ethernet0    inet 10.0.0.1/30 brd 10.0.0.3 scope global Ethernet0\\       valid_lft forever preferred_lft forever\n"
+               "7: Ethernet4    inet 10.0.0.2/31 scope global Ethernet4\\       valid_lft forever preferred_lft forever\n")
+R_MGMT = (0, "10.0.0.2 via 172.20.20.1 dev eth0 src 172.20.20.5 uid 0 \n    cache \n", "")
+R_LOCAL = (0, "local 10.0.0.2 dev lo src 10.0.0.2 uid 0 \n    cache <local> \n", "")
+R_GUEST_LAB = (0, "10.0.0.2 dev Ethernet0 src 10.0.0.1 uid 1000 \n    cache \n", SONIC_PRE)
+R_GUEST_MGMT = (0, "10.0.0.2 via 10.0.0.2 dev eth0 src 10.0.0.15 uid 1000 \n    cache \n", SONIC_PRE)
+R_GUEST_STOCK = (0, "local 10.0.0.2 dev lo table local src 10.0.0.2 uid 1000 \n    cache <local> \n", SONIC_PRE)
+REPLY = (0, "2 received", "")
+WHY_MGMT = "route to 10.0.0.2 leaves node 'n1' through eth0, which carries no address the topology declares for it"
+WHY_OWN = "10.0.0.2 is an address of node 'n1' that the topology does not declare"
+TOPO_RID = {"nodes": [{"name": "n1", "router_id": "10.0.0.2"}, {"name": "n2"}], "links": TOPO["links"]}
+# name, mock factory, topology, and the reason under expect: pass (None: the reply counts). A reason that starts
+# "cannot read" is a read that gave no answer (R8's ending); any other is a reply from outside the lab (R3's).
+G_CASES = [
+    ("reply through the lab", lambda: MockRT(REPLY), TOPO, None),
+    ("reply through management", lambda: MockRT(REPLY, route=R_MGMT, dev_addrs=ADDRS + ETH0), TOPO, WHY_MGMT),
+    ("reply to an undeclared own address", lambda: MockRT(REPLY, route=R_LOCAL), TOPO, WHY_OWN),
+    ("reply to a declared own address (router_id)", lambda: MockRT(REPLY, route=R_LOCAL), TOPO_RID, None),
+    ("guest reply through a lab port", lambda: MockRT(REPLY, route=R_GUEST_LAB, dev_addrs=GUEST_ADDRS), TOPO, None),
+    ("guest reply through management", lambda: MockRT(REPLY, route=R_GUEST_MGMT, dev_addrs=GUEST_ADDRS), TOPO,
+     WHY_MGMT),
+    ("guest reply to its stock port address", lambda: MockRT(REPLY, route=R_GUEST_STOCK), TOPO, WHY_OWN),
+    ("route read exits 2", lambda: MockRT(REPLY, route=(2, "", "RTNETLINK answers: Network is unreachable\n")), TOPO,
+     "cannot read the route to 10.0.0.2 on node 'n1' (ip exited 2: RTNETLINK answers: Network is unreachable)"),
+    ("route read not a route", lambda: MockRT(REPLY, route=(0, "garbage\n", "")), TOPO,
+     "cannot read the route to 10.0.0.2 on node 'n1' (no route in the output)"),
+    ("route read raised", lambda: MockRT(REPLY, route=[RuntimeError("transport down")]), TOPO,
+     "cannot read the route to 10.0.0.2 on node 'n1' (transport down)"),
+    ("address read exits 1", lambda: MockRT(REPLY, addr_fail=(1, 'Device "eth1" does not exist.\n')), TOPO,
+     "cannot read the addresses of eth1 on node 'n1' (ip exited 1: Device \"eth1\" does not exist.)"),
+]
+
+
+def _route_reads(rt):
+    return [c for c in rt.calls if c[:3] == ["ip", "route", "get"]]
+
+
+def _g_run(kind, text, rt, topo, expect, extras=None, real_retry=False):
+    """One site, one case: ("verdict", v, record) on the test path, or run_wait's pair for wait_for."""
+    cap = {}
+    ns = ns_with(text, rt, cap)
+    ns["topo"] = topo
+    if real_retry:
+        ns["retry_until"] = E.retry_until
+    if kind in ("ping", "tcp") and text in (LIVE.get("run_ping_test"), LIVE.get("run_tcp_test"),
+                                            PRE16.get("run_ping_test"), PRE16.get("run_tcp_test")):
+        if kind == "ping":
+            t = {"expect": expect, "dst": "10.0.0.2", "timeout_s": 1, **(extras or {})}
+            ns["run_ping_test"](test_name="t", src="n1", dst="10.0.0.2", t=t, record_fn=lambda **kw: cap.update(kw))
+        else:
+            t = {"expect": expect, "port": 80, "listener": False, "timeout_s": 1}
+            ns["run_tcp_test"](test_name="t", src="n1", dst="n2", t=t, record_fn=lambda **kw: cap.update(kw))
+        return "verdict", cap.get("verdict"), cap
+    ns["retry_until"] = E.retry_until
+    wf = {"type": kind, "from": "n1", "to": "10.0.0.2", "expect": expect, "timeout": 1, "interval_s": 0.05,
+          **({"port": 80} if kind == "tcp" else {}), **(extras or {})}
+    try:
+        res = ns["wait_for_predicate"](wf)
+    except ValueError as exc:
+        return "raise", str(exc), {}
+    except TypeError:
+        return "verdict", "fail (F-S20-2 timeout)", {}
+    return "verdict", res[5], {}
+
+
+def _leg_g():
+    for name, mk, topo, why in G_CASES:
+        for kind, site in (("ping", "run_ping_test"), ("tcp", "run_tcp_test")):
+            for expect in ("pass", "fail"):
+                rt = mk()
+                got, v, rec = _g_run(kind, LIVE[site], rt, topo, expect)
+                ev = rec.get("evidence", {})
+                if expect == "fail":
+                    ok = v == "fail" and "read_unusable" not in ev and not _route_reads(rt)
+                    want = "fail, no route read"
+                elif why is None:
+                    ok = v == "pass" and "read_unusable" not in ev and len(_route_reads(rt)) == 1
+                    want = "pass"
+                else:
+                    _ending = UNREAD if why.startswith("cannot read") else OUT
+                    ok = (v == "fail" and ev.get("read_unusable") == why
+                          and rec.get("error") == "%s probe unusable on n1: %s; %s" % (kind, why, _ending))
+                    want = "fail (route unread)" if _ending is UNREAD else "fail (outside)"
+                check("G %-4s %-44s expect %-4s -> %s" % (kind, name, expect, want), ok, "%r %r" % (v, rec.get("error")))
+            for expect in ("pass", "fail"):
+                rt = mk()
+                got = _g_run(kind, LIVE["wait_for_predicate"], rt, topo, expect)[:2]
+                if expect == "fail":
+                    ok, want = got == ("verdict", "fail") and not _route_reads(rt), "fail, no route read"
+                elif why is None:
+                    ok, want = got == ("verdict", "pass"), "pass"
+                else:
+                    ok, want = got == ("raise", "wait_for %s: probe unusable: %s" % (kind, why)), "raises"
+                check("G wait_for %-4s %-35s expect %-4s -> %s" % (kind, name, expect, want), ok, repr(got))
+    # src_ip and src_if select `from` and `oif` (ping only: tcp has neither).
+    for extras, tail in (({"src_ip": "10.0.0.1"}, ["from", "10.0.0.1"]), ({"src_if": "eth1"}, ["oif", "eth1"])):
+        for site in ("run_ping_test", "wait_for_predicate"):
+            rt = MockRT(REPLY, addrs=ADDRS)
+            got = _g_run("ping", LIVE[site], rt, TOPO, "pass", extras)
+            ok = got[1] == "pass" and _route_reads(rt) == [["ip", "route", "get", "10.0.0.2"] + tail]
+            check("G %s with %s reads `ip route get 10.0.0.2 %s`" % (site, list(extras)[0], " ".join(tail)), ok,
+                  "%r %r" % (got[:2], _route_reads(rt)))
+    # R2: a management reply followed by a lab reply passes; a window that ends on an outside reply (the
+    # last answered attempt) followed by no answer fails with that reply's reason.
+    for site in ("run_ping_test", "wait_for_predicate"):
+        rt = MockRT(REPLY, route=[R_MGMT, ROUTE_LAB], dev_addrs=ADDRS + ETH0)
+        got = _g_run("ping", LIVE[site], rt, TOPO, "pass", real_retry=True)
+        check("G %s: a management reply, then a lab reply -> pass (the window goes on)" % site,
+              got[1] == "pass" and len(_route_reads(rt)) == 2, "%r %r" % (got[:2], _route_reads(rt)))
+        rt = MockRT(REPLY, route=R_MGMT, dev_addrs=ADDRS + ETH0, probes=[REPLY, (1, "0 received", "")])
+        got = _g_run("ping", LIVE[site], rt, TOPO, "pass", real_retry=True)
+        if site == "run_ping_test":
+            ok = got[1] == "fail" and got[2].get("evidence", {}).get("read_unusable") == WHY_MGMT
+        else:
+            ok = got[:2] == ("raise", "wait_for ping: probe unusable: %s" % WHY_MGMT)
+        check("G %s: an outside reply, then no answer to the end of the window -> fails with the reply's reason" % site,
+              ok, repr(got[:2]))
+
+
+leg("G", _leg_g)
+
+
+# ------------------------------------------------------------------- N: detection (PO-33)
+def _leg_n():
+    _missed = []
+    for name, mk, topo, why in G_CASES:
+        if why is None or why.startswith("cannot read"):
+            continue
+        for kind, site in (("ping", "run_ping_test"), ("tcp", "run_tcp_test")):
+            if _g_run(kind, PRE16[site], mk(), topo, "pass")[1] != "pass":
+                _missed.append("%s %s" % (kind, name))
+            if _g_run(kind, PRE16["wait_for_predicate"], mk(), topo, "pass")[:2] != ("verdict", "pass"):
+                _missed.append("wait_for %s %s" % (kind, name))
+    check("N the sites with the WI-16 check removed pass every reply from outside the lab under expect: pass "
+          "(test paths and wait_for): the removal is reported, so G is not vacuous", not _missed, ", ".join(_missed))
+
+
+leg("N", _leg_n)
+
+
 # ------------------------------------------------------------------- K: docker
 class DockerRT:
     """Each command in a throwaway container of `image` (no network, no pull)."""
@@ -640,6 +1035,16 @@ def _k_image(role, image):
     _cp = rt.exec("lab", "n1", ["sh", "-lc", "nc -z -w 1 127.0.0.1 9"])
     check("K %s: nc to a closed port exits inside the range (rc %s) and is a network answer" % (role, _cp.returncode),
           _cp.returncode == 1 and E._probe_exit_unexplained(rt, "lab", "n1", "nc", _cp) is None)
+    # KG (PO-33, WI-16): the through-the-lab check on the image's own iproute2.
+    _lo = {"nodes": [{"name": "n1", "router_id": "127.0.0.1"}], "links": []}
+    check("KG %s: a reply to a declared own address (lo, router_id) counts" % role,
+          E._probe_egress_unusable(rt, "lab", "n1", "127.0.0.1", _lo) is None)
+    check("KG %s: a reply to an undeclared own address is caught" % role,
+          E._probe_egress_unusable(rt, "lab", "n1", "127.0.0.1", {"nodes": [{"name": "n1"}], "links": []})
+          == "127.0.0.1 is an address of node 'n1' that the topology does not declare")
+    _why = E._probe_egress_unusable(rt, "lab", "n1", "192.0.2.1", _lo)
+    check("KG %s: a destination with no route is a route read with no answer" % role,
+          str(_why).startswith("cannot read the route to 192.0.2.1 on node 'n1' (ip exited "), repr(_why))
 
 
 leg("K", _leg_k)

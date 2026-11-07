@@ -616,7 +616,9 @@ try:
     # (tests/probe_unusable_verdict_proof.py) pins those branches' pre-WI-13 form to 02669cd.
     # Re-baselined by Stage-1 gap item (d)(2) WI-15 script 1b-i(i) (S1D2-S14-R1, -R4, 2026-11-02): the
     # oracle now also carries the five C3-12 wait_for collection-failure raises (rulings note 4 ruling 3).
-    WFP_ORACLE_SHA256 = "698335648614870652d975de9fb427b69414f554979cd7402cd1c128eba78bc9"
+    # Re-baselined by Stage-1 gap item (d)(2) WI-16 (S1D2-S25-R1, -R2, -R4, 2026-11-07): the oracle now also
+    # carries the ping and tcp branches' through-the-lab check under expect: pass and its end-of-window raise.
+    WFP_ORACLE_SHA256 = "920ed7768ca3a0963bcd175b004e5c3e9bfd321a710c7e85ae75ab915afde307"
     GUARD_RIT = '''\
         # Q20-3 (founder ruling (i) of 2026-10-02, an SP #1 bounded-scope amendment;
         # finding F-S20-1): a read the provider cannot vouch for (probe_ok False)
