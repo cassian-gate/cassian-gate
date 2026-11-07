@@ -6,7 +6,7 @@ Requirements: REQ-S1D2-4, -5, -12, -15, -16 and -29. Acceptance check: C-3.
 Founder rulings applied: SLD-3 (the golden, diffed in CI); PBR-8 (PO-25 and PO-26 sit in HS-1); PBR-11 with
 SLD-21 (CI step A's interpreter loop); Am-1 (PO-26's coverage limit); Am-3 (the generator's release-version
 guard); Am-6 (the human-layout leg, PO-03 (viii)); S1D2-S21-R2 (WI-7's second script; PO-26 red by plan until
-WI-9 wires the HS proofs into CI).
+WI-9 wired the HS proofs into CI, at 7e703b4).
 
 What it proves: the catalogue `cassian checks` emits is generated from the code, byte-deterministic, equal to
 the committed golden, and wired into CI. The golden is a drift guard: it is regenerated only by
@@ -35,7 +35,7 @@ Legs
   W   PO-26   CI wiring of the HS proofs in .github/workflows/cassian.yml: every step whose run invokes an HS
               file carries `if: success() || failure()` and names each HS file it runs in its `name:`; HS-1 and
               HS-3 run under each of python3.10, 3.11 and 3.12; some step runs each of HS-2, HS-4, HS-5 and
-              HS-6. RED BY PLAN until WI-9 lands (S1D2-S21-R2): before WI-9 no step runs any HS file.
+              HS-6. Red by plan until WI-9 (S1D2-S21-R2), which wired the HS files into CI at `7e703b4`.
   N   MUTANTS each leg above is shown capable of failing: M's three mutations (G's comparator); a flipped
               golden byte (H); an unsorted set-derived list printed under two hash seeds (D (ii), the same
               comparator); seeded renderers that drop one check line and that swap one status (D (viii));
@@ -525,7 +525,7 @@ def main():
     # W (PO-26)
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     bad = wiring_failures(workflow)
-    check("W PO-26 CI wiring of the HS proofs (RED BY PLAN until WI-9, S1D2-S21-R2)", not bad,
+    check("W PO-26 CI wiring of the HS proofs", not bad,
           "; ".join(bad) if bad else "every HS file wired as section 14.2 WI-9 rules")
     wi9 = with_wi9(workflow)
     bad = wiring_failures(wi9)
