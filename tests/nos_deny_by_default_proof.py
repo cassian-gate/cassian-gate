@@ -226,7 +226,7 @@ check(not (on_disk - MODULE_ROSTER) and not (MODULE_ROSTER - on_disk),
 synthetic = on_disk | {"src/cassian_nos_UNREGISTERED_PROBE.py"}
 check(bool(synthetic - MODULE_ROSTER),
       "(iv) NON-VACUITY: an unregistered new module reds the roster predicate (LD-9)")
-check(len(MODULE_ROSTER) == 18, f"(iv) roster denominator is 18 (got {len(MODULE_ROSTER)})")
+check(len(MODULE_ROSTER) == 19, f"(iv) roster denominator is 19 (got {len(MODULE_ROSTER)})")
 
 print("=" * 60)
 if fails:

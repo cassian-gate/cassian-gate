@@ -39,7 +39,24 @@ def cmd_import(args) -> None:
     run_import(args.source, args.out, backend=args.backend)
 
 
-def main() -> None:
+def cmd_checks(args) -> None:
+    # Stage-1 gap item (d)(2): `cassian checks`. Builds the capability catalogue from the
+    # live parser and the release version, then writes it as canonical JSON (--json) or as
+    # the fixed-layout summary. Read-only: no file, subprocess, socket or lab action.
+    import sys
+    import cassian_catalogue
+    catalogue = cassian_catalogue.build_catalogue(
+        build_parser(), release_version=cassian_engine._audit_release_version()
+    )
+    if args.json:
+        data = cassian_catalogue.render_json(catalogue)
+    else:
+        data = cassian_catalogue.render_text(catalogue)
+    sys.stdout.buffer.write(data)
+    sys.stdout.buffer.flush()
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cassian",
         description="Cassian Gate: deterministic network change validation gate",
@@ -370,6 +387,15 @@ def main() -> None:
     p_import.add_argument("--backend", default="netbox", help="Importer backend (default: netbox)")
     p_import.set_defaults(func=cmd_import)
 
+    p_checks = sub.add_parser("checks", help="Print the capability catalogue: checks, per-node-type status, profile, command effect labels (read-only)")
+    p_checks.add_argument("--json", action="store_true", help="Emit the canonical catalogue as JSON (machine-readable)")
+    p_checks.set_defaults(func=cmd_checks)
+
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
 
     old_quiet = cassian_common.QUIET_RUN

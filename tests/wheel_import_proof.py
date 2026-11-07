@@ -192,6 +192,29 @@ try:
             check("REQ-45C-40 step 4: cassian --help succeeds", _h.returncode == 0,
                   (_h.stderr.strip().split("\n")[-1] if _h.returncode else "rc=0"))
 
+            # STEP 4b -- `cassian checks --json` from the installed wheel equals the
+            # committed golden (Stage-1 gap item (d)(2): REQ-S1D2-22, PO-08; handover
+            # v9-rev3 section 6.7.2, LD-S1D2-4: a new step after STEP 4, so STEP 5 and
+            # every existing check name are unchanged). Run out of tree in the clean
+            # venv; the output is compared as bytes, never decoded, and a non-zero
+            # exit fails whatever the bytes are.
+            _golden = io.open(os.path.join(_ROOT, "tests", "fixtures",
+                                           "checks_catalogue.json"), "rb").read()
+            _c = subprocess.run([_cli, "checks", "--json"], cwd=_work,
+                                capture_output=True)
+            if _c.returncode != 0:
+                _c_detail = "rc=%d: %s" % (_c.returncode, _c.stderr.decode(
+                    "utf-8", "replace").strip().split("\n")[-1] or "(no stderr)")
+            elif _c.stdout != _golden:
+                _c_at = next((i for i, (x, y) in enumerate(zip(_c.stdout, _golden))
+                              if x != y), min(len(_c.stdout), len(_golden)))
+                _c_detail = "%d bytes vs the golden's %d; first difference at byte %d" % (
+                    len(_c.stdout), len(_golden), _c_at)
+            else:
+                _c_detail = "rc=0, %d bytes == the golden" % len(_c.stdout)
+            check("REQ-S1D2-22 step 4b: cassian checks --json equals the golden",
+                  _c.returncode == 0 and _c.stdout == _golden, _c_detail)
+
             # STEP 5 -- a source-independent validate
             _fx = os.path.join(_ROOT, "topologies", "sonic-base-lifecycle.yaml")
             if os.path.isfile(_fx):

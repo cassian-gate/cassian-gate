@@ -42,8 +42,8 @@ Sections:
                     scenario working read -> registry die (exit 2);
               Q-A   nft-fw vantage: refusal text changes and expect: fail stops
                     passing (explicit UNSUP-fail); scenario wait raises the UNSUP;
-              Q20-2 scenario last_rc reports the read's own rc (retired form
-                    forced 0 with `|| true`); verdict unchanged.
+              Q20-2 an ip read exiting 2 is a collection failure (S1D2-S10-R4):
+                    test path fails, scenario wait raises; retired form forced 0.
             Observed, not changed (ZERO-TOUCH meta block, D-1): an expect: pass
             wait that times out raises TypeError at time_to_success_ms
             (int(None)) in both forms, for every wait_for type (F-S20-2).
@@ -533,16 +533,23 @@ try:
           a[0] == ("verdict", "pass", "pass") and b[0][0] == "raise"
           and b[0][1] == "NosCapabilityUnsupported" and "route_prefix" in b[0][2] and "nft-fw" in b[0][2])
 
-    # Q20-2, last_rc on a failed ip read.
+    # Q20-2, a failed ip read (exit 2). S1D2-S10-R4 (Stage-1 gap item (d)(2) WI-15 script 1a): under
+    # S1D2-S9-R1 a non-zero ip exit is no answer, so the seam form fails the read, naming its exit; the
+    # retired form's forced last_rc 0 stays asserted on the OLD side.
     fib4 = {"r1": [line_for("192.0.2.0/24")]}
     a = run_wait(OLD_WFP, R1, FakeRt(fib4, rc=2), wf_for("192.0.2.0/24", "fail"))
     b = run_wait(NEW_WFP, R1, FakeRt(fib4, rc=2), wf_for("192.0.2.0/24", "fail"))
-    check("P-DECL Q20-2 (scenario): last_rc 0 (forced by || true) -> 2, the read's own rc; verdict unchanged",
-          a[0] == b[0] and a[1]["last_rc"] == 0 and b[1]["last_rc"] == 2
-          and a[1]["evidence"]["last_rc"] == 0 and b[1]["evidence"]["last_rc"] == 2)
-    check("P-DECL Q20-2 (test path): no delta -- both forms recorded the read's own rc",
-          run_test(OLD_RPT, R1, FakeRt(fib4, rc=2), t_for("192.0.2.0/24", "pass"), "r1")
-          == run_test(NEW_RPT, R1, FakeRt(fib4, rc=2), t_for("192.0.2.0/24", "pass"), "r1"))
+    check("P-DECL Q20-2 (scenario): last_rc 0 (forced by || true) -> the seam form raises on the failed read, "
+          "naming its exit (S1D2-S10-R4)",
+          a[1] is not None and a[1]["last_rc"] == 0 and a[1]["evidence"]["last_rc"] == 0
+          and b[0][0] == "raise" and "wait_for route_prefix: collection failed on 'r1': ip exited 2" in b[0][2])
+    ta = run_test(NEW_RPT, R1, FakeRt(fib4, rc=2), t_for("192.0.2.0/24", "pass"), "r1")
+    tb = run_test(NEW_RPT, R1, FakeRt(fib4, rc=2), t_for("192.0.2.0/24", "fail"), "r1")
+    check("P-DECL Q20-2 (test path): a failed ip read is verdict fail for expect pass AND expect fail, "
+          "naming its exit (S1D2-S10-R4)",
+          ta[0] == ("verdict", "fail") and tb[0] == ("verdict", "fail")
+          and ta[1]["error"] == "route_prefix collection failed on 'r1': ip exited 2"
+          and tb[1]["error"] == "route_prefix collection failed on 'r1': ip exited 2")
 
     # ----------------------------------------------------------------- P-NEVER
     def stub_collect(rt, lab, node, ntype, request, seam):
@@ -599,8 +606,19 @@ try:
     # reproduce the f015801 extraction byte for byte.
     import json as _json
 
-    RIT_ORACLE_SHA256 = "2a2fa73c2fb47283e1dbdbb6486dced205999473972b511af4eaab0a640e5d2a"
-    WFP_ORACLE_SHA256 = "f90862ca977f6193ba3607ae8fe01f024cc988345036a32485e9b11b41499529"
+    # Re-baselined by Stage-1 gap item (d)(2) WI-15 script 1b-i(ii) (S1D2-S14-R1, S1D2-S16-R1 to -R3, 2026-11-03):
+    # the oracle now also carries the five invariant test-path kinds' unanswered-read decisions.
+    # Re-baselined by Stage-1 gap item (d)(2) WI-15 script 1b-ii (S1D2-S13-R1, -R2, S1D2-S17-R1, 2026-11-03): the
+    # oracle now also carries the three run_invariant_test sites' unanswered-read decisions.
+    RIT_ORACLE_SHA256 = "ea079f3f819fd14268d8735cead931c0d5c40c894bc05a25acaa5800ca4bdbcf"
+    # Re-baselined by Stage-1 gap item (d)(2) WI-13 (founder ruling D5, 2026-10-27): the oracle
+    # is now the f015801 extraction plus WI-13's probe guards in the ping and tcp branches. HS-7
+    # (tests/probe_unusable_verdict_proof.py) pins those branches' pre-WI-13 form to 02669cd.
+    # Re-baselined by Stage-1 gap item (d)(2) WI-15 script 1b-i(i) (S1D2-S14-R1, -R4, 2026-11-02): the
+    # oracle now also carries the five C3-12 wait_for collection-failure raises (rulings note 4 ruling 3).
+    # Re-baselined by Stage-1 gap item (d)(2) WI-16 (S1D2-S25-R1, -R2, -R4, 2026-11-07): the oracle now also
+    # carries the ping and tcp branches' through-the-lab check under expect: pass and its end-of-window raise.
+    WFP_ORACLE_SHA256 = "920ed7768ca3a0963bcd175b004e5c3e9bfd321a710c7e85ae75ab915afde307"
     GUARD_RIT = '''\
         # Q20-3 (founder ruling (i) of 2026-10-02, an SP #1 bounded-scope amendment;
         # finding F-S20-1): a read the provider cannot vouch for (probe_ok False)
@@ -615,6 +633,8 @@ try:
             }
             if _parse_error:
                 _cf_evidence["parse_error"] = _parse_error
+            # S1D2-S14-R2 (WI-15): the shared helper names the unanswered read in the evidence.
+            _cf_evidence["read_unusable"] = _read_unusable(_vtysh_ok, last_evidence)
             record_fn(
                 name=test_name,
                 kind="invariant",
@@ -781,7 +801,7 @@ try:
           a[0] == ("verdict", "pass") and b[0] == ("verdict", "fail")
           and b[1].get("observed") == "fail" and b[1].get("verdict") == "fail"
           and b[1].get("error") == "route_absent collection failed on 'r1': probe not ok"
-          and b[1].get("evidence") == {"cmd": "vtysh -c 'show ip route json'", "rc": 1})
+          and b[1].get("evidence") == {"cmd": "vtysh -c 'show ip route json'", "rc": 1, "read_unusable": "probe not ok"})
     a = run_inv(OLD_RIT, R1, FakeRib({}, rc=1), inv_t("route_present", "192.0.2.0/24", "fail"), "r1")
     b = run_inv(NEW_RIT, R1, FakeRib({}, rc=1), inv_t("route_present", "192.0.2.0/24", "fail"), "r1")
     check("P-RP-DECL Q20-3 FRR non-zero rc (test path, route_present, expect fail): the retired consumer passed; "

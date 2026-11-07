@@ -1504,6 +1504,24 @@ def _summary_peer(raw: str, neighbor: str) -> "tuple[Any, str]":
     return peer, ""
 
 
+def _output_is_not_json(out) -> bool:
+    """Stage-1 gap item (d)(2) WI-15 scripts 1a and 1a-ii (S1D2-S9-R1, -R2; S1D2-S10-R3, -R6;
+    S1D2-S11-R3, -R4).
+
+    A JSON reader whose output is not JSON produced no answer: the reader reports it with
+    probe_ok False, and the core decides. Empty output is not JSON either, so it is no
+    answer (S1D2-S10-R6 (i)); a text reader does not call this helper.
+    """
+    text = str(out or "").strip()
+    if not text:
+        return True
+    try:
+        json.loads(text)
+    except ValueError:
+        return True
+    return False
+
+
 def _sonic_collect_bgp_session_up(rt, lab, node, req: "ObservationRequest") -> "Observation":
     """REQ-45D-8: one declared neighbor's session state from the BGP summary."""
     neighbor = str(req.params.get("neighbor") or "").strip()
@@ -1527,6 +1545,9 @@ def _sonic_collect_bgp_session_up(rt, lab, node, req: "ObservationRequest") -> "
                 last_error = str(reset) if reset else ""
             else:
                 last_error = parse_error = "state not present for neighbor"
+    # S1D2-S9-R2: output that is not JSON is no answer (probe_ok False).
+    if _output_is_not_json(out):
+        probe_ok = False
     return Observation(
         kind="bgp_session_up",
         data={"peer_present": peer_present, "state": state, "last_error": last_error},
@@ -1556,6 +1577,9 @@ def _sonic_collect_bgp_neighbor(rt, lab, node, req: "ObservationRequest") -> "Ob
                 observed = "up" if state.lower() == "established" else "down"
             else:
                 parse_error = "state not present for neighbor"
+    # S1D2-S9-R2: output that is not JSON is no answer (probe_ok False).
+    if _output_is_not_json(out):
+        probe_ok = False
     return Observation(
         kind="bgp_neighbor",
         data={"observed": observed, "state": state},
@@ -1619,6 +1643,9 @@ def _sonic_collect_bgp_localpref_equals(rt, lab, node, req: "ObservationRequest"
         observed = _int_or_none(path.get("locPrf"))
         if observed is None:
             parse_error = "localpref not present in bgp json"
+    # S1D2-S9-R2: output that is not JSON is no answer (probe_ok False).
+    if _output_is_not_json(out):
+        probe_ok = False
     return Observation(
         kind="bgp_localpref_equals",
         data={"norm_prefix": prefix, "observed_localpref": observed},
@@ -1640,6 +1667,9 @@ def _sonic_collect_bgp_med_equals(rt, lab, node, req: "ObservationRequest") -> "
         observed = _int_or_none(path.get("metric"))
         if observed is None:
             parse_error = "med not present in bgp json"
+    # S1D2-S9-R2: output that is not JSON is no answer (probe_ok False).
+    if _output_is_not_json(out):
+        probe_ok = False
     return Observation(
         kind="bgp_med_equals",
         data={"norm_prefix": prefix, "observed_med": observed},
@@ -1668,6 +1698,9 @@ def _sonic_collect_bgp_community(rt, lab, node, req: "ObservationRequest") -> "O
             tokens = [str(t) for t in comm["list"]]
         elif comm is not None:
             parse_error = "community not readable in bgp json"
+    # S1D2-S9-R2: output that is not JSON is no answer (probe_ok False).
+    if _output_is_not_json(out):
+        probe_ok = False
     return Observation(
         kind="bgp_community",
         data={
@@ -1697,6 +1730,9 @@ def _sonic_collect_bgp_as_path(rt, lab, node, req: "ObservationRequest") -> "Obs
             observed = " ".join(text.split())
         else:
             parse_error = "as path not present in bgp json"
+    # S1D2-S9-R2: output that is not JSON is no answer (probe_ok False).
+    if _output_is_not_json(out):
+        probe_ok = False
     return Observation(
         kind="bgp_as_path",
         data={"norm_prefix": prefix, "route_present": path is not None, "observed_as_path": observed},
@@ -1772,6 +1808,9 @@ def _sonic_collect_advertised_routes(rt, lab, node, req: "ObservationRequest") -
     rc, out = _sonic_read(rt, lab, node, _advertised_argv(peer_ip))
     probe_ok = (rc == 0)
     advertised, parse_error = _advertised_prefixes(out)
+    # S1D2-S9-R2: output that is not JSON is no answer (probe_ok False).
+    if _output_is_not_json(out):
+        probe_ok = False
     return Observation(
         kind=req.kind,
         data={"norm_prefix": prefix, "present": prefix in advertised, "advertised_prefixes": advertised},

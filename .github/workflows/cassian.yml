@@ -311,6 +311,27 @@ jobs:
           set -euo pipefail
           python tests/vm_runtime_validate_rejection_proof.py
 
+      # Stage-1 gap item (d)(2) WI-9 (handover v9-rev3 section 14.1 and section 14.2 WI-9; REQ-S1D2-29;
+      # PBR-11 with SLD-21): the capability-catalogue proofs HS-1 to HS-6. Step A runs HS-1 and HS-3
+      # under 3.10, 3.11 and 3.12; step B runs HS-2, HS-4, HS-5 and HS-6 on the pinned interpreter. Both
+      # are keyed, so a red step above them does not skip them. Additions only.
+      - name: Capability catalogue drift and parameter proofs, interpreter matrix (checks_catalogue_drift_proof.py, checks_param_conformance_proof.py)
+        if: success() || failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          for v in 3.10 3.11 3.12; do "python$v" tests/checks_catalogue_drift_proof.py; "python$v" tests/checks_param_conformance_proof.py; done
+
+      - name: Capability catalogue coherence, command-surface, read-only and CLI-surface proofs (checks_catalogue_coherence_proof.py, checks_command_surface_proof.py, checks_readonly_ai_free_proof.py, cli_surface_preservation_proof.py)
+        if: success() || failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/checks_catalogue_coherence_proof.py
+          python tests/checks_command_surface_proof.py
+          python tests/checks_readonly_ai_free_proof.py
+          python tests/cli_surface_preservation_proof.py
+
       - name: Project gate (up -> test -> down)
         shell: bash
         run: |
@@ -816,6 +837,32 @@ jobs:
         run: |
           set -euo pipefail
           python tests/frr_address_step_window_proof.py
+
+      # Stage-1 gap item (d)(2) WI-13 (founder rulings of 2026-10-27: D1 to D8 and the D3
+      # amendment (a); F-S1D2-C3-5): a dataplane probe that cannot run is never read as the
+      # network's answer. Lab-free legs, then a Docker leg that runs the probe preconditions in
+      # throwaway containers of the frr, host and nft-fw images. Additions only.
+      - name: probe-unusable verdict proof — probe_unusable_verdict_proof.py (Stage-1 (d)(2) WI-13, HS-7, PO-30)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/probe_unusable_verdict_proof.py
+
+      # Stage-1 gap item (d)(2) WI-15 script 2 (founder rulings S1D2-S18-R1 to -R5, rulings note 31;
+      # S1D2-S9-R1 to -R6): on every check and node type the catalogue marks implemented, on the test
+      # path and in scenario wait_for, a read that produced no answer fails whatever expect says, and an
+      # answer keeps its verdict. Lab-free; its mutant legs show the sweep can fail. Additions only.
+      - name: unusable-read sweep proof — unusable_read_sweep_proof.py (Stage-1 (d)(2) WI-15, HS-8, PO-32)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/unusable_read_sweep_proof.py
 
       # §4.5-d VM-1 -- scope §9 row 15: one fixture, one boot, one declared FRR<->SONiC
       # session carrying REQ-45D-8 first, then -1, -16 and -19 (S29-R5), and the two
