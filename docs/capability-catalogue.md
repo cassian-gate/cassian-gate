@@ -64,6 +64,8 @@ Every key is always present, with `null` where a value does not apply, so each k
 | `forbidden_if` | The listed parameters must not be given when the condition in `when` holds |
 | `required_iff` | The listed parameters are required when the condition in `when` holds, and must not be given when it does not |
 
+**Rules that depend on the topology.** The parameter lists state per-key rules: rules about a check's own keys, each on its own (`params`) and taken together (`constraints`). `cassian validate` also applies rules that depend on the rest of the topology, which a parameter list cannot state. One of them is the multi-hop guardrail. A `ping` test with `expect: pass` is refused when its `dst` is not the name of a node linked directly to its `src`; an IP address given as `dst` names no node, so that test is refused too. The refusal does not apply when the topology has at least one `frr` node and every `frr` node declares `frr_mode: preconfigured`. The guardrail reads the `dst` key as written, so a test that gives the address as `to` or `to_ip` is not checked by it. `topology-schema-v1.md` describes the guardrail under "Multi-hop Guardrail".
+
 **Value-type tokens.** The vocabulary is closed.
 
 | Token | Means |
