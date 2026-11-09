@@ -2160,6 +2160,53 @@ def _compile_frr_as_path_regex(pattern):
     return re.compile(translated)
 
 
+builtin_invariant_packs = {
+    "datacenter-bgp-safety": {
+        "pack_id": "datacenter-bgp-safety",
+        "invariants": [
+            {
+                "name": "leaf1_evpn_session_to_spine1_up",
+                "kind": "invariant",
+                "type": "evpn_bgp_session_up",
+                "node": "leaf1",
+                "peer": "spine1",
+                "expect": "pass",
+            },
+            {
+                "name": "leaf2_evpn_session_to_spine1_up",
+                "kind": "invariant",
+                "type": "evpn_bgp_session_up",
+                "node": "leaf2",
+                "peer": "spine1",
+                "expect": "pass",
+            },
+        ],
+    },
+    "pack_incompatible_fixture": {
+        "pack_id": "pack_incompatible_fixture",
+        "invariants": [
+            {
+                "name": "invalid_pack_entry",
+                "kind": "invariant",
+                "type": "not_a_supported_invariant_type",
+                "node": "leaf1",
+                "expect": "pass",
+            }
+        ],
+    },
+}
+
+supported_pack_invariant_types = {
+    "evpn_bgp_session_up",
+    "evpn_mac_route_present",
+    "evpn_mac_route_absent",
+    "evpn_vni_route_present",
+    "bgp_localpref_equals",
+    "route_advertised_to",
+    "route_not_advertised_to",
+}
+
+
 def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
     """
     Return a copy of topo with missing link IPv4 addresses allocated.
@@ -2500,52 +2547,6 @@ def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
     packs = resolved.get("packs", []) or []
     if not isinstance(packs, list):
         die("packs: must be a list")
-
-    builtin_invariant_packs = {
-        "datacenter-bgp-safety": {
-            "pack_id": "datacenter-bgp-safety",
-            "invariants": [
-                {
-                    "name": "leaf1_evpn_session_to_spine1_up",
-                    "kind": "invariant",
-                    "type": "evpn_bgp_session_up",
-                    "node": "leaf1",
-                    "peer": "spine1",
-                    "expect": "pass",
-                },
-                {
-                    "name": "leaf2_evpn_session_to_spine1_up",
-                    "kind": "invariant",
-                    "type": "evpn_bgp_session_up",
-                    "node": "leaf2",
-                    "peer": "spine1",
-                    "expect": "pass",
-                },
-            ],
-        },
-        "pack_incompatible_fixture": {
-            "pack_id": "pack_incompatible_fixture",
-            "invariants": [
-                {
-                    "name": "invalid_pack_entry",
-                    "kind": "invariant",
-                    "type": "not_a_supported_invariant_type",
-                    "node": "leaf1",
-                    "expect": "pass",
-                }
-            ],
-        },
-    }
-
-    supported_pack_invariant_types = {
-        "evpn_bgp_session_up",
-        "evpn_mac_route_present",
-        "evpn_mac_route_absent",
-        "evpn_vni_route_present",
-        "bgp_localpref_equals",
-        "route_advertised_to",
-        "route_not_advertised_to",
-    }
 
     expanded_pack_tests = []
     for i, pack_name in enumerate(packs, start=1):
@@ -2926,6 +2927,16 @@ def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
                 if not isinstance(peer, str) or not peer.strip():
                     die(f"{ctx}: evpn_bgp_session_up requires non-empty 'peer'")
                 t["peer"] = peer.strip()
+                if t["peer"] not in nodes_by_name:
+                    die(
+                        f"{ctx}: invariant 'evpn_bgp_session_up' references unknown 'peer' value "
+                        f"{t['peer']!r} (node not declared in topology 'nodes:' section)"
+                    )
+                if t["peer"] == src.strip():
+                    die(
+                        f"{ctx}: invariant 'evpn_bgp_session_up' 'peer' value "
+                        f"{t['peer']!r} is the test's own 'node' (an EVPN session needs a different node)"
+                    )
 
             elif inv_type == "ospf_neighbor_up":
                 # H4: OSPF neighbor-state invariant (FRR-only NOS-tag).
@@ -3224,6 +3235,32 @@ def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
             if exp_s not in ("pass", "fail"):
                 die(f"{ctx}: route_prefix.expect must be pass|fail if provided")
             t["expect"] = exp_s
+
+        # Stage-1 gap item (d)(2) WI-12 (founder ruling R2.2, 2026-10-27; F-S1D2-C3-2):
+        # ping, tcp, bgp_neighbor and exec read 'expect' at run and treat any value other
+        # than pass/fail as pass, so a mistyped must-not test would run as a must-reach
+        # test. Reject it here, in the form of the invariant and route_prefix rules: the
+        # value is trimmed and lower-cased; an accepted value is written back normalized
+        # (visible in topology.resolved.yaml); an absent or null 'expect' is left as it is.
+        if (t.get("kind") or "").strip() in ("ping", "tcp", "bgp_neighbor", "exec"):
+            _wi12_exp = t.get("expect")
+            if _wi12_exp is not None:
+                _wi12_exp_s = str(_wi12_exp).strip().lower()
+                if _wi12_exp_s not in ("pass", "fail"):
+                    die(
+                        f"tests[{i}] ({t.get('name', '<unnamed>')}): "
+                        f"{t.get('kind')}.expect must be pass|fail if provided (got {_wi12_exp!r})"
+                    )
+                t["expect"] = _wi12_exp_s
+
+        # WI-12 (F-S1D2-C3-4): the run reads bool(listener), so a quoted "false" would start
+        # Cassian's own listener and a check of a real service could pass with it down.
+        if (t.get("kind") or "").strip() == "tcp" and "listener" in t:
+            if not isinstance(t.get("listener"), bool):
+                die(
+                    f"tests[{i}] ({t.get('name', '<unnamed>')}): "
+                    f"tcp.listener must be true|false if provided (got {t.get('listener')!r})"
+                )
 
         # ----------------------------
         # v1: normalize test field aliases

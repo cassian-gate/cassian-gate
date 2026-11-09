@@ -71,7 +71,7 @@ FOUR_VALUE_VOCABULARY = ("section", "item", "section-narrative", "N/A-DIM")
 
 # Core modules the extraction was scoped over (provider + leaf are NOT core).
 CORE_MODULES = ["cassian.py", "cassian_ai.py", "cassian_artifacts.py",
-                "cassian_candidate.py", "cassian_cli.py", "cassian_common.py",
+                "cassian_candidate.py", "cassian_catalogue.py", "cassian_cli.py", "cassian_common.py",
                 "cassian_engine.py", "cassian_import.py", "cassian_model.py",
                 "cassian_runtime_container.py", "cassian_runtime_vm.py",
                 "cassian_state.py", "cassian_tests.py", "cassian_two_run.py"]

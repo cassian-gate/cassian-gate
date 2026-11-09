@@ -52,6 +52,8 @@ The two `verdict: fail` rows (`expect: pass` over a failing predicate, and `expe
 
 A structural evaluation error (missing field, probe failure, unparseable output, or unsupported type) forces `verdict: fail` regardless of `expect:` — including `expect: fail` — so an error path never satisfies a negative test; only a genuinely-failing predicate satisfies `expect: fail`.
 
+**In a scenario `wait_for` step.** For the invariant-derived condition types `bgp_session_up`, `route_present`, `route_advertised_to`, `evpn_bgp_session_up`, `evpn_vni_route_present` and `evpn_mac_route_present`, a read that gives no answer (the command exits non-zero, or its output is not in the reader's format, empty output included for a JSON reader) fails the step whatever `expect:` says: `wait_for <type>: collection failed on '<node>': <reason>`. An answer, an empty table included, is polled as before.
+
 ---
 
 ## 2) Supported Invariant Types

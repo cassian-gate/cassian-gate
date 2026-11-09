@@ -366,6 +366,33 @@ Read-only environment readiness checks. Reports gate-critical dependencies (dock
 
 A missing advisory prerequisite is reported but does not by itself fail the command; gate-critical failures (docker / containerlab absent) do.
 
+## 9) Capability catalogue
+
+### `cassian checks [--json]`
+
+**Purpose:** Print the catalogue of what this release of Cassian Gate can check: each check with its parameters and its status on each node type, the profiles that ship, and the effects of each command.
+
+Flags:
+
+* `--json`  
+  Emit the whole catalogue as JSON on standard output.
+
+* `-h, --help`  
+  Show this command's help and exit.
+
+Exit codes:
+
+* `0`  
+  The catalogue was printed.
+
+* `1`  
+  The catalogue could not be built because the code is internally inconsistent; nothing is written to standard output. This is a defect in Cassian Gate, not in your input.
+
+* `2`  
+  Usage error: an unknown option, or any argument.
+
+See [Capability Catalogue](capability-catalogue.md) for the shape, the status values and the effect labels.
+
 ---
 
 **End of Cassian Gate v1 CLI Reference**

@@ -3730,6 +3730,158 @@ class _PrecheckRecord:
         self.summary["failure"] = self._failure
         self.timing["duration_ms"] = int(round((now - self._t0) * 1000))
 
+# Stage-1 gap item (d)(2) WI-13 (F-S1D2-C3-5). A dataplane probe (ping, nc) that cannot run
+# exits non-zero exactly like one the network answered "no", so on a must-not test the run
+# read a broken probe as "unreachable" and passed. Measured 2026-10-27 on the images Cassian
+# runs: busybox ping and nc exit 1 for every failure; iputils ping exits 2 for "no route" and
+# for a bad -I argument alike; docker exec into a missing container exits 1; ssh that cannot
+# connect exits 255. The exit status alone cannot tell them apart, so the probe's own
+# preconditions are checked first, and an exit status outside the tool's range, or a node that
+# stopped, is never read as the network's answer. Verdict fail regardless of expect.
+_PROBE_EXIT_CODES = {"ping": (0, 1, 2), "nc": (0, 1)}
+
+
+def _probe_addrs(text: str) -> set:
+    out = set()
+    for line in (text or "").splitlines():
+        parts = line.split()
+        for k in range(len(parts) - 1):
+            if parts[k] in ("inet", "inet6"):
+                try:
+                    out.add(ipaddress.ip_address(parts[k + 1].split("/", 1)[0]))
+                except ValueError:
+                    pass
+    return out
+
+
+def _probe_last_stderr(cp) -> str:
+    """': <last non-empty stderr line>', or ''. The last line, not the first: on a sonic-vm node
+    the ssh transport writes its own lines (known-hosts warning, login banner) before the
+    command's, so the first line is never the tool's (measured 2026-10-27)."""
+    lines = [ln.strip() for ln in (getattr(cp, "stderr", "") or "").splitlines() if ln.strip()]
+    return f": {lines[-1]}" if lines else ""
+
+
+def _probe_unusable(rt, lab: str, node: str, tool: str, *, src_if=None, src_ip=None):
+    """Why a `tool` probe on `node` cannot be trusted to report "unreachable", or None."""
+    try:
+        if not rt.is_running(lab, node):
+            return f"node {node!r} is not running"
+    except Exception as e:
+        return f"cannot tell whether node {node!r} is running ({e})"
+    cp = rt.exec(lab, node, ["sh", "-c", f"command -v {tool}"], check=False)
+    rc = getattr(cp, "returncode", None)
+    if rc in (1, 127):
+        return f"{tool} is not available on node {node!r}"
+    if rc != 0:
+        return f"cannot run a command on node {node!r} (exited {rc}{_probe_last_stderr(cp)})"
+    if src_if:
+        name = str(src_if).strip()
+        cp = rt.exec(lab, node, ["ip", "link", "show", "dev", name], check=False)
+        if getattr(cp, "returncode", 1) != 0:
+            return f"src_if {name!r} is not an interface of node {node!r}"
+    if src_ip:
+        want = ipaddress.ip_address(str(src_ip).strip())
+        cp = rt.exec(lab, node, ["ip", "-o", "addr", "show"], check=False)
+        if getattr(cp, "returncode", 1) != 0 or want not in _probe_addrs(getattr(cp, "stdout", "")):
+            return f"src_ip {str(want)!r} is not an address of node {node!r}"
+    return None
+
+
+def _probe_exit_unexplained(rt, lab: str, node: str, tool: str, cp):
+    """After a non-zero probe: why that exit is not the network's answer, or None."""
+    rc = getattr(cp, "returncode", None)
+    if rc not in _PROBE_EXIT_CODES[tool]:
+        _last = _probe_last_stderr(cp)
+        return f"{tool} exited {rc}" + (f" ({_last[2:]})" if _last else "")
+    try:
+        if not rt.is_running(lab, node):
+            return f"node {node!r} stopped during the probe"
+    except Exception as e:
+        return f"cannot tell whether node {node!r} is running ({e})"
+    return None
+
+
+def _probe_declared_addrs(topo, node: str) -> set:
+    """S1D2-S25-R1 (WI-16): the addresses the topology declares for `node` -- its link ipv4
+    entries, its `interfaces` values, its `ip` and its `router_id`."""
+    out = set()
+
+    def _add(value):
+        if isinstance(value, str) and value.strip():
+            try:
+                out.add(ipaddress.ip_interface(value.strip()).ip)
+            except ValueError:
+                pass
+
+    for link in (topo or {}).get("links") or []:
+        eps, ips = link.get("endpoints") or [], link.get("ipv4") or []
+        for k, ep in enumerate(eps):
+            if isinstance(ep, str) and ep.split(":", 1)[0] == node and k < len(ips):
+                _add(ips[k])
+    for n in (topo or {}).get("nodes") or []:
+        if isinstance(n, dict) and n.get("name") == node:
+            intfs = n.get("interfaces")
+            for value in (list(intfs.values()) if isinstance(intfs, dict) else []) + [n.get("ip"), n.get("router_id")]:
+                _add(value)
+    return out
+
+
+def _probe_egress_unusable(rt, lab: str, node: str, dst_ip, topo, *, src_if=None, src_ip=None):
+    """S1D2-S25-R1 to -R3 and -R8 (WI-16, F-S1D2-C3-8): after an answered expect: pass probe, why the
+    answer did not come through the lab, or None when it did.
+
+    The source's route to dst_ip (`ip route get`, with `from <src_ip>` or `oif <src_if>` when
+    declared) must be a local route to an address the topology declares for the source, or leave
+    through an interface that carries such an address (`ip -4 -o addr show dev <dev>`). A read
+    that gives no answer makes the probe unusable (S1D2-S2-R3).
+    """
+    declared = _probe_declared_addrs(topo, node)
+    argv = ["ip", "route", "get", str(dst_ip)]
+    if src_ip:
+        argv += ["from", str(src_ip).strip()]
+    elif src_if:
+        argv += ["oif", str(src_if).strip()]
+    try:
+        cp = rt.exec(lab, node, argv, check=False)
+    except Exception as e:  # noqa: BLE001 -- a read that raised gave no answer
+        return f"cannot read the route to {dst_ip} on node {node!r} ({e})"
+    if getattr(cp, "returncode", None) != 0:
+        return f"cannot read the route to {dst_ip} on node {node!r} (ip exited {getattr(cp, 'returncode', None)}{_probe_last_stderr(cp)})"
+    out = getattr(cp, "stdout", "") or ""
+    if re.search(r"(?m)^\s*local\s", out):
+        if ipaddress.ip_address(str(dst_ip)) in declared:
+            return None
+        return f"{dst_ip} is an address of node {node!r} that the topology does not declare"
+    m = re.search(r"(?:^|\s)dev\s+(\S+)", out)
+    if not m:
+        return f"cannot read the route to {dst_ip} on node {node!r} (no route in the output)"
+    dev = m.group(1)
+    try:
+        cp = rt.exec(lab, node, ["ip", "-4", "-o", "addr", "show", "dev", dev], check=False)
+    except Exception as e:  # noqa: BLE001 -- a read that raised gave no answer
+        return f"cannot read the addresses of {dev} on node {node!r} ({e})"
+    if getattr(cp, "returncode", None) != 0:
+        return f"cannot read the addresses of {dev} on node {node!r} (ip exited {getattr(cp, 'returncode', None)}{_probe_last_stderr(cp)})"
+    if _probe_addrs(getattr(cp, "stdout", "") or "") & declared:
+        return None
+    return f"route to {dst_ip} leaves node {node!r} through {dev}, which carries no address the topology declares for it"
+
+
+def _read_unusable(read_ok, evidence):
+    """S1D2-S9-R1 to -R3 (WI-15): why a read produced no answer, or None when it answered.
+
+    A provider sets probe_ok False when its read raised, exited outside its answer codes, or gave
+    output that is not in the reader's format (for a JSON reader, empty output included); the core
+    decides here, at each check and wait_for site that reads the flag. The reason is the provider's
+    parse_error, or "probe not ok" when it gives none: the text a collection-failure record quotes
+    (`<check> collection failed on '<node>': <reason>`) and the value of its `read_unusable` key.
+    """
+    if read_ok:
+        return None
+    return str((evidence or {}).get("parse_error") or "") or "probe not ok"
+
+
 def cmd_test(args: argparse.Namespace) -> None:
     """
     v1 update (Section C): Scenarios wired into cmd_test (minimal invasive).
@@ -5261,6 +5413,10 @@ def cmd_test(args: argparse.Namespace) -> None:
             extra_s = f" ({', '.join(extras)})" if extras else ""
             return f"ping mismatch: from={src} dst={dst_part} expected={expected_s} observed={observed_s}{extra_s}"
 
+        # S1D2-S25-R1/-R2 (WI-16, F-S1D2-C3-8): the last answered attempt's reason when its answer
+        # did not come through the lab; such an attempt is not a success, and the window goes on.
+        _egress = [None]
+
         def attempt():
             ping_cmd = ["ping", "-c", str(count), "-W", str(per_attempt_timeout_s)]
             if src_ip:
@@ -5275,21 +5431,42 @@ def cmd_test(args: argparse.Namespace) -> None:
                 ping_cmd,
                 check=False,
             )
+            if cp.returncode == 0 and expected == "pass":
+                _egress[0] = _probe_egress_unusable(rt, lab, src, dst_ip, topo, src_if=src_if, src_ip=src_ip)
+                if _egress[0] is not None:
+                    return False, cp
             return (cp.returncode == 0), cp
 
-        if expected == "fail":
+        # WI-13 (F-S1D2-C3-5): a probe that cannot run is not the network's answer.
+        _unusable = _probe_unusable(rt, lab, src, "ping", src_if=src_if, src_ip=src_ip)
+        if _unusable is not None:
+            ok, last_cp, attempts, dur_ms = False, None, 0, 0
+        elif expected == "fail":
             # v1 gate semantics: expected fail is fail-fast (single attempt)
             ok, last_cp = attempt()
             attempts = 1
             dur_ms = 0
         else:
             ok, last_cp, attempts, dur_ms = retry_until(retry_timeout_s, retry_interval_s, attempt)
+        if _unusable is None and not ok:
+            _unusable = _probe_exit_unexplained(rt, lab, src, "ping", last_cp)
+        _from_outside = _unusable is None and not ok and _egress[0] is not None
+        if _from_outside:
+            _unusable = _egress[0]
+        # S1D2-S25-R3, -R8: a reply whose route read gave no answer has its own ending.
+        _end = ("an answer whose route cannot be read" if _from_outside and _unusable.startswith("cannot read ")
+                else "an answer from outside the lab")
 
         observed = "pass" if ok else "fail"
         should_succeed = (expected == "pass")
-        verdict = "pass" if (ok == should_succeed) else "fail"
+        verdict = "pass" if (ok == should_succeed and _unusable is None) else "fail"
 
-        err = "" if verdict == "pass" else _format_ping_ctx(expected_s=expected, observed_s=observed)
+        if _from_outside:
+            err = f"ping probe unusable on {src}: {_unusable}; {_end} is never read as reachable"
+        elif _unusable is not None:
+            err = f"ping probe unusable on {src}: {_unusable}; never read as unreachable"
+        else:
+            err = "" if verdict == "pass" else _format_ping_ctx(expected_s=expected, observed_s=observed)
 
         rec = {
             "name": test_name,
@@ -5329,6 +5506,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 "src_ip": (str(src_ip).strip() if src_ip else ""),
                 "src_if": (str(src_if).strip() if src_if else ""),
                 "dst_ip": str(dst_ip),
+                **({"read_unusable": _unusable} if _unusable is not None else {}),
             },
             duration_ms=rec["duration_ms"],
             error=rec["error"],
@@ -5367,21 +5545,41 @@ def cmd_test(args: argparse.Namespace) -> None:
         timeout_s = int(t.get("timeout_s") or (10 if expected == "pass" else 0))
         interval_s = float(t.get("retry_interval_s") or 1.0)
 
+        # S1D2-S25-R1/-R2 (WI-16, F-S1D2-C3-8): the last answered attempt's reason when its answer
+        # did not come through the lab; such an attempt is not a success, and the window goes on.
+        _egress = [None]
+
         def attempt():
             cp = rt.exec(lab, src, ["sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"], check=False)
+            if cp.returncode == 0 and expected == "pass":
+                _egress[0] = _probe_egress_unusable(rt, lab, src, dst_ip, topo)
+                if _egress[0] is not None:
+                    return False, cp
             return (cp.returncode == 0), cp
 
         start = time.time()
-        if expected == "pass" and timeout_s > 0:
+        # WI-13 (F-S1D2-C3-5): a probe that cannot run is not the network's answer.
+        _unusable = _probe_unusable(rt, lab, src, "nc")
+        if _unusable is not None:
+            ok, last_cp, attempts, dur_ms = False, None, 0, 0
+        elif expected == "pass" and timeout_s > 0:
             ok, last_cp, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
         else:
-            cp = rt.exec(lab, src, ["sh", "-lc", f"nc -z -w 2 {dst_ip} {port}"], check=False)
-            ok, last_cp, attempts = (cp.returncode == 0), cp, 1
+            ok, last_cp = attempt()
+            attempts = 1
             dur_ms = int((time.time() - start) * 1000)
+        if _unusable is None and not ok:
+            _unusable = _probe_exit_unexplained(rt, lab, src, "nc", last_cp)
+        _from_outside = _unusable is None and not ok and _egress[0] is not None
+        if _from_outside:
+            _unusable = _egress[0]
+        # S1D2-S25-R3, -R8: a reply whose route read gave no answer has its own ending.
+        _end = ("an answer whose route cannot be read" if _from_outside and _unusable.startswith("cannot read ")
+                else "an answer from outside the lab")
 
         observed = "pass" if ok else "fail"
         should_succeed = (expected == "pass")
-        verdict = "pass" if (ok == should_succeed) else "fail"
+        verdict = "pass" if (ok == should_succeed and _unusable is None) else "fail"
 
         record_fn(
             name=test_name,
@@ -5391,9 +5589,12 @@ def cmd_test(args: argparse.Namespace) -> None:
             expected=expected,
             observed=observed,
             verdict=verdict,
-            evidence={"cmd": "nc -z"},
+            evidence={"cmd": "nc -z", **({"read_unusable": _unusable} if _unusable is not None else {})},
             duration_ms=dur_ms,
-            error="" if verdict == "pass" else f"tcp mismatch (expected {expected}, observed {observed})",
+            error=(f"tcp probe unusable on {src}: {_unusable}; {_end} is never read as reachable"
+                   if _from_outside
+                   else f"tcp probe unusable on {src}: {_unusable}; never read as unreachable" if _unusable is not None
+                   else ("" if verdict == "pass" else f"tcp mismatch (expected {expected}, observed {observed})")),
             meta={
                 "dst_ip": dst_ip,
                 "port": int(port),
@@ -5478,6 +5679,8 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         if not _ev.get("probe_ok"):
             dur_ms = int((time.time() - start) * 1000)
+            # S1D2-S14-R2 (WI-15): the shared helper names the unanswered read in the evidence.
+            evidence["read_unusable"] = _read_unusable(_ev.get("probe_ok"), _ev)
             record_fn(
                 name=test_name,
                 kind="route_prefix",
@@ -5605,6 +5808,15 @@ def cmd_test(args: argparse.Namespace) -> None:
             "parse_error": parse_error,
         }
 
+        # S1D2-S9-R1 to -R3, S1D2-S14-R3 (WI-15, F-S1D2-C3-11; rulings note 4 ruling 2): the retry loop
+        # above is kept; a last read that produced no answer (vtysh exited non-zero, or its output is
+        # not JSON) fails whatever expect says and is never read as "down". "No BGP instance" and a
+        # neighbour absent from the summary are answers, judged as before.
+        _unusable = _read_unusable(last_obs.evidence.get("probe_ok"), last_obs.evidence)
+        if _unusable is not None:
+            verdict = "fail"
+            evidence["read_unusable"] = _unusable
+
         record_fn(
             name=test_name,
             kind="bgp_neighbor",
@@ -5614,7 +5826,8 @@ def cmd_test(args: argparse.Namespace) -> None:
             observed=observed,
             verdict=verdict,
             duration_ms=int(dur_ms),
-            error="" if verdict == "pass" else f"bgp neighbor mismatch (expected {expected}, observed {observed})",
+            error=(f"bgp_neighbor collection failed on '{src}': {_unusable}" if _unusable is not None
+                   else ("" if verdict == "pass" else f"bgp neighbor mismatch (expected {expected}, observed {observed})")),
             meta=meta,
             evidence=evidence,
         )
@@ -6445,6 +6658,31 @@ def cmd_test(args: argparse.Namespace) -> None:
                 )
                 raise SystemExit(2)
 
+            # S1D2-S9-R1 to -R3, S1D2-S13-R1, -R2, S1D2-S17-R1 (WI-15 script 1b-ii): a read that produced no answer (the read
+            # raised, exited outside its answer codes, or its output is not in the reader's format, empty output
+            # included for a JSON reader) fails whatever expect says, where the site has not already stopped on it
+            # above: no observed_state, so the summary renders the absence block. An answer is judged below as before.
+            _unusable = _read_unusable(_vtysh_ok, last_evidence)
+            if _unusable is not None:
+                _cf_evidence = {"cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn summary json'", "rc": rc}
+                if str(last_evidence.get("parse_error") or ""):
+                    _cf_evidence["parse_error"] = str(last_evidence.get("parse_error") or "")
+                _cf_evidence["read_unusable"] = _unusable
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    error=f"{inv_type} collection failed on '{src}': {_unusable}",
+                    duration_ms=int((time.time() - start) * 1000),
+                    evidence=_cf_evidence,
+                    meta={"type": inv_type, "peer": peer},
+                )
+                return "fail"
+
             observed = "pass" if present else "fail"
             verdict = "pass" if observed == expected else "fail"
 
@@ -6712,6 +6950,8 @@ def cmd_test(args: argparse.Namespace) -> None:
                 }
                 if _parse_error:
                     _cf_evidence["parse_error"] = _parse_error
+                # S1D2-S14-R2 (WI-15): the shared helper names the unanswered read in the evidence.
+                _cf_evidence["read_unusable"] = _read_unusable(_vtysh_ok, last_evidence)
                 record_fn(
                     name=test_name,
                     kind="invariant",
@@ -6960,6 +7200,31 @@ def cmd_test(args: argparse.Namespace) -> None:
                 )
                 raise SystemExit(2)
 
+            # S1D2-S9-R1 to -R3, S1D2-S13-R1, -R2, S1D2-S17-R1 (WI-15 script 1b-ii): a read that produced no answer (the read
+            # raised, exited outside its answer codes, or its output is not in the reader's format, empty output
+            # included for a JSON reader) fails whatever expect says, where the site has not already stopped on it
+            # above: no observed_state, so the summary renders the absence block. An answer is judged below as before.
+            _unusable = _read_unusable(_vtysh_ok, last_evidence)
+            if _unusable is not None:
+                _cf_evidence = {"cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp l2vpn evpn route json'", "rc": rc}
+                if str(last_evidence.get("parse_error") or ""):
+                    _cf_evidence["parse_error"] = str(last_evidence.get("parse_error") or "")
+                _cf_evidence["read_unusable"] = _unusable
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    error=f"{inv_type} collection failed on '{src}': {_unusable}",
+                    duration_ms=int((time.time() - start) * 1000),
+                    evidence=_cf_evidence,
+                    meta={"type": inv_type, "mac": mac, "vni": vni_i},
+                )
+                return "fail"
+
             dedup = {}
             for rec in evidence_entries:
                 sig = (
@@ -7195,6 +7460,31 @@ def cmd_test(args: argparse.Namespace) -> None:
                 )
                 raise SystemExit(2)
 
+            # S1D2-S9-R1 to -R3, S1D2-S13-R1, -R2, S1D2-S17-R1 (WI-15 script 1b-ii): a read that produced no answer (the read
+            # raised, exited outside its answer codes, or its output is not in the reader's format, empty output
+            # included for a JSON reader) fails whatever expect says, where the site has not already stopped on it
+            # above: no observed_state, so the summary renders the absence block. An answer is judged below as before.
+            _unusable = _read_unusable(_vtysh_ok, last_evidence)
+            if _unusable is not None:
+                _cf_evidence = {"cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp neighbor {peer_ips[0]} advertised-routes json'", "rc": rc}
+                if str(last_evidence.get("parse_error") or ""):
+                    _cf_evidence["parse_error"] = str(last_evidence.get("parse_error") or "")
+                _cf_evidence["read_unusable"] = _unusable
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=node,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    error=f"{inv_type} collection failed on '{node}': {_unusable}",
+                    duration_ms=int((time.time() - start) * 1000),
+                    evidence=_cf_evidence,
+                    meta={"type": inv_type, "prefix": prefix, "peer": peer},
+                )
+                return "fail"
+
             observed = "pass" if present else "fail"
             if inv_type == "route_not_advertised_to":
                 observed = "pass" if not present else "fail"
@@ -7362,6 +7652,8 @@ def cmd_test(args: argparse.Namespace) -> None:
             route_present = bool(last_state.get("route_present"))
             observed_communities = list(last_state.get("observed_communities") or [])
             empty_first_doc = bool(last_evidence.get("empty_first_doc"))
+            # S1D2-S16-R2 (WI-15 script 1b-i(ii)): the last attempt's read decides; a re-read below rebinds these.
+            _last_read_ok, _last_read_ev = _vtysh_ok, last_evidence
 
             if str(last_evidence.get("reason") or "") == "unsupported_provider_capability":
                 # BL-P2-4.5c-44: deny-by-default must not render as a negative
@@ -7421,6 +7713,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 _vtysh_ok2, _pred_ok2, last_state2, last_evidence2 = (
                     _evaluate_invariant_attempt(inv_type="bgp_community", t=t, src=node)
                 )
+                _last_read_ok, _last_read_ev = _vtysh_ok2, last_evidence2
                 if bool(last_state2.get("route_present")):
                     last_state = last_state2
                     last_evidence = last_evidence2
@@ -7428,6 +7721,33 @@ def cmd_test(args: argparse.Namespace) -> None:
                     parse_error = str(last_evidence.get("parse_error") or "")
                     route_present = bool(last_state.get("route_present"))
                     observed_communities = list(last_state.get("observed_communities") or [])
+
+            # S1D2-S9-R1 to -R3, S1D2-S14-R1, -R3, S1D2-S16-R1, -R2 (WI-15 script 1b-i(ii)): a last read that
+            # produced no answer (the read raised, exited outside its answer codes, or its output is not in the
+            # reader's format, empty output included for a JSON reader) fails whatever expect says, as
+            # route_present's collection-failure record does: no observed_state, so the summary renders the
+            # absence block. An answer is judged below as before.
+            _unusable = _read_unusable(_last_read_ok, _last_read_ev)
+            if _unusable is not None:
+                last_evidence = _last_read_ev  # S1D2-S16-R2: the decided read's evidence
+                _cf_evidence = {"cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'", "rc": last_evidence.get("rc")}
+                if str(last_evidence.get("parse_error") or ""):
+                    _cf_evidence["parse_error"] = str(last_evidence.get("parse_error") or "")
+                _cf_evidence["read_unusable"] = _unusable
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=node,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    error=f"{inv_type} collection failed on '{node}': {_unusable}",
+                    duration_ms=int((time.time() - start) * 1000),
+                    evidence=_cf_evidence,
+                    meta={"type": inv_type, "prefix": prefix},
+                )
+                return "fail"
 
             observed = _bgp_community_observed(exp_comm, match, observed_communities)
             verdict = "pass" if observed == expected else "fail"
@@ -7487,6 +7807,8 @@ def cmd_test(args: argparse.Namespace) -> None:
             route_present = bool(last_state.get("route_present"))
             observed_as_path = str(last_state.get("observed_as_path") or "")
             empty_first_doc = bool(last_evidence.get("empty_first_doc"))
+            # S1D2-S16-R2 (WI-15 script 1b-i(ii)): the last attempt's read decides; a re-read below rebinds these.
+            _last_read_ok, _last_read_ev = _vtysh_ok, last_evidence
 
             if str(last_evidence.get("reason") or "") == "unsupported_provider_capability":
                 # BL-P2-4.5c-44: deny-by-default must not render as a negative
@@ -7546,6 +7868,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 _vtysh_ok2, _pred_ok2, last_state2, last_evidence2 = (
                     _evaluate_invariant_attempt(inv_type="bgp_as_path", t=t, src=node)
                 )
+                _last_read_ok, _last_read_ev = _vtysh_ok2, last_evidence2
                 if bool(last_state2.get("route_present")):
                     last_state = last_state2
                     last_evidence = last_evidence2
@@ -7553,6 +7876,33 @@ def cmd_test(args: argparse.Namespace) -> None:
                     parse_error = str(last_evidence.get("parse_error") or "")
                     route_present = bool(last_state.get("route_present"))
                     observed_as_path = str(last_state.get("observed_as_path") or "")
+
+            # S1D2-S9-R1 to -R3, S1D2-S14-R1, -R3, S1D2-S16-R1, -R2 (WI-15 script 1b-i(ii)): a last read that
+            # produced no answer (the read raised, exited outside its answer codes, or its output is not in the
+            # reader's format, empty output included for a JSON reader) fails whatever expect says, as
+            # route_present's collection-failure record does: no observed_state, so the summary renders the
+            # absence block. An answer is judged below as before.
+            _unusable = _read_unusable(_last_read_ok, _last_read_ev)
+            if _unusable is not None:
+                last_evidence = _last_read_ev  # S1D2-S16-R2: the decided read's evidence
+                _cf_evidence = {"cmd": last_evidence.get("cmd") or f"vtysh -c 'show ip bgp {prefix} json'", "rc": last_evidence.get("rc")}
+                if str(last_evidence.get("parse_error") or ""):
+                    _cf_evidence["parse_error"] = str(last_evidence.get("parse_error") or "")
+                _cf_evidence["read_unusable"] = _unusable
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=node,
+                    dst="",
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    error=f"{inv_type} collection failed on '{node}': {_unusable}",
+                    duration_ms=int((time.time() - start) * 1000),
+                    evidence=_cf_evidence,
+                    meta={"type": inv_type, "prefix": prefix},
+                )
+                return "fail"
 
             observed = _bgp_as_path_observed(as_path_pat, observed_as_path) if route_present else "fail"
             verdict = "pass" if observed == expected else "fail"
@@ -7719,6 +8069,32 @@ def cmd_test(args: argparse.Namespace) -> None:
                 )
                 raise SystemExit(2)
 
+            # S1D2-S9-R1 to -R3, S1D2-S14-R1, -R3, S1D2-S16-R1, -R2 (WI-15 script 1b-i(ii)): a last read that
+            # produced no answer (the read raised, exited outside its answer codes, or its output is not in the
+            # reader's format, empty output included for a JSON reader) fails whatever expect says, as
+            # route_present's collection-failure record does: no observed_state, so the summary renders the
+            # absence block. An answer is judged below as before.
+            _unusable = _read_unusable(ok, last_evidence)
+            if _unusable is not None:
+                _cf_evidence = {"cmd": last_evidence.get("cmd") or "vtysh -c 'show bgp summary json'", "rc": last_evidence.get("returncode")}
+                if str(last_evidence.get("parse_error") or ""):
+                    _cf_evidence["parse_error"] = str(last_evidence.get("parse_error") or "")
+                _cf_evidence["read_unusable"] = _unusable
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst=neighbor,
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    error=f"{inv_type} collection failed on '{src}': {_unusable}",
+                    duration_ms=int(dur_ms),
+                    evidence=_cf_evidence,
+                    meta={"type": inv_type, "neighbor": neighbor, "attempts": int(attempts), "timeout_s": int(timeout_s), "last_rc": last_evidence.get("returncode")},
+                )
+                return "fail"
+
             observed_state_str = str(last_state.get("state") or "Unknown")
             last_error = str(last_state.get("last_error") or "")
             parse_error = str(last_evidence.get("parse_error") or "")
@@ -7868,14 +8244,16 @@ def cmd_test(args: argparse.Namespace) -> None:
                 # Drive retry on the predicate (state == expected), not on
                 # vtysh-success alone: NotConfigured with vtysh-success is
                 # not yet a pass.
-                return _predicate_ok, (attempt_state, attempt_evidence)
+                # S1D2-S14-R3 (WI-15 script 1b-i(ii)): the loop still retries on the predicate; the read
+                # flag travels with the attempt's state so the last attempt's read is decided after it.
+                return _predicate_ok, (attempt_state, attempt_evidence, _vtysh_ok)
 
             if expected == "pass" and timeout_s > 0:
                 ok, last_payload, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
-                last_state, last_evidence = last_payload
+                last_state, last_evidence, _last_read_ok = last_payload
             else:
                 ok_a, payload_a = attempt()
-                last_state, last_evidence = payload_a
+                last_state, last_evidence, _last_read_ok = payload_a
                 attempts = 1
                 dur_ms = int((time.time() - start) * 1000)
                 ok = ok_a
@@ -7909,6 +8287,32 @@ def cmd_test(args: argparse.Namespace) -> None:
                     },
                 )
                 raise SystemExit(2)
+
+            # S1D2-S9-R1 to -R3, S1D2-S14-R1, -R3, S1D2-S16-R1, -R2 (WI-15 script 1b-i(ii)): a last read that
+            # produced no answer (the read raised, exited outside its answer codes, or its output is not in the
+            # reader's format, empty output included for a JSON reader) fails whatever expect says, as
+            # route_present's collection-failure record does: no observed_state, so the summary renders the
+            # absence block. An answer is judged below as before.
+            _unusable = _read_unusable(_last_read_ok, last_evidence)
+            if _unusable is not None:
+                _cf_evidence = {"cmd": last_evidence.get("cmd") or "vtysh -c 'show ip ospf neighbor json'", "rc": last_evidence.get("returncode")}
+                if str(last_evidence.get("parse_error") or ""):
+                    _cf_evidence["parse_error"] = str(last_evidence.get("parse_error") or "")
+                _cf_evidence["read_unusable"] = _unusable
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst=neighbor,
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    error=f"{inv_type} collection failed on '{src}': {_unusable}",
+                    duration_ms=int(dur_ms),
+                    evidence=_cf_evidence,
+                    meta={"type": inv_type, "neighbor": neighbor, "attempts": int(attempts), "timeout_s": int(timeout_s), "last_rc": last_evidence.get("returncode")},
+                )
+                return "fail"
 
             observed_state_str = str(last_state.get("state") or "Unknown")
             last_error = str(last_state.get("last_error") or "")
@@ -8065,14 +8469,16 @@ def cmd_test(args: argparse.Namespace) -> None:
                 # Drive retry on the predicate (B-RT12); a probe-success
                 # with predicate-mismatch on expect=pass should retry
                 # until timeout in case kernel state catches up.
-                return _predicate_ok, (attempt_state, attempt_evidence)
+                # S1D2-S14-R3 (WI-15 script 1b-i(ii)): the loop still retries on the predicate; the read
+                # flag travels with the attempt's state so the last attempt's read is decided after it.
+                return _predicate_ok, (attempt_state, attempt_evidence, _probe_ok)
 
             if expected == "pass" and timeout_s > 0:
                 ok, last_payload, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
-                last_state, last_evidence = last_payload
+                last_state, last_evidence, _last_read_ok = last_payload
             else:
                 ok_a, payload_a = attempt()
-                last_state, last_evidence = payload_a
+                last_state, last_evidence, _last_read_ok = payload_a
                 attempts = 1
                 dur_ms = int((time.time() - start) * 1000)
                 ok = ok_a
@@ -8106,6 +8512,32 @@ def cmd_test(args: argparse.Namespace) -> None:
                     },
                 )
                 raise SystemExit(2)
+
+            # S1D2-S9-R1 to -R3, S1D2-S14-R1, -R3, S1D2-S16-R1, -R2 (WI-15 script 1b-i(ii)): a last read that
+            # produced no answer (the read raised, exited outside its answer codes, or its output is not in the
+            # reader's format, empty output included for a JSON reader) fails whatever expect says, as
+            # route_present's collection-failure record does: no observed_state, so the summary renders the
+            # absence block. An answer is judged below as before.
+            _unusable = _read_unusable(_last_read_ok, last_evidence)
+            if _unusable is not None:
+                _cf_evidence = {"cmd": last_evidence.get("cmd") or f"ip -j link show {iface}", "rc": last_evidence.get("returncode")}
+                if str(last_evidence.get("parse_error") or ""):
+                    _cf_evidence["parse_error"] = str(last_evidence.get("parse_error") or "")
+                _cf_evidence["read_unusable"] = _unusable
+                record_fn(
+                    name=test_name,
+                    kind="invariant",
+                    src=src,
+                    dst=iface,
+                    expected=expected,
+                    observed="fail",
+                    verdict="fail",
+                    error=f"{inv_type} collection failed on '{src}': {_unusable}",
+                    duration_ms=int(dur_ms),
+                    evidence=_cf_evidence,
+                    meta={"type": inv_type, "interface": iface, "attempts": int(attempts), "timeout_s": int(timeout_s), "last_rc": last_evidence.get("returncode")},
+                )
+                return "fail"
 
             admin_state = str(last_state.get("admin_state") or "unknown")
             operstate = str(last_state.get("operstate") or "UNKNOWN")
@@ -8244,12 +8676,35 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         verdict = "pass" if observed == expected else "fail"
 
+        # Stage-1 gap item (d)(2) WI-14 (F-S1D2-C3-6). The command's exit status was ignored, so a
+        # command that did not answer (unknown command, stopped daemon, ssh down) left empty or
+        # error output that a not_contains, or any expect: fail, read as a pass; an exec that
+        # raised (timeout) also passed under expect: fail. Measured 2026-10-27 on every allowed
+        # exec form of every node type that has one: each answer exits 0, including the routing
+        # shell's answers about absent objects; a non-zero exit is a command error, a stopped
+        # daemon or a transport failure -- or, for SONiC's show CLI and nft, an absent object,
+        # which the exit status cannot tell apart from a usage error. An exec that raised or
+        # exited non-zero is never judged on its output: verdict fail whatever expect says. A
+        # backend that reports no exit status (rt.exec returning str) is judged on its output.
+        # F-S1D2-C3-10: an assertion that could not be evaluated on an answer (output not JSON,
+        # a missing path, an ordering on a non-number) is not judged either; its error is the
+        # evaluator's own.
+        _exec_unusable = exec_error or None
+        if _exec_unusable is None and isinstance(returncode, int) and not isinstance(returncode, bool) \
+                and returncode != 0:
+            _exec_unusable = f"exited {returncode}"
+            observed = "fail"
+            eval_error = f"exec command exited {returncode} on {src}; its output is not judged"
+        if _exec_unusable is not None or eval_error:
+            verdict = "fail"
+
         _truncated = len(stdout) > _EXEC_EVIDENCE_CAP or len(stderr) > _EXEC_EVIDENCE_CAP
         evidence = {
             "stdout": stdout[:_EXEC_EVIDENCE_CAP],
             "stderr": stderr[:_EXEC_EVIDENCE_CAP],
             "returncode": returncode,
             "truncated": _truncated,
+            **({"read_unusable": _exec_unusable} if _exec_unusable is not None else {}),
         }
 
         observed_state_payload = None
@@ -8261,6 +8716,10 @@ def cmd_test(args: argparse.Namespace) -> None:
             }
             if eval_error:
                 observed_state_payload["eval_error"] = eval_error
+            if _exec_unusable is not None:
+                # WI-14: the output was not judged, so the reason is in stderr (a stopped
+                # daemon, a usage error, the transport); render it in the failure block.
+                observed_state_payload["stderr_excerpt"] = stderr[:_EXEC_EVIDENCE_CAP]
 
         record_fn(
             name=test_name,
@@ -8996,6 +9455,9 @@ def cmd_test(args: argparse.Namespace) -> None:
         last_cp = None
         last_obs = "fail"
         last_evidence: dict = {}
+        # S1D2-S25-R1/-R2 (WI-16, F-S1D2-C3-8): ping and tcp under expect: pass keep the last answered
+        # attempt's reason when its answer did not come through the lab.
+        _wf_egress = [None]
 
         start = time.time()
 
@@ -9046,9 +9508,22 @@ def cmd_test(args: argparse.Namespace) -> None:
                     ping_cmd += ["-I", str(src_if).strip()]
                 ping_cmd += [str(dst_ip)]
 
+                # WI-13 (F-S1D2-C3-5): a probe that cannot run fails the step, whatever expect says.
+                _unusable = _probe_unusable(rt, lab, str(src).strip(), "ping", src_if=src_if, src_ip=src_ip)
+                if _unusable is not None:
+                    raise ValueError(f"wait_for ping: probe unusable: {_unusable}")
                 cp = rt.exec(lab, str(src).strip(), ping_cmd, check=False)
                 last_cp = cp
                 ping_ok = (cp.returncode == 0)
+                if not ping_ok:
+                    _unusable = _probe_exit_unexplained(rt, lab, str(src).strip(), "ping", cp)
+                    if _unusable is not None:
+                        raise ValueError(f"wait_for ping: probe unusable: {_unusable}")
+                elif expected == "pass":
+                    _wf_egress[0] = _probe_egress_unusable(rt, lab, str(src).strip(), str(dst_ip), topo,
+                                                           src_if=src_if, src_ip=src_ip)
+                    if _wf_egress[0] is not None:
+                        ping_ok = False
 
                 last_obs = "pass" if ping_ok else "fail"
                 last_evidence = {
@@ -9080,6 +9555,10 @@ def cmd_test(args: argparse.Namespace) -> None:
                 dst_ip = resolve_dst_to_ip(topo, to.strip())
                 ensure_nc(rt, lab, str(src).strip())
 
+                # WI-13 (F-S1D2-C3-5): a probe that cannot run fails the step, whatever expect says.
+                _unusable = _probe_unusable(rt, lab, str(src).strip(), "nc")
+                if _unusable is not None:
+                    raise ValueError(f"wait_for tcp: probe unusable: {_unusable}")
                 # Deterministic connect check; attempt timeout is explicit via -w
                 cp = rt.exec(
                     lab,
@@ -9089,6 +9568,14 @@ def cmd_test(args: argparse.Namespace) -> None:
                 )
                 last_cp = cp
                 tcp_ok = (cp.returncode == 0)
+                if not tcp_ok:
+                    _unusable = _probe_exit_unexplained(rt, lab, str(src).strip(), "nc", cp)
+                    if _unusable is not None:
+                        raise ValueError(f"wait_for tcp: probe unusable: {_unusable}")
+                elif expected == "pass":
+                    _wf_egress[0] = _probe_egress_unusable(rt, lab, str(src).strip(), str(dst_ip), topo)
+                    if _wf_egress[0] is not None:
+                        tcp_ok = False
 
                 last_obs = "pass" if tcp_ok else "fail"
                 last_evidence = {
@@ -9170,6 +9657,11 @@ def cmd_test(args: argparse.Namespace) -> None:
                         src=str(src).strip(),
                     )
                 )
+                # S1D2-S9-R1 to -R3 (WI-15, F-S1D2-C3-12; rulings note 4 ruling 3): a read that produced no
+                # answer fails the step whatever expect says, as route_present's does.
+                _unusable = _read_unusable(vtysh_ok, evidence)
+                if _unusable is not None:
+                    raise RuntimeError(f"wait_for bgp_session_up: collection failed on '{str(src).strip()}': {_unusable}")
                 last_cp = None
                 last_obs = "pass" if predicate_ok else "fail"
                 last_evidence = dict(evidence or {})
@@ -9267,6 +9759,11 @@ def cmd_test(args: argparse.Namespace) -> None:
                         src=node_s,
                     )
                 )
+                # S1D2-S9-R1 to -R3 (WI-15, F-S1D2-C3-12; rulings note 4 ruling 3): a read that produced no
+                # answer fails the step whatever expect says, as route_present's does.
+                _unusable = _read_unusable(vtysh_ok, evidence)
+                if _unusable is not None:
+                    raise RuntimeError(f"wait_for route_advertised_to: collection failed on '{node_s}': {_unusable}")
                 last_cp = None
                 last_obs = "pass" if predicate_ok else "fail"
                 last_evidence = dict(evidence or {})
@@ -9289,6 +9786,11 @@ def cmd_test(args: argparse.Namespace) -> None:
                         src=str(src).strip(),
                     )
                 )
+                # S1D2-S9-R1 to -R3 (WI-15, F-S1D2-C3-12; rulings note 4 ruling 3): a read that produced no
+                # answer fails the step whatever expect says, as route_present's does.
+                _unusable = _read_unusable(vtysh_ok, evidence)
+                if _unusable is not None:
+                    raise RuntimeError(f"wait_for evpn_bgp_session_up: collection failed on '{str(src).strip()}': {_unusable}")
                 last_cp = None
                 last_obs = "pass" if predicate_ok else "fail"
                 last_evidence = dict(evidence or {})
@@ -9311,6 +9813,11 @@ def cmd_test(args: argparse.Namespace) -> None:
                         src=str(src).strip(),
                     )
                 )
+                # S1D2-S9-R1 to -R3 (WI-15, F-S1D2-C3-12; rulings note 4 ruling 3): a read that produced no
+                # answer fails the step whatever expect says, as route_present's does.
+                _unusable = _read_unusable(vtysh_ok, evidence)
+                if _unusable is not None:
+                    raise RuntimeError(f"wait_for evpn_vni_route_present: collection failed on '{str(src).strip()}': {_unusable}")
                 last_cp = None
                 last_obs = "pass" if predicate_ok else "fail"
                 last_evidence = dict(evidence or {})
@@ -9336,6 +9843,11 @@ def cmd_test(args: argparse.Namespace) -> None:
                         src=str(src).strip(),
                     )
                 )
+                # S1D2-S9-R1 to -R3 (WI-15, F-S1D2-C3-12; rulings note 4 ruling 3): a read that produced no
+                # answer fails the step whatever expect says, as route_present's does.
+                _unusable = _read_unusable(vtysh_ok, evidence)
+                if _unusable is not None:
+                    raise RuntimeError(f"wait_for evpn_mac_route_present: collection failed on '{str(src).strip()}': {_unusable}")
                 last_cp = None
                 last_obs = "pass" if predicate_ok else "fail"
                 last_evidence = dict(evidence or {})
@@ -9347,6 +9859,8 @@ def cmd_test(args: argparse.Namespace) -> None:
 
         ok, last_val, attempts, dur_ms = retry_until(timeout_s, interval_s, attempt)
         last_cp, last_obs = last_val  # type: ignore[misc]
+        if not ok and _wf_egress[0] is not None:
+            raise ValueError(f"wait_for {wtype}: probe unusable: {_wf_egress[0]}")
 
         # First success timing (for bounds)
         if ok:
