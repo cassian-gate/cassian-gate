@@ -3,7 +3,15 @@
 
 Source-validation, loud-fail. Asserts the §13(b)(c) failed-invariant render
 seam and the FAIL-branch fail_meaning_block are byte-unchanged by the B-6
-PASS-scope edit (REQ-4.12-B6-2, REQ-4.12-B6-3; DC §13 / §14 item 9; PBE-1b-3).
+PASS-scope edit (REQ-4.12-B6-2, REQ-4.12-B6-3; DC §13 / §14 item **8**;
+PBE-1b-3).
+
+Citation corrected §4.5-b (REQ-45b-15(ii), per E-1): this proof's authority is
+§14 item 8 ("No silent mutation introduced") -- the drift-guard clause -- not
+§14 item 9 ("Engineer-experience guarantees of §13 preserved"). The subject
+matter is the §13(b)(c) render seam, but the mechanism is byte-identity
+drift-guarding, so item 8 governs. The E-1 note itself is not edited; this
+correction is recorded additively in the E-1 addendum (§4.8).
 
 Method (Rule 2 + Rule 4): per-function SHA-256 over AST source segments for the
 three seam functions, plus byte-exact string-content anchors for the

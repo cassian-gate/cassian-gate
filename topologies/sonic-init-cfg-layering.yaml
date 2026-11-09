@@ -1,0 +1,48 @@
+name: sonic-init-cfg-layering
+
+# §4.5-d VM-7 -- scope §9 row 12 (REQ-45D-29, Ledger BL-P2-4.5c-86), founder ruling S37-R4
+# of 2026-10-20. One frr node and one sonic-vm guest in preconfigured mode, linked once, and
+# no BGP session declared (the artifact's DEVICE_METADATA carries a bgp_asn, as
+# sonic-preconfigured-boot's does). Booted once by tests/sonic_init_cfg_layering_proof.py
+# (LD-45D-6).
+#
+# The operator artifact beside this file, sonic-init-cfg-layering-config-db.json, is what is
+# measured. `cassian up` applies it with `config reload -y -f` (LD-45C-R17 R3), and the proof
+# reads ConfigDB back. The image's /etc/sonic/init_cfg.json was read in the packet's
+# pre-run, and the artifact's arms are chosen from that read (S37-R4). The artifact carries:
+#   - the full PORT table (32 ports, Force10-S6000);
+#   - arm F: DEVICE_METADATA.localhost declaring hwsku, platform, mac, hostname, type and
+#     bgp_asn, and omitting the four fields init_cfg.json carries there: buffer_model,
+#     default_bgp_status, default_pfcwd_status and timezone;
+#   - arm E: KDUMP, a table init_cfg.json carries, declared empty ({});
+#   - arm D, a control: BANNER_MESSAGE.global.login declared as the sentinel
+#     CASSIAN-S37-R4-SENTINEL, a field init_cfg.json carries with another value.
+# It omits NTP, a table init_cfg.json carries: arm A, a control. The proof names the arms
+# and checks the artifact's shape and init_cfg.json's against them.
+#
+# No test is declared.
+#
+# HALT-2 address discipline: every declared address is an RFC 5737 documentation address,
+# outside the stock ranges of sonic-vm:202405 (checked by LEG 1 of
+# tests/sonic_lifecycle_proof.py, where this fixture is registered), and used by no other
+# fixture. The artifact declares no IP address. No link is left for auto-addressing.
+#
+# `sonic_config_db` is relative and resolves against this file's directory (LD-45C-R21 R1).
+# Image resolves from the contrib-owned local tag (REQ-45C-11, REQ-45C-32).
+
+nodes:
+  - name: r1
+    type: frr
+    router_id: 192.0.2.132
+
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    router_id: 192.0.2.131
+    sonic_mode: preconfigured
+    sonic_config_db: sonic-init-cfg-layering-config-db.json
+
+links:
+  - endpoints: ["r1:eth1", "s1:eth1"]
+    ipv4: ["198.51.100.72/31", "198.51.100.73/31"]

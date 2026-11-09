@@ -92,7 +92,14 @@ def _read(path):
 
 
 def _extract_catalog(model_src):
-    m = re.search(r"if inv_type not in \((.*?)\):", model_src, re.DOTALL)
+    # The admission tuple, hoisted unchanged into `_INVARIANT_TYPES` (founder
+    # ruling A-prime and Decision 4 (a), 2026-09-28); read only when the
+    # admission check `if inv_type not in _INVARIANT_TYPES:` reads the constant.
+    if not re.search(r"^\s*if inv_type not in _INVARIANT_TYPES:", model_src,
+                     re.MULTILINE):
+        return ()
+    m = re.search(r"^_INVARIANT_TYPES\b[^=\n]*=\s*\((.*?)\)", model_src,
+                  re.DOTALL | re.MULTILINE)
     if not m:
         return ()
     return tuple(re.findall(r'"([a-z_]+)"', m.group(1)))

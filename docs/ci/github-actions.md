@@ -59,6 +59,16 @@ A narrow, truthful CI flow usually looks like this:
 5. assert render determinism with a clean-state replay byte-identity check
 6. upload generated artifacts for review
 
+## Proof-harness gating
+
+The gate invokes the repository's `tests/*_proof.py` proof harnesses as standing regression guards; a green gate is the preservation guard for every change. The suite is fully gated — no proof harness is left uninvoked. Each proof runs as `python tests/<name>.py` under `set -euo pipefail`, in per-section steps labelled for the originating scope section.
+
+The four proofs wired under new per-section steps are:
+
+- **§4.1** — `tests/bl6_observed_state_absence_render_proof.py`
+- **§4.3** — `tests/bl_h3_8_scenarios_summary_existing_type_render_proof.py`
+- **§4.4** — `tests/h53_resolve_interface_existence_proof.py`, `tests/h57_scenario_invariant_dispatch_generalization_proof.py`
+
 ## Determinism replay check (B-9)
 
 The gate job includes a replay determinism check. It runs a by-design failing-invariant topology through two independent clean-state `up → test → down` cycles and fails the step on any byte-difference in the rendered `results.summary.txt` across the two runs.

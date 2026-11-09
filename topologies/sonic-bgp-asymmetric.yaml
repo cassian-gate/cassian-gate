@@ -1,0 +1,49 @@
+name: sonic-bgp-asymmetric
+
+# §4.5-c WI-3 packet 4a — REQ-45C-24 negative fixture.
+#
+# ONE-SIDED DECLARATION, deliberately: s1 declares s2 as a BGP neighbour; s2
+# declares NO neighbours at all. Both are BGP speakers (both carry `asn`) and
+# both are linked, so both enter the precheck's participant set — which is the
+# whole point. Without REQ-45C-24 s2 waits on a peer it never asked for and
+# nothing says so (Doctrine §1.11).
+#
+# This pair CANNOT converge. That is intended: the fixture exists to make the
+# asymmetry visible, not to reach Established.
+#
+# HALT-2 address discipline (founder ruling 2026-08-15, surface S-9): every
+# §4.5-c SONiC fixture declares data addresses OUTSIDE the stock canned ranges
+# of sonic-vm:202405 — Ethernet0..124 at 10.0.0.0/31..10.0.0.62/31, Loopback0
+# at 10.1.0.1/32, eth0 management at 10.0.0.15/24. The addresses below are
+# RFC 5737 TEST-NET-1 / TEST-NET-2, provably outside both.
+#
+# ASNs deliberately avoid 65100, the stock DEVICE_METADATA.localhost.bgp_asn,
+# so rendering cannot be confused with the factory default.
+#
+# Image resolves from the contrib-owned local tag (REQ-45C-11, REQ-45C-32).
+# Declaration surface is FRR's key for key (REQ-45C-23).
+
+nodes:
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    asn: 65001
+    router_id: 192.0.2.21
+    bgp:
+      neighbors:
+        - peer: s2
+          remote_as: 65002
+
+  # s2 declares `asn` — it IS a BGP speaker and IS linked to s1 — but it
+  # declares no `bgp.neighbors`. This is the asymmetry.
+  - name: s2
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    asn: 65002
+    router_id: 192.0.2.22
+
+links:
+  - endpoints: ["s1:eth1", "s2:eth1"]
+    ipv4: ["198.51.100.4/31", "198.51.100.5/31"]

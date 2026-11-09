@@ -1,0 +1,36 @@
+name: sonic-status-collect
+
+# §4.5-d VM-5 -- scope §9 row 11 (the live legs of REQ-45D-19 and REQ-45D-20),
+# founder rulings S36-R1 to S36-R3 of 2026-10-20. One frr node and one sonic-vm
+# guest, linked once, with a declared loopback (the guest's router_id) and link
+# addresses, and no BGP declared, so the guest has no session. Booted once by
+# tests/sonic_status_collect_proof.py (LD-45D-6).
+#
+# No test is declared: the proof reads the guest through `cassian status --routes`
+# (JSON, and human with the raw route lines) and `cassian collect`, which writes the
+# SONiC node's two collect artifacts with zero sessions. It then sends the same
+# reads through the product's substrate_exec, which reaches the vrnetlab launcher
+# that wraps the guest, not the guest: there they must carry none of the declared
+# values (the guest-not-wrapper control).
+#
+# HALT-2 address discipline: every declared address is an RFC 5737 documentation
+# address, outside the stock ranges of sonic-vm:202405 (checked by LEG 1 of
+# tests/sonic_lifecycle_proof.py, where this fixture is registered), and used by no
+# other fixture. No link is left for auto-addressing.
+#
+# Image resolves from the contrib-owned local tag (REQ-45C-11, REQ-45C-32).
+
+nodes:
+  - name: r1
+    type: frr
+    router_id: 192.0.2.112
+
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    router_id: 192.0.2.111
+
+links:
+  - endpoints: ["r1:eth1", "s1:eth1"]
+    ipv4: ["198.51.100.64/31", "198.51.100.65/31"]

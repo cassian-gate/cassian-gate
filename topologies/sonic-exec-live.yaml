@@ -1,0 +1,66 @@
+name: sonic-exec-live
+
+# §4.5-d VM-4 -- scope §9 row 9 (REQ-45D-5's live leg), founder rulings S35-R1 to
+# S35-R6 of 2026-10-19. One frr node and one sonic-vm guest, linked once. Booted
+# once by tests/sonic_exec_live_proof.py (LD-45D-6).
+#
+# Three declared exec tests on the SONiC node, each in one of the two read-only
+# forms the SONiC exec rule admits at validate (REQ-45D-5; LD-45D-5). Run one at a
+# time with `cassian test --name`, in this order:
+#   exec_show_version          show version             the SONiC version banner  expect pass
+#   exec_vtysh_show_version    vtysh -c "show version"  FRRouting's banner        expect pass
+#   exec_show_version_absent   show version             a string no guest prints  expect fail
+# The third is the live negative: it runs the same command as the first, so its
+# record must carry the same guest output, and only its assertion fails (observed
+# fail, verdict pass). A plain `cassian test` of this lab passes all three.
+#
+# The proof also sends the first two commands through the product's substrate_exec,
+# which reaches the vrnetlab launcher that wraps the guest, not the guest: there
+# they must not produce either banner (the guest-not-wrapper control, S35-R1).
+#
+# HALT-2 address discipline: every declared address is an RFC 5737 documentation
+# address, outside the stock ranges of sonic-vm:202405 (checked by LEG 1 of
+# tests/sonic_lifecycle_proof.py, where this fixture is registered), and used by no
+# other fixture. No link is left for auto-addressing.
+#
+# Image resolves from the contrib-owned local tag (REQ-45C-11, REQ-45C-32).
+
+nodes:
+  - name: r1
+    type: frr
+    router_id: 192.0.2.101
+
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    router_id: 192.0.2.102
+
+links:
+  - endpoints: ["r1:eth1", "s1:eth1"]
+    ipv4: ["198.51.100.60/31", "198.51.100.61/31"]
+
+tests:
+  - name: exec_show_version
+    kind: exec
+    src: s1
+    command: show version
+    assertion:
+      contains: "SONiC Software Version"
+    expect: pass
+
+  - name: exec_vtysh_show_version
+    kind: exec
+    src: s1
+    command: vtysh -c "show version"
+    assertion:
+      contains: "FRRouting"
+    expect: pass
+
+  - name: exec_show_version_absent
+    kind: exec
+    src: s1
+    command: show version
+    assertion:
+      contains: "cassian-exec-live-never-printed"
+    expect: fail

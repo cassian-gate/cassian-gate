@@ -29,27 +29,34 @@ import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
+sys.path.insert(0, os.path.join(_ROOT, "tests"))  # locate preservation_manifest (script-dir is tests/importer/)
+
+from preservation_manifest import MODULE_ROSTER
 
 # === FORK_BASELINE BEGIN (generated at apply-time from the live merge-base) ===
 BASELINE = {
     "src/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "src/cassian.py": "cbc931d2f977c37249599bf63229b507ce6ea4d58eb6ca5525b7269b70d4c895",
+    "src/cassian.py": "2da8db410415bb4e77fc6da1e944ff0919a5b6c03e1e630d42a99e5e10cbc664",  # re-baselined from 588fbed5 (phase2 §4.5-b WI-F dead-code sweep (ensure_ip_tools import) + guardrail comment correction); orig cbc931d2
     "src/cassian_ai.py": "6900c52ea52f2a4a588b99478f10e967603b7a1a5f87b3b257878d4fde569361",
     "src/cassian_artifacts.py": "ae8a54302e4fa8fe2f89e3af0e1e16dcda0ff2ae7bc4a805b671f69029fbb04c",
-    "src/cassian_candidate.py": "93db9b61e9fd22c74156fc0492119fc4e170a7a192684354c8a31c70876ff52d",
-    "src/cassian_cli.py": "bcf460f7be2d2ec4280569bdfe3f30ab9d0784d6677a98a8db64579bf32ebf75",
-    "src/cassian_common.py": "a0469a2a1b3cdcc5a1fffc7cd02198447cf1e0cb1ee8657469c3fb2c57139a10",
-    "src/cassian_engine.py": "f3831817f66e62840deae7153270e8c627b09ba4131c965cf80e623f0f4db85e",
-    "src/cassian_model.py": "4b9f01aaa95e9c67e5bddc6e30752e60627103c1588a529db88cc0703732fa01",
-    "src/cassian_runtime_container.py": "b2a493f947c121416c992b8b9788a60acead190d305d58654c3c457def116ba3",
-    "src/cassian_state.py": "aec4d412ee53555156cb5275c5d7a1329f54aaef298d4409feebcad2c198a9d6",
-    "src/cassian_tests.py": "ba0a1f36245de1ac01853fca4e8a3100ff5aad28525e91ef26ebaf24f404b0af",
-    "src/cassian_two_run.py": "694f4e0d8ca7e07e7f4843e4f269a697d74d19bcdece60adf6f339952e471452",
+    "src/cassian_candidate.py": "217d8f08621db367a0d0666470793ff2335136846a4663ce95b4d0d3110330bc",  # re-baselined from 7775a062 (undef remediation: _cand_misuse helper, vty import, cmd_test rebinds + scenarios reads, resolve_topology names); orig 93db9b61
+    "src/cassian_catalogue.py": "6e9e8aa8927aeb9b7356003f3d57789a49d2e5795cee87aa2718c747fa543668",  # Stage-1 gap item (d)(2) new module (WI-1 capability catalogue); enforced (REQ-S1D2-35; LD-9)
+    "src/cassian_common.py": "0f5a326f3407811ba9afa8c449a15a9526e101a0ba258998b29bd633e48223bb",  # re-baselined from a0469a2a (phase2 §4.5-b WI-C1/C2 NOS-neutral re-homes + A-S6 provenance comment); orig a0469a2a
+    "src/cassian_engine.py": "5c82228a147187c8dd156ba2dc2c09ba2087679e4136d1491cbe9f6d66b49000",  # re-baselined from 13faabf6 (Stage-1 gap item (d)(2) WI-5b: the engine edits of WI-13, WI-14, WI-15 scripts 1b-i(i), 1b-i(ii) and 1b-ii, and WI-16, swapped once here (S1D2-S3-R5, S1D2-S19-R2; rulings note 2 section 4 reading 2), touched module src/cassian_engine.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 289fbd6d (phase2 §4.5-d BL-P2-4.5c-230 fix (founder rulings S32-R1 to S32-R4 of 2026-10-18), touched module src/cassian_engine.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 6447ba16 (phase2 §4.5-d S30-R5 readiness packet (founder rulings S31-R10 to S31-R19 of 2026-10-16), touched module src/cassian_engine.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 76ca244b (phase2 §4.5-d BL-P2-4.5c-216 fix (founder rulings S30-R1 to S30-R3, S30-R9 to S30-R11, S30-R16 to S30-R18, S30-R20, S30-R21 and S30-R23 to S30-R25 of 2026-10-14), touched module src/cassian_engine.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from f547ff56 (phase2 §4.5-d BL-P2-4.5c-223 fix (founder ruling S29-R4 of 2026-10-12), touched module src/cassian_engine.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 5cee95a7 (phase2 §4.5-d BL-P2-4.5c-220 fix (founder rulings S28-R1 and S28-R2 of 2026-10-11), touched module src/cassian_engine.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 2287e7d0 (phase2 §4.5-d hosted packet REQ-45D-19/-20 (founder rulings S27-R4 and S27-R8 to S27-R12 of 2026-10-09), touched module src/cassian_engine.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 58dcf113 (phase2 §4.5-d S24-R5 script (founder rulings S24-R5 of 2026-10-06 and S25-R4 of 2026-10-08), touched module src/cassian_engine.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 5fda5624 (phase2 §4.5-d H1-b3 script 2a (founder rulings Q20-3 i of 2026-10-02, and F-S21-1 A, R2 and Decision A a of 2026-10-03), touched module src/cassian_engine.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from c409d4dd (phase2 §4.5-d H1-b3 script 1b (founder rulings A of 2026-09-25, D-1 and D-4 of 2026-09-30, Q-A, Q-B and Q13 a of 2026-10-01, and Q20-1 A and Q20-2 A of 2026-10-02), touched module src/cassian_engine.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined (phase2 §4.5-c WI-1 packet 1 script A: resolve_topology topo_path keyword at four call sites; LD-45C-R21 R2/R5)
+    "src/cassian_model.py": "3dd4bcff557db2a4a5c96b14f46bb3684edb74378074eedb22c6f29be2104805",  # re-baselined from e5419b5a (Stage-1 gap item (d)(2) WI-5b: the model edits of WI-3, WI-12 and WI-17, swapped once here (S1D2-S3-R5, S1D2-S19-R2), touched module src/cassian_model.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from a1834f70 (phase2 §4.5-d hosted packet REQ-45D-17/-18/-28 (founder rulings S27-R4 to S27-R7 of 2026-10-09), touched module src/cassian_model.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 247bd14e (phase2 §4.5-d BL-P2-4.5c-219 script (founder rulings S25-R5 and S26-R5 to S26-R8 of 2026-10-08, and S26-R9 of 2026-10-09), touched module src/cassian_model.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 844be3bc (phase2 §4.5-d H1-b3 script 2b-ii (founder rulings D-2 A of 2026-09-30 and Decision 2 of 2026-10-05), touched module src/cassian_model.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 6fcfd028 (phase2 §4.5-d H1-b1 script 2 (founder rulings A of 2026-09-25, alpha of 2026-09-25, D1 of 2026-09-26 and A-prime of 2026-09-28), touched module src/cassian_model.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from ff8253bc (phase2 §4.5-d REQ-45D-33 early re-baseline at c619814 (founder ruling 2026-09-24), touched module src/cassian_model.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined (phase2 §4.5-c WI-1 packet 1 script A: sonic_mode/sonic_config_db resolution + cassian_common import; LD-45C-R17 R1/R9, LD-45C-R21 R1/R3)
+    "src/cassian_nos_frr.py": "fd11597e287ccf3ed1e7a266e6b27345ada73580451bc9855efee2a7a675bebb",  # re-baselined from d037bc2f (Stage-1 gap item (d)(2) WI-5b: the provider edits of WI-15 scripts 1a and 1a-ii, swapped once here (S1D2-S10-R1, S1D2-S19-R2), touched module src/cassian_nos_frr.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 8e303f0a (phase2 §4.5-d S30-R5 readiness packet (founder rulings S31-R10 to S31-R19 of 2026-10-16), touched module src/cassian_nos_frr.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from b9b5bb53 (phase2 §4.5-d BL-P2-4.5c-229 fix (founder rulings S31-R3 of 2026-10-15, S31-R6 and S31-R7 of 2026-10-16), touched module src/cassian_nos_frr.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 8ecb147b (phase2 §4.5-d H1-b3 script 1b (founder rulings A of 2026-09-25, D-1 and D-4 of 2026-09-30, Q-A, Q-B and Q13 a of 2026-10-01, and Q20-1 A and Q20-2 A of 2026-10-02), touched module src/cassian_nos_frr.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 0b48fba1 (phase2 §4.5-d REQ-45D-33 early re-baseline at c619814 (founder ruling 2026-09-24), touched module src/cassian_nos_frr.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 898eb296 (§4.5-c WI-7: supplementary EVPN text collect leg, REQ-45C-14); §4.5-b new module (WI-B NOS provider structure); enforced (REQ-45b-13; LD-9)
+    "src/cassian_nos_sonic.py": "2d25f6d59fe84ad9cbdfaa0318c692190f1f82ff1a84b44f101142f6f222c36e",  # re-baselined from d612f835 (Stage-1 gap item (d)(2) WI-5b: the provider edits of WI-15 scripts 1a and 1a-ii, swapped once here (S1D2-S10-R1, S1D2-S19-R2), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from d7ed7cdf (phase2 §4.5-d readiness-wait packet BL-P2-4.5c-236 (founder rulings S37-R9, S37-R10 and S37-R13 of 2026-10-21), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 71b3235f (phase2 §4.5-d VM-6 within-boot packet REQ-45D-30 (founder rulings S37-R1 to S37-R3 of 2026-10-20), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from db7b3048 (phase2 §4.5-d BL-P2-4.5c-224 and -225 fix (founder rulings S29-R7 to S29-R9 of 2026-10-13), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 9ed99ffe (phase2 §4.5-d hosted packet REQ-45D-19/-20 (founder rulings S27-R4 and S27-R8 to S27-R12 of 2026-10-09), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from a7c212fa (phase2 §4.5-d H1-b3 script 2b-ii (founder rulings D-2 A of 2026-09-30 and Decision 2 of 2026-10-05), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 7d715dce (phase2 §4.5-d H1-b3 script 2b-i (founder rulings R2 of 2026-10-03 and Decision 2, Decision 3 i and the REQ-45D-2 render ruling ii of 2026-10-05), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from a3f904eb (phase2 §4.5-d H1-b3 script 1b (founder rulings A of 2026-09-25, D-1 and D-4 of 2026-09-30, Q-A, Q-B and Q13 a of 2026-10-01, and Q20-1 A and Q20-2 A of 2026-10-02), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 7306690b (phase2 §4.5-d H1-b3 script 1a (founder rulings A of 2026-09-25, D-3 and D-4 of 2026-09-30, and Q13 a, IPv6 I and B of 2026-10-01), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from b86372da (phase2 §4.5-d H1-b2 script 2 (founder rulings A of 2026-09-25, D2 A-prime of 2026-09-29 and 1 of 2026-09-29), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 765ad929 (phase2 §4.5-d H1-b2 script 1 (founder rulings A of 2026-09-25, D1 P1 and D2 A-prime of 2026-09-29, and the session-15 two-script split of 2026-09-29), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 775c7c54 (phase2 §4.5-d H1-b1 script 2 (founder rulings A of 2026-09-25, alpha of 2026-09-25, D1 of 2026-09-26 and A-prime of 2026-09-28), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 14180f56 (phase2 §4.5-d H1-b1 script 1 (founder rulings A of 2026-09-25 and D1 of 2026-09-26), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 12ba458e (phase2 §4.5-d REQ-45D-33 early re-baseline at c619814 (founder ruling 2026-09-24), touched module src/cassian_nos_sonic.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 0cd5bc21 (LD-45C-R36: REQ-45C-44(b) abort message names the key and its value), itself from 44aae825 (WI-3 REQ-45C-9: gated daemon observation on convergence_wait's timeout path; LD-45C-R4); §4.5-c new module (WI-1 SONiC provider); enforced (REQ-45C-39; LD-9)
+    "src/cassian_nos_types.py": "49246567d0b5b8b475001fb3a52cfc262206036b8f38f75fdfe46f24607f420d",  # re-baselined from 470ea87f (phase2 §4.5-d REQ-45D-33 early re-baseline at c619814 (founder ruling 2026-09-24), touched module src/cassian_nos_types.py; named check DC v2.1 §14 item 8: No silent mutation introduced); §4.5-b new module (WI-B NOS provider structure); enforced (REQ-45b-13; LD-9)
+    "src/cassian_runtime_container.py": "2603f8fdf04b95a605bc4bf3e7c1b9c66438ab70ffac0261439d28af08d228bb",  # re-baselined from c6d36548 (phase2 §4.5-d VM-3 ping-through packet, REQ-45D-26 (founder rulings S34-R1 to S34-R4 of 2026-10-19), touched module src/cassian_runtime_container.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 1863184e (phase2 §4.5-d BL-P2-4.5c-233 fix (founder rulings S33-R1 to S33-R5 of 2026-10-19), touched module src/cassian_runtime_container.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from b3e45fa2 (phase2 §4.5-b WI-C1 _normalize_prefix shim + WI-F ensure_ip_tools removal); orig b2a493f9
+    "src/cassian_runtime_vm.py": "a4c48685a81a47407587c502f0a9e730c03236abfd9a73e470f79095dd3d0aea",  # re-baselined from 3832ad07 (phase2 §4.5-d BL-P2-4.5c-32 rc=5 fix under founder rulings R1 and D-i (2026-09-24), touched module src/cassian_runtime_vm.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from 865545e4 (phase2 §4.5-b WI-D2 node_runtime_map model-homing); orig 865545e4
+    "src/cassian_state.py": "771d8c069e1cdd48c002d5ff3edd25912a8941912395b56844ef6f4df041bf57",  # re-baselined from aec4d412 (phase2 §4.5-d REQ-45D-33 early re-baseline at c619814 (founder ruling 2026-09-24), touched module src/cassian_state.py; named check DC v2.1 §14 item 8: No silent mutation introduced)
+    "src/cassian_tests.py": "9db9074568418580e8671719e083f876b0f7f111201284b889e483ef92388af7",  # re-baselined from d977b4b1 (phase2 §4.5-d BL-P2-4.5c-216 fix (founder rulings S30-R13, S30-R18 and S30-R20 of 2026-10-14), touched module src/cassian_tests.py; named check DC v2.1 §14 item 8: No silent mutation introduced); re-baselined from b8dc8534 (phase2 §4.5-c Unit B: wait_for_bgp gate predicate + LD-45C-R10 header import; LD-45C-R9/R10/R11); prior dd56046b; orig ba0a1f36
+    "src/cassian_two_run.py": "a6432665dbfee699713fe60c2e42d427c3c3fd9f82be7ec0ab65caa8b34c3ed9",  # re-baselined from cfafdfa6 (phase2 4.4 F-1 canonical serializer); orig 694f4e0d
 }
 # === FORK_BASELINE END ===
 
 SCOPED = {"src/cassian_cli.py"}
-NEW_ALLOWED = {"src/cassian_import.py"}
+ALLOWED_NEW = {"src/cassian_import.py"}
 PRES_CRITICAL = {
     "src/cassian_model.py",      # LD-4 reuse-by-import; never edited
     "src/cassian_tests.py",      # §13(b)(c) render seam + invariant evaluation
@@ -79,15 +86,23 @@ def main():
         sys.exit(1)
     head = set("src/" + n for n in os.listdir(src_dir) if n.endswith(".py"))
 
-    added, removed = head - set(BASELINE) - NEW_ALLOWED, set(BASELINE) - head
-    record("PO-6 module-set drift = {cassian_import.py} added, none removed",
-           (not added) and (not removed) and (NEW_ALLOWED <= head),
+    # module-set drift read from the roster (bidirectional; LD-9 leg).
+    added, removed = head - MODULE_ROSTER, MODULE_ROSTER - head
+    record("PO-6 module-set matches roster (denom " + str(len(MODULE_ROSTER)) + ", bidirectional)",
+           (not added) and (not removed),
            "added=" + str(sorted(added)) + " removed=" + str(sorted(removed)))
+
+    # enforced set derived FROM THE ROSTER (not baseline keys); a rostered-enforced
+    # module absent from the baseline fails loud, never skipped, never auto-baselined.
+    enforced_set = MODULE_ROSTER - SCOPED - ALLOWED_NEW
+    unbaselined = sorted(m for m in enforced_set if m not in BASELINE)
+    record("PO-6 all enforced modules baselined (F-1 re-baseline guard)",
+           not unbaselined, "re-baseline required: " + str(unbaselined))
 
     enforced = 0
     drift = []
-    for mod in sorted(BASELINE):
-        if mod in SCOPED:
+    for mod in sorted(enforced_set):
+        if mod not in BASELINE:
             continue
         enforced += 1
         actual = _sha_file(mod)
@@ -99,8 +114,8 @@ def main():
            "; ".join(drift))
 
     record("PO-6 §13(b)(c) seam + advisory + results-writer + model in enforced set",
-           PRES_CRITICAL.issubset(set(BASELINE) - SCOPED),
-           "missing=" + str(sorted(PRES_CRITICAL - (set(BASELINE) - SCOPED))))
+           PRES_CRITICAL.issubset(enforced_set),
+           "missing=" + str(sorted(PRES_CRITICAL - enforced_set)))
 
     failed = [n for n, ok, _ in checks if not ok]
     for n, ok, detail in checks:

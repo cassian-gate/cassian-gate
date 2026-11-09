@@ -1,0 +1,83 @@
+name: sonic-ping-through
+
+# §4.5-d VM-3 -- scope §9 row 10 (REQ-45D-3, -4, -26), founder rulings S34-R1 to
+# S34-R4 of 2026-10-19. One sonic-vm guest and two hosts, each attached directly to
+# it; nothing else. Booted once by tests/sonic_ping_through_proof.py (LD-45D-6).
+#
+# REQ-45D-26 (PBE-P2-11, same change as REQ-45D-3/-4): a host attached directly to
+# a sonic-vm peer is configured by configure_hosts_from_topology -- IP, MAC and a
+# default route via the SONiC end of its link. The proof asserts that state on each
+# host directly; verify_host_ready is not the instrument (it passes on a
+# management address alone).
+#
+# The four declared ping tests are the four quadrants of REQ-45D-4, all from h1,
+# whose only route off its own link is the default route via s1. Run one at a
+# time with `cassian test --name`, in this order (the reachable expect-pass test
+# first, so neighbour resolution is warm before the single-attempt expect-fail
+# tests):
+#   pt_reach_pass      to_ip  h2's address      expect pass  -> observed pass, verdict pass
+#   pt_unreach_fail    to_ip  unused address    expect fail  -> observed fail, verdict pass
+#   pt_reach_fail      to     h2's address      expect fail  -> observed pass, verdict fail
+#   pt_unreach_pass    to     unused address    expect pass  -> observed fail, verdict fail
+# The unused address lies inside h2's link subnet, so s1 routes it out of h2's port
+# and nothing answers. pt_reach_pass may wait up to 60 s for its first reply (the
+# engine's expect-pass retry window), so a slow first forward after boot is not read
+# as a failure; it stops at the first reply. The expected verdicts are core's ping
+# rule (S34-R3): pass iff the observed result equals the expectation. Two quadrants
+# fail by design, so a plain `cassian test` of this lab exits non-zero.
+#
+# HALT-2 address discipline: every declared address is an RFC 5737 documentation
+# address, outside the stock ranges of sonic-vm:202405 (checked by LEG 1 of
+# tests/sonic_lifecycle_proof.py, where this fixture is registered), and used by no
+# other fixture. No link is left for auto-addressing.
+#
+# Image resolves from the contrib-owned local tag (REQ-45C-11, REQ-45C-32).
+
+nodes:
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    router_id: 192.0.2.91
+
+  - name: h1
+    type: host
+    mac: "00:11:22:33:47:01"
+
+  - name: h2
+    type: host
+    mac: "00:11:22:33:47:02"
+
+links:
+  - endpoints: ["h1:eth1", "s1:eth1"]
+    ipv4: ["198.51.100.42/29", "198.51.100.41/29"]
+
+  - endpoints: ["h2:eth1", "s1:eth2"]
+    ipv4: ["198.51.100.50/29", "198.51.100.49/29"]
+
+tests:
+  - name: pt_reach_pass
+    kind: ping
+    src: h1
+    to_ip: 198.51.100.50
+    expect: pass
+    timeout_s: 60
+
+  - name: pt_unreach_fail
+    kind: ping
+    src: h1
+    to_ip: 198.51.100.53
+    expect: fail
+
+  - name: pt_reach_fail
+    kind: ping
+    src: h1
+    to: 198.51.100.50
+    expect: fail
+
+  - name: pt_unreach_pass
+    kind: ping
+    src: h1
+    to: 198.51.100.53
+    expect: pass
+    timeout_s: 6

@@ -1,0 +1,31 @@
+name: sonic-ospf-unsup
+
+# §4.5-d REQ-45D-17 (D-047.VAL; the OSPF governance anchor) negative fixture --
+# handover §18 row -17 and §19.2's second walkthrough. Declares an ospf_neighbor_up
+# invariant whose src is a sonic-vm node. OSPF on SONiC is not supported in
+# this release, so `cassian validate` must refuse it at exit 2 with the
+# deterministic UNSUPPORTED message, byte-identical on every run
+# (tests/sonic_ospf_unsupported_proof.py). It is not a deployable topology and
+# no proof deploys it. Registered in tests/sonic_lifecycle_proof.py under
+# founder ruling S27-R5.
+
+nodes:
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    router_id: 192.0.2.31
+
+  - name: r1
+    type: frr
+    router_id: 192.0.2.41
+
+links:
+  - endpoints: ["s1:eth1", "r1:eth1"]
+
+tests:
+  - name: ospf-on-sonic
+    kind: invariant
+    type: ospf_neighbor_up
+    src: s1
+    neighbor: 192.0.2.41

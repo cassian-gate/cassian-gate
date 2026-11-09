@@ -23,12 +23,13 @@ That's the whole anatomy. The four moving parts are the **node**, the **command*
 
 ## Step by step
 
-**1. Name it and point it at a node.** `src` is the node the command runs on — it must be a node in your `nodes:` list. Cassian works out the node's type itself; today that type has to be `frr` or `nft-fw`.
+**1. Name it and point it at a node.** `src` is the node the command runs on — it must be a node in your `nodes:` list. Cassian works out the node's type itself; today that type has to be `frr`, `nft-fw` or `sonic-vm`.
 
 **2. Give it a read-only command.** Cassian only allows commands that *read* state, never change it:
 
 - on an `frr` node: `vtysh -c "show …"` (any `show` command)
 - on an `nft-fw` node: `nft list …` (e.g. `nft list ruleset`)
+- on a `sonic-vm` node: `show …` (SONiC's own `show` commands, except `show techsupport`) or `vtysh -c "show …"`
 
 Anything else — a config change, a raw shell — is rejected when you run `cassian validate`, before anything is deployed.
 
@@ -81,6 +82,8 @@ A few things worth knowing up front:
 - **`field` needs JSON.** Use a command whose output is JSON (e.g. `show bgp summary json`), and note it walks *dictionary* keys — it reads `{...: {...: value}}` shapes, not list positions.
 - **`==` is exact and type-aware.** `"Established"` won't match `"established"` or a number. `>=` and `<=` only work on numbers.
 - **A missing thing is a fail, not a crash.** If the output can't be parsed, a key isn't there, or the command times out, the check simply records `observed: fail` — safely. It never errors out, and it never silently passes.
+
+**A command that doesn't answer fails the test.** If the command exits non-zero — an unknown command, a daemon that isn't running, a node Cassian can't reach — or times out, Cassian doesn't judge its output: the test fails whatever `expect` says, and the failure block shows what the command wrote to stderr. So write an absence check with a command that still answers, and exits 0, when the thing is absent: `vtysh -c "show ip route 203.0.113.200/32"` answers `% Network not in table` and exits 0, so `not_contains` judges it; SONiC's `show ip bgp neighbors <ip>` for a neighbour that isn't configured, or `nft list table` for a table that doesn't exist, exits with an error, so the test fails. The same holds when the assertion can't be evaluated on the answer (output that isn't JSON, a key that isn't there, `>=` on text): the test fails whatever `expect` says, with the evaluator's own message.
 
 ## Negative invariants
 

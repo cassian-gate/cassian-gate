@@ -32,6 +32,7 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
 import cassian_engine as E  # noqa: E402
+import cassian_nos_frr as F  # noqa: E402  # §4.5-c WI-5: route extractors are provider-homed (§4.5-b B')
 try:
     import cassian_common as C  # noqa: E402
     if hasattr(C, "_QUIET_DIE"):
@@ -133,7 +134,7 @@ check("finalize replay identical serialized bytes",
 
 # ---- D: eval-helper canonical observed set determinism + order-independence ----
 def observed_set(route_obj):
-    return sorted({E._canonical_community_token(t) for t in E._route_communities(route_obj)})
+    return sorted({E._canonical_community_token(t) for t in F._route_communities(route_obj)})
 R1 = {"community": {"list": ["internet", "65000:100", "noExport"]}}
 R2 = {"community": {"list": ["noExport", "65000:100", "internet"]}}
 check("observed_set replay-identical", observed_set(R1) == observed_set(R1))

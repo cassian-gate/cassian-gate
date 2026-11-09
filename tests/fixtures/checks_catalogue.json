@@ -1,0 +1,2134 @@
+{
+  "checks": [
+    {
+      "id": "bgp_as_path",
+      "kind": "invariant",
+      "limitations": [],
+      "parameters": {
+        "constraints": [],
+        "params": [
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "as_path",
+            "required": true,
+            "types": [
+              "as_path_regex"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expect",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "fail",
+              "pass"
+            ]
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "node",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "prefix",
+            "required": true,
+            "types": [
+              "cidr"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "tags",
+            "required": false,
+            "types": [
+              "string_list"
+            ],
+            "values": null
+          }
+        ],
+        "unknown_keys": "accepted"
+      },
+      "status": {
+        "frr": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        },
+        "nft-fw": {
+          "detail": null,
+          "reason": "capability 'bgp_as_path' is not declared by NOS provider 'nft-fw' (deny-by-default)",
+          "state": "not implemented"
+        },
+        "sonic-vm": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        }
+      }
+    },
+    {
+      "id": "bgp_community",
+      "kind": "invariant",
+      "limitations": [],
+      "parameters": {
+        "constraints": [
+          {
+            "enforced": "validate",
+            "operator": "required_iff",
+            "params": [
+              "match"
+            ],
+            "when": {
+              "equals": null,
+              "param": "expected",
+              "type": "community_list"
+            }
+          }
+        ],
+        "params": [
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expect",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "fail",
+              "pass"
+            ]
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expected",
+            "required": true,
+            "types": [
+              "community",
+              "community_list"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "match",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "all",
+              "any"
+            ]
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "node",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "prefix",
+            "required": true,
+            "types": [
+              "cidr"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "tags",
+            "required": false,
+            "types": [
+              "string_list"
+            ],
+            "values": null
+          }
+        ],
+        "unknown_keys": "accepted"
+      },
+      "status": {
+        "frr": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        },
+        "nft-fw": {
+          "detail": null,
+          "reason": "capability 'bgp_community' is not declared by NOS provider 'nft-fw' (deny-by-default)",
+          "state": "not implemented"
+        },
+        "sonic-vm": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        }
+      }
+    },
+    {
+      "id": "bgp_localpref_equals",
+      "kind": "invariant",
+      "limitations": [],
+      "parameters": {
+        "constraints": [],
+        "params": [
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expect",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "fail",
+              "pass"
+            ]
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expected",
+            "required": true,
+            "types": [
+              "integer"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "node",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "prefix",
+            "required": true,
+            "types": [
+              "cidr"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "tags",
+            "required": false,
+            "types": [
+              "string_list"
+            ],
+            "values": null
+          }
+        ],
+        "unknown_keys": "accepted"
+      },
+      "status": {
+        "frr": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        },
+        "nft-fw": {
+          "detail": null,
+          "reason": "capability 'bgp_localpref_equals' is not declared by NOS provider 'nft-fw' (deny-by-default)",
+          "state": "not implemented"
+        },
+        "sonic-vm": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        }
+      }
+    },
+    {
+      "id": "bgp_med_equals",
+      "kind": "invariant",
+      "limitations": [],
+      "parameters": {
+        "constraints": [],
+        "params": [
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expect",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "fail",
+              "pass"
+            ]
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expected",
+            "required": true,
+            "types": [
+              "integer"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [
+              "src"
+            ],
+            "enforced": "validate",
+            "name": "node",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "prefix",
+            "required": true,
+            "types": [
+              "cidr"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "tags",
+            "required": false,
+            "types": [
+              "string_list"
+            ],
+            "values": null
+          }
+        ],
+        "unknown_keys": "accepted"
+      },
+      "status": {
+        "frr": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        },
+        "nft-fw": {
+          "detail": null,
+          "reason": "capability 'bgp_med_equals' is not declared by NOS provider 'nft-fw' (deny-by-default)",
+          "state": "not implemented"
+        },
+        "sonic-vm": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        }
+      }
+    },
+    {
+      "id": "bgp_neighbor",
+      "kind": "bgp_neighbor",
+      "limitations": [],
+      "parameters": {
+        "constraints": [],
+        "params": [
+          {
+            "aliases": [
+              "neighbor",
+              "to"
+            ],
+            "enforced": "run",
+            "name": "dst",
+            "required": true,
+            "types": [
+              "ipv4"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expect",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "fail",
+              "pass"
+            ]
+          },
+          {
+            "aliases": [],
+            "enforced": "run",
+            "name": "retry_interval_s",
+            "required": false,
+            "types": [
+              "number"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [
+              "from",
+              "on"
+            ],
+            "enforced": "run",
+            "name": "src",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "tags",
+            "required": false,
+            "types": [
+              "string_list"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "run",
+            "name": "timeout_s",
+            "required": false,
+            "types": [
+              "integer"
+            ],
+            "values": null
+          }
+        ],
+        "unknown_keys": "accepted"
+      },
+      "status": {
+        "frr": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        },
+        "nft-fw": {
+          "detail": null,
+          "reason": "capability 'bgp_neighbor' is not declared by NOS provider 'nft-fw' (deny-by-default)",
+          "state": "not implemented"
+        },
+        "sonic-vm": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        }
+      }
+    },
+    {
+      "id": "bgp_session_up",
+      "kind": "invariant",
+      "limitations": [],
+      "parameters": {
+        "constraints": [],
+        "params": [
+          {
+            "aliases": [
+              "neighbor"
+            ],
+            "enforced": "run",
+            "name": "dst",
+            "required": true,
+            "types": [
+              "ipv4"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expect",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "fail",
+              "pass"
+            ]
+          },
+          {
+            "aliases": [
+              "src"
+            ],
+            "enforced": "validate",
+            "name": "node",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "run",
+            "name": "retry_interval_s",
+            "required": false,
+            "types": [
+              "number"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "tags",
+            "required": false,
+            "types": [
+              "string_list"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "run",
+            "name": "timeout_s",
+            "required": false,
+            "types": [
+              "integer"
+            ],
+            "values": null
+          }
+        ],
+        "unknown_keys": "accepted"
+      },
+      "status": {
+        "frr": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        },
+        "nft-fw": {
+          "detail": null,
+          "reason": "capability 'bgp_session_up' is not declared by NOS provider 'nft-fw' (deny-by-default)",
+          "state": "not implemented"
+        },
+        "sonic-vm": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        }
+      }
+    },
+    {
+      "id": "evpn_bgp_session_up",
+      "kind": "invariant",
+      "limitations": [],
+      "parameters": {
+        "constraints": [],
+        "params": [
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expect",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "fail",
+              "pass"
+            ]
+          },
+          {
+            "aliases": [
+              "src"
+            ],
+            "enforced": "validate",
+            "name": "node",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "peer",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "tags",
+            "required": false,
+            "types": [
+              "string_list"
+            ],
+            "values": null
+          }
+        ],
+        "unknown_keys": "accepted"
+      },
+      "status": {
+        "frr": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        },
+        "nft-fw": {
+          "detail": null,
+          "reason": "capability 'evpn_bgp_session_up' is not declared by NOS provider 'nft-fw' (deny-by-default)",
+          "state": "not implemented"
+        },
+        "sonic-vm": {
+          "detail": null,
+          "reason": "capability 'evpn_bgp_session_up' is not declared by NOS provider 'sonic-vm' (deny-by-default)",
+          "state": "not implemented"
+        }
+      }
+    },
+    {
+      "id": "evpn_mac_route_absent",
+      "kind": "invariant",
+      "limitations": [],
+      "parameters": {
+        "constraints": [],
+        "params": [
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expect",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "fail",
+              "pass"
+            ]
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "mac",
+            "required": true,
+            "types": [
+              "mac"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [
+              "src"
+            ],
+            "enforced": "validate",
+            "name": "node",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "tags",
+            "required": false,
+            "types": [
+              "string_list"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "vni",
+            "required": true,
+            "types": [
+              "integer"
+            ],
+            "values": null
+          }
+        ],
+        "unknown_keys": "accepted"
+      },
+      "status": {
+        "frr": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        },
+        "nft-fw": {
+          "detail": null,
+          "reason": "capability 'evpn_mac_route_absent' is not declared by NOS provider 'nft-fw' (deny-by-default)",
+          "state": "not implemented"
+        },
+        "sonic-vm": {
+          "detail": null,
+          "reason": "capability 'evpn_mac_route_absent' is not declared by NOS provider 'sonic-vm' (deny-by-default)",
+          "state": "not implemented"
+        }
+      }
+    },
+    {
+      "id": "evpn_mac_route_present",
+      "kind": "invariant",
+      "limitations": [],
+      "parameters": {
+        "constraints": [],
+        "params": [
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expect",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "fail",
+              "pass"
+            ]
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "mac",
+            "required": true,
+            "types": [
+              "mac"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [
+              "src"
+            ],
+            "enforced": "validate",
+            "name": "node",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "tags",
+            "required": false,
+            "types": [
+              "string_list"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "vni",
+            "required": true,
+            "types": [
+              "integer"
+            ],
+            "values": null
+          }
+        ],
+        "unknown_keys": "accepted"
+      },
+      "status": {
+        "frr": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        },
+        "nft-fw": {
+          "detail": null,
+          "reason": "capability 'evpn_mac_route_present' is not declared by NOS provider 'nft-fw' (deny-by-default)",
+          "state": "not implemented"
+        },
+        "sonic-vm": {
+          "detail": null,
+          "reason": "capability 'evpn_mac_route_present' is not declared by NOS provider 'sonic-vm' (deny-by-default)",
+          "state": "not implemented"
+        }
+      }
+    },
+    {
+      "id": "evpn_vni_route_present",
+      "kind": "invariant",
+      "limitations": [],
+      "parameters": {
+        "constraints": [],
+        "params": [
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expect",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "fail",
+              "pass"
+            ]
+          },
+          {
+            "aliases": [
+              "src"
+            ],
+            "enforced": "validate",
+            "name": "node",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "tags",
+            "required": false,
+            "types": [
+              "string_list"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "vni",
+            "required": true,
+            "types": [
+              "integer"
+            ],
+            "values": null
+          }
+        ],
+        "unknown_keys": "accepted"
+      },
+      "status": {
+        "frr": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        },
+        "nft-fw": {
+          "detail": null,
+          "reason": "capability 'evpn_vni_route_present' is not declared by NOS provider 'nft-fw' (deny-by-default)",
+          "state": "not implemented"
+        },
+        "sonic-vm": {
+          "detail": null,
+          "reason": "capability 'evpn_vni_route_present' is not declared by NOS provider 'sonic-vm' (deny-by-default)",
+          "state": "not implemented"
+        }
+      }
+    },
+    {
+      "id": "exec",
+      "kind": "exec",
+      "limitations": [],
+      "parameters": {
+        "constraints": [],
+        "params": [
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "assertion",
+            "required": true,
+            "types": [
+              "exec_assertion"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "command",
+            "required": true,
+            "types": [
+              "string"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expect",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "fail",
+              "pass"
+            ]
+          },
+          {
+            "aliases": [
+              "from",
+              "node",
+              "on"
+            ],
+            "enforced": "validate",
+            "name": "src",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "tags",
+            "required": false,
+            "types": [
+              "string_list"
+            ],
+            "values": null
+          }
+        ],
+        "unknown_keys": "rejected"
+      },
+      "status": {
+        "frr": {
+          "detail": "vtysh -c \"show …\"",
+          "reason": null,
+          "state": "implemented"
+        },
+        "nft-fw": {
+          "detail": "nft list …",
+          "reason": null,
+          "state": "implemented"
+        },
+        "sonic-vm": {
+          "detail": "show … or vtysh -c \"show …\" (not show techsupport)",
+          "reason": null,
+          "state": "implemented"
+        }
+      }
+    },
+    {
+      "id": "interface_state",
+      "kind": "invariant",
+      "limitations": [
+        "On a container-runtime node, the engine first checks that the node's iproute2 can emit JSON (`ip -j link show lo`); if it cannot, the test records a fixed error instead of an observation."
+      ],
+      "parameters": {
+        "constraints": [],
+        "params": [
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expect",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "fail",
+              "pass"
+            ]
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "interface",
+            "required": true,
+            "types": [
+              "string"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "node",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "retry_interval_s",
+            "required": false,
+            "types": [
+              "number"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "state",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "down",
+              "up"
+            ]
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "timeout_s",
+            "required": false,
+            "types": [
+              "integer"
+            ],
+            "values": null
+          }
+        ],
+        "unknown_keys": "rejected"
+      },
+      "status": {
+        "frr": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        },
+        "nft-fw": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        },
+        "sonic-vm": {
+          "detail": null,
+          "reason": "capability 'interface_state' is not declared by NOS provider 'sonic-vm' (deny-by-default)",
+          "state": "not implemented"
+        }
+      }
+    },
+    {
+      "id": "ospf_neighbor_up",
+      "kind": "invariant",
+      "limitations": [],
+      "parameters": {
+        "constraints": [],
+        "params": [
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expect",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "fail",
+              "pass"
+            ]
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "neighbor",
+            "required": true,
+            "types": [
+              "ipv4"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [
+              "src"
+            ],
+            "enforced": "validate",
+            "name": "node",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "run",
+            "name": "retry_interval_s",
+            "required": false,
+            "types": [
+              "number"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "state",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "2-Way",
+              "Attempt",
+              "Down",
+              "ExStart",
+              "Exchange",
+              "Full",
+              "Init",
+              "Loading"
+            ]
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "tags",
+            "required": false,
+            "types": [
+              "string_list"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "run",
+            "name": "timeout_s",
+            "required": false,
+            "types": [
+              "integer"
+            ],
+            "values": null
+          }
+        ],
+        "unknown_keys": "accepted"
+      },
+      "status": {
+        "frr": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        },
+        "nft-fw": {
+          "detail": null,
+          "reason": "capability 'ospf_neighbor_up' is not declared by NOS provider 'nft-fw' (deny-by-default)",
+          "state": "not implemented"
+        },
+        "sonic-vm": {
+          "detail": null,
+          "reason": "capability 'ospf_neighbor_up' is not declared by NOS provider 'sonic-vm' (deny-by-default)",
+          "state": "not implemented"
+        }
+      }
+    },
+    {
+      "id": "ping",
+      "kind": "ping",
+      "limitations": [],
+      "parameters": {
+        "constraints": [
+          {
+            "enforced": "run",
+            "operator": "at_most_one_of",
+            "params": [
+              "src_if",
+              "src_ip"
+            ],
+            "when": null
+          },
+          {
+            "enforced": "validate",
+            "operator": "exactly_one_of",
+            "params": [
+              "dst",
+              "to",
+              "to_ip"
+            ],
+            "when": null
+          },
+          {
+            "enforced": "validate",
+            "operator": "forbidden_if",
+            "params": [
+              "retry_interval_s",
+              "timeout_s"
+            ],
+            "when": {
+              "equals": "fail",
+              "param": "expect",
+              "type": null
+            }
+          }
+        ],
+        "params": [
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "count",
+            "required": false,
+            "types": [
+              "integer"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "dst",
+            "required": false,
+            "types": [
+              "ip",
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expect",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "fail",
+              "pass"
+            ]
+          },
+          {
+            "aliases": [],
+            "enforced": "run",
+            "name": "per_attempt_timeout_s",
+            "required": false,
+            "types": [
+              "integer"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "run",
+            "name": "retry_interval_s",
+            "required": false,
+            "types": [
+              "number"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [
+              "from",
+              "on"
+            ],
+            "enforced": "validate",
+            "name": "src",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "run",
+            "name": "src_if",
+            "required": false,
+            "types": [
+              "string"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "run",
+            "name": "src_ip",
+            "required": false,
+            "types": [
+              "ip"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "tags",
+            "required": false,
+            "types": [
+              "string_list"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "run",
+            "name": "timeout_s",
+            "required": false,
+            "types": [
+              "integer"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "to",
+            "required": false,
+            "types": [
+              "ip"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "to_ip",
+            "required": false,
+            "types": [
+              "ip"
+            ],
+            "values": null
+          }
+        ],
+        "unknown_keys": "accepted"
+      },
+      "status": {
+        "frr": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        },
+        "nft-fw": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        },
+        "sonic-vm": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        }
+      }
+    },
+    {
+      "id": "route_absent",
+      "kind": "invariant",
+      "limitations": [],
+      "parameters": {
+        "constraints": [],
+        "params": [
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expect",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "fail",
+              "pass"
+            ]
+          },
+          {
+            "aliases": [
+              "src"
+            ],
+            "enforced": "validate",
+            "name": "node",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "prefix",
+            "required": true,
+            "types": [
+              "cidr"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "tags",
+            "required": false,
+            "types": [
+              "string_list"
+            ],
+            "values": null
+          }
+        ],
+        "unknown_keys": "accepted"
+      },
+      "status": {
+        "frr": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        },
+        "nft-fw": {
+          "detail": null,
+          "reason": "capability 'route_absent' is not declared by NOS provider 'nft-fw' (deny-by-default)",
+          "state": "not implemented"
+        },
+        "sonic-vm": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        }
+      }
+    },
+    {
+      "id": "route_advertised_to",
+      "kind": "invariant",
+      "limitations": [],
+      "parameters": {
+        "constraints": [],
+        "params": [
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expect",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "fail",
+              "pass"
+            ]
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "node",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "peer",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "prefix",
+            "required": true,
+            "types": [
+              "cidr"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "tags",
+            "required": false,
+            "types": [
+              "string_list"
+            ],
+            "values": null
+          }
+        ],
+        "unknown_keys": "accepted"
+      },
+      "status": {
+        "frr": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        },
+        "nft-fw": {
+          "detail": null,
+          "reason": "capability 'route_advertised_to' is not declared by NOS provider 'nft-fw' (deny-by-default)",
+          "state": "not implemented"
+        },
+        "sonic-vm": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        }
+      }
+    },
+    {
+      "id": "route_not_advertised_to",
+      "kind": "invariant",
+      "limitations": [],
+      "parameters": {
+        "constraints": [],
+        "params": [
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expect",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "fail",
+              "pass"
+            ]
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "node",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "peer",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "prefix",
+            "required": true,
+            "types": [
+              "cidr"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "tags",
+            "required": false,
+            "types": [
+              "string_list"
+            ],
+            "values": null
+          }
+        ],
+        "unknown_keys": "accepted"
+      },
+      "status": {
+        "frr": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        },
+        "nft-fw": {
+          "detail": null,
+          "reason": "capability 'route_not_advertised_to' is not declared by NOS provider 'nft-fw' (deny-by-default)",
+          "state": "not implemented"
+        },
+        "sonic-vm": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        }
+      }
+    },
+    {
+      "id": "route_prefix",
+      "kind": "route_prefix",
+      "limitations": [],
+      "parameters": {
+        "constraints": [],
+        "params": [
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expect",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "fail",
+              "pass"
+            ]
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "prefix",
+            "required": true,
+            "types": [
+              "cidr"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [
+              "on"
+            ],
+            "enforced": "validate",
+            "name": "src",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "tags",
+            "required": false,
+            "types": [
+              "string_list"
+            ],
+            "values": null
+          }
+        ],
+        "unknown_keys": "accepted"
+      },
+      "status": {
+        "frr": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        },
+        "nft-fw": {
+          "detail": null,
+          "reason": "capability 'route_prefix' is not declared by NOS provider 'nft-fw' (deny-by-default)",
+          "state": "not implemented"
+        },
+        "sonic-vm": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        }
+      }
+    },
+    {
+      "id": "route_present",
+      "kind": "invariant",
+      "limitations": [],
+      "parameters": {
+        "constraints": [],
+        "params": [
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expect",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "fail",
+              "pass"
+            ]
+          },
+          {
+            "aliases": [
+              "src"
+            ],
+            "enforced": "validate",
+            "name": "node",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "prefix",
+            "required": true,
+            "types": [
+              "cidr"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "tags",
+            "required": false,
+            "types": [
+              "string_list"
+            ],
+            "values": null
+          }
+        ],
+        "unknown_keys": "accepted"
+      },
+      "status": {
+        "frr": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        },
+        "nft-fw": {
+          "detail": null,
+          "reason": "capability 'route_present' is not declared by NOS provider 'nft-fw' (deny-by-default)",
+          "state": "not implemented"
+        },
+        "sonic-vm": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        }
+      }
+    },
+    {
+      "id": "tcp",
+      "kind": "tcp",
+      "limitations": [],
+      "parameters": {
+        "constraints": [],
+        "params": [
+          {
+            "aliases": [
+              "to"
+            ],
+            "enforced": "run",
+            "name": "dst",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expect",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "fail",
+              "pass"
+            ]
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "listener",
+            "required": false,
+            "types": [
+              "boolean"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "run",
+            "name": "port",
+            "required": true,
+            "types": [
+              "integer"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "run",
+            "name": "retry_interval_s",
+            "required": false,
+            "types": [
+              "number"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [
+              "from",
+              "on"
+            ],
+            "enforced": "run",
+            "name": "src",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "tags",
+            "required": false,
+            "types": [
+              "string_list"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "run",
+            "name": "timeout_s",
+            "required": false,
+            "types": [
+              "integer"
+            ],
+            "values": null
+          }
+        ],
+        "unknown_keys": "accepted"
+      },
+      "status": {
+        "frr": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        },
+        "nft-fw": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        },
+        "sonic-vm": {
+          "detail": null,
+          "reason": "capability 'tcp' is not declared by NOS provider 'sonic-vm' (deny-by-default)",
+          "state": "not implemented"
+        }
+      }
+    }
+  ],
+  "commands": [
+    {
+      "command": "adapt ansible",
+      "effects": [
+        {
+          "label": "advisory",
+          "reason": "writes adapter output files (default artifacts/adapters/)"
+        }
+      ],
+      "exception": null
+    },
+    {
+      "command": "adapt terraform",
+      "effects": [
+        {
+          "label": "advisory",
+          "reason": "writes adapter output files (default artifacts/adapters/)"
+        }
+      ],
+      "exception": null
+    },
+    {
+      "command": "ai",
+      "effects": null,
+      "exception": "writes no file; with --online, sends the question and an evidence package to an AI endpoint, which no effect label covers"
+    },
+    {
+      "command": "checks",
+      "effects": [
+        {
+          "label": "read-only",
+          "reason": "prints this catalogue; writes nothing"
+        }
+      ],
+      "exception": null
+    },
+    {
+      "command": "cleanup",
+      "effects": [
+        {
+          "label": "destructive",
+          "reason": "with --yes, destroys Cassian-owned labs found under labs/"
+        }
+      ],
+      "exception": null
+    },
+    {
+      "command": "collect",
+      "effects": [
+        {
+          "label": "advisory",
+          "reason": "writes collected lab evidence under labs/clab-<lab>/artifacts/"
+        }
+      ],
+      "exception": null
+    },
+    {
+      "command": "destroy",
+      "effects": [
+        {
+          "label": "destructive",
+          "reason": "destroys a lab runtime; with --purge-artifacts, deletes its artifacts"
+        }
+      ],
+      "exception": null
+    },
+    {
+      "command": "doctor",
+      "effects": [
+        {
+          "label": "read-only",
+          "reason": "reports environment readiness; writes nothing"
+        }
+      ],
+      "exception": null
+    },
+    {
+      "command": "down",
+      "effects": [
+        {
+          "label": "destructive",
+          "reason": "destroys a deployed lab's runtime"
+        }
+      ],
+      "exception": null
+    },
+    {
+      "command": "exec",
+      "effects": [
+        {
+          "label": "lab-mutating",
+          "reason": "runs a command inside a lab node"
+        }
+      ],
+      "exception": null
+    },
+    {
+      "command": "gen",
+      "effects": [
+        {
+          "label": "lab-mutating",
+          "reason": "rewrites in place the config files a deployed lab of the same name bind-mounts"
+        }
+      ],
+      "exception": null
+    },
+    {
+      "command": "import",
+      "effects": null,
+      "exception": "writes an authoritative declaration pair to a path the caller names"
+    },
+    {
+      "command": "preflight",
+      "effects": [
+        {
+          "label": "advisory",
+          "reason": "writes a preflight report (default artifacts/preflight/preflight.json)"
+        }
+      ],
+      "exception": null
+    },
+    {
+      "command": "replay",
+      "effects": [
+        {
+          "label": "lab-mutating",
+          "reason": "deploys a lab from prior artifacts"
+        },
+        {
+          "label": "destructive",
+          "reason": "replaces an existing lab of the same derived replay name (reconfigure)"
+        },
+        {
+          "label": "authoritative",
+          "reason": "with --gate, runs test's gate path (cmd_test, _report_authority gate)"
+        }
+      ],
+      "exception": null
+    },
+    {
+      "command": "run",
+      "effects": [
+        {
+          "label": "lab-mutating",
+          "reason": "builds, tests and tears down a lab"
+        },
+        {
+          "label": "destructive",
+          "reason": "with --reconfigure, destroys the existing lab first"
+        }
+      ],
+      "exception": null
+    },
+    {
+      "command": "status",
+      "effects": [
+        {
+          "label": "read-only",
+          "reason": "reads lab state with show commands; writes nothing"
+        }
+      ],
+      "exception": null
+    },
+    {
+      "command": "test",
+      "effects": [
+        {
+          "label": "lab-mutating",
+          "reason": "deploys and tears down a clean lab"
+        },
+        {
+          "label": "destructive",
+          "reason": "replaces an existing lab of the same name (reconfigure)"
+        },
+        {
+          "label": "authoritative",
+          "reason": "produces the deploy/no-deploy verdict"
+        }
+      ],
+      "exception": null
+    },
+    {
+      "command": "up",
+      "effects": [
+        {
+          "label": "lab-mutating",
+          "reason": "deploys a lab"
+        },
+        {
+          "label": "destructive",
+          "reason": "with --reconfigure, destroys the existing lab first"
+        }
+      ],
+      "exception": null
+    },
+    {
+      "command": "validate",
+      "effects": [
+        {
+          "label": "advisory",
+          "reason": "writes a coverage file under labs/"
+        }
+      ],
+      "exception": null
+    },
+    {
+      "command": "validate-contrib",
+      "effects": [
+        {
+          "label": "read-only",
+          "reason": "structural check of contrib content; writes nothing"
+        }
+      ],
+      "exception": null
+    },
+    {
+      "command": "vty",
+      "effects": [
+        {
+          "label": "lab-mutating",
+          "reason": "runs a vty command inside a lab node"
+        }
+      ],
+      "exception": null
+    }
+  ],
+  "gate_release": "2.1.0",
+  "node_types": [
+    {
+      "runtime_requirement": null,
+      "type": "frr"
+    },
+    {
+      "runtime_requirement": null,
+      "type": "nft-fw"
+    },
+    {
+      "runtime_requirement": "vm",
+      "type": "sonic-vm"
+    }
+  ],
+  "notices": [
+    "Status values report what this release's code implements for each check on each node type. This catalogue makes no NOS-support declaration and is not a qualification claim.",
+    "The shape of this catalogue is provisional: no stability promise is made for it, and later releases may change it."
+  ],
+  "profiles": [
+    {
+      "content": {
+        "invariants": [
+          {
+            "expect": "pass",
+            "kind": "invariant",
+            "name": "leaf1_evpn_session_to_spine1_up",
+            "node": "leaf1",
+            "peer": "spine1",
+            "type": "evpn_bgp_session_up"
+          },
+          {
+            "expect": "pass",
+            "kind": "invariant",
+            "name": "leaf2_evpn_session_to_spine1_up",
+            "node": "leaf2",
+            "peer": "spine1",
+            "type": "evpn_bgp_session_up"
+          }
+        ],
+        "pack_id": "datacenter-bgp-safety"
+      },
+      "id": "datacenter-bgp-safety",
+      "versioned": false
+    }
+  ],
+  "provenance": {
+    "declared_proof_bound": [
+      "checks.limitations",
+      "checks.parameters",
+      "commands.effects",
+      "commands.exception",
+      "notices",
+      "status_classes"
+    ],
+    "derived_from_code": [
+      "checks.id",
+      "checks.kind",
+      "checks.status",
+      "commands.command",
+      "gate_release",
+      "node_types",
+      "profiles",
+      "provisional",
+      "schema_version"
+    ]
+  },
+  "provisional": true,
+  "schema_version": "checks.v1"
+}

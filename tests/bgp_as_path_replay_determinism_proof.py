@@ -32,6 +32,7 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
 import cassian_engine as E  # noqa: E402
+import cassian_nos_frr as F  # noqa: E402  # §4.5-c WI-5: route extractors are provider-homed (§4.5-b B')
 try:
     import cassian_common as C  # noqa: E402
     if hasattr(C, "_QUIET_DIE"):
@@ -129,7 +130,7 @@ check("finalize replay identical serialized bytes",
 
 # ---- D: eval-helper _route_as_path determinism + order-verbatim ----
 def observed_p(route_obj):
-    return E._route_as_path(route_obj)
+    return F._route_as_path(route_obj)
 R1 = {"paths": [{"aspath": {"string": "65001 65002 65003"}}]}
 R2 = {"paths": [{"aspath": {"string": "65003 65002 65001"}}]}
 check("_route_as_path replay-identical", observed_p(R1) == observed_p(R1))

@@ -1,0 +1,24 @@
+name: sonic-route-absent-stock
+
+# §4.5-d REQ-45D-12, founder ruling D-2 = A (2026-09-30, SP #1): a DELIBERATELY
+# INVALID fixture. route_absent on a stock prefix of sonic-vm:202405 is a
+# declaration error at validate (LD-45D-2(a)): `cassian validate` on this file
+# must exit 2 and name the prefix as a stock route. 10.1.0.1/32 is Loopback0's
+# stock address (LD-45D-2: stock 10.1.0.1/32 on Loopback0, never removed); its
+# stock status is SONiC's own evidence (capture procedure 4_5d-h1b3-rib rev 1,
+# BEFORE full-table read). Validation only -- never booted.
+
+nodes:
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+
+links: []
+
+tests:
+  - name: stock-loopback-route-absent
+    kind: invariant
+    type: route_absent
+    node: s1
+    prefix: 10.1.0.1/32

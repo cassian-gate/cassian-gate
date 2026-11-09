@@ -33,7 +33,7 @@ r = copy.deepcopy(base)
 e._finalize_results_schema(results=r, command="test", topo_name="t", lab_name="l",
                            phase="collect", intent="ticket-4412")
 
-ck(r.get("release_version") == "2.0.2" and isinstance(r.get("release_version"), str), "release_version present, str, == 2.0.2")
+ck(r.get("release_version") == "2.1.0" and isinstance(r.get("release_version"), str), "release_version present, str, == 2.1.0")
 tc = r.get("tamper_check")
 ck(isinstance(tc, dict) and set(tc) == {"algo","digest","domain","state"}, "tamper_check object shape {algo,digest,domain,state}")
 ck(tc.get("algo") == "sha256" and tc.get("state") == "verified", "tamper_check algo=sha256 state=verified")

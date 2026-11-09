@@ -1,0 +1,57 @@
+name: sonic-mixed-linux
+
+# §4.5-c WI-2 endpoint recognition, linux leg (REQ-45C-7, cell D-013.LIF).
+#
+# Same ratified disposition as D-012.LIF: line-item L1, "Node type recognized
+# in topology schema", VERIFY, "verify functional in SONiC topologies".
+# Expected outcome per §15.2: full lifecycle, clean completion.
+#
+# x1 is a `linux` fallback-kind node. It takes NO core provisioning leg --
+# configure_hosts_from_topology configures `host` nodes only
+# (src/cassian_runtime_container.py:1034 / :1046), and verify_lab_ready
+# (:1275) has no `linux` branch, so x1 also takes no readiness gate. Both are
+# measured properties of the tree, not omissions in this fixture: REQ-45C-7
+# asks that the node be RECOGNIZED and that the lifecycle complete clean, not
+# that it be addressed. x1 therefore declares no link addresses and appears in
+# no test -- declaring an address that nothing applies would misreport.
+#
+# The declared test runs s1 -> r1 so `cassian test` exercises a real verdict
+# path with the linux node present, rather than running an empty test set.
+#
+# HALT-2 address discipline (founder ruling, 2026-08-15), surface S-9: RFC 5737
+# documentation ranges only, outside the stock canned ranges of
+# sonic-vm:202405. Constants live in tests/sonic_lifecycle_proof.py.
+#
+# Image resolves from the contrib-owned local tag (REQ-45C-11, REQ-45C-32);
+# build it via contrib/sonic-image-build/build.sh. No registry pull.
+
+nodes:
+  - name: s1
+    type: sonic-vm
+    runtime: vm
+    image: local/sonic-vm:202405
+    router_id: 192.0.2.15
+
+  - name: r1
+    type: frr
+    router_id: 192.0.2.25
+
+  - name: x1
+    type: linux
+
+links:
+  - endpoints: ["s1:eth1", "r1:eth1"]
+    ipv4: ["198.51.100.8/31", "198.51.100.9/31"]
+
+  # x1 is present and deployed; no ipv4 is declared because no core leg
+  # applies one to a `linux` node. Recognition and clean lifecycle are the
+  # requirement, per the L1 VERIFY disposition.
+  - endpoints: ["x1:eth1", "r1:eth2"]
+
+tests:
+  - name: s1_to_r1_dataplane_ping
+    kind: ping
+    src: s1
+    to: 198.51.100.9
+    expect: pass
+    count: 1

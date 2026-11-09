@@ -101,6 +101,7 @@ nav:
   - Legacy schema (v1): topology-schema-v1.md
   - CLI Reference: cli-reference-v1.md
   - Cheatsheet: cheatsheet.md
+  - Capability Catalogue: capability-catalogue.md
   - Writing a user-defined invariant: recipes/exec-user-defined-invariants.md
   - The AI-change reference case: recipes/ai-change-reference-case.md
 
