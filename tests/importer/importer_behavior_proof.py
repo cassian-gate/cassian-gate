@@ -23,6 +23,8 @@ with no lab and no containers (cassian-test-alone CI posture):
         with no neighbour and no starter check (page legs: stage 6).
   PF-5  siteA's pair equals the committed golden; the success block; the
         set-aside section; the contract positives of §15.2.
+  PF-11 §4.6 stage 2: every session siteA's import resolves renders as
+        ' neighbor <X> remote-as <AS>' through the model's gen_frr_conf.
 
 Exit 0 on all-pass; loud exit 1 on any failure. Run from the repo root:
     python tests/importer/importer_behavior_proof.py
@@ -569,6 +571,60 @@ def pf5_golden_and_positives():
             shutil.rmtree(scratch, ignore_errors=True)
 
 
+# --------------------------------------------------------------------------- #
+# §4.6 stage 2: PF-11 on siteA (handover REQ-46-29, B-29), lab-free. Every     #
+# session the import resolves appears in its local node's FRR configuration    #
+# as ' neighbor <X> remote-as <AS>', rendered by the model's own generator on  #
+# a resolved deep copy, by import, with no model edit and no file written.     #
+# --------------------------------------------------------------------------- #
+from cassian_model import gen_frr_conf  # noqa: E402
+
+
+def _pf11_missing(topo_path, triples):
+    """The (L, X, AS) of ``triples`` whose ' neighbor X remote-as AS' line is
+    absent from L's gen_frr_conf text (B-29)."""
+    with open(topo_path, encoding="utf-8") as f:
+        topo = yaml.safe_load(f)
+    resolved = resolve_topology(_copy.deepcopy(topo))
+    nodes = {n.get("name"): n for n in resolved.get("nodes") or []}
+    missing = []
+    for local, x, asn in triples:
+        text = gen_frr_conf(nodes[local], resolved) if local in nodes else ""
+        if " neighbor %s remote-as %s" % (x, asn) not in text.splitlines():
+            missing.append((local, x, asn))
+    return missing
+
+
+def _pf11_site_a_triples():
+    """(L, X, AS) of siteA's two sessions, from its export; both resolve (PF-5)."""
+    return sorted((s["local_device"], s["peer_ip"], s["remote_asn"])
+                  for s in _site_a()["bgp_sessions"])
+
+
+def pf11_render_site_a():
+    """PF-11, siteA leg (REQ-46-29): import siteA, render each node of a
+    resolved session through gen_frr_conf, and find every session's line."""
+    scratch = tempfile.mkdtemp(prefix="pf11_")
+    try:
+        out = os.path.join(scratch, "out")
+        r = subprocess.run(
+            [sys.executable, "-c",
+             "import sys;sys.path.insert(0,%r);"
+             "from cassian_import import run_import;"
+             "run_import(%r,%r)" % (_SRC, POS, out)],
+            capture_output=True, text=True,
+        )
+        triples = _pf11_site_a_triples()
+        missing = (_pf11_missing(os.path.join(out, "topology.yaml"), triples)
+                   if r.returncode == 0 else triples)
+        _rec("PF-11 siteA: each resolved session renders ' neighbor <X> "
+             "remote-as <AS>' through gen_frr_conf (REQ-46-29)",
+             r.returncode == 0 and len(triples) == 2 and not missing,
+             "rc=%d missing=%s err=%s" % (r.returncode, missing, r.stderr.strip()[:200]))
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
 def main():
     po1_determinism()
     po2_roundtrip()
@@ -577,6 +633,7 @@ def main():
     pf2_contract_rejections()
     pf4_contract_exclusions()
     pf5_golden_and_positives()
+    pf11_render_site_a()
     failed = [n for n, ok, _ in checks if not ok]
     for n, ok, detail in checks:
         print(("PASS" if ok else "FAIL") + "  " + n + (("  -- " + detail) if detail else ""))
