@@ -23,7 +23,13 @@ Proof obligations (lab-free):
              registered provider declaring a status token IMPL has that leg callable
              (the declaration the guard reads never points at a None leg).
   SC-PARITY  each SONiC copy returns output EQUAL to its FRR original on every input
-             in a fixed set covering each branch (S27-R12).
+             in a fixed set covering each branch (S27-R12), extended with FRR 10.7.1's
+             header, reordered columns and a header naming neither column (REQ-45E-4).
+  SC-COLUMNS both bgp-summary normalisers take AS and STATE from the columns the header
+             names (BL-P2-4.5c-234; REQ-45E-3, rule B02), on the SONiC summary with Desc,
+             FRR 10.7.1's header, reordered columns and a header naming neither; the
+             misreadings (AS from V; STATE from Desc or PfxSnt), rebuilt from each copy's
+             own source, are each detected (REQ-45E-5).
   SC-SUMMARY the summary leg over the captured guest `show bgp summary json`
              (tests/fixtures/sonic-4_5d-h1b1/bgp_summary.out): observed EQUALS FRR's
              JSON parser over the same bytes; parser_mode json; data keys EQUAL FRR's.
@@ -32,7 +38,11 @@ Proof obligations (lab-free):
              FRR's JSON parser over the same bytes; parser_mode json; data keys EQUAL FRR's.
   SC-STATUS  `cassian status --bgp --routes --json` on a stub lab (r1 frr, s1 sonic-vm,
              f1 nft-fw): s1 carries bgp and routes records, f1 carries neither, nothing
-             raises (B09). Human mode prints s1's BGP line (S27-R8).
+             raises (B09). Human mode prints s1's BGP line (S27-R8). Per node
+             (BL-P2-4.5c-235; REQ-45E-6, rule B03): with the record loop's last node
+             stopped, the running r1 prints IF:, BGP, ROUTES and both verbose blocks;
+             with r1 stopped and the last node running, r1 prints only its state line.
+             An engine copy with B03's three guards reverted fails both branches.
   SC-UNSUP   the same run with SONiC's legs set to None and its two tokens removed:
              s1 carries no record, the run completes, and a leg that would raise if
              called is never called (S27-R9).
@@ -389,6 +399,82 @@ _s1_block = _hout.split("  - s1")[1].split("  - ")[0] if "  - s1" in _hout else 
 check("SC-STATUS human mode prints s1's BGP line (expected peers FRR-derived: BGP (none))",
       _hexc is None and "BGP (none)" in _s1_block, repr(_s1_block[:120]))
 
+# ---- SC-STATUS per node (BL-P2-4.5c-235; REQ-45E-6, rule B03) --------------------------
+# A node's IF:, BGP and routes blocks print only when ITS OWN record is running. The stub lab
+# sorts f1, r1, s1, so s1 is the record loop's last node. Branch A stops s1 (the last node)
+# while r1 runs; branch B stops r1 while s1, the last node, runs. Interfaces, both verbose
+# blocks and the routes summary are switched on, so every guarded block can print.
+class PartStubRuntime(StubRuntime):
+    """StubRuntime in which the named nodes exist but are not running."""
+
+    def __init__(self, by_node, stopped):
+        super().__init__(by_node)
+        self.stopped = set(stopped)
+
+    def is_running_id(self, cname):
+        return cname.rsplit("-", 1)[-1] not in self.stopped
+
+    def is_running(self, lab, node):
+        return node not in self.stopped
+
+
+PER_NODE_OUTPUTS = copy.deepcopy(OUTPUTS)
+for _n in ("r1", "s1"):
+    PER_NODE_OUTPUTS[_n]["sh -lc ip -br a"] = "lo               UNKNOWN        127.0.0.1/8\n"
+LIVE_MARKS = ("IF:", "BGP ", "ROUTES ", "--- show bgp summary ---", "--- show ip route ---")
+RUNNING_R1 = ["--- show bgp summary ---", "--- show ip route ---", "BGP ", "IF:", "ROUTES "]
+RUNNING_S1 = ["--- show bgp summary ---", "--- show ip route ---", "BGP ", "IF:"]
+
+
+def status_human(stopped, eng=E):
+    ns = argparse.Namespace(lab=LAB, bgp=True, bgp_verbose=True, strict=False, interfaces=True,
+                            summary=False, json=False, routes=True, routes_verbose=True)
+    buf, exc = io.StringIO(), None
+    saved = eng.get_runtime
+    eng.get_runtime = lambda *a, **k: PartStubRuntime(PER_NODE_OUTPUTS, stopped)
+    try:
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+            eng.cmd_status(ns)
+    except BaseException as ex:  # noqa: BLE001 -- recorded, judged below
+        exc = ex
+    finally:
+        eng.get_runtime = saved
+    return buf.getvalue(), exc
+
+
+def live_marks(out, node):
+    """The guarded blocks a node's human block prints; None when the node has no block."""
+    head = "  - %s " % node
+    if head not in out:
+        return None
+    block = out.split(head, 1)[1].split("\n  - ")[0]
+    return sorted({m for m in LIVE_MARKS for ln in block.splitlines() if ln.strip().startswith(m.strip())})
+
+
+def per_node(eng=E):
+    a, ea = status_human({"s1"}, eng)
+    b, eb = status_human({"r1"}, eng)
+    return {"A: s1 (last) stopped, r1 running": (ea, live_marks(a, "r1"), live_marks(a, "s1")),
+            "B: s1 (last) running, r1 stopped": (eb, live_marks(b, "r1"), live_marks(b, "s1"))}
+
+
+def per_node_ok(res):
+    ea, ra, sa = res["A: s1 (last) stopped, r1 running"]
+    eb, rb, sb = res["B: s1 (last) running, r1 stopped"]
+    return (ea is None and eb is None and ra == RUNNING_R1 and sa == [] and rb == [] and sb == RUNNING_S1)
+
+
+_pn = per_node()
+_ea, _ra, _sa = _pn["A: s1 (last) stopped, r1 running"]
+_eb, _rb, _sb = _pn["B: s1 (last) running, r1 stopped"]
+check("SC-STATUS branch A (the last node stopped): running r1 prints IF:, BGP, ROUTES and both verbose blocks",
+      _ea is None and _ra == RUNNING_R1, "r1: %r" % (_ra,))
+check("SC-STATUS branch A: stopped s1 prints only its state line", _ea is None and _sa == [], "s1: %r" % (_sa,))
+check("SC-STATUS branch B (an earlier node stopped): stopped r1 prints only its state line (no BGP (none))",
+      _eb is None and _rb == [], "r1: %r" % (_rb,))
+check("SC-STATUS branch B: running s1, the last node, prints IF:, BGP and both verbose blocks",
+      _eb is None and _sb == RUNNING_S1, "s1: %r" % (_sb,))
+
 _calls = []
 
 
@@ -709,6 +795,35 @@ if _src_s is not None and _src_c is not None:
           "bgp_art=%r" % (_rc["bgp_art"],))
     check("SC-RUNTIME NV a reverted site passes no topology (the recorded argument is None)",
           _rs["args"][0] is None and _rc["args"][1] is None)
+
+# ---- SC-STATUS NV: rule B03 reverted, both branches fail (BL-P2-4.5c-235) ---------------
+B03_GUARDS = ("        if node_running and show_intf and ",
+              "        if (node_running and bgp_enabled and ",
+              "        if (node_running and routes_enabled and ")
+
+
+def b03_reverted():
+    """The engine source with B03's three guards reading the loop variable again, or None
+    when a guard is not in the source exactly once."""
+    src = _ENGINE_SRC
+    for g in B03_GUARDS:
+        if src.count(g) != 1:
+            return None
+        src = src.replace(g, g.replace("node_running", "running"))
+    return src
+
+
+_src_b03 = b03_reverted()
+check("SC-STATUS NV the three B03 guards are in the fixed form, so they can be reverted", _src_b03 is not None)
+if _src_b03 is not None:
+    _pr = per_node(engine_copy(_src_b03, "b03"))
+    _a_r = _pr["A: s1 (last) stopped, r1 running"][1]
+    _b_r = _pr["B: s1 (last) running, r1 stopped"][1]
+    _det = (not per_node_ok(_pr)) and _a_r != RUNNING_R1 and _b_r != []
+    if _det:
+        print("MUTATION-FAIL: B03 reverted (branch A r1=%r; branch B r1=%r)" % (_a_r, _b_r))
+    check("SC-STATUS NV B03 reverted: branch A's running r1 loses its blocks AND branch B's stopped r1 prints",
+          _det, "A r1=%r; B r1=%r" % (_a_r, _b_r))
 
 shutil.rmtree(WORK, ignore_errors=True)
 

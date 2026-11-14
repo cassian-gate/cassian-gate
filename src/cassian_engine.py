@@ -2898,14 +2898,17 @@ def cmd_status(args: argparse.Namespace) -> None:
         cname = node_rec["container"]
         state = str(node_rec.get("state") or ("running" if node_rec.get("running") else "missing"))
         print(f"  - {name:<8} ({cname}) : {state}")
+        # BL-P2-4.5c-235 (REQ-45E-6, rule B03): each block below prints only when THIS
+        # node's record says it is running -- never the record loop's last value.
+        node_running = bool(node_rec.get("running"))
 
-        if running and show_intf and "interfaces" in node_rec and node_rec["interfaces"]:
+        if node_running and show_intf and "interfaces" in node_rec and node_rec["interfaces"]:
             print("      IF:")
             for line in node_rec["interfaces"]:
                 print(f"      {line}")
 
         # Human output (founder ruling S27-R8): the record guard's capability check.
-        if (running and bgp_enabled and node_rec.get("type") in NOS_PROVIDERS
+        if (node_running and bgp_enabled and node_rec.get("type") in NOS_PROVIDERS
                 and capability_for(NOS_PROVIDERS[node_rec.get("type")],
                                    "status_bgp_summary").state == CAP_IMPL):
             bgp = node_rec.get("bgp") or {}
@@ -2935,7 +2938,7 @@ def cmd_status(args: argparse.Namespace) -> None:
                     for line in raw_text:
                         print(f"      {line}")
 
-        if (running and routes_enabled and node_rec.get("type") in NOS_PROVIDERS
+        if (node_running and routes_enabled and node_rec.get("type") in NOS_PROVIDERS
                 and capability_for(NOS_PROVIDERS[node_rec.get("type")],
                                    "status_routes").state == CAP_IMPL):
             rts = node_rec.get("routes") or {}
