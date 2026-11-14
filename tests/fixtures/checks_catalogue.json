@@ -936,7 +936,7 @@
           "state": "implemented"
         },
         "sonic-vm": {
-          "detail": "show … or vtysh -c \"show …\" (not show techsupport)",
+          "detail": "show … or vtysh -c \"show …\" (refused: show followed by any leading part of \"techsupport\", from \"t\" to \"techsupport\", in any letter case)",
           "reason": null,
           "state": "implemented"
         }

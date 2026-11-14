@@ -63,7 +63,7 @@ v1.5 supports the following invariant types. Each type maps to a single determin
 | Type | Category | Required fields (in addition to `kind`, `type`, `name`, `expect`) |
 |---|---|---|
 | `bgp_session_up` | BGP session | `node`, `neighbor` (IPv4 literal of the BGP neighbor; canonical alias `dst` accepted) |
-| `evpn_bgp_session_up` | BGP session | `node`, `peer` (a known node name) |
+| `evpn_bgp_session_up` | BGP session | `node`, `peer` (a known node name; `peer` MUST NOT be the test's own `node`) |
 | `route_present` | Route | `node`, `prefix` (CIDR) |
 | `route_absent` | Route | `node`, `prefix` (CIDR) |
 | `route_advertised_to` | BGP policy | `node`, `peer` (a known node name), `prefix` (CIDR) |
@@ -80,11 +80,11 @@ v1.5 supports the following invariant types. Each type maps to a single determin
 
 Rules:
 
-* `peer` fields MUST reference a node declared in `nodes:`; the engine's blast-radius validator rejects unknown node references with a hard-failure
+* `peer` fields MUST reference a node declared in `nodes:`; the engine's blast-radius validator rejects unknown node references with a hard-failure. For `evpn_bgp_session_up`, `peer` MUST NOT be the test's own `node`
 * IPv4 literals (`dst` for `bgp_session_up`) bypass the node-name check and pass through verbatim
 * `ospf_neighbor_up`'s `neighbor` field MUST be an IPv4 literal of the peer's OSPF router-ID (NOT a node name); the resolver's IPv4-literal validator hard-fails on non-IPv4 input. The `src` field MUST reference a node of `type: frr` declared in `nodes:` (FRR-only NOS-tag enforcement; non-FRR `src` is rejected at validation with a deterministic error)
 * `interface_state`'s `interface` field MUST reference an interface present in the referenced node's resolved interface set (its link interfaces, `lo`, and any `interfaces:` declared on the node); a reference to an absent interface is rejected at validation time with a hard-failure (exit code `2`), parallel to the unknown-node reference rejection
-* `prefix` fields MUST be canonical IPv4 CIDR notation (e.g. `10.0.0.0/24`); non-canonical values are rejected at validation time
+* `prefix` fields MUST be canonical CIDR notation (e.g. `10.0.0.0/24`); non-canonical values are rejected at validation time. An IPv6 prefix (e.g. `2001:db8::/32`) validates. For `route_present` and `route_absent`, collection on `frr` and on `sonic-vm` fails an IPv6 prefix explicitly, as a collection failure naming IPv6 as unsupported (the read is IPv4 only), never a pass
 * `bgp_community`'s `expected` communities MUST each be a literal `AS:VAL` token (e.g. `65001:100`) or a well-known token (`no-export`, `no-advertise`, `local-AS`, `internet`; `internet` normalises to community `0:0` in FRR JSON form); `match` (`any` or `all`) is REQUIRED when `expected` is a list and REJECTED when `expected` is a scalar
 * `bgp_as_path`'s `as_path` MUST be a valid regular expression (compiled after translating the FRR-native `_` word-boundary idiom to a delimiter alternation); it is matched with `re.search` against the canonical space-separated, path-ordered AS-path string (operator `^` / `$` anchors are honoured). The `node` MUST reference a node of `type: frr` (a non-FRR or unknown `node` is rejected at validation). AS numbers are read in asplain notation as FRR emits them; BGP AS-confederation handling and 4-byte AS distinctions beyond FRR's native parsing are out of scope
 * `mac` fields MUST be canonical lowercase colon-separated form (e.g. `00:11:22:33:44:55`)
@@ -139,7 +139,7 @@ Commands are constrained to a node-type-aware read-only allow-list at a single v
 |---|---|
 | `frr` | `vtysh -c "show …"` (read-only `show` commands) |
 | `nft-fw` | `nft list …` (e.g. `nft list ruleset`; mutating verbs such as `add` / `delete` / `flush` / `insert` / `replace` are denied) |
-| `sonic-vm` | `show …` (SONiC's own read-only `show` commands; `show techsupport` is denied) or `vtysh -c "show …"` (exactly one `-c` with a `show` payload) |
+| `sonic-vm` | `show …` (SONiC's own read-only `show` commands; refused: show followed by any leading part of "techsupport", from "t" to "techsupport", in any letter case, that is `t`, `te`, `tec`, `tech`, `techs`, `techsu`, `techsup`, `techsupp`, `techsuppo`, `techsuppor` and `techsupport`) or `vtysh -c "show …"` (exactly one `-c` with a `show` payload). The refusal applies to the `show` form, and a `vtysh -c` command is not refused by it. |
 
 A command outside the allow-list for the target's derived type is rejected at validation (exit code `2`) with a deterministic error; it never reaches runtime.
 
@@ -264,7 +264,7 @@ Every key listed below is REQUIRED on the failed-invariant record's `observed_st
 }
 ```
 
-* `peer` is the test's `peer` field, a known node name.
+* `peer` is the test's `peer` field, a known node name. `peer` MUST NOT be the test's own `node`.
 * `state` reflects the EVPN-AFI BGP session state.
 * `last_reset_reason` carries the most recent reset reason from FRR.
 

@@ -1401,10 +1401,12 @@ def _sonic_exec_command_rule(argv: "list[str]") -> "tuple[bool, str]":
 
     Two accepted forms, default-deny otherwise:
 
-    * ``show \u2026`` -- ``argv[0] == "show"``, excluding ``show techsupport``
-      (founder ruling D4, 2026-09-24), which interrupts the device and writes a
-      dump. ``show auto-techsupport`` is a different subcommand and stays
-      accepted. D4 narrows this form only.
+    * ``show \u2026`` -- ``argv[0] == "show"``, excluding ``show`` followed by
+      any leading part of ``techsupport``, from ``t`` to ``techsupport``, in
+      any letter case (founder ruling D4, 2026-09-24; every leading part by
+      BL-P2-4.5c-239, REQ-45E-1). ``show techsupport`` interrupts the device and
+      writes a dump. ``show auto-techsupport`` is a different subcommand, not a
+      leading part, and stays accepted. D4 narrows this form only.
     * ``vtysh -c "show \u2026"`` -- EXACTLY three arguments (founder ruling D2,
       2026-09-24). The guest's ``/usr/bin/vtysh`` is a wrapper that passes every
       argument to FRR's vtysh, which honours repeated ``-c`` and ``-b`` / ``-f``
@@ -1422,7 +1424,10 @@ def _sonic_exec_command_rule(argv: "list[str]") -> "tuple[bool, str]":
         "'show \u2026' or 'vtysh -c \"show \u2026\"'"
     )
     if argv[0] == "show":
-        if len(argv) > 1 and argv[1] == "techsupport":
+        # BL-P2-4.5c-239 (REQ-45E-1, rule B01): refuse ``show`` followed by any
+        # non-empty leading part of ``techsupport``, in any letter case. Decided
+        # from argv alone -- no help text is read and no guest is called.
+        if len(argv) > 1 and argv[1] != "" and "techsupport".startswith(argv[1].lower()):
             return (False, _reason)
         return (True, "")
     if argv[0] != "vtysh" or len(argv) != 3 or argv[1] != "-c":
@@ -2084,8 +2089,9 @@ def _sonic_normalize_bgp_summary(text: str) -> str:
 
     We intentionally discard volatile counters/timers and keep only:
     - neighbor address
-    - ASN (best-effort parse)
-    - state (Established vs Idle/Active/etc.)
+    - ASN (the column the header line names `AS`)
+    - state (the column the header line names `State/PfxRcd`; a numeric
+      value means Established, otherwise Idle/Active/etc.)
 
     Output format (one per neighbor):
       <NEIGHBOR> AS=<ASN or ?> STATE=<STATE>
@@ -2093,11 +2099,19 @@ def _sonic_normalize_bgp_summary(text: str) -> str:
     lines = (text or "").splitlines()
     out: list[str] = []
     in_table = False
+    # BL-P2-4.5c-234 (REQ-45E-3, rule B02): AS and STATE are read from the columns
+    # the header line names, located by the header's own tokens. None when the
+    # header carries no such token.
+    as_col: int | None = None
+    state_col: int | None = None
 
     for line in lines:
         # Detect the table header
         if ("Neighbor" in line) and ("Up/Down" in line):
             in_table = True
+            header = line.split()
+            as_col = next((i for i, tok in enumerate(header) if tok == "AS"), None)
+            state_col = next((i for i, tok in enumerate(header) if tok == "State/PfxRcd"), None)
             out.append(line.rstrip())
             continue
 
@@ -2121,16 +2135,18 @@ def _sonic_normalize_bgp_summary(text: str) -> str:
             out.append(line.rstrip())
             continue
 
-        # Heuristic: AS is the first integer token shortly after the neighbor/V columns
+        # AS: the row's token in the header's AS column, when it is all digits.
         asn: str | None = None
-        for tok in parts[1:6]:
-            if tok.isdigit():
-                asn = tok
-                break
+        if as_col is not None and as_col < len(parts) and parts[as_col].isdigit():
+            asn = parts[as_col]
 
-        # Last token often is State/PfxRcd. If it's numeric => Established.
-        last = parts[-1]
-        state = "Established" if last.isdigit() else last
+        # STATE: the row's token in the header's State/PfxRcd column; numeric =>
+        # Established. Without that column, the last token, as before.
+        if state_col is not None and state_col < len(parts):
+            st = parts[state_col]
+        else:
+            st = parts[-1]
+        state = "Established" if st.isdigit() else st
 
         out.append(f"{nbr} AS={asn or '?'} STATE={state}")
 
@@ -2272,7 +2288,8 @@ SONIC_PROVIDER = NosProvider(
     # -- legs the ratified design does NOT assign to SONiC (NG-9) --
     doctor_checks=deferred_leg("doctor_checks", "unassigned"),
     exec_command_rule=_sonic_exec_command_rule,
-    exec_allowed_forms="show \u2026 or vtysh -c \"show \u2026\" (not show techsupport)",
+    exec_allowed_forms=("show \u2026 or vtysh -c \"show \u2026\" (refused: show followed by any "
+                        "leading part of \"techsupport\", from \"t\" to \"techsupport\", in any letter case)"),
     state_profiles={},
     state_argv_allow=deferred_leg("state_argv_allow", "§4.5-f"),
 )

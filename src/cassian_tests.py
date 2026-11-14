@@ -2913,6 +2913,30 @@ def _fmt_dur_s(dur_ms: object) -> str:
     except Exception:
         return ""
 
+def _scenario_run_step_block(results: dict, scenario_id: str, step_index) -> list[str]:
+    """
+    BL-P2-4.5c-237 (REQ-45E-11, rule B05): the observed-state block for a failed scenario `run` step,
+    rendered from the record of that step's scenario_test_run event (same scenario id and step index; the
+    last such event when there is more than one) exactly as a failed declared test renders its record: a
+    dict observed_state renders the `observed:` block; any other value renders the absence block.
+    """
+    rec: dict = {}
+    for ev in results.get("events") or []:
+        if (
+            isinstance(ev, dict)
+            and ev.get("type") == "scenario_test_run"
+            and str(ev.get("scenario_id") or "").strip() == scenario_id
+            and ev.get("step") == step_index
+        ):
+            rec = ev
+    observed_state = rec.get("observed_state")
+    if isinstance(observed_state, dict):
+        return _format_observed_state_block(observed_state, bool(rec.get("observed_state_truncated")))
+    return _format_observed_state_absence_block(
+        rec.get("meta") or {}, rec.get("from", ""), rec.get("to", ""), rec.get("expected", "")
+    )
+
+
 def _render_scenarios_summary(results: dict) -> str:
     scenarios = results.get("scenarios") or []
     if not isinstance(scenarios, list) or not scenarios:
@@ -3125,6 +3149,14 @@ def _render_scenarios_summary(results: dict) -> str:
                 line_parts.append(f"dur={dur_step}")
 
             out.append("  " + " ".join(line_parts))
+
+            # BL-P2-4.5c-237 (REQ-45E-11, rule B05): a failed `run` step renders its record's block directly
+            # beneath its line; a passed step renders none.
+            if stype == "run" and str(st.get("verdict") or "").strip().lower() == "fail":
+                _step_index = st.get("step") if isinstance(st.get("step"), int) else i
+                out.extend(
+                    _scenario_run_step_block(results, str(s.get("id") or "").strip(), _step_index)
+                )
 
     return "\n".join(out) + "\n"
 

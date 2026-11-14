@@ -33,12 +33,32 @@ Sections:
   R-RPFX    route_prefix: the failed record's line carries SONiC's observed
             value, derived by the core from data["routes"], through the
             unchanged `failed_tests` line, in both directions.
+  R-ENGINE  BL-P2-4.5c-238 (REQ-45E-8): the engine's OWN record for a SONiC
+            observation -- bgp_session_up through the engine's scenario wait
+            path (_evaluate_invariant_attempt + wait_for_predicate, extracted
+            from the shipped engine source), on a neighbour absent from the
+            captured summary so last_error is non-empty -- carries the keys
+            FRR's handler fills over the same bytes, and renders through
+            _format_test_summary with the keys a record built from FRR's own
+            data renders. Shown red on V21a (an engine-side branch keyed on
+            startswith("son") that drops last_error after the copy) and V21b
+            (last_error dropped for every NOS after the copy), each rebuilt
+            in-process from the shipped engine source.
   R-NV      mutations that MUST fail: a dropped key and a renamed key per
             invariant kind, a dropped `observed` for bgp_neighbor and a dropped
             `routes` for route_prefix. Each
             prints MUTATION-FAIL when the proof detects it.
 
-Coverage limits (PBE-P2-8): lab-free; one image (local/sonic-vm:202405, FRR
+Coverage limits (PBE-P2-8): R-SEAM has two limits of its own (BL-P2-4.5c-238).
+(i) Its "no NOS branch" check intersects the string constants of each branch
+with the four exact NOS names in NOS_CONSTANTS, so an engine-side NOS branch
+keyed on any other string -- for example a startswith("son") test -- is not
+seen. (ii) _copies_obs_data checks only that the copy statement
+`observed_state = dict(_obs.data)` exists, not what happens to observed_state
+after it, so an engine-side key drop after the copy is not seen. R-ENGINE
+covers both on the engine's scenario wait path for bgp_session_up, the one
+kind whose data carries last_error; it exercises no other kind's engine path.
+Further: lab-free; one image (local/sonic-vm:202405, FRR
 8.5.4); the records are built in-process in the engine's shape, not by running
 the engine's retry driver; truncation is not exercised (the payloads are far
 below the cap). The advertised pair's failing observations are the captured
@@ -398,6 +418,94 @@ _rdet = rpfx_line(_rd, "fail") != _rl_s
 if _rdet:
     print("MUTATION-FAIL: key-drop route_prefix (routes)")
 check("R-NV key-drop route_prefix (routes) is detected", _rdet)
+
+# -------------------------------------------------------------- R-ENGINE
+# BL-P2-4.5c-238 (REQ-45E-8; §4.5-d closure record §5 R-a): the engine's own record path.
+import contextlib  # noqa: E402
+import io  # noqa: E402
+import re  # noqa: E402
+import textwrap  # noqa: E402
+
+import cassian_engine as E  # noqa: E402
+
+ABSENT_NEIGHBOR = "10.255.255.1"    # not in the captured summary: last_error is filled
+_V21_ANCHOR = ('            st_norm = str(observed_state.get("state") or "").strip().lower()\n'
+               '            predicate_ok = bool(observed_state.get("peer_present") and st_norm == "established")\n')
+
+
+def _eng_seg(src, name):
+    tree = ast.parse(src)
+    lines = src.splitlines(keepends=True)
+    defs = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == name]
+    if len(defs) != 1:
+        return None
+    return textwrap.dedent("".join(lines[defs[0].lineno - 1:defs[0].end_lineno]))
+
+
+def _wait_step(meta, wait_type, observed, verdict, expect):
+    return {"type": "wait_for", "wait_type": wait_type, "wait_for": None, "expected": expect,
+            "observed": observed, "verdict": verdict, "duration_ms": 12, "meta": meta}
+
+
+def _render_keys(step):
+    res = {"lab": "r45e8", "result": "pass", "summary": {"total": 0, "passed": 0, "failed": 0},
+           "tests": [], "scenarios": [{"id": "s-r45e8", "verdict": "pass", "duration_ms": 12, "steps": [step]}]}
+    line = [ln for ln in T._format_test_summary(res).splitlines() if "type=bgp_session_up" in ln]
+    return sorted(set(re.findall(r"(\w+)=", line[0]))) if len(line) == 1 else None
+
+
+def engine_wait(eng_src, ntype="sonic-vm"):
+    """bgp_session_up through the given engine source's own scenario wait path, on a node of
+    ntype reading the captured summary. Returns (recorded observed_state, rendered keys), or
+    (None, None) when the path cannot be extracted or raises."""
+    ns = dict(E.__dict__)
+    ns.update(topo={"nodes": [{"name": "s1", "type": ntype}]}, rt=FakeRt(SUMMARY), lab="lab")
+    try:
+        for name in ("_evaluate_invariant_attempt", "wait_for_predicate"):
+            seg = _eng_seg(eng_src, name)
+            if seg is None:
+                return None, None
+            exec(compile(seg, "<R-ENGINE:%s>" % name, "exec"), ns)
+        w = {"type": "bgp_session_up", "from": "s1", "neighbor": ABSENT_NEIGHBOR, "expect": "fail",
+             "timeout": 1, "interval_s": 0.05}
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            wt, _ex, observed, _dur, meta, verdict = ns["wait_for_predicate"](w)
+    except Exception:  # noqa: BLE001 -- an engine that cannot run the path fails the leg
+        return None, None
+    ostate = (meta.get("evidence") or {}).get("observed_state")
+    return ostate, _render_keys(_wait_step(meta, wt, observed, verdict, "fail"))
+
+
+def engine_leg_ok(eng_src):
+    ostate, rkeys = engine_wait(eng_src)
+    return (isinstance(ostate, dict) and sorted(ostate) == _FRR_KEYS
+            and rkeys is not None and rkeys == _REF_KEYS)
+
+
+_FRR_DATA = FRR._COLLECT_HANDLERS["bgp_session_up"](
+    FakeRt(SUMMARY), "lab", "s1",
+    ObservationRequest(kind="bgp_session_up", params={"neighbor": ABSENT_NEIGHBOR})).data
+_FRR_KEYS = sorted(_FRR_DATA)
+_REF_KEYS = _render_keys(_wait_step({"type": "bgp_session_up", "from": "s1", "succeeded": False,
+                                     "evidence": {"observed_state": dict(_FRR_DATA)}},
+                                    "bgp_session_up", "fail", "pass", "fail"))
+_ENG_SRC_R = open(E.__file__, encoding="utf-8").read()
+check("R-ENGINE FRR's handler fills last_error for the absent neighbour, and a record built from "
+      "FRR's own data renders it", bool(str(_FRR_DATA.get("last_error") or "").strip())
+      and _REF_KEYS is not None and "last_error" in _REF_KEYS)
+_os, _rk = engine_wait(_ENG_SRC_R)
+check("R-ENGINE the engine's own scenario record for a SONiC observation carries FRR's keys "
+      "and renders FRR's keys through _format_test_summary", engine_leg_ok(_ENG_SRC_R))
+for _tag, _ins in (
+        ("V21a", '            if str(_nos_ntype(topo, src)).startswith("son"):\n'
+                 '                observed_state.pop("last_error", None)\n'),
+        ("V21b", '            observed_state.pop("last_error", None)\n')):
+    _ok_anchor = _ENG_SRC_R.count(_V21_ANCHOR) == 1
+    _mut = _ENG_SRC_R.replace(_V21_ANCHOR, _ins + _V21_ANCHOR) if _ok_anchor else None
+    _det = _ok_anchor and not engine_leg_ok(_mut)
+    if _det:
+        print("MUTATION-FAIL: %s (last_error dropped after the copy)" % _tag)
+    check("R-ENGINE NV %s is detected by the engine-path leg" % _tag, _det)
 
 # ---------------------------------------------------------------- summary
 for name, ok in checks:

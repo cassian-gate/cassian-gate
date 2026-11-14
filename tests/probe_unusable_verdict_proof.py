@@ -29,6 +29,17 @@ Legs:
   W  WAIT       the live wait_for_predicate's ping and tcp branches: a broken probe raises
                 "wait_for <kind>: probe unusable: <reason>" for both expects; a network answer
                 does not raise and keeps its verdict.
+                Timed-out rows (BL-P2-4.5c-243, REQ-45E-12, rule B06): for every wait_for type,
+                an expect: pass wait whose read answers but never satisfies it returns a failed
+                outcome with time_to_success_ms null, and raises nothing. Before the 4.5-e base
+                it raised TypeError in its meta block (F-S20-2); the O-leg forms of record keep
+                that meta block (B06 reversed), so they still raise.
+                Undeclared-kind rows (BL-P2-4.5c-218, REQ-45E-13, preserved): a bgp_session_up or
+                route_advertised_to wait from a vantage whose provider does not declare the kind
+                (nft-fw), through the live _evaluate_invariant_attempt, fails under expect: pass and
+                under expect: fail: the wait raises "collection failed", which the scenario runner
+                records as a failed step. With the read flag's decision bypassed in those two
+                branches, expect: fail passes: the rows can fail.
                 V and W also check every reason text as ruled (D3 as amended by (a)): the
                 last non-empty stderr line is quoted, not the first, so a sonic-vm guest's ssh
                 transport lines (written before the command's own) are never quoted as the cause.
@@ -582,6 +593,20 @@ WI16_EDITS = {
 for _n, _p in WI16_EDITS.items():
     WI13_EDITS[_n] = _p + WI13_EDITS[_n]
 
+# The 4.5-e base, BL-P2-4.5c-243 (REQ-45E-12, rule B06): an expect: pass wait that never succeeds no longer
+# raises in the meta block. As (WI-16 text, B06 text) at the engine's own indentation, reversed before WI-16's,
+# so OLD, PRE16 and every oracle above are the forms they were before B06.
+B06_EDITS = {
+    "wait_for_predicate": [
+        (r'''            "time_to_success_ms": (int(first_success_ms) if (expected == "pass") else None),
+''',
+         r'''            "time_to_success_ms": (int(first_success_ms) if (expected == "pass" and first_success_ms is not None) else None),
+'''),
+    ],
+}
+for _n, _p in B06_EDITS.items():
+    WI13_EDITS[_n] = _p + WI13_EDITS[_n]
+
 ENG_SRC = open(os.path.join(_SRC, "cassian_engine.py"), encoding="utf-8").read()
 _LINES = ENG_SRC.splitlines(keepends=True)
 _FN = {n.name: n for n in ast.walk(ast.parse(ENG_SRC)) if isinstance(n, ast.FunctionDef)}
@@ -603,12 +628,12 @@ def _leg_o():
         for _k, (_before, _after) in enumerate(_pairs):
             _ok = _ok and _old.count(_after) == 1
             _old = _old.replace(_after, _before, 1)
-            if _k + 1 == len(WI16_EDITS.get(_name, ())):
+            if _k + 1 == len(B06_EDITS.get(_name, ())) + len(WI16_EDITS.get(_name, ())):
                 PRE16[_name] = textwrap.dedent(_old)
         LIVE[_name] = textwrap.dedent(_live)
         OLD[_name] = textwrap.dedent(_old)
         check("O %s is the 02669cd extraction with exactly the WI-13 edits (and WI-15's wait_for raises, "
-              "and WI-16's through-the-lab check) applied (sha256 pinned)" % _name,
+              "WI-16's through-the-lab check and the 4.5-e base's B06) applied (sha256 pinned)" % _name,
               _ok and sha(OLD[_name]) == ORACLE_SHA256[_name], sha(OLD[_name]))
 
 
@@ -752,14 +777,82 @@ def run_wait(text, rt, kind, expect, extras=None):
     except ValueError as exc:
         return "raise", str(exc)
     except TypeError:
-        # F-S20-2 (observed, not changed): an expect: pass wait that times out raises TypeError
-        # in its meta block, in every form; the scenario runner records the step as failed.
+        # F-S20-2: before the 4.5-e base an expect: pass wait that timed out raised TypeError in its
+        # meta block (BL-P2-4.5c-243). The O-leg forms of record keep that meta block (B06 reversed), so
+        # they still raise here; the scenario runner records a raise as a failed step. The live form
+        # returns its failed outcome instead (leg W's timed-out rows, REQ-45E-12).
         return "verdict", "fail (F-S20-2 timeout)"
     return "verdict", res[5]
 
 
 def want_reason(reason, tool):
     return None if reason is None else (reason % tool if "%s" in reason else reason)
+
+
+# BL-P2-4.5c-243 (REQ-45E-12): every type wait_for_predicate reads.
+WF_TYPES = ("ping", "tcp", "route_prefix", "bgp_session_up", "route_present", "route_advertised_to",
+            "evpn_bgp_session_up", "evpn_vni_route_present", "evpn_mac_route_present")
+
+
+def run_wait_timeout(text, kind):
+    """An expect: pass wait whose every attempt is an answer that does not satisfy it: ping and tcp get no
+    reply (an in-range exit, so the probe is usable); route_prefix's seam read answers with no route; the
+    invariant-backed kinds' read answers (flag True) and the predicate does not hold. Returns
+    (("returned", verdict), meta), or (("raise", exception type, text), None)."""
+    ns = ns_with(text, MockRT((1, "0 received", "")), {})
+    ns["retry_until"] = E.retry_until
+    ns["_nos_ntype"] = lambda _topo, _node: "frr"
+    ns["_nos_collect"] = lambda *_a, **_k: E.Observation(
+        kind="route_prefix", data={"routes": []},
+        evidence={"cmd": "vtysh -c 'show ip route json'", "rc": 0, "parse_error": "", "probe_ok": True})
+    ns["_evaluate_invariant_attempt"] = lambda **_kw: (True, False, {"state": "Idle"}, {"cmd": "vtysh", "rc": 0})
+    wf = {"type": kind, "from": "n1", "to": "10.0.0.2", "expect": "pass", "timeout": 1, "interval_s": 0.05}
+    wf.update({"tcp": {"port": 80},
+               "route_prefix": {"src": "n1", "prefix": "192.0.2.0/24"},
+               "bgp_session_up": {"dst": "10.0.0.2"},
+               "route_present": {"prefix": "192.0.2.0/24"},
+               "route_advertised_to": {"peer": "n2", "prefix": "192.0.2.0/24"},
+               "evpn_bgp_session_up": {"peer": "n2"},
+               "evpn_vni_route_present": {"vni": 100},
+               "evpn_mac_route_present": {"mac": "00:11:22:33:44:55", "vni": 100}}.get(kind, {}))
+    try:
+        res = ns["wait_for_predicate"](wf)
+    except Exception as exc:  # noqa: BLE001 -- reported, never swallowed
+        return ("raise", type(exc).__name__, str(exc)), None
+    return ("returned", res[5]), res[4]
+
+
+# BL-P2-4.5c-218 (REQ-45E-13): the two consumers whose read flag the 4.5-d session-21 finding named.
+UNDECLARED_KINDS = ("bgp_session_up", "route_advertised_to")
+# fw is an nft-fw node, whose provider declares neither kind; r2 is its frr peer.
+TOPO_FW = {"nodes": [{"name": "fw", "type": "nft-fw"}, {"name": "r2", "type": "frr"}],
+           "links": [{"endpoints": ["fw:eth1", "r2:eth1"], "ipv4": ["10.0.0.1/30", "10.0.0.2/30"]}]}
+
+
+def run_wait_undeclared(text, kind, expect):
+    """The wait through the live _evaluate_invariant_attempt and the real provider registry, from fw."""
+    ns = ns_with(text, MockRT((0, "", "")), {})
+    ns["topo"] = TOPO_FW
+    ns["retry_until"] = E.retry_until
+    exec(compile(textwrap.dedent(raw("_evaluate_invariant_attempt")), "<probe_unusable_verdict_proof:EIA>", "exec"), ns)
+    wf = {"type": kind, "from": "fw", "expect": expect, "timeout": 1, "interval_s": 0.05,
+          **({"dst": "10.0.0.2"} if kind == "bgp_session_up" else {"peer": "r2", "prefix": "192.0.2.0/24"})}
+    try:
+        res = ns["wait_for_predicate"](wf)
+    except Exception as exc:  # noqa: BLE001 -- the scenario runner records a raised wait as a failed step
+        return "raise", type(exc).__name__, str(exc)
+    return "returned", res[5]
+
+
+def bypass_read_flag(text, kind):
+    """The live form with the read flag's decision removed in `kind`'s branch only, or None when the line is
+    not found exactly once."""
+    lines = text.splitlines(keepends=True)
+    hits = [i for i, ln in enumerate(lines) if ('raise RuntimeError(f"wait_for %s: collection failed' % kind) in ln]
+    if len(hits) != 1 or "_unusable = _read_unusable(vtysh_ok, evidence)" not in lines[hits[0] - 2]:
+        return None
+    lines[hits[0] - 2] = lines[hits[0] - 2].replace("_read_unusable(vtysh_ok, evidence)", "None")
+    return "".join(lines)
 
 
 # ------------------------------------------------------------------- V: verdicts and texts
@@ -804,6 +897,29 @@ def _leg_w():
                     ok = got == ("raise", "wait_for %s: probe unusable: %s" % (kind, r))
                 check("W wait_for %-4s %-36s expect %-4s -> %s" % (kind, name, expect,
                                                                   "raises" if r is not None else want), ok, repr(got))
+    # BL-P2-4.5c-243 (REQ-45E-12, rule B06): the timed-out rows, every wait_for type.
+    for kind in WF_TYPES:
+        got, meta = run_wait_timeout(LIVE["wait_for_predicate"], kind)
+        ok = (got == ("returned", "fail") and meta.get("succeeded") is False
+              and meta.get("time_to_success_ms") is None and meta.get("time_to_first_success_ms") is None)
+        check("W wait_for %-24s expect pass, never succeeds -> failed outcome, time_to_success_ms null, "
+              "no exception (BL-P2-4.5c-243)" % kind, ok,
+              "%r %r" % (got, None if meta is None else {k: meta.get(k) for k in ("succeeded", "time_to_success_ms")}))
+    # BL-P2-4.5c-218 (REQ-45E-13, preserved): the undeclared-kind rows, then their non-vacuity.
+    _bypassed = {kind: bypass_read_flag(LIVE["wait_for_predicate"], kind) for kind in UNDECLARED_KINDS}
+    for kind in UNDECLARED_KINDS:
+        for expect in ("pass", "fail"):
+            got = run_wait_undeclared(LIVE["wait_for_predicate"], kind, expect)
+            ok = (got[0] == "raise" and got[1] == "RuntimeError"
+                  and got[2].startswith("wait_for %s: collection failed on 'fw': " % kind)
+                  and "nft-fw" in got[2])
+            check("W wait_for %-20s from an nft-fw vantage (kind not declared) expect %-4s -> the step fails "
+                  "(BL-P2-4.5c-218)" % (kind, expect), ok, repr(got))
+        _nv = _bypassed[kind] is not None and run_wait_undeclared(_bypassed[kind], kind, "fail") == ("returned", "pass")
+        if _nv:
+            print("MUTATION-FAIL: wait_for %s read flag bypassed -> expect: fail passes on an undeclared kind" % kind)
+        check("W NV wait_for %s with the read flag's decision bypassed: expect: fail passes, so the row "
+              "can fail (BL-P2-4.5c-218)" % kind, _nv)
 
 
 leg("W", _leg_w)
@@ -901,6 +1017,8 @@ def _g_run(kind, text, rt, topo, expect, extras=None, real_retry=False):
     except ValueError as exc:
         return "raise", str(exc), {}
     except TypeError:
+        # F-S20-2: only PRE16, a form of record, still raises TypeError on an expect: pass timeout; the live
+        # form returns its failed outcome (BL-P2-4.5c-243, REQ-45E-12).
         return "verdict", "fail (F-S20-2 timeout)", {}
     return "verdict", res[5], {}
 

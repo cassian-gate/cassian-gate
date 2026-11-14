@@ -861,6 +861,21 @@ def _collect_bgp_as_path(rt, lab, node, req: ObservationRequest) -> Observation:
 def _collect_route_prefix_table(rt, lab, node, req: ObservationRequest) -> Observation:
     """Probe + normalize FRR routing state for route_present, route_absent."""
     norm_prefix = str(req.params.get("prefix") or "").strip()
+    # BL-P2-4.5c-244 (REQ-45E-9, rule B04): FRR's read is the IPv4 RIB only. An IPv6
+    # prefix is an explicit collection failure, as on SONiC (cassian_nos_sonic
+    # _sonic_collect_route_table): no read is issued and the read is not vouched for.
+    try:
+        _is_v6 = ipaddress.ip_network(norm_prefix, strict=False).version == 6
+    except ValueError:
+        _is_v6 = False
+    if _is_v6:
+        return Observation(
+            kind=req.kind,
+            data={"norm_prefix": norm_prefix, "present": False, "observed_prefixes": []},
+            evidence=dict({"cmd": "", "rc": None,
+                           "parse_error": "IPv6 prefix unsupported on frr (IPv4 RIB read only)"},
+                          probe_ok=False),
+        )
     cp = rt.exec(
         lab,
         node,
@@ -1644,8 +1659,9 @@ def normalize_bgp_summary(text: str) -> str:
 
     We intentionally discard volatile counters/timers and keep only:
     - neighbor address
-    - ASN (best-effort parse)
-    - state (Established vs Idle/Active/etc.)
+    - ASN (the column the header line names `AS`)
+    - state (the column the header line names `State/PfxRcd`; a numeric
+      value means Established, otherwise Idle/Active/etc.)
 
     Output format (one per neighbor):
       <NEIGHBOR> AS=<ASN or ?> STATE=<STATE>
@@ -1653,11 +1669,19 @@ def normalize_bgp_summary(text: str) -> str:
     lines = (text or "").splitlines()
     out: list[str] = []
     in_table = False
+    # BL-P2-4.5c-234 (REQ-45E-3, rule B02): AS and STATE are read from the columns
+    # the header line names, located by the header's own tokens. None when the
+    # header carries no such token.
+    as_col: int | None = None
+    state_col: int | None = None
 
     for line in lines:
         # Detect the table header
         if ("Neighbor" in line) and ("Up/Down" in line):
             in_table = True
+            header = line.split()
+            as_col = next((i for i, tok in enumerate(header) if tok == "AS"), None)
+            state_col = next((i for i, tok in enumerate(header) if tok == "State/PfxRcd"), None)
             out.append(line.rstrip())
             continue
 
@@ -1681,16 +1705,18 @@ def normalize_bgp_summary(text: str) -> str:
             out.append(line.rstrip())
             continue
 
-        # Heuristic: AS is the first integer token shortly after the neighbor/V columns
+        # AS: the row's token in the header's AS column, when it is all digits.
         asn: str | None = None
-        for tok in parts[1:6]:
-            if tok.isdigit():
-                asn = tok
-                break
+        if as_col is not None and as_col < len(parts) and parts[as_col].isdigit():
+            asn = parts[as_col]
 
-        # Last token often is State/PfxRcd. If it's numeric => Established.
-        last = parts[-1]
-        state = "Established" if last.isdigit() else last
+        # STATE: the row's token in the header's State/PfxRcd column; numeric =>
+        # Established. Without that column, the last token, as before.
+        if state_col is not None and state_col < len(parts):
+            st = parts[state_col]
+        else:
+            st = parts[-1]
+        state = "Established" if st.isdigit() else st
 
         out.append(f"{nbr} AS={asn or '?'} STATE={state}")
 

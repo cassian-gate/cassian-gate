@@ -73,12 +73,13 @@ ORDER = (T_SHOW, T_VTYSH, T_ABSENT)
 SONIC_BANNER, FRR_BANNER = "SONiC Software Version", "FRRouting"
 LAUNCHER_PROBE = ["uname", "-s"]
 # The landed rejection line for topologies/sonic-exec-refused.yaml (S35-R2), measured on
-# cassian-gate@28ea1fc in session 35 and pinned byte for byte.
+# cassian-gate@28ea1fc in session 35 and pinned byte for byte. Its Allowed clause's sonic-vm
+# segment moved with SONiC's exec_allowed_forms in BL-P2-4.5c-239's commit (REQ-45E-2).
 REFUSED_LINE = ("ERROR: tests[1] (exec_refused): exec command rejected — 'config interface startup"
                 " Ethernet0' is not read-only for node 's1' (type 'sonic-vm'): sonic-vm exec commands"
                 " must be read-only 'show …' or 'vtysh -c \"show …\"'. Allowed: frr -> vtysh -c"
                 " \"show …\"; nft-fw -> nft list …; sonic-vm -> show … or vtysh -c \"show …\""
-                " (not show techsupport)")
+                " (refused: show followed by any leading part of \"techsupport\", from \"t\" to \"techsupport\", in any letter case)")
 
 checks, blocked = [], []
 
@@ -236,7 +237,7 @@ nv("launcher_lacks", lambda x: launcher_lacks(x[0], x[1], (SONIC_BANNER, FRR_BAN
    ((0, "Linux\n"), [(0, _OUT), (127, _NF.replace("show", "vtysh"))]),
    ((1, ""), [(127, ""), (127, "")]))
 nv("refused_ok", lambda x: refused_ok(*x), (2, REFUSED_LINE + "\n"),
-   (2, REFUSED_LINE.replace("; sonic-vm -> show … or vtysh -c \"show …\" (not show techsupport)", "") + "\n"),
+   (2, REFUSED_LINE.replace("; sonic-vm -> show … or vtysh -c \"show …\" (refused: show followed by any leading part of \"techsupport\", from \"t\" to \"techsupport\", in any letter case)", "") + "\n"),
    (0, "✅ VALIDATE PASS: topologies/sonic-exec-refused.yaml\n"))
 nv("refused_ok (one line)", lambda x: refused_ok(*x), (2, REFUSED_LINE + "\n"),
    (2, REFUSED_LINE + "\nERROR: tests[2] (x): exec command rejected\n"), (1, REFUSED_LINE + "\n"))
