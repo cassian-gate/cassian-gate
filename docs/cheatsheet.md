@@ -743,7 +743,7 @@ Which references are rejected:
 
 Support boundary:
 
-- supported current surfaces for `sonic-vm`: lifecycle (`up` / `status` / `down`), node readiness, **ping tests** (executed against the guest), **`exec` tests** that run a read-only `show …` (except `show techsupport`) or `vtysh -c "show …"` command on the guest, and the test kinds and invariant types in the implemented set above
+- supported current surfaces for `sonic-vm`: lifecycle (`up` / `status` / `down`), node readiness, **ping tests** (executed against the guest), **`exec` tests** that run a read-only `show …` (refused: show followed by any leading part of "techsupport", from "t" to "techsupport", in any letter case) or `vtysh -c "show …"` command on the guest, and the test kinds and invariant types in the implemented set above. The refusal applies to the `show` form, and a `vtysh -c` command is not refused by it.
 - unsupported current surfaces: test kinds and invariant types outside the implemented set above (the deferred list the validation rejection message derives), guest-file `copy_*`, and candidate-config input against `sonic-vm` / NOS VM nodes
 
 Scope boundary:
@@ -1208,7 +1208,7 @@ When the built-in invariant catalog can't express the check you need, an `exec` 
 - name: bgp_peer_established
   kind: exec
   src: r1                                    # target node; type derived (frr | nft-fw | sonic-vm)
-  command: vtysh -c "show bgp summary json"  # read-only: frr -> vtysh -c "show …"; nft-fw -> nft list …; sonic-vm -> show … or vtysh -c "show …" (not show techsupport)
+  command: vtysh -c "show bgp summary json"  # read-only: frr -> vtysh -c "show …"; nft-fw -> nft list …; sonic-vm -> show … or vtysh -c "show …" (refused: show followed by any leading part of "techsupport", from "t" to "techsupport", in any letter case)
   assertion:
     field:
       path: [ipv4Unicast, peers, "10.0.0.2", state]

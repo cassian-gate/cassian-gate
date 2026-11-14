@@ -139,7 +139,7 @@ Commands are constrained to a node-type-aware read-only allow-list at a single v
 |---|---|
 | `frr` | `vtysh -c "show …"` (read-only `show` commands) |
 | `nft-fw` | `nft list …` (e.g. `nft list ruleset`; mutating verbs such as `add` / `delete` / `flush` / `insert` / `replace` are denied) |
-| `sonic-vm` | `show …` (SONiC's own read-only `show` commands; `show techsupport` is denied) or `vtysh -c "show …"` (exactly one `-c` with a `show` payload) |
+| `sonic-vm` | `show …` (SONiC's own read-only `show` commands; refused: show followed by any leading part of "techsupport", from "t" to "techsupport", in any letter case, that is `t`, `te`, `tec`, `tech`, `techs`, `techsu`, `techsup`, `techsupp`, `techsuppo`, `techsuppor` and `techsupport`) or `vtysh -c "show …"` (exactly one `-c` with a `show` payload). The refusal applies to the `show` form, and a `vtysh -c` command is not refused by it. |
 
 A command outside the allow-list for the target's derived type is rejected at validation (exit code `2`) with a deterministic error; it never reaches runtime.
 
