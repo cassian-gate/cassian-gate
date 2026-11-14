@@ -48,12 +48,14 @@ Coverage limits (PBE-P2-8), stated so a PASS is not read as more than it is:
   4. ping, tcp and exec are swept for a raise and exit 255 only; their unusable-read texts are WI-13's and
      WI-14's, rendered by HS-7 (tests/probe_unusable_verdict_proof.py), not by leg R.
   5. Loud cells are counted, not judged: a raise escaping the check function or an exit 2 (rows BL-P2-S1D2-45 and
-     -53); a wait_for with expect: pass that never succeeds can raise TypeError (row BL-P2-4.5c-243).
+     -53). A wait_for with expect: pass that never succeeds no longer raises TypeError: row BL-P2-4.5c-243 is
+     fixed in the 4.5-e base (REQ-45E-12, rule B06), and such a wait is a failed outcome.
   6. Each mutant shows that the sweep fails when that one decision is disabled. A future site that bypasses every
      shared decision is caught by the sweep itself on the live code, not by a mutant.
   7. Leg A's answers are the ANSWERS table's, one to three per cell, hand-written in each reader's format; other
      in-format answers (a "no BGP instance" body, a table with many rows) are not swept. A wait_for with
-     expect: pass on an answer that never satisfies it raises TypeError (row BL-P2-4.5c-243): compared, not judged.
+     expect: pass on an answer that never satisfies it is a failed outcome, no longer a TypeError (row
+     BL-P2-4.5c-243, fixed by REQ-45E-12): compared, not judged.
   8. The failure modes are injected at the runtime's exec seam. A read that does not go through rt.exec is not
      reached by any mode, and is visible here only as a cell that does not fail.
   9. JSON in the wrong shape is not a sweep mode. Whether it is an answer is the reader's own declaration

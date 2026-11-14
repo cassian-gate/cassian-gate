@@ -44,9 +44,13 @@ Sections:
                     passing (explicit UNSUP-fail); scenario wait raises the UNSUP;
               Q20-2 an ip read exiting 2 is a collection failure (S1D2-S10-R4):
                     test path fails, scenario wait raises; retired form forced 0.
-            Observed, not changed (ZERO-TOUCH meta block, D-1): an expect: pass
-            wait that times out raises TypeError at time_to_success_ms
-            (int(None)) in both forms, for every wait_for type (F-S20-2).
+            The live form no longer raises on an expect: pass wait that times
+            out: BL-P2-4.5c-243 (REQ-45E-12, rule B06) records it as a failed
+            outcome with time_to_success_ms null. The D-1 OLD-form assertions
+            run OLD_WFP_FROZEN, the retired branch in the meta block of record
+            (B06 reversed), which still raises TypeError at time_to_success_ms
+            (int(None)) (F-S20-2). The parity legs compare both branches inside
+            the live surroundings, so B06 is never a delta there.
   P-NEVER   ruling (I): a read the provider cannot vouch for (probe_ok False)
             is verdict fail regardless of expect on the test path, and raises on
             the scenario path. SONiC route_prefix is declared IMPL in script
@@ -288,6 +292,18 @@ try:
     _pre, NEW_BRANCH, _post = split_branch(NEW_WFP)
     OLD_WFP = _pre + OLD_BRANCH + _post
 
+    # BL-P2-4.5c-243 (REQ-45E-12, rule B06): the live meta block no longer raises on an expect: pass
+    # timeout. B06 is reversed (exactly once) wherever a form must keep the meta block of record.
+    B06_LIVE = ('    "time_to_success_ms": (int(first_success_ms) if (expected == "pass" and first_success_ms '
+                'is not None) else None),\n')
+    B06_OLD = '    "time_to_success_ms": (int(first_success_ms) if (expected == "pass") else None),\n'
+
+    def unb06(wfp):
+        assert wfp.count(B06_LIVE) == 1, "B06 not found exactly once in the live wait_for_predicate"
+        return wfp.replace(B06_LIVE, B06_OLD)
+
+    OLD_WFP_FROZEN = unb06(OLD_WFP)
+
     # --------------------------------------------------------------- P-ORACLE
     check("P-ORACLE frozen run_route_prefix_test is the a2fcae5 extraction (sha256 pinned)",
           sha(OLD_RPT) == OLD_RPT_SHA256)
@@ -479,7 +495,7 @@ try:
     check("P-DECL D-1 IPv6 (scenario, expect fail): retired -4 read saw nothing (verdict pass); "
           "seam read sees the route (verdict fail)",
           a[0] == ("verdict", "pass", "fail") and b[0] == ("verdict", "fail", "pass"))
-    a = run_wait(OLD_WFP, R1, FakeRt(fib6), wf_for(V6, "pass"))
+    a = run_wait(OLD_WFP_FROZEN, R1, FakeRt(fib6), wf_for(V6, "pass"))
     b = run_wait(NEW_WFP, R1, FakeRt(fib6), wf_for(V6, "pass"))
     check("P-DECL D-1 IPv6 (scenario, expect pass): retired read timed out (raised in the meta block, "
           "F-S20-2); seam read passes",
@@ -495,7 +511,7 @@ try:
     check("P-DECL D-1 /32 (scenario, expect fail): retired substring rule read it absent (verdict pass); "
           "seam rule reads it present (verdict fail)",
           a[0] == ("verdict", "pass", "fail") and b[0] == ("verdict", "fail", "pass"))
-    a = run_wait(OLD_WFP, R1, FakeRt(fib32), wf_for(HOST32, "pass"))
+    a = run_wait(OLD_WFP_FROZEN, R1, FakeRt(fib32), wf_for(HOST32, "pass"))
     b = run_wait(NEW_WFP, R1, FakeRt(fib32), wf_for(HOST32, "pass"))
     check("P-DECL D-1 /32 (scenario, expect pass): retired rule timed out (raised in the meta block, "
           "F-S20-2); seam rule passes",
@@ -679,8 +695,8 @@ try:
           "the f015801 extraction (sha256 pinned)",
           NEW_RIT.count(GUARD_RIT) == 1 and sha(OLD_RIT) == RIT_ORACLE_SHA256)
     check("P-RP-ORACLE wait_for_predicate carries the F-S21-1 guard exactly once and is otherwise "
-          "the f015801 extraction (sha256 pinned)",
-          NEW_WFP.count(GUARD_WFP) == 1 and sha(OLD_WFP_RP) == WFP_ORACLE_SHA256)
+          "the f015801 extraction, B06 reversed (sha256 pinned)",
+          NEW_WFP.count(GUARD_WFP) == 1 and sha(unb06(OLD_WFP_RP)) == WFP_ORACLE_SHA256)
 
     class FakeRib:
         """Answers FRR's `vtysh -c 'show ip route json'` per node. `rib` maps

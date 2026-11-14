@@ -9890,7 +9890,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             "interval_s": float(interval_s),
             "per_attempt_timeout_s": int(per_attempt_timeout_s),
             "succeeded": bool(succeeded),
-            "time_to_success_ms": (int(first_success_ms) if (expected == "pass") else None),
+            "time_to_success_ms": (int(first_success_ms) if (expected == "pass" and first_success_ms is not None) else None),
             "time_to_first_success_ms": (int(first_success_ms) if (expected == "fail" and succeeded) else None),
             "last_rc": getattr(last_cp, "returncode", None),
         }
