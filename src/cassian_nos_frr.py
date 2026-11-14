@@ -861,6 +861,21 @@ def _collect_bgp_as_path(rt, lab, node, req: ObservationRequest) -> Observation:
 def _collect_route_prefix_table(rt, lab, node, req: ObservationRequest) -> Observation:
     """Probe + normalize FRR routing state for route_present, route_absent."""
     norm_prefix = str(req.params.get("prefix") or "").strip()
+    # BL-P2-4.5c-244 (REQ-45E-9, rule B04): FRR's read is the IPv4 RIB only. An IPv6
+    # prefix is an explicit collection failure, as on SONiC (cassian_nos_sonic
+    # _sonic_collect_route_table): no read is issued and the read is not vouched for.
+    try:
+        _is_v6 = ipaddress.ip_network(norm_prefix, strict=False).version == 6
+    except ValueError:
+        _is_v6 = False
+    if _is_v6:
+        return Observation(
+            kind=req.kind,
+            data={"norm_prefix": norm_prefix, "present": False, "observed_prefixes": []},
+            evidence=dict({"cmd": "", "rc": None,
+                           "parse_error": "IPv6 prefix unsupported on frr (IPv4 RIB read only)"},
+                          probe_ok=False),
+        )
     cp = rt.exec(
         lab,
         node,

@@ -51,6 +51,11 @@ Sections:
             is verdict fail regardless of expect on the test path, and raises on
             the scenario path. SONiC route_prefix is declared IMPL in script
             2b-i; its never-pass is ruling (I)'s IPv6 collection failure.
+            FRR route_present / route_absent (BL-P2-4.5c-244; REQ-45E-9, rule
+            B04): an IPv6 prefix is verdict fail under expect pass AND expect
+            fail, the IPv6 reason recorded as parse_error and read_unusable,
+            and no read issued; with the provider's IPv6 test bypassed, the
+            leg is shown to fail.
   P-RP      (script 2a) ORACLE: each consumer is the live function with exactly
             the 2a guard text removed, sha256-pinned to the f015801 extraction.
             PARITY: FRR rc 0, every committed route_present / route_absent test
@@ -856,6 +861,44 @@ try:
           never_pass_rit(NEW_RIT))
     check("P-RP-NEVER scenario: probe_ok False raises for expect pass AND expect fail (F-S21-1)",
           never_pass_wfp(NEW_WFP))
+
+    # BL-P2-4.5c-244 (REQ-45E-9, rule B04): FRR's IPv6 never-pass, through the real provider.
+    FRR_V6_REASON = "IPv6 prefix unsupported on frr (IPv4 RIB read only)"
+    V6_PFX = "2001:db8:1::/64"
+
+    def frr_v6_never_pass(rit):
+        ok, reads = True, 0
+        for k in ("route_present", "route_absent"):
+            for e in ("pass", "fail"):
+                rib = FakeRib({"r1": [V6_PFX]})
+                out, rec = run_inv(rit, R1, rib, inv_t(k, V6_PFX, e), "r1")
+                reads += len(rib.calls)
+                ev = rec.get("evidence") or {}
+                ok = (ok and out == ("verdict", "fail") and rec.get("verdict") == "fail"
+                      and rec.get("observed") == "fail" and ev.get("parse_error") == FRR_V6_REASON
+                      and ev.get("read_unusable") == FRR_V6_REASON
+                      and rec.get("error") == f"{k} collection failed on 'r1': {FRR_V6_REASON}")
+        return ok and reads == 0
+
+    check("P-NEVER frr route_present / route_absent: an IPv6 prefix is verdict fail for expect pass AND expect "
+          "fail, the IPv6 reason recorded, no read issued (BL-P2-4.5c-244, REQ-45E-9)",
+          frr_v6_never_pass(NEW_RIT))
+
+    class _V4Only:
+        """Stands in for the provider's ipaddress module: every prefix reads as IPv4."""
+        @staticmethod
+        def ip_network(_p, strict=True):
+            return SimpleNamespace(version=4)
+
+    _saved_ip = FRR.ipaddress
+    FRR.ipaddress = _V4Only
+    try:
+        _v6_bypassed = frr_v6_never_pass(NEW_RIT)
+    finally:
+        FRR.ipaddress = _saved_ip
+    if not _v6_bypassed:
+        print("MUTATION-FAIL: frr IPv6 test bypassed (the read is issued)")
+    check("P-NV frr IPv6 test bypassed: the never-pass leg detects it", not _v6_bypassed)
 
     # -------------------------------------------------------------------- P-NV
     def mutate(text, old, new):
