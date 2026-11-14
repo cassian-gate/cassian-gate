@@ -63,7 +63,7 @@ v1.5 supports the following invariant types. Each type maps to a single determin
 | Type | Category | Required fields (in addition to `kind`, `type`, `name`, `expect`) |
 |---|---|---|
 | `bgp_session_up` | BGP session | `node`, `neighbor` (IPv4 literal of the BGP neighbor; canonical alias `dst` accepted) |
-| `evpn_bgp_session_up` | BGP session | `node`, `peer` (a known node name) |
+| `evpn_bgp_session_up` | BGP session | `node`, `peer` (a known node name; `peer` MUST NOT be the test's own `node`) |
 | `route_present` | Route | `node`, `prefix` (CIDR) |
 | `route_absent` | Route | `node`, `prefix` (CIDR) |
 | `route_advertised_to` | BGP policy | `node`, `peer` (a known node name), `prefix` (CIDR) |
@@ -80,7 +80,7 @@ v1.5 supports the following invariant types. Each type maps to a single determin
 
 Rules:
 
-* `peer` fields MUST reference a node declared in `nodes:`; the engine's blast-radius validator rejects unknown node references with a hard-failure
+* `peer` fields MUST reference a node declared in `nodes:`; the engine's blast-radius validator rejects unknown node references with a hard-failure. For `evpn_bgp_session_up`, `peer` MUST NOT be the test's own `node`
 * IPv4 literals (`dst` for `bgp_session_up`) bypass the node-name check and pass through verbatim
 * `ospf_neighbor_up`'s `neighbor` field MUST be an IPv4 literal of the peer's OSPF router-ID (NOT a node name); the resolver's IPv4-literal validator hard-fails on non-IPv4 input. The `src` field MUST reference a node of `type: frr` declared in `nodes:` (FRR-only NOS-tag enforcement; non-FRR `src` is rejected at validation with a deterministic error)
 * `interface_state`'s `interface` field MUST reference an interface present in the referenced node's resolved interface set (its link interfaces, `lo`, and any `interfaces:` declared on the node); a reference to an absent interface is rejected at validation time with a hard-failure (exit code `2`), parallel to the unknown-node reference rejection
@@ -264,7 +264,7 @@ Every key listed below is REQUIRED on the failed-invariant record's `observed_st
 }
 ```
 
-* `peer` is the test's `peer` field, a known node name.
+* `peer` is the test's `peer` field, a known node name. `peer` MUST NOT be the test's own `node`.
 * `state` reflects the EVPN-AFI BGP session state.
 * `last_reset_reason` carries the most recent reset reason from FRR.
 
