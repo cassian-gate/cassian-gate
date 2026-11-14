@@ -34,6 +34,12 @@ Legs:
                 outcome with time_to_success_ms null, and raises nothing. Before the 4.5-e base
                 it raised TypeError in its meta block (F-S20-2); the O-leg forms of record keep
                 that meta block (B06 reversed), so they still raise.
+                Undeclared-kind rows (BL-P2-4.5c-218, REQ-45E-13, preserved): a bgp_session_up or
+                route_advertised_to wait from a vantage whose provider does not declare the kind
+                (nft-fw), through the live _evaluate_invariant_attempt, fails under expect: pass and
+                under expect: fail: the wait raises "collection failed", which the scenario runner
+                records as a failed step. With the read flag's decision bypassed in those two
+                branches, expect: fail passes: the rows can fail.
                 V and W also check every reason text as ruled (D3 as amended by (a)): the
                 last non-empty stderr line is quoted, not the first, so a sonic-vm guest's ssh
                 transport lines (written before the command's own) are never quoted as the cause.
@@ -816,6 +822,39 @@ def run_wait_timeout(text, kind):
     return ("returned", res[5]), res[4]
 
 
+# BL-P2-4.5c-218 (REQ-45E-13): the two consumers whose read flag the 4.5-d session-21 finding named.
+UNDECLARED_KINDS = ("bgp_session_up", "route_advertised_to")
+# fw is an nft-fw node, whose provider declares neither kind; r2 is its frr peer.
+TOPO_FW = {"nodes": [{"name": "fw", "type": "nft-fw"}, {"name": "r2", "type": "frr"}],
+           "links": [{"endpoints": ["fw:eth1", "r2:eth1"], "ipv4": ["10.0.0.1/30", "10.0.0.2/30"]}]}
+
+
+def run_wait_undeclared(text, kind, expect):
+    """The wait through the live _evaluate_invariant_attempt and the real provider registry, from fw."""
+    ns = ns_with(text, MockRT((0, "", "")), {})
+    ns["topo"] = TOPO_FW
+    ns["retry_until"] = E.retry_until
+    exec(compile(textwrap.dedent(raw("_evaluate_invariant_attempt")), "<probe_unusable_verdict_proof:EIA>", "exec"), ns)
+    wf = {"type": kind, "from": "fw", "expect": expect, "timeout": 1, "interval_s": 0.05,
+          **({"dst": "10.0.0.2"} if kind == "bgp_session_up" else {"peer": "r2", "prefix": "192.0.2.0/24"})}
+    try:
+        res = ns["wait_for_predicate"](wf)
+    except Exception as exc:  # noqa: BLE001 -- the scenario runner records a raised wait as a failed step
+        return "raise", type(exc).__name__, str(exc)
+    return "returned", res[5]
+
+
+def bypass_read_flag(text, kind):
+    """The live form with the read flag's decision removed in `kind`'s branch only, or None when the line is
+    not found exactly once."""
+    lines = text.splitlines(keepends=True)
+    hits = [i for i, ln in enumerate(lines) if ('raise RuntimeError(f"wait_for %s: collection failed' % kind) in ln]
+    if len(hits) != 1 or "_unusable = _read_unusable(vtysh_ok, evidence)" not in lines[hits[0] - 2]:
+        return None
+    lines[hits[0] - 2] = lines[hits[0] - 2].replace("_read_unusable(vtysh_ok, evidence)", "None")
+    return "".join(lines)
+
+
 # ------------------------------------------------------------------- V: verdicts and texts
 def _leg_v():
     for name, mk, extras, (want_p, want_f), reason in CASES + PING_ONLY:
@@ -866,6 +905,21 @@ def _leg_w():
         check("W wait_for %-24s expect pass, never succeeds -> failed outcome, time_to_success_ms null, "
               "no exception (BL-P2-4.5c-243)" % kind, ok,
               "%r %r" % (got, None if meta is None else {k: meta.get(k) for k in ("succeeded", "time_to_success_ms")}))
+    # BL-P2-4.5c-218 (REQ-45E-13, preserved): the undeclared-kind rows, then their non-vacuity.
+    _bypassed = {kind: bypass_read_flag(LIVE["wait_for_predicate"], kind) for kind in UNDECLARED_KINDS}
+    for kind in UNDECLARED_KINDS:
+        for expect in ("pass", "fail"):
+            got = run_wait_undeclared(LIVE["wait_for_predicate"], kind, expect)
+            ok = (got[0] == "raise" and got[1] == "RuntimeError"
+                  and got[2].startswith("wait_for %s: collection failed on 'fw': " % kind)
+                  and "nft-fw" in got[2])
+            check("W wait_for %-20s from an nft-fw vantage (kind not declared) expect %-4s -> the step fails "
+                  "(BL-P2-4.5c-218)" % (kind, expect), ok, repr(got))
+        _nv = _bypassed[kind] is not None and run_wait_undeclared(_bypassed[kind], kind, "fail") == ("returned", "pass")
+        if _nv:
+            print("MUTATION-FAIL: wait_for %s read flag bypassed -> expect: fail passes on an undeclared kind" % kind)
+        check("W NV wait_for %s with the read flag's decision bypassed: expect: fail passes, so the row "
+              "can fail (BL-P2-4.5c-218)" % kind, _nv)
 
 
 leg("W", _leg_w)
