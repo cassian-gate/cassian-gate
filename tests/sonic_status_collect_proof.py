@@ -177,7 +177,53 @@ RT_TEXT = (
     "C>* 10.1.0.1/32 is directly connected, Loopback0, 00:09:59\n"
 )
 RT_INPUTS = [RT_TEXT, "", "% Unknown command\n", "garbage 300.1.2.3/40 here\n"]
-NORM_INPUTS = SUM_INPUTS + ["pre-table line\n" + SUM_TEXT, SUM_TEXT.replace("Up/Down", "UpDown")]
+# BL-P2-4.5c-234 (REQ-45E-3 to REQ-45E-5): FRR 10.7.1's header, measured on ai-netsim in
+# §4.5-e Chat 3 session 1's A-P lab trial (its row values are written for the case); a
+# summary whose columns are reordered; and a header that names neither column (rule B02's
+# else branch: AS '?', STATE the last token).
+SUM_FRR1071 = (
+    "IPv4 Unicast Summary:\n"
+    "BGP router identifier 10.0.0.1, local AS number 65001 VRF default vrf-id 0\n"
+    "\n"
+    "Neighbor        V         AS   MsgRcvd   MsgSent   TblVer  InQ OutQ  Up/Down State/PfxRcd   PfxSnt Desc\n"
+    "10.0.0.2        4      65002        10        10        1    0    0 00:02:11            1        1 N/A\n"
+    "10.0.0.6        4      65003         0         0        0    0    0    never       Active        0 N/A\n"
+    "\n"
+    "Total number of neighbors 2\n"
+)
+SUM_REORDERED = (
+    "Neighbor State/PfxRcd V MsgRcvd MsgSent Up/Down AS Desc\n"
+    "10.0.1.1 5 4 30 31 00:10:00 64512 peerA\n"
+    "10.0.1.2 Idle 4 0 0 never 64513 peerB\n"
+)
+SUM_NOCOLS = "Neighbor V Up/Down Desc\n10.0.2.1 4 00:00:01 Connect\n"
+NORM_INPUTS = SUM_INPUTS + ["pre-table line\n" + SUM_TEXT, SUM_TEXT.replace("Up/Down", "UpDown"),
+                            SUM_FRR1071, SUM_REORDERED, SUM_NOCOLS]
+# The normalised rows each input must give: AS and STATE from the header-named columns.
+COLUMN_CASES = [
+    (SUM_TEXT, ["10.0.0.1 AS=65200 STATE=Established", "10.0.0.3 AS=65200 STATE=Connect",
+                "10.0.0.5 AS=65200 STATE=Active", "fc00::2 AS=65200 STATE=Active"]),
+    (SUM_FRR1071, ["10.0.0.2 AS=65002 STATE=Established", "10.0.0.6 AS=65003 STATE=Active"]),
+    (SUM_REORDERED, ["10.0.1.1 AS=64512 STATE=Established", "10.0.1.2 AS=64513 STATE=Idle"]),
+    (SUM_NOCOLS, ["10.0.2.1 AS=? STATE=Connect"]),
+]
+
+
+def columns_ok(fn):
+    return all([ln for ln in fn(text).splitlines() if " AS=" in ln] == want for text, want in COLUMN_CASES)
+
+
+def column_mutant(fn, old, new, tag):
+    """fn rebuilt from its own source with one header token swapped: a misreading restored.
+    None when the anchor is not in the source exactly once (the leg then fails, never passes)."""
+    import inspect
+    import textwrap
+    src = textwrap.dedent(inspect.getsource(fn))
+    if src.count(old) != 1:
+        return None
+    ns = dict(fn.__globals__)
+    exec(compile(src.replace(old, new), "<sc-columns-%s>" % tag, "exec"), ns)
+    return ns[fn.__name__]
 
 
 def parity(fa, fb, inputs):
@@ -256,6 +302,20 @@ check("SC-PARITY the input set reaches both branches (established and not)",
       any(v["established"] for v in _txt.values()) and any(not v["established"] for v in _txt.values()))
 check("SC-PARITY the no-header input reaches the fallback branch",
       F.parse_frr_bgp_summary_neighbors(SUM_NOHEADER).get("10.0.0.7", {}).get("established") is True)
+
+# ---- SC-COLUMNS (BL-P2-4.5c-234; REQ-45E-3, REQ-45E-4, REQ-45E-5) -------------------
+for _lbl, _fn in (("FRR normalize_bgp_summary", F.normalize_bgp_summary),
+                  ("SONiC _sonic_normalize_bgp_summary", S._sonic_normalize_bgp_summary)):
+    check("SC-COLUMNS %s reads AS and State/PfxRcd from the header-named columns (Desc, FRR 10.7.1's "
+          "header, reordered columns, a header naming neither)" % _lbl, columns_ok(_fn))
+    for _tag, _old, _new in (("AS read from V", 'tok == "AS"', 'tok == "V"'),
+                             ("STATE read from Desc", 'tok == "State/PfxRcd"', 'tok == "Desc"'),
+                             ("STATE read from PfxSnt", 'tok == "State/PfxRcd"', 'tok == "PfxSnt"')):
+        _mut = column_mutant(_fn, _old, _new, _tag.replace(" ", "-"))
+        _det = _mut is not None and not columns_ok(_mut)
+        if _det:
+            print("MUTATION-FAIL: %s (%s)" % (_tag, _lbl))
+        check("SC-COLUMNS NV %s: %s is detected" % (_lbl, _tag), _det)
 
 # ---- SC-SUMMARY / SC-ROUTES (captured guest output) --------------------------------
 _rt = StubRuntime(OUTPUTS)
