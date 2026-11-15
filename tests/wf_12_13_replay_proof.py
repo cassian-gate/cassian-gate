@@ -284,9 +284,17 @@ for _s, _p in (
 
 # §4.5-e base: the proofs its own CI steps run (handover §6.7.4), one entry per step, entered
 # with the step (REQ-45E-15).
-for _p in ("wf_additions_only_proof.py",):  # WI-3, REQ-45E-14, §6.7.4 row 2
+for _p in ("wf_additions_only_proof.py",  # WI-3, REQ-45E-14, §6.7.4 row 2
+           "substrate_target_preservation_proof.py"):  # WI-3, REQ-45E-16, §6.7.4 row 3
     check(f"§4.5-e proof is CI-wired: {_p} present in the gate", _p in gate)
     LISTED.append(_p)
+# Non-vacuity (handover §15.2, negative-proof row 16): with the proof listed, an in-memory
+# gate without its step turns the existing direction red.
+_gate_nv16 = "".join(_l for _l in gate.splitlines(keepends=True)
+                     if "substrate_target_preservation_proof" not in _l)
+check("NV REQ-45E-16 a gate without the substrate step reds the listed proof's existing-direction check",
+      "substrate_target_preservation_proof.py" in gate
+      and "substrate_target_preservation_proof.py" not in _gate_nv16)
 
 _INVOKED_RE = r"\bpython3? tests/([A-Za-z0-9_./-]+_proof\.py)\b"
 

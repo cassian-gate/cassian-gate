@@ -884,6 +884,17 @@ jobs:
           fi
           python tests/wf_additions_only_proof.py
 
+      # §4.5-e WI-3 (REQ-45E-16; BL-P2-DESIGN-5; ER-26): the W4 substrate/NOS target-preservation
+      # guard (REQ-45a-17/-18) runs in CI. Lab-free. Additions only (REQ-45E-14).
+      - name: substrate target-preservation proof — substrate_target_preservation_proof.py (§4.5-e WI-3, REQ-45E-16)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          python tests/substrate_target_preservation_proof.py
+
       # §4.5-d VM-1 -- scope §9 row 15: one fixture, one boot, one declared FRR<->SONiC
       # session carrying REQ-45D-8 first, then -1, -16 and -19 (S29-R5), and the two
       # §15.2 negatives. The proof drives `cassian test --name` and `cassian status`
