@@ -282,6 +282,12 @@ for _s, _p in (
     check(f"{_s} proof is CI-wired: {_p} present in the gate", _p in gate)
     LISTED.append(_p)
 
+# §4.5-e base: the proofs its own CI steps run (handover §6.7.4), one entry per step, entered
+# with the step (REQ-45E-15).
+for _p in ("wf_additions_only_proof.py",):  # WI-3, REQ-45E-14, §6.7.4 row 2
+    check(f"§4.5-e proof is CI-wired: {_p} present in the gate", _p in gate)
+    LISTED.append(_p)
+
 _INVOKED_RE = r"\bpython3? tests/([A-Za-z0-9_./-]+_proof\.py)\b"
 
 

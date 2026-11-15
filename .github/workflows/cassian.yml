@@ -864,6 +864,26 @@ jobs:
           set -euo pipefail
           python tests/unusable_read_sweep_proof.py
 
+      # §4.5-e WI-3 (REQ-45E-14; BL-P2-4.5c-241; ESC-5 ruling and founder answer 5): every step
+      # present at the merge-base with origin/develop/phase2 is byte-identical at HEAD, in the same
+      # relative order. The Checkout step keeps its default depth, so this step fetches the base
+      # branch's history itself; an unshallow fetch on a complete clone is an error, hence the test.
+      # If the history cannot be had, the fetch or the proof goes red; it never passes. Lab-free.
+      # Additions only (REQ-45E-14).
+      - name: additions-only workflow proof — wf_additions_only_proof.py (§4.5-e WI-3, REQ-45E-14)
+        if: success() || failure()
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            git fetch --no-tags --prune --unshallow origin '+refs/heads/develop/phase2:refs/remotes/origin/develop/phase2'
+          else
+            git fetch --no-tags --prune origin '+refs/heads/develop/phase2:refs/remotes/origin/develop/phase2'
+          fi
+          python tests/wf_additions_only_proof.py
+
       # §4.5-d VM-1 -- scope §9 row 15: one fixture, one boot, one declared FRR<->SONiC
       # session carrying REQ-45D-8 first, then -1, -16 and -19 (S29-R5), and the two
       # §15.2 negatives. The proof drives `cassian test --name` and `cassian status`
