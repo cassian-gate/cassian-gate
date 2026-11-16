@@ -1,0 +1,387 @@
+[
+  {
+    "id": 1,
+    "url": "http://127.0.0.1:54091/api/plugins/bgp/bgpsession/1/",
+    "display": "leaf1:leaf1 to spine1",
+    "status": {
+      "value": "active",
+      "label": "Active"
+    },
+    "site": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/sites/1/",
+      "display": "site-a",
+      "name": "site-a",
+      "slug": "site-a",
+      "description": ""
+    },
+    "tenant": null,
+    "device": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/devices/1/",
+      "display": "leaf1",
+      "name": "leaf1",
+      "description": ""
+    },
+    "virtualmachine": null,
+    "local_address": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/ipam/ip-addresses/1/",
+      "display": "10.0.0.1/30",
+      "family": {
+        "value": 4,
+        "label": "IPv4"
+      },
+      "address": "10.0.0.1/30",
+      "description": ""
+    },
+    "remote_address": {
+      "id": 2,
+      "url": "http://127.0.0.1:54091/api/ipam/ip-addresses/2/",
+      "display": "10.0.0.2/30",
+      "family": {
+        "value": 4,
+        "label": "IPv4"
+      },
+      "address": "10.0.0.2/30",
+      "description": ""
+    },
+    "local_as": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/ipam/asns/1/",
+      "display": "AS65001",
+      "asn": 65001,
+      "description": ""
+    },
+    "remote_as": {
+      "id": 2,
+      "url": "http://127.0.0.1:54091/api/ipam/asns/2/",
+      "display": "AS65002",
+      "asn": 65002,
+      "description": ""
+    },
+    "remote_as_macro": null,
+    "peer_group": null,
+    "import_policies": [],
+    "export_policies": [],
+    "max_prefixes": null,
+    "prefix_list_in": null,
+    "prefix_list_out": null,
+    "extra_attributes": {},
+    "name": "leaf1 to spine1",
+    "description": "",
+    "comments": "",
+    "tags": [],
+    "custom_fields": {},
+    "created": "2026-11-16T11:28:54.528479Z",
+    "last_updated": "2026-11-16T11:28:54.528486Z"
+  },
+  {
+    "id": 3,
+    "url": "http://127.0.0.1:54091/api/plugins/bgp/bgpsession/3/",
+    "display": "leaf2:leaf2 to spine1",
+    "status": {
+      "value": "active",
+      "label": "Active"
+    },
+    "site": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/sites/1/",
+      "display": "site-a",
+      "name": "site-a",
+      "slug": "site-a",
+      "description": ""
+    },
+    "tenant": null,
+    "device": {
+      "id": 3,
+      "url": "http://127.0.0.1:54091/api/dcim/devices/3/",
+      "display": "leaf2",
+      "name": "leaf2",
+      "description": ""
+    },
+    "virtualmachine": null,
+    "local_address": {
+      "id": 3,
+      "url": "http://127.0.0.1:54091/api/ipam/ip-addresses/3/",
+      "display": "10.0.0.5/30",
+      "family": {
+        "value": 4,
+        "label": "IPv4"
+      },
+      "address": "10.0.0.5/30",
+      "description": ""
+    },
+    "remote_address": {
+      "id": 4,
+      "url": "http://127.0.0.1:54091/api/ipam/ip-addresses/4/",
+      "display": "10.0.0.6/30",
+      "family": {
+        "value": 4,
+        "label": "IPv4"
+      },
+      "address": "10.0.0.6/30",
+      "description": ""
+    },
+    "local_as": {
+      "id": 3,
+      "url": "http://127.0.0.1:54091/api/ipam/asns/3/",
+      "display": "AS65003",
+      "asn": 65003,
+      "description": ""
+    },
+    "remote_as": {
+      "id": 2,
+      "url": "http://127.0.0.1:54091/api/ipam/asns/2/",
+      "display": "AS65002",
+      "asn": 65002,
+      "description": ""
+    },
+    "remote_as_macro": null,
+    "peer_group": null,
+    "import_policies": [],
+    "export_policies": [],
+    "max_prefixes": null,
+    "prefix_list_in": null,
+    "prefix_list_out": null,
+    "extra_attributes": {},
+    "name": "leaf2 to spine1",
+    "description": "",
+    "comments": "",
+    "tags": [],
+    "custom_fields": {},
+    "created": "2026-11-16T11:28:54.585063Z",
+    "last_updated": "2026-11-16T11:28:54.585069Z"
+  },
+  {
+    "id": 2,
+    "url": "http://127.0.0.1:54091/api/plugins/bgp/bgpsession/2/",
+    "display": "spine1:spine1 to leaf1",
+    "status": {
+      "value": "active",
+      "label": "Active"
+    },
+    "site": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/sites/1/",
+      "display": "site-a",
+      "name": "site-a",
+      "slug": "site-a",
+      "description": ""
+    },
+    "tenant": null,
+    "device": {
+      "id": 2,
+      "url": "http://127.0.0.1:54091/api/dcim/devices/2/",
+      "display": "spine1",
+      "name": "spine1",
+      "description": ""
+    },
+    "virtualmachine": null,
+    "local_address": {
+      "id": 2,
+      "url": "http://127.0.0.1:54091/api/ipam/ip-addresses/2/",
+      "display": "10.0.0.2/30",
+      "family": {
+        "value": 4,
+        "label": "IPv4"
+      },
+      "address": "10.0.0.2/30",
+      "description": ""
+    },
+    "remote_address": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/ipam/ip-addresses/1/",
+      "display": "10.0.0.1/30",
+      "family": {
+        "value": 4,
+        "label": "IPv4"
+      },
+      "address": "10.0.0.1/30",
+      "description": ""
+    },
+    "local_as": {
+      "id": 2,
+      "url": "http://127.0.0.1:54091/api/ipam/asns/2/",
+      "display": "AS65002",
+      "asn": 65002,
+      "description": ""
+    },
+    "remote_as": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/ipam/asns/1/",
+      "display": "AS65001",
+      "asn": 65001,
+      "description": ""
+    },
+    "remote_as_macro": null,
+    "peer_group": null,
+    "import_policies": [],
+    "export_policies": [],
+    "max_prefixes": null,
+    "prefix_list_in": null,
+    "prefix_list_out": null,
+    "extra_attributes": {},
+    "name": "spine1 to leaf1",
+    "description": "",
+    "comments": "",
+    "tags": [],
+    "custom_fields": {},
+    "created": "2026-11-16T11:28:54.559026Z",
+    "last_updated": "2026-11-16T11:28:54.559032Z"
+  },
+  {
+    "id": 4,
+    "url": "http://127.0.0.1:54091/api/plugins/bgp/bgpsession/4/",
+    "display": "spine1:spine1 to leaf2",
+    "status": {
+      "value": "active",
+      "label": "Active"
+    },
+    "site": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/sites/1/",
+      "display": "site-a",
+      "name": "site-a",
+      "slug": "site-a",
+      "description": ""
+    },
+    "tenant": null,
+    "device": {
+      "id": 2,
+      "url": "http://127.0.0.1:54091/api/dcim/devices/2/",
+      "display": "spine1",
+      "name": "spine1",
+      "description": ""
+    },
+    "virtualmachine": null,
+    "local_address": {
+      "id": 4,
+      "url": "http://127.0.0.1:54091/api/ipam/ip-addresses/4/",
+      "display": "10.0.0.6/30",
+      "family": {
+        "value": 4,
+        "label": "IPv4"
+      },
+      "address": "10.0.0.6/30",
+      "description": ""
+    },
+    "remote_address": {
+      "id": 3,
+      "url": "http://127.0.0.1:54091/api/ipam/ip-addresses/3/",
+      "display": "10.0.0.5/30",
+      "family": {
+        "value": 4,
+        "label": "IPv4"
+      },
+      "address": "10.0.0.5/30",
+      "description": ""
+    },
+    "local_as": {
+      "id": 2,
+      "url": "http://127.0.0.1:54091/api/ipam/asns/2/",
+      "display": "AS65002",
+      "asn": 65002,
+      "description": ""
+    },
+    "remote_as": {
+      "id": 3,
+      "url": "http://127.0.0.1:54091/api/ipam/asns/3/",
+      "display": "AS65003",
+      "asn": 65003,
+      "description": ""
+    },
+    "remote_as_macro": null,
+    "peer_group": null,
+    "import_policies": [],
+    "export_policies": [],
+    "max_prefixes": null,
+    "prefix_list_in": null,
+    "prefix_list_out": null,
+    "extra_attributes": {},
+    "name": "spine1 to leaf2",
+    "description": "",
+    "comments": "",
+    "tags": [],
+    "custom_fields": {},
+    "created": "2026-11-16T11:28:54.610402Z",
+    "last_updated": "2026-11-16T11:28:54.610408Z"
+  },
+  {
+    "id": 5,
+    "url": "http://127.0.0.1:54091/api/plugins/bgp/bgpsession/5/",
+    "display": "spine1:spine1 to outside-peer",
+    "status": {
+      "value": "active",
+      "label": "Active"
+    },
+    "site": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/sites/1/",
+      "display": "site-a",
+      "name": "site-a",
+      "slug": "site-a",
+      "description": ""
+    },
+    "tenant": null,
+    "device": {
+      "id": 2,
+      "url": "http://127.0.0.1:54091/api/dcim/devices/2/",
+      "display": "spine1",
+      "name": "spine1",
+      "description": ""
+    },
+    "virtualmachine": null,
+    "local_address": {
+      "id": 2,
+      "url": "http://127.0.0.1:54091/api/ipam/ip-addresses/2/",
+      "display": "10.0.0.2/30",
+      "family": {
+        "value": 4,
+        "label": "IPv4"
+      },
+      "address": "10.0.0.2/30",
+      "description": ""
+    },
+    "remote_address": {
+      "id": 7,
+      "url": "http://127.0.0.1:54091/api/ipam/ip-addresses/7/",
+      "display": "203.0.113.1/32",
+      "family": {
+        "value": 4,
+        "label": "IPv4"
+      },
+      "address": "203.0.113.1/32",
+      "description": ""
+    },
+    "local_as": {
+      "id": 2,
+      "url": "http://127.0.0.1:54091/api/ipam/asns/2/",
+      "display": "AS65002",
+      "asn": 65002,
+      "description": ""
+    },
+    "remote_as": {
+      "id": 4,
+      "url": "http://127.0.0.1:54091/api/ipam/asns/4/",
+      "display": "AS64999",
+      "asn": 64999,
+      "description": ""
+    },
+    "remote_as_macro": null,
+    "peer_group": null,
+    "import_policies": [],
+    "export_policies": [],
+    "max_prefixes": null,
+    "prefix_list_in": null,
+    "prefix_list_out": null,
+    "extra_attributes": {},
+    "name": "spine1 to outside-peer",
+    "description": "",
+    "comments": "",
+    "tags": [],
+    "custom_fields": {},
+    "created": "2026-11-16T11:28:54.882956Z",
+    "last_updated": "2026-11-16T11:28:54.882963Z"
+  }
+]
