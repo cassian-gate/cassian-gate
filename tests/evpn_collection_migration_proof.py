@@ -17,7 +17,8 @@ and the founder rulings of 2026-08-20:
 and, for row 1, founder ruling S30-R4 (2026-10-14, BL-P2-4.5c-216's fix):
 R1-GATE checks each lab's `summary.precheck` record -- the control-plane
 precheck was entered and its EVPN route poll accepted every declared host MAC
--- before R1-DECLARED and R1-PAIRED rely on declared-MAC membership. Its
+-- before R1-DECLARED relies on declared-MAC membership (R1-PAIRED did too,
+until §4.5-e WI-5 retired it with the string typing; see coverage limit 3). Its
 predicate is also checked lab-free against synthetic records (BL-GATE).
 
 MODES
@@ -47,12 +48,22 @@ COVERAGE LIMITS  (PBE-P2-8)
   2. `evpn_vni_route_present` does not route to the supplementary leg -- the
      migrated block gates on evpn_mac_route_present / _absent only. VNI-route
      text collection is uncovered here and is not claimed.
-  3. The non-vacuity witness is the string-typed `route_type` entry. That
-     typing is a PRE-EXISTING defect (JSON leg emits int at
-     cassian_nos_frr.py:1154; text leg emits str at :1259; the dedup key at
-     cassian_engine.py:6654 includes route_type so they do not collapse),
-     recorded and routed to §4.5-e by founder ruling. WHOEVER NORMALISES THAT
-     TYPING INVALIDATES THIS WITNESS AND MUST REPLACE IT IN THE SAME CHANGE.
+  3. The non-vacuity witness is W-TEXT (§4.5-e WI-5, REQ-45E-22; PBE-P2-11).
+     Until §4.5-e it was the string-typed `route_type` entry: the text leg
+     emitted "2" and the JSON leg 2, and the dedup key, which includes
+     route_type, kept both (BL-P2-4.5c-43). Rule B07 (REQ-45E-21) makes both
+     legs emit the int 2, so that witness is gone, and W-TEXT replaces it in the
+     same change. W-TEXT is lab-free: it runs the engine's own
+     run_invariant_test, with the JSON leg stubbed to show no matching route
+     and the REAL FRR text leg reading a fixed text table through the real
+     collection seam. It asserts that the text leg's route decides the verdict,
+     that every route_type is an int and that no (mac, vni, node) appears
+     twice. Its non-vacuity: with the text leg stubbed out (no records), or
+     emitting the old string "2", W-TEXT goes red. Row 1's former witness
+     legs (R1-NONVACUITY on string typing, R1-PAIRED) are replaced by R1-INT
+     and R1-NODUP (§15.2 row 21). W-TEXT does not show that FRR's JSON omits a
+     route the text table shows on any given lab; row 1's R1-VERDICT on the
+     reaching rows is the live evidence of the text leg's effect.
   4. Row 1 proves the migrated path executed and produced no verdict delta.
      It does not prove FRR's response to the command string beyond what the
      corpus exercises.
@@ -70,7 +81,7 @@ COVERAGE LIMITS  (PBE-P2-8)
      reached is OPEN. Since BL-P2-4.5c-216's fix (S30-R1, S30-R4) the precheck
      runs for fabric labs and records itself in `summary.precheck`. Read R1-GATE
      first: when it is RED, the runs were not gated to convergence, and any
-     R1-DECLARED, R1-VERDICT, R1-NONVACUITY or R1-13C failure beside it is a
+     R1-DECLARED, R1-VERDICT, R1-INT, R1-NODUP or R1-13C failure beside it is a
      convergence finding, not this row's subject. A GREEN R1-GATE shows the gate
      accepted at test start; it does not show that the routes stayed put while
      the tests read them.
@@ -80,6 +91,8 @@ Reports only; writes nothing. Exit 0 = GREEN, 1 = RED.
 
 import argparse
 import ast
+import contextlib
+import io
 import json
 import os
 import sys
@@ -132,12 +145,14 @@ BASELINE = {
 }
 
 RESULTS = []
+_QUIET = [False]  # True while W-TEXT's mutants run: their expected FAIL lines are not printed
 
 
 def check(label, ok, detail=""):
     RESULTS.append((label, bool(ok), detail))
-    print("%-6s %s%s" % ("PASS" if ok else "FAIL", label,
-                         ("  -- " + detail) if detail else ""))
+    if not _QUIET[0]:
+        print("%-6s %s%s" % ("PASS" if ok else "FAIL", label,
+                             ("  -- " + detail) if detail else ""))
     return bool(ok)
 
 
@@ -274,13 +289,19 @@ def _routes_of(test):
     return r if isinstance(r, list) else []
 
 
-def _typed(routes, want_str):
-    out = []
+def _is_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _dup_keys(routes):
+    """The (mac, vni, node) keys that appear more than once."""
+    seen, dups = set(), []
     for rec in routes:
-        rt = rec.get("route_type")
-        if isinstance(rt, str) == want_str:
-            out.append(rec)
-    return out
+        key = (str(rec.get("mac") or "").lower(), rec.get("vni"), rec.get("node"))
+        if key in seen and key not in dups:
+            dups.append(key)
+        seen.add(key)
+    return dups
 
 
 K_REQUIRED = 3  # S28-R2's window, which the precheck record names as `k_required`
@@ -349,26 +370,15 @@ def row1_differential(artdir):
                   "declared present=%s" % sorted(m for m in DECLARED_MACS
                                                  if m in macs))
 
-            str_typed = _typed(routes, True)
-            if base["reaches"]:
-                check("R1-NONVACUITY %s :: %s supplementary TEXT leg executed"
-                      % (lab, name),
-                      len(str_typed) > 0,
-                      "string-typed route_type entries=%d" % len(str_typed))
-                str_macs = {str(r.get("mac") or "").lower() for r in str_typed}
-                int_macs = {str(r.get("mac") or "").lower()
-                            for r in _typed(routes, False)}
-                check("R1-PAIRED %s :: %s every text MAC also appears "
-                      "int-typed" % (lab, name),
-                      str_macs and str_macs.issubset(int_macs),
-                      "text=%d int=%d unpaired=%s"
-                      % (len(str_macs), len(int_macs),
-                         sorted(str_macs - int_macs)))
-            else:
-                check("R1-NONVACUITY %s :: %s TEXT leg correctly NOT reached"
-                      % (lab, name),
-                      len(str_typed) == 0,
-                      "string-typed entries=%d (expected 0)" % len(str_typed))
+            # §4.5-e WI-5 (REQ-45E-21, -22; §15.2 rows 21, 22): the string-typed
+            # witness is gone with rule B07; W-TEXT (lab-free) replaces it.
+            not_int = [r for r in routes if not _is_int(r.get("route_type"))]
+            check("R1-INT %s :: %s every route_type is an int (REQ-45E-21)"
+                  % (lab, name), routes and not not_int,
+                  "routes=%d not-int=%s" % (len(routes), [r.get("route_type") for r in not_int][:5]))
+            dups = _dup_keys(routes)
+            check("R1-NODUP %s :: %s no (mac, vni, node) twice (REQ-45E-21)"
+                  % (lab, name), not dups, "duplicates=%s" % dups[:5])
 
             obs = t.get("observed_state")
             populated = isinstance(obs, dict) and len(obs) > 0
@@ -381,6 +391,154 @@ def row1_differential(artdir):
             check("R1-NOEXCERPT %s :: %s no excerpt in the record"
                   % (lab, name),
                   "excerpt" not in ev, "evidence keys=%s" % sorted(ev.keys()))
+
+
+# ------------------------------------------------------------- W-TEXT --
+# §4.5-e WI-5 (REQ-45E-22; PBE-P2-11): the witness that replaces the
+# string-typed one. Lab-free; reads no lab.
+W_NODE = "leaf2"
+W_VNI = 10100
+W_TEXT_ONLY = "00:11:22:33:44:55"   # in the text table only: the JSON leg has no matching route
+W_BOTH = "00:11:22:33:44:66"        # in both legs: the JSON leg's entry and the text line
+W_TEXT_TABLE = (
+    "Route Distinguisher: 10.0.0.3:2\n"
+    " *>i[2]:[0]:[48]:[00:11:22:33:44:55]\n"
+    "                    10.0.0.3                    100      0 i\n"
+    " *>i[2]:[0]:[48]:[00:11:22:33:44:66]\n"
+    "                    10.0.0.3                    100      0 i\n"
+)
+
+
+class _FakeTime:
+    @staticmethod
+    def time():
+        return 0.0
+
+    @staticmethod
+    def sleep(_s):
+        return None
+
+
+class _FakeCompleted:
+    def __init__(self, stdout):
+        self.stdout = stdout
+        self.returncode = 0
+
+
+class _FakeRt:
+    """Answers the text leg's one command with W_TEXT_TABLE; nothing else is asked."""
+
+    def __init__(self):
+        self.calls = []
+
+    def exec(self, lab, node, cmd, check=False, capture_output=True):
+        self.calls.append(list(cmd))
+        return _FakeCompleted(W_TEXT_TABLE)
+
+
+def _json_leg_stub(*, inv_type, t, src):
+    """The JSON leg's answer: a usable read with no route for W_TEXT_ONLY, one for W_BOTH."""
+    state = {"present": False,
+             "evidence_entries": [{"mac": W_BOTH, "vni": W_VNI, "route_type": 2, "node": src}]}
+    evidence = {"cmd": "vtysh -c 'show bgp l2vpn evpn route json'", "rc": 0,
+                "parse_error": "", "probe_ok": True}
+    return (True, False, state, evidence)
+
+
+def _bind_engine():
+    """The engine's ACTUAL run_invariant_test body, bound with this harness's stubs."""
+    import textwrap
+    if os.path.join(REPO, "src") not in sys.path:
+        sys.path.insert(0, os.path.join(REPO, "src"))
+    import cassian_common
+    import cassian_engine
+    cassian_common._QUIET_DIE = True
+    fn = _fn(ast.parse(_read(ENGINE)), "run_invariant_test")
+    body = "\n".join(ast.unparse(s) for s in fn.body)
+    ns = dict(cassian_engine.__dict__)
+    ns.update(time=_FakeTime, lab="w-text", topo={"nodes": [{"name": W_NODE, "type": "frr"}]},
+              _evaluate_invariant_attempt=_json_leg_stub)
+    exec("def _rit(test_name, src, t, record_fn):\n" + textwrap.indent(body, "    "), ns)
+    return ns
+
+
+def w_text_run(ns, inv_type, expect):
+    """One run of the EVPN branch; returns (verdict or 'raised: ...', record, rt)."""
+    ns["rt"] = rt = _FakeRt()
+    rec = {}
+    t = {"type": inv_type, "node": W_NODE, "mac": W_TEXT_ONLY, "vni": W_VNI, "expect": expect}
+    try:
+        verdict = ns["_rit"]("w_text_" + inv_type, W_NODE, t, lambda **kw: rec.update(kw))
+    except BaseException as exc:  # SystemExit included: any escape is a red, never a pass
+        verdict = "raised: %r" % (exc,)
+    return verdict, rec, rt
+
+
+def w_text_legs(ns, prefix):
+    """The witness's assertions; returns True when all hold. `prefix` names the run."""
+    ok = True
+    verdict, rec, rt = w_text_run(ns, "evpn_mac_route_present", "pass")
+    routes = (rec.get("evidence") or {}).get("routes") or []
+    asked = [c for c in rt.calls if c == ["vtysh", "-c", "show bgp l2vpn evpn route"]]
+    ok &= check("%s the text leg was asked once, through the real seam" % prefix, len(asked) == 1,
+                "calls=%s" % rt.calls)
+    ok &= check("%s evpn_mac_route_present: the text leg's route decides it (pass, present)" % prefix,
+                verdict == "pass" and (rec.get("meta") or {}).get("present") is True,
+                "verdict=%s meta=%s" % (verdict, rec.get("meta")))
+    ok &= check("%s every route_type is an int (REQ-45E-21)" % prefix,
+                routes and all(_is_int(r.get("route_type")) for r in routes),
+                "route_types=%s" % [r.get("route_type") for r in routes])
+    ok &= check("%s no (mac, vni, node) twice: the two legs' entries collapse (REQ-45E-21)" % prefix,
+                routes and not _dup_keys(routes), "routes=%s" % routes)
+    verdict, rec, _rt = w_text_run(ns, "evpn_mac_route_absent", "pass")
+    ok &= check("%s evpn_mac_route_absent: the text leg's route makes it fail" % prefix,
+                verdict == "fail" and (rec.get("meta") or {}).get("present") is True,
+                "verdict=%s meta=%s" % (verdict, rec.get("meta")))
+    return ok
+
+
+def w_text_witness():
+    print("\n--- W-TEXT: the supplementary text leg decides, typed int (REQ-45E-22) ---")
+    ns = _bind_engine()
+    import cassian_nos_frr as frr
+    check("W-TEXT witness holds on the shipped code", w_text_legs(ns, "W-TEXT"))
+
+    real = frr._COLLECT_HANDLERS["evpn_mac_route_text"]
+
+    def stubbed_out(rt, lab, node, req):
+        return frr.Observation(kind=req.kind, data={"records": [], "parse_error": ""},
+                               evidence={"cmd": "stub", "excerpt": "", "returncode": 0})
+
+    def old_typing(rt, lab, node, req):
+        obs = real(rt, lab, node, req)
+        for r in obs.data.get("records") or []:
+            r["route_type"] = "2"
+        return obs
+
+    for label, mutant in (("text leg stubbed out (no records)", stubbed_out),
+                          ("text leg emits the old string \"2\"", old_typing),
+                          ("text leg deleted from the collect map", None)):
+        try:
+            if mutant is None:
+                del frr._COLLECT_HANDLERS["evpn_mac_route_text"]
+            else:
+                frr._COLLECT_HANDLERS["evpn_mac_route_text"] = mutant
+            _QUIET[0] = True
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                red = not w_text_legs(ns, "  (mutant: %s)" % label)
+        finally:
+            _QUIET[0] = False
+            frr._COLLECT_HANDLERS["evpn_mac_route_text"] = real
+        # the mutant's own results are expected to fail; they are not this proof's checks
+        del RESULTS[-_W_TEXT_LEGS:]
+        if red:
+            print("MUTATION-FAIL: %s -> W-TEXT red" % label)
+        check("W-NV %s: W-TEXT goes red" % label, red)
+    check("W-NV the real text leg is restored", frr._COLLECT_HANDLERS["evpn_mac_route_text"] is real
+          and w_text_legs(ns, "W-TEXT (restored)"))
+
+
+_W_TEXT_LEGS = 5  # the checks w_text_legs records per run
 
 
 def baseline_self_check():
@@ -435,6 +593,7 @@ def main():
     row3_no_widening()
     row4_misuse_path()
     baseline_self_check()
+    w_text_witness()
     if args.artifacts:
         row1_differential(args.artifacts)
     else:

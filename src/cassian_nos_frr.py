@@ -1161,6 +1161,21 @@ def _collect_evpn_bgp_summary(rt, lab, node, req: ObservationRequest) -> Observa
     )
 
 
+_RE_EVPN_ROUTE_TYPE_DIGITS = re.compile(r"[0-9]+")
+
+
+def _evpn_route_type_int(value):
+    """§4.5-e WI-5, rule B07 (REQ-45E-21): the canonical `route_type` of an EVPN route entry.
+
+    An int is used as is; a string of ASCII digits is converted with int(); any other
+    value stays as received. The provider normalises; the engine's dedup and sort code
+    is unchanged (scope rule 3).
+    """
+    if isinstance(value, str) and _RE_EVPN_ROUTE_TYPE_DIGITS.fullmatch(value):
+        return int(value)
+    return value
+
+
 def _collect_evpn_routes(rt, lab, node, req: ObservationRequest) -> Observation:
     """Probe + normalize FRR EVPN state for evpn_mac_route_present, evpn_mac_route_absent, evpn_vni_route_present."""
     mac = str(req.params.get("mac") or "").strip().lower()
@@ -1267,6 +1282,9 @@ def _collect_evpn_routes(rt, lab, node, req: ObservationRequest) -> Observation:
                                 state_val = entry.get("type")
                             if isinstance(state_val, str):
                                 state_val = state_val.strip()
+                            # §4.5-e WI-5, rule B07 (REQ-45E-21; BL-P2-4.5c-43): `route_type` is an int.
+                            # A string of digits is converted; any other value stays as received.
+                            state_val = _evpn_route_type_int(state_val)
 
                             if req.kind == "evpn_vni_route_present" and vni_val is None:
                                 continue
@@ -1370,7 +1388,7 @@ def _collect_evpn_routes_text(rt, lab, node, req: ObservationRequest) -> Observa
             rec = {
                 "mac": str(m.group(1).lower() or "").strip().lower(),
                 "vni": vni_i,
-                "route_type": "2",
+                "route_type": 2,  # §4.5-e WI-5, rule B07 (REQ-45E-21): an int, as the JSON leg's
                 "node": node,
             }
             if not rec["mac"]:

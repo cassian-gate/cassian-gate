@@ -340,7 +340,7 @@ Every key listed below is REQUIRED on the failed-invariant record's `observed_st
       "mac": "<MAC literal>",
       "prefix": "<string, often empty>",
       "rd": "<string, often empty>",
-      "route_type": <int|string>,
+      "route_type": <int>,
       "vni": <int>
     }
   ],
@@ -351,7 +351,7 @@ Every key listed below is REQUIRED on the failed-invariant record's `observed_st
 ```
 
 * `evpn_routes` is the deterministic list of EVPN type-2 / type-5 routes observed for the queried `vni`, filtered to MAC literals declared in the topology's host nodes.
-* The `route_type` field may appear as either integer `2` or string `"2"` due to FRR's vtysh JSON output normalization; both forms are deterministic and pre-existing in the engine's evidence dedup.
+* `route_type` is an integer: `2` for a type-2 route. FRR's collection emits it as an integer from its JSON read, and from the supplementary text read that `evpn_mac_route_present` and `evpn_mac_route_absent` use (§4.7), so a route that both reads see is recorded once.
 
 ### 4.7) `evpn_mac_route_present` and `evpn_mac_route_absent`
 
@@ -362,7 +362,7 @@ Every key listed below is REQUIRED on the failed-invariant record's `observed_st
       "mac": "<MAC literal>",
       "prefix": "<string, often empty>",
       "rd": "<string, often empty>",
-      "route_type": <int|string>,
+      "route_type": <int>,
       "vni": <int>
     }
   ],
