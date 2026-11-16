@@ -102,13 +102,17 @@ Sections:
              domain keeps summary.precheck and drops timing.precheck; the record
              is attached right after `results` is created ("not-reached");
              the real `wait_for_bgp` reports its attempts and its timeout through
-             `stats` (driven with a fake runtime).
+             `stats` (driven with a fake runtime); a fabric lab with the participants
+             rule B10 derives (§4.5-e WI-4, REQ-45E-18) waits on each, in topology
+             node order, before the poll.
 
 Coverage limits (PBE-P2-8): lab-free; the fake clock stands in for wall time;
 the stubs stand in for the runtime, for `wait_for_bgp` (except where P-RECORD
 drives the real one) and for a provider's `convergence_wait`. P-REACH reads
 `_precheck_entry` with an empty participant list -- the worst case, and the
-measured one for every fabric topology; it does not derive participants itself,
+measured one for every fabric topology before §4.5-e WI-4's rule B10, which gives
+every fabric topology the participants of the fabric session set (REQ-45E-18;
+tests/evpn_gen_proof.py P-7 proves them); P-REACH does not derive participants itself,
 and it does not cover topologies the resolver rejects (they never reach the
 precheck). A SystemExit inside the precheck from anything but the waits, the
 guard and the poll's own refusals (a runtime failure inside the presence read,
@@ -696,7 +700,7 @@ def _seen(r):
     return r
 
 
-# 1 -- a fabric lab as measured (no participant): the poll accepts.
+# 1 -- a fabric lab with no participant (the measured case before §4.5-e WI-4's rule B10): the poll accepts.
 _r = _seen(_rec(EVPN, ALL, parts=[]))
 check("P-RECORD fabric lab, no participant, accepted: summary.precheck as ruled",
       _r.summary == {"entered": True, "not_entered_reason": None, "participants": [], "session_wait": [],
@@ -713,6 +717,17 @@ check("P-RECORD with FRR participants: sorted names; one wait each, in the order
 check("P-RECORD ... each FRR wait's attempts come from wait_for_bgp's `stats` (attempts_reported true)",
       _r.timing["session_wait"] == [{"node": n, "elapsed_ms": 0, "attempts": 1, "attempts_reported": True} for n in _pn],
       str(_r.timing["session_wait"]))
+# 2b -- §4.5-e WI-4, rule B10 (REQ-45E-18): a fabric lab with the participants the fabric session set
+# gives it, in topology node order: one FRR wait each, in that order, then the poll accepts.
+_dp = [n for _name, _ips in (cassian_engine._precheck_fabric_participants(EVPN) or [])
+       for n in EVPN["nodes"] if n.get("name") == _name]
+_dn = [n["name"] for n in _dp]
+_r = _seen(_rec(EVPN, ALL, parts=_dp))
+check("P-RECORD fabric lab with its derived participants (rule B10, REQ-45E-18): each waited in topology node "
+      "order, established, bound 30; then the poll accepts",
+      bool(_dn) and _r.summary["participants"] == sorted(_dn)
+      and _r.summary["session_wait"] == _waits(_dn, ["established"] * len(_dn))
+      and _r.summary["settle"] == _settle("accepted") and _r.summary["outcome"] == "passed", str(_r.summary))
 # 3 -- the same outcome reached later: summary.precheck identical, timing.precheck not.
 _rl = _seen(_rec(EVPN, _late, parts=[]))
 _ra = _seen(_rec(EVPN, ALL, parts=[]))

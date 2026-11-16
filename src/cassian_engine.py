@@ -94,7 +94,7 @@ from cassian_candidate import (
 )
 from cassian_two_run import _cmd_test_two_run
 from cassian_runtime_container import _normalize_prefix, verify_lab_ready, verify_sonic_vm_ready
-from cassian_model import build_node_links
+from cassian_model import build_node_links, fabric_evpn_session_set
 from cassian_tests import (
     ensure_nc,
     node_first_ipv4,
@@ -3615,6 +3615,21 @@ def _precheck_entry(topo: dict, bgp_participants: list, selected: bool):
     if bgp_participants or fabric:
         return True, None, None
     return False, "no-bgp-intent", None
+
+
+def _precheck_fabric_participants(topo: dict):
+    """`cmd_test`'s precheck participants for a topology with `fabric.evpn` enabled, each with its
+    expected peer IPs, taken from the model's one derivation of the fabric session set
+    (`fabric_evpn_session_set`), in topology node order; None for any other topology.
+
+    §4.5-e WI-4, rule B10 (REQ-45E-18; BL-P2-4.5c-227; PBE-1b-9). The generator renders the same
+    peers in the same order (REQ-45E-17), so a participant's expected peers are the generator's
+    peers for that node. A topology without `fabric.evpn` keeps `cmd_test`'s asn-gated derivation.
+    """
+    sessions = fabric_evpn_session_set(topo)
+    if sessions is None:
+        return None
+    return [(name, tuple(ip for _peer, ip, _rr in peers)) for name, peers in sessions.items()]
 
 
 class _PrecheckRecord:
@@ -11175,6 +11190,14 @@ def cmd_test(args: argparse.Namespace) -> None:
     for n in bgp_speakers:
         if expected_bgp_peers(n["name"]):
             bgp_participants.append(n)
+    # §4.5-e WI-4, rule B10 (REQ-45E-18; BL-P2-4.5c-227): a fabric.evpn topology takes its precheck
+    # participants from the model's one derivation of the fabric session set, in topology node order
+    # (`_precheck_fabric_participants`); each FRR participant then waits through the existing inline
+    # wait below. Every other topology keeps the asn-gated derivation above. Declared under DC v2.1
+    # §14 item 8.
+    _fabric_participants = _precheck_fabric_participants(topo)
+    if _fabric_participants is not None:
+        bgp_participants = [nodes_by_name[_name] for _name, _peer_ips in _fabric_participants]
 
     # Convergence semantics:
     # - Default tests: the precheck is selected; whether it runs is
