@@ -1,0 +1,62 @@
+[
+ {
+  "a_terminations": [
+   {
+    "object": {
+     "_occupied": true,
+     "cable": null,
+     "description": "",
+     "device": {
+      "description": "",
+      "display": "leaf1",
+      "id": 1,
+      "name": "leaf1",
+      "url": "http://netbox.example.test/api/dcim/devices/1/"
+     },
+     "display": "eth1",
+     "id": 11,
+     "name": "eth1",
+     "url": "http://netbox.example.test/api/dcim/interfaces/11/"
+    },
+    "object_id": 11,
+    "object_type": "dcim.interface"
+   }
+  ],
+  "b_terminations": [
+   {
+    "object": {
+     "_occupied": true,
+     "cable": null,
+     "description": "",
+     "device": {
+      "description": "",
+      "display": "spine1",
+      "id": 2,
+      "name": "spine1",
+      "url": "http://netbox.example.test/api/dcim/devices/2/"
+     },
+     "display": "eth1",
+     "id": 21,
+     "name": "eth1",
+     "url": "http://netbox.example.test/api/dcim/interfaces/21/"
+    },
+    "object_id": 21,
+    "object_type": "dcim.interface"
+   }
+  ],
+  "comments": "",
+  "created": "2026-11-16T11:28:52.000000Z",
+  "custom_fields": {},
+  "description": "",
+  "display": "#1",
+  "id": 1,
+  "label": "",
+  "last_updated": "2026-11-16T11:28:52.000000Z",
+  "status": {
+   "label": "Connected",
+   "value": "connected"
+  },
+  "tags": [],
+  "url": "http://netbox.example.test/api/dcim/cables/1/"
+ }
+]

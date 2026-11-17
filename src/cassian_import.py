@@ -436,6 +436,14 @@ class NetBoxBackend(ImporterBackend):
         export_path = source_dir / self.EXPORT_FILENAME
         where = (str(export_path), "")
         if not export_path.is_file():
+            if (source_dir / DUMP_MANIFEST_FILENAME).is_file():  # B-49 (S-10)
+                _reject(
+                    (str(source_dir), ""),
+                    "the 'netbox' backend expects netbox_export.json and the "
+                    "'netbox-dump' backend expects manifest.json; neither is "
+                    f"present for the selected backend '{self.name}'",
+                    "Select the backend that matches the layout",
+                )
             _reject(
                 where,
                 "export file not found (expected a committed NetBox export "
@@ -894,8 +902,760 @@ class NetBoxBackend(ImporterBackend):
         return topo, invariants
 
 
+# --------------------------------------------------------------------------- #
+# The netbox-dump reader (§4.6 stage 5: REQ-46-35 to -54, -64 to -72)          #
+# --------------------------------------------------------------------------- #
+# A second backend (B-35): it reads a bundle a capture of NetBox 4.6.8 with
+# netbox-bgp 0.19.0 wrote (manifest.json and four endpoint files), and builds
+# the contract in memory for the build path above. Its passes are B-68's:
+# (i) load checks on every object, (ii) the filter, (iii) checks on kept
+# objects, (iv) the contract, sorted by names, into the build path. It reads
+# only the files its manifest names, never a URL, a timestamp or an ID beyond
+# matching a reference to a device (D-2 to D-5).
+
+DUMP_MANIFEST_FILENAME = "manifest.json"
+DUMP_MANIFEST_KEYS = ("endpoints", "format", "netbox_version", "plugins", "schema", "site")
+DUMP_PROVEN_TEXT = "the proven set is NetBox 4.6.8 with netbox-bgp 0.19.0"
+DUMP_PROVEN_VERSION = "4.6.8"
+DUMP_PROVEN_PLUGINS = {"netbox_bgp": "0.19.0"}
+# The endpoints, in the fixed order the reader opens them (D-5).
+DUMP_ENDPOINTS = ("dcim/devices", "dcim/cables", "ipam/ip-addresses", "plugins/bgp/session")
+# REQ-46-42's platform table: a kept device's platform.slug -> node type.
+DUMP_PLATFORM_TYPES = {"frr": "frr"}
+DUMP_SCHEMA_KEYS = ("file", "sha256", "source")
+DUMP_SCHEMA_SOURCES = ("plugin serializer", "published")
+DUMP_CASSIAN_KEYS = ("router_id", "static_routes")
+DUMP_RECAPTURE = "Re-capture at the proven versions, or report the field"
+DUMP_FIX_IN_NETBOX = "Correct the object in NetBox and capture again"
+
+# The nested objects the reader reads into, per row of DUMP_KEY_LISTS (B-47):
+# key -> the row its object is checked against. "[termination]" is a list of
+# terminations; "@interface" is an interface object only where its type field
+# names DUMP_INTERFACE_TYPE (46-S4-R1); a termination of another type has only
+# its "device" and "circuit" checked (46-S4-R2).
+_DUMP_NESTED = {
+    "dcim/devices": (("platform", "platform"), ("site", "site"), ("status", "status")),
+    "dcim/cables": (
+        ("a_terminations", "[termination]"),
+        ("b_terminations", "[termination]"),
+        ("status", "status"),
+    ),
+    "ipam/ip-addresses": (
+        ("assigned_object", "@interface"),
+        ("status", "status"),
+        ("vrf", "vrf"),
+    ),
+    "plugins/bgp/session": (
+        ("device", "device"),
+        ("local_as", "asn"),
+        ("remote_address", "ip-address"),
+        ("remote_as", "asn"),
+        ("status", "status"),
+    ),
+    "interface": (("device", "device"),),
+    "termination": (("object", "@interface"),),
+}
+
+
+def _dump_id(obj):
+    """An object's integer ID, or None (a bool is not an ID)."""
+    v = obj.get("id") if isinstance(obj, dict) else None
+    return v if type(v) is int else None
+
+
+def _dump_name(nested, default="-") -> str:
+    """The ``name`` a nested object carries, or ``default`` (B-71: names come
+    from the nested objects, never from an ID)."""
+    if isinstance(nested, dict):
+        name = _text(nested.get("name"))
+        if name:
+            return name
+    return default
+
+
+def _dump_status(obj) -> str:
+    """An object's status value as the export writes it (B-64 to B-67)."""
+    status = obj.get("status")
+    return _text(status.get("value")) if isinstance(status, dict) else ""
+
+
+def _dump_side(terms) -> str:
+    """One side of a cable as §6.1 names it: ``<device>:<interface>`` for an
+    interface; any other termination is its type, then its device and name,
+    or a circuit's cid and termination side, where the nested object has them."""
+    if not isinstance(terms, list) or not terms or not isinstance(terms[0], dict):
+        return "-"
+    t = terms[0]
+    otype = _text(t.get("object_type")) or "-"
+    obj = t.get("object") if isinstance(t.get("object"), dict) else {}
+    if otype == DUMP_INTERFACE_TYPE:
+        return f"{_dump_name(obj.get('device'))}:{_dump_name(obj)}"
+    parts = [otype]
+    circuit = obj.get("circuit")
+    if isinstance(circuit, dict):
+        parts += [p for p in (_text(circuit.get("cid")), _text(obj.get("term_side"))) if p]
+    else:
+        parts += [p for p in (_dump_name(obj.get("device"), ""), _dump_name(obj, "")) if p]
+    return " ".join(parts)
+
+
+def _dump_peer(sess) -> str:
+    """A session's remote address: the address part of the nested
+    ``remote_address.address``, never resolved (B-72)."""
+    ra = sess.get("remote_address")
+    if not isinstance(ra, dict):
+        return ""
+    return _text(ra.get("address")).split("/")[0]
+
+
+def _dump_is_ipv6(text: str) -> bool:
+    try:
+        return ipaddress.ip_interface(text).version == 6
+    except ValueError:
+        return False
+
+
+def _dump_key_problem(obj: dict, row: str, path: str = ""):
+    """The first key problem in ``obj`` against its row's two lists, and in
+    each nested object the reader reads into (B-47): an unknown key (this
+    object's keys in sorted order first, then its nested objects in key
+    order), or a nested value that is not an object. None if there is none."""
+    reads, knows = DUMP_KEY_LISTS[row]
+    for key in sorted(obj):
+        if key not in reads and key not in knows:
+            return (
+                f"unknown key '{path}{key}' (not among the keys the reader "
+                f"reads or knows for NetBox 4.6.8 with netbox-bgp 0.19.0)"
+            )
+    for key, sub in _DUMP_NESTED.get(row, ()):
+        value = obj.get(key)
+        if value is None:
+            continue
+        where = f"{path}{key}"
+        if sub == "[termination]":
+            if not isinstance(value, list) or not all(isinstance(t, dict) for t in value):
+                return f"'{where}' must be a list of termination objects"
+            for k, term in enumerate(value):
+                problem = _dump_key_problem(term, "termination", f"{where}[{k}].")
+                if problem:
+                    return problem
+            continue
+        if not isinstance(value, dict):
+            return f"'{where}' must be an object or null (got {json.dumps(value)})"
+        if sub == "@interface":
+            type_key = "object_type" if row == "termination" else "assigned_object_type"
+            if obj.get(type_key) == DUMP_INTERFACE_TYPE:
+                problem = _dump_key_problem(value, "interface", where + ".")
+                if not problem and not isinstance(value.get("device"), dict):
+                    problem = f"'{where}.device' must be an object"
+            elif row == "termination":
+                problem = None  # 46-S4-R2: the object is not key-checked ...
+                for k2, sub2 in (("circuit", "circuit"), ("device", "device")):
+                    v2 = value.get(k2)  # ... beyond its device and circuit
+                    if v2 is None:
+                        continue
+                    if not isinstance(v2, dict):
+                        problem = f"'{where}.{k2}' must be an object or null"
+                    else:
+                        problem = _dump_key_problem(v2, sub2, f"{where}.{k2}.")
+                    if problem:
+                        break
+            else:
+                problem = None  # an address not on an interface is not read (B-44)
+        else:
+            problem = _dump_key_problem(value, sub, where + ".")
+        if problem:
+            return problem
+    return None
+
+
+class _BundleLocator:
+    """The reader's locator table (§4.6 §13): for each contract entry, the
+    endpoint file and ``<endpoint> object id <id> (<name>)`` of the bundle
+    object it was built from (a link: its cable; a static route: its device)."""
+
+    def __init__(self, files: dict, origin: dict):
+        self.files = files    # "manifest" or an endpoint -> its file's path
+        self.origin = origin  # contract list -> [(file, object text)] by position
+
+    def whole(self) -> tuple:
+        return (self.files["manifest"], "")
+
+    def section(self, key: str) -> tuple:
+        endpoint = {
+            "devices": "dcim/devices", "static_routes": "dcim/devices",
+            "cables": "dcim/cables", "bgp_sessions": "plugins/bgp/session",
+        }.get(key)
+        if endpoint is None:
+            return (self.files["manifest"], "manifest")
+        return (self.files[endpoint], endpoint)
+
+    def item(self, key: str, i: int) -> tuple:
+        return self.origin[key][i]
+
+    def device(self, i: int) -> tuple:
+        return self.origin["devices"][i]
+
+    def cable(self, i: int) -> tuple:
+        return self.origin["cables"][i]
+
+    def cable_end(self, i: int, side: str) -> tuple:
+        file, obj = self.origin["cables"][i]
+        return (file, f"{obj} end '{side}'")
+
+    def session(self, i: int, peer: bool = True) -> tuple:
+        return self.origin["bgp_sessions"][i]
+
+    def route(self, i: int) -> tuple:
+        return self.origin["static_routes"][i]
+
+
+class NetBoxDumpBackend(NetBoxBackend):
+    """The ``netbox-dump`` backend (§4.6 REQ-46-35): an offline reader of a
+    NetBox bundle, which builds the contract in memory and hands it, with its
+    locator table, to the contract backend's build path (§13)."""
+
+    name = "netbox-dump"
+
+    # ---- (i) load checks, on every object (B-49, B-36 to B-38, B-47, B-40) - #
+
+    def _where(self, endpoint: str, obj: dict) -> tuple:
+        """``<endpoint> object id <id> (<name>)`` in that endpoint's file."""
+        oid = obj.get("id") if isinstance(obj, dict) else None
+        return (self.files[endpoint], f"{endpoint} object id {oid} ({self._label(endpoint, obj)})")
+
+    def _label(self, endpoint: str, obj: dict) -> str:
+        if endpoint == "dcim/devices":
+            return _dump_name(obj)
+        if endpoint == "dcim/cables":
+            return f"{_dump_side(obj.get('a_terminations'))}<->{_dump_side(obj.get('b_terminations'))}"
+        if endpoint == "ipam/ip-addresses":
+            ao = obj.get("assigned_object") if isinstance(obj.get("assigned_object"), dict) else {}
+            return f"{_dump_name(ao.get('device'))}:{_dump_name(ao)} {_text(obj.get('address')) or '-'}"
+        return f"{_dump_name(obj.get('device'))} -> {_dump_peer(obj) or '-'}"
+
+    def _load_manifest(self, source_dir: Path) -> dict:
+        path = source_dir / DUMP_MANIFEST_FILENAME
+        self.files = {"manifest": str(path)}
+        if not path.is_file():
+            if (source_dir / self.EXPORT_FILENAME).is_file():  # B-49 (S-10)
+                _reject(
+                    (str(source_dir), ""),
+                    "the 'netbox' backend expects netbox_export.json and the "
+                    "'netbox-dump' backend expects manifest.json; neither is "
+                    f"present for the selected backend '{self.name}'",
+                    "Select the backend that matches the layout",
+                )
+            _reject(  # B-36
+                (str(path), ""),
+                "the bundle has no manifest (required keys: "
+                f"{', '.join(DUMP_MANIFEST_KEYS)})",
+                "Add the manifest the capture writes",
+            )
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            _reject((str(path), ""), f"not valid JSON ({exc})", "Capture the bundle again")
+        if not isinstance(manifest, dict):
+            _reject((str(path), ""), "the manifest must be a JSON object", "Capture the bundle again")
+        where = (str(path), "manifest")
+        proven = "Capture the export at the proven versions"
+        unknown = sorted(k for k in manifest if k not in DUMP_MANIFEST_KEYS)
+        missing = [k for k in DUMP_MANIFEST_KEYS if k not in manifest]
+        if unknown:  # B-37
+            _reject(where, f"unknown key '{unknown[0]}' (allowed: "
+                    f"{', '.join(DUMP_MANIFEST_KEYS)}); {DUMP_PROVEN_TEXT}", proven)
+        if missing:
+            _reject(where, f"key '{missing[0]}' is missing; {DUMP_PROVEN_TEXT}", proven)
+        if type(manifest["format"]) is not int or manifest["format"] != 1:
+            _reject(where, f"format {json.dumps(manifest['format'])} is not 1; "
+                    f"{DUMP_PROVEN_TEXT}", proven)
+        version = manifest["netbox_version"]
+        if version != DUMP_PROVEN_VERSION:
+            shown = f"'{version}'" if isinstance(version, str) else json.dumps(version)
+            _reject(where, f"netbox_version {shown} is not in the proven set; "
+                    f"{DUMP_PROVEN_TEXT}", proven)
+        if manifest["plugins"] != DUMP_PROVEN_PLUGINS:
+            _reject(where, f"plugins {json.dumps(manifest['plugins'], sort_keys=True)} "
+                    f"is not the proven set; {DUMP_PROVEN_TEXT}", proven)
+        site = manifest["site"]
+        if not isinstance(site, str) or not site.strip():
+            _reject(where, "'site' must be a non-empty site slug", "Correct the manifest")
+        endpoints = manifest["endpoints"]
+        if (
+            not isinstance(endpoints, dict)
+            or sorted(endpoints) != sorted(DUMP_ENDPOINTS)
+            or not all(
+                isinstance(f, str) and f not in ("", ".", "..")
+                and "/" not in f and "\\" not in f
+                for f in endpoints.values()
+            )
+        ):
+            _reject(
+                where,
+                "'endpoints' must map each of " + ", ".join(DUMP_ENDPOINTS)
+                + " to a file name in the bundle",
+                "Correct the manifest",
+            )
+        schema = manifest["schema"]
+        if (
+            not isinstance(schema, dict)
+            or sorted(schema) != list(DUMP_SCHEMA_KEYS)
+            or schema.get("source") not in DUMP_SCHEMA_SOURCES
+        ):
+            _reject(
+                where,
+                "'schema' must carry file, sha256 and source (source "
+                + " or ".join(f"'{s}'" for s in DUMP_SCHEMA_SOURCES) + ")",
+                "Correct the manifest",
+            )
+        return manifest
+
+    def _load_bundle(self, source_dir: Path) -> tuple[dict, dict]:
+        """B-49, B-36 to B-38, B-47, B-40, in that order (B-68 step (i))."""
+        manifest = self._load_manifest(source_dir)
+        data = {}
+        for endpoint in DUMP_ENDPOINTS:  # D-5: the code's fixed order
+            path = source_dir / manifest["endpoints"][endpoint]
+            self.files[endpoint] = str(path)
+            where = (str(path), "")
+            if not path.is_file():
+                _reject(where, f"the manifest names this file for {endpoint}, "
+                        f"and it is missing", "Capture the bundle again")
+            try:
+                items = json.loads(path.read_text(encoding="utf-8"))
+            except Exception as exc:  # noqa: BLE001
+                _reject(where, f"not valid JSON ({exc})", "Capture the bundle again")
+            if not isinstance(items, list) or not all(isinstance(o, dict) for o in items):
+                _reject(where, f"must be a JSON list of {endpoint} objects",
+                        "Capture the bundle again")
+            data[endpoint] = items
+        for endpoint in DUMP_ENDPOINTS:  # B-47
+            for obj in data[endpoint]:
+                problem = _dump_key_problem(obj, endpoint)
+                if problem:
+                    _reject(self._where(endpoint, obj), problem, DUMP_RECAPTURE)
+        for endpoint in DUMP_ENDPOINTS:  # B-40: IDs, status
+            seen: dict = {}
+            for obj in data[endpoint]:
+                oid = _dump_id(obj)
+                if oid is None:
+                    _reject(self._where(endpoint, obj), f"'id' must be an integer "
+                            f"(got {_value_text(obj, 'id')})", DUMP_RECAPTURE)
+                if oid in seen:
+                    _reject(self._where(endpoint, obj),
+                            f"'id' {oid} is also carried by {seen[oid]}; an "
+                            f"export carries each id once", "Capture the bundle again")
+                seen[oid] = f"{endpoint} object ({self._label(endpoint, obj)})"
+                status = obj.get("status")
+                if not isinstance(status, dict) or not isinstance(status.get("value"), str):
+                    _reject(self._where(endpoint, obj), "'status' must be an object "
+                            "with a 'value'", DUMP_RECAPTURE)
+        carried: dict = {}  # interface ID -> (device name, name, the object's text)
+        for endpoint, objs in (("dcim/cables", data["dcim/cables"]),
+                               ("ipam/ip-addresses", data["ipam/ip-addresses"])):
+            for obj in objs:
+                if endpoint == "dcim/cables":
+                    ifaces = [
+                        t["object"] for side in ("a_terminations", "b_terminations")
+                        for t in (obj.get(side) or [])
+                        if t.get("object_type") == DUMP_INTERFACE_TYPE
+                    ]
+                elif obj.get("assigned_object_type") == DUMP_INTERFACE_TYPE and \
+                        isinstance(obj.get("assigned_object"), dict):
+                    ifaces = [obj["assigned_object"]]
+                else:
+                    ifaces = []
+                for iface in ifaces:
+                    iid = _dump_id(iface)
+                    pair = (_dump_name(iface.get("device")), _dump_name(iface))
+                    if iid in carried and carried[iid][:2] != pair:
+                        first = carried[iid]
+                        _reject(
+                            self._where(endpoint, obj),
+                            f"interface id {iid} is carried as {pair[0]}:{pair[1]} "
+                            f"here and as {first[0]}:{first[1]} by {first[2]}",
+                            "Capture the bundle again",
+                        )
+                    carried.setdefault(iid, pair + (self._where(endpoint, obj)[1],))
+        for obj in data["dcim/devices"]:  # B-40, R-3
+            if "local_context_data" not in obj:
+                _reject(self._where("dcim/devices", obj), "'local_context_data' is "
+                        "missing; the capture must request it", "Capture the bundle again")
+            lcd = obj["local_context_data"]
+            if lcd is not None and not isinstance(lcd, dict):
+                _reject(self._where("dcim/devices", obj), "'local_context_data' must be "
+                        f"null or an object (got {json.dumps(lcd)})", DUMP_FIX_IN_NETBOX)
+        return manifest, data
+
+    # ---- (ii) the filter (B-64 to B-67, B-43 to B-45, B-71) ------------------ #
+
+    def _filter(self, data: dict) -> dict:
+        """Exclude and name what is out of scope, each object with the first
+        reason in D-19's precedence for its kind, in the order devices, cables,
+        IP addresses, sessions (B-68 step (ii)). Returns the kept objects."""
+        out = self.filtered = []
+        devices = {_dump_id(d): d for d in data["dcim/devices"]}
+        gone: dict = {}  # excluded device ID -> (name, reason)
+        kept_devices = []
+        for d in data["dcim/devices"]:
+            name = _dump_name(d)
+            status = _dump_status(d)
+            if status != DUMP_IN_SERVICE["dcim/devices"]:  # B-64
+                reason = f"status {status or '-'} is not active"
+                out.append(("device", name, name, reason))
+                gone[_dump_id(d)] = (name, reason)
+            else:
+                kept_devices.append(d)
+
+        def placed(nested):
+            """B-71 and B-64 for an object pointing at ``nested``: the
+            reason, or None if its device is kept."""
+            did = _dump_id(nested)
+            name = _dump_name(nested)
+            if did not in devices:
+                return f"device {name} is not in this site's bundle"
+            if did in gone:
+                return f"device {_text(devices[did].get('name'))} is excluded"
+            return None
+
+        kept_cables = []
+        carried = set()  # (device, interface) on a kept cable
+        for c in data["dcim/cables"]:
+            terms = [
+                t for side in ("a_terminations", "b_terminations")
+                for t in (c.get(side) or [])
+            ]
+            objs = [t.get("object") if isinstance(t.get("object"), dict) else {} for t in terms]
+            reason = None
+            for rule in ("outside", "excluded"):
+                for obj in objs:
+                    if not isinstance(obj.get("device"), dict):
+                        continue
+                    r = placed(obj["device"])
+                    if r and r.endswith("bundle") == (rule == "outside"):
+                        reason = r
+                        break
+                if reason:
+                    break
+            status = _dump_status(c)
+            if not reason and status != DUMP_IN_SERVICE["dcim/cables"]:  # B-65
+                reason = f"status {status or '-'} is not connected"
+            if not reason:  # B-43
+                for t in terms:
+                    if t.get("object_type") != DUMP_INTERFACE_TYPE:
+                        reason = (f"termination {_text(t.get('object_type')) or '-'} "
+                                  f"is not an interface; links connect interfaces")
+                        break
+            side_a = _dump_side(c.get("a_terminations"))
+            side_b = _dump_side(c.get("b_terminations"))
+            if reason:
+                device = ""
+                for side in ("a_terminations", "b_terminations"):
+                    first = (c.get(side) or [None])[0]
+                    obj = first.get("object") if isinstance(first, dict) else None
+                    if isinstance(obj, dict) and isinstance(obj.get("device"), dict):
+                        device = _dump_name(obj["device"])
+                        break
+                out.append(("cable", device, f"{side_a} <-> {side_b}", reason))
+                continue
+            kept_cables.append(c)
+            for obj in objs:
+                carried.add((_text(devices[_dump_id(obj["device"])].get("name")), _dump_name(obj)))
+
+        kept_ips = []
+        set_aside: dict = {}  # (device, interface) -> [(address, reason)] by B-66/-67
+        for ip in data["ipam/ip-addresses"]:
+            ao = ip.get("assigned_object")
+            if ip.get("assigned_object_type") != DUMP_INTERFACE_TYPE or not isinstance(ao, dict):
+                continue  # not read for links (B-44)
+            address = _text(ip.get("address"))
+            device = _dump_name(ao.get("device"))
+            iface = _dump_name(ao)
+            reason = placed(ao["device"])
+            if not reason and _dump_id(ao["device"]) in devices:
+                device = _text(devices[_dump_id(ao["device"])].get("name"))
+            status = _dump_status(ip)
+            by_filter = None
+            if not reason and status != DUMP_IN_SERVICE["ipam/ip-addresses"]:  # B-66
+                reason = by_filter = f"status {status or '-'} is not active"
+            if not reason and ip.get("vrf") is not None:  # B-67
+                reason = by_filter = (f"in VRF {_dump_name(ip['vrf'])}; the importer "
+                                      f"models the global table only")
+            if not reason and _dump_is_ipv6(address):  # B-44
+                reason = "IPv6 address; the importer reads IPv4 link addresses only"
+            if not reason and (device, iface) not in carried:
+                reason = "interface is on no imported link, so no link carries the address"
+            if reason:
+                out.append(("ip-address", device, f"{device}:{iface} {address}", reason))
+                if by_filter:
+                    set_aside.setdefault((device, iface), []).append((address, by_filter))
+                continue
+            kept_ips.append(ip)
+
+        kept_sessions = []
+        for s in data["plugins/bgp/session"]:
+            local = _dump_name(s.get("device"))
+            peer = _dump_peer(s) or "-"
+            reason = placed(s["device"]) if isinstance(s.get("device"), dict) else None
+            status = _dump_status(s)
+            if not reason and status != DUMP_IN_SERVICE["plugins/bgp/session"]:  # B-45
+                reason = f"status {status or '-'} is not active"
+            if not reason and _dump_is_ipv6(peer):
+                reason = "IPv6 peer; the importer reads IPv4 sessions only"
+            if reason:
+                out.append(("bgp-session", local, f"{local} -> {peer}", reason))
+                continue
+            kept_sessions.append(s)
+
+        return {
+            "devices": devices, "gone": gone, "dcim/devices": kept_devices,
+            "dcim/cables": kept_cables, "ipam/ip-addresses": kept_ips,
+            "plugins/bgp/session": kept_sessions, "set_aside": set_aside,
+        }
+
+    # ---- (iii) checks on kept objects; (iv) the contract -------------------- #
+
+    def _contract(self, manifest: dict, kept: dict) -> tuple[dict, _BundleLocator]:
+        """B-41, B-42, B-51, B-46, B-43, B-44, B-70, B-45 and B-50 on the kept
+        objects (B-68 step (iii)), then the contract, sorted by names (B-52)."""
+        devices = kept["devices"]
+        site = manifest["site"].strip()
+        names: dict = {}
+        for d in kept["dcim/devices"]:  # B-41
+            name = _text(d.get("name"))
+            if name and name in names:
+                _reject(self._where("dcim/devices", d), f"device name '{name}' is also "
+                        f"object id {_dump_id(names[name])}'s; device names must be "
+                        f"unique", DUMP_FIX_IN_NETBOX)
+            names[name] = d
+        ifaces: dict = {}  # (device, interface) -> interface ID
+        for endpoint in ("dcim/cables", "ipam/ip-addresses"):
+            for obj in kept[endpoint]:
+                if endpoint == "dcim/cables":
+                    objs = [t["object"] for side in ("a_terminations", "b_terminations")
+                            for t in (obj.get(side) or [])]
+                else:
+                    objs = [obj["assigned_object"]]
+                for iface in objs:
+                    key = (devices[_dump_id(iface["device"])].get("name"), _dump_name(iface))
+                    iid = _dump_id(iface)
+                    if key in ifaces and ifaces[key] != iid:
+                        _reject(self._where(endpoint, obj), f"device {key[0]} has two "
+                                f"interfaces named {key[1]} (interface ids "
+                                f"{ifaces[key]} and {iid})", DUMP_FIX_IN_NETBOX)
+                    ifaces[key] = iid
+        for d in sorted(kept["dcim/devices"], key=lambda o: _text(o.get("name"))):
+            where = self._where("dcim/devices", d)
+            platform = d.get("platform")
+            slug = _text(platform.get("slug")).lower() if isinstance(platform, dict) else ""
+            if slug not in DUMP_PLATFORM_TYPES:  # B-42, the shipped message
+                _reject(where, f"platform '{slug}' unsupported (allowed: "
+                        f"{', '.join(SUPPORTED_PLATFORMS)})", "Correct the export")
+        for d in sorted(kept["dcim/devices"], key=lambda o: _text(o.get("name"))):
+            dsite = d.get("site")
+            slug = _text(dsite.get("slug")) if isinstance(dsite, dict) else ""
+            if slug != site:  # B-51
+                _reject(self._where("dcim/devices", d), f"site '{slug or '-'}' differs "
+                        f"from the manifest's site '{site}'",
+                        "Capture the site that holds the device, or correct its site in NetBox")
+        cassian: dict = {}
+        for d in sorted(kept["dcim/devices"], key=lambda o: _text(o.get("name"))):
+            cassian[_dump_id(d)] = self._cassian(d)  # B-46
+        for c in kept["dcim/cables"]:  # B-43, two-termination test
+            for side in ("a", "b"):
+                n = len(c.get(side + "_terminations") or [])
+                if n != 1:
+                    _reject(self._where("dcim/cables", c), f"side {side} has {n} "
+                            f"terminations; a link needs exactly one interface on "
+                            f"each side", DUMP_FIX_IN_NETBOX)
+        addresses: dict = {}  # (device, interface) -> (address, the object)
+        for ip in kept["ipam/ip-addresses"]:  # B-44, two-address test
+            ao = ip["assigned_object"]
+            key = (devices[_dump_id(ao["device"])].get("name"), _dump_name(ao))
+            if key in addresses:
+                _reject(self._where("ipam/ip-addresses", ip), f"interface "
+                        f"{key[0]}:{key[1]} carries two addresses the filter keeps "
+                        f"({addresses[key][0]} and {_text(ip.get('address'))}); a "
+                        f"link end takes one", "Keep one address on the interface "
+                        "in service in NetBox")
+            addresses[key] = (_text(ip.get("address")), ip)
+        ends: dict = {}
+        for c in kept["dcim/cables"]:
+            pair = []
+            for side in ("a_terminations", "b_terminations"):
+                obj = c[side][0]["object"]
+                pair.append((devices[_dump_id(obj["device"])].get("name"), _dump_name(obj)))
+            ends[_dump_id(c)] = pair
+            has = [p in addresses for p in pair]
+            if has[0] != has[1]:  # B-70
+                bare = pair[1] if has[0] else pair[0]
+                aside = kept["set_aside"].get(bare)
+                if aside:
+                    address, reason = sorted(aside)[0]
+                    _reject(
+                        self._where("dcim/cables", c),
+                        f"the filter excluded the address {address} on "
+                        f"{bare[0]}:{bare[1]} ({reason}), so the link keeps one "
+                        f"address; a link needs both addresses or neither",
+                        "Bring both addresses into service in the global table, or neither",
+                    )
+        local_as: dict = {}  # device -> (asn, the session)
+        for s in sorted(kept["plugins/bgp/session"],
+                        key=lambda o: (_dump_name(o.get("device")), _dump_peer(o))):
+            where = self._where("plugins/bgp/session", s)
+            if not isinstance(s.get("device"), dict):  # B-45
+                _reject(where, "'device' is missing; a session needs its device",
+                        DUMP_FIX_IN_NETBOX)
+            if not _dump_peer(s):
+                _reject(where, "'remote_address' is missing; a session needs its "
+                        "peer's address", DUMP_FIX_IN_NETBOX)
+            name = devices[_dump_id(s["device"])].get("name")
+            las = s.get("local_as")
+            if not isinstance(las, dict):
+                continue
+            asn = las.get("asn")
+            if type(asn) is not int:
+                _reject(where, f"'local_as.asn' must be an integer (got "
+                        f"{_value_text(las, 'asn')})", DUMP_FIX_IN_NETBOX)
+            if name in local_as and local_as[name][0] != asn:
+                other = local_as[name][1]
+                _reject(where, f"local_as {asn} disagrees with local_as "
+                        f"{local_as[name][0]} of {self._where('plugins/bgp/session', other)[1]};"
+                        f" device {name}'s asn is the local_as its sessions agree on",
+                        DUMP_FIX_IN_NETBOX)
+            local_as.setdefault(name, (asn, s))
+        if kept["devices"] and not kept["dcim/devices"]:  # B-50, filtered
+            first = sorted(kept["gone"].values())[0]
+            _reject(
+                (self.files["dcim/devices"], "dcim/devices"),
+                f"no device is in service after the filter ({len(kept['gone'])} "
+                f"excluded; the first by name, '{first[0]}': {first[1]})",
+                "Set the devices' NetBox status to active, or capture the site that holds them",
+            )
+
+        # (iv) The contract, every list sorted by names (B-52).
+        origin: dict = {"devices": [], "cables": [], "bgp_sessions": [], "static_routes": []}
+        contract: dict = {"site": {"name": site}, "devices": [], "cables": [],
+                          "bgp_sessions": [], "static_routes": []}
+        routes = []
+        for d in sorted(kept["dcim/devices"], key=lambda o: _text(o.get("name"))):
+            name = _text(d.get("name"))
+            entry = {"name": name, "platform": DUMP_PLATFORM_TYPES[
+                _text(d["platform"].get("slug")).lower()]}
+            if name in local_as:
+                entry["asn"] = local_as[name][0]
+            rid, prefixes = cassian[_dump_id(d)]
+            if rid is not None:
+                entry["router_id"] = rid
+            contract["devices"].append(entry)
+            origin["devices"].append(self._where("dcim/devices", d))
+            for k, prefix in prefixes:
+                file, obj = self._where("dcim/devices", d)
+                routes.append(((name, prefix), {"device": name, "prefix": prefix},
+                               (file, f"{obj} local_context_data.cassian.static_routes[{k}]")))
+        for _key, entry, where in sorted(routes, key=lambda r: r[0]):
+            contract["static_routes"].append(entry)
+            origin["static_routes"].append(where)
+        cables = []
+        for c in kept["dcim/cables"]:
+            (ad, ai), (bd, bi) = ends[_dump_id(c)]
+            entry = {"a": {"device": ad, "interface": ai}, "b": {"device": bd, "interface": bi}}
+            for key, end in (("a_ip", (ad, ai)), ("b_ip", (bd, bi))):
+                if end in addresses:
+                    entry[key] = addresses[end][0]
+            cables.append(((f"{ad}:{ai}", f"{bd}:{bi}"), entry, self._where("dcim/cables", c)))
+        for _key, entry, where in sorted(cables, key=lambda r: r[0]):
+            contract["cables"].append(entry)
+            origin["cables"].append(where)
+        sessions = []
+        for s in kept["plugins/bgp/session"]:
+            local = _text(devices[_dump_id(s["device"])].get("name"))
+            entry = {"local_device": local, "peer_ip": _dump_peer(s)}
+            ras = s.get("remote_as")
+            if isinstance(ras, dict) and "asn" in ras:
+                entry["remote_asn"] = ras["asn"]
+            sessions.append(((local, entry["peer_ip"]), entry,
+                             self._where("plugins/bgp/session", s)))
+        for _key, entry, where in sorted(sessions, key=lambda r: r[0]):
+            contract["bgp_sessions"].append(entry)
+            origin["bgp_sessions"].append(where)
+        return contract, _BundleLocator(self.files, origin)
+
+    def _cassian(self, d: dict) -> tuple:
+        """B-46 on a kept device: ``local_context_data.cassian`` only, with
+        ``router_id`` and ``static_routes`` (entries ``{prefix}``) inside it;
+        null local_context_data reads as ``cassian`` absent (R-3). Returns
+        ``(router_id or None, [(position, prefix)])``."""
+        where = self._where("dcim/devices", d)
+        lcd = d.get("local_context_data")
+        if lcd is None or "cassian" not in lcd:
+            return None, []
+        cas = lcd["cassian"]
+        file, obj = where
+        at = (file, f"{obj} local_context_data.cassian")
+        allowed = ("(allowed: router_id, static_routes; a static_routes entry "
+                   "allows prefix only). Cassian Gate checks only that a declared "
+                   "route is present, not its next hop")
+        if not isinstance(cas, dict):
+            _reject(at, f"must be an object (got {json.dumps(cas)})", DUMP_FIX_IN_NETBOX)
+        unknown = sorted(k for k in cas if k not in DUMP_CASSIAN_KEYS)
+        if unknown:
+            _reject((file, obj), f"local_context_data.cassian: unknown key "
+                    f"'{unknown[0]}' {allowed}", "Remove the key")
+        rid = cas.get("router_id")
+        if "router_id" in cas:
+            try:
+                ipaddress.IPv4Address(rid if isinstance(rid, str) else "")
+            except ValueError:
+                _reject(at, f"'router_id' must be an IPv4 address (got "
+                        f"{json.dumps(rid)})", DUMP_FIX_IN_NETBOX)
+        routes = cas.get("static_routes", [])
+        if not isinstance(routes, list):
+            _reject(at, "'static_routes' must be a list of {prefix} entries",
+                    DUMP_FIX_IN_NETBOX)
+        out = []
+        seen: dict = {}
+        for k, entry in enumerate(routes):
+            if not isinstance(entry, dict):
+                _reject(at, f"static_routes[{k}] must be an object with 'prefix'",
+                        DUMP_FIX_IN_NETBOX)
+            extra = sorted(x for x in entry if x != "prefix")
+            if extra:
+                _reject((file, obj), f"local_context_data.cassian.static_routes[{k}]: "
+                        f"unknown key '{extra[0]}' {allowed}", "Remove the key")
+            if "prefix" not in entry:
+                _reject(at, f"static_routes[{k}]: 'prefix' is missing; a static "
+                        f"route needs its prefix", DUMP_FIX_IN_NETBOX)
+            prefix = _text(entry["prefix"])
+            if prefix in seen:
+                _reject(at, f"prefix '{prefix}' is declared more than once "
+                        f"(static_routes[{seen[prefix]}] and [{k}])", "Remove the duplicate")
+            seen[prefix] = k
+            out.append((k, prefix))
+        return (rid if isinstance(rid, str) else None), out
+
+    # ---- produce ----------------------------------------------------------- #
+
+    def produce(self, source_dir: Path) -> tuple[dict, list]:
+        manifest, data = self._load_bundle(source_dir)
+        kept = self._filter(data)
+        contract, loc = self._contract(manifest, kept)
+        rendered = self._parse_rendered_configs(source_dir)
+        topo, invariants = self._build(
+            contract, rendered, loc, source_dir / self.RENDERED_SUBDIR
+        )
+        # The build path names what direction A excluded; the filter's
+        # exclusions join them in the same list (§13; B-25).
+        self.exclusions = self.filtered + self.exclusions
+        return topo, invariants
+
+
 # Backend registry. Adding a backend = one entry; no consumer change (IF-1).
-BACKENDS = {NetBoxBackend.name: NetBoxBackend}
+BACKENDS = {
+    NetBoxBackend.name: NetBoxBackend,
+    NetBoxDumpBackend.name: NetBoxDumpBackend,
+}
 
 
 # --------------------------------------------------------------------------- #

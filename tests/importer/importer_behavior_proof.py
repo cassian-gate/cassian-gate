@@ -30,6 +30,14 @@ with no lab and no containers (cassian-test-alone CI posture):
         whose sha256 is the manifest's; the filter's fields and in-service
         values are the schema's; the manifest's schema source is consistent;
         each check is shown failing once on a mutated copy.
+  PF-1  §4.6 stage 5 piece (ii): bundleA through the netbox-dump reader
+        equals golden/siteA, with and without rendered/, under permutation
+        of order, IDs, timestamps and URLs; the pair passes the model.
+  PF-3  No URL, ID, timestamp or free-form sentinel reaches the pair.
+  PF-2  The reader's rejections (N-36 to N-70) and the shared path's through
+        the reader (R-n): exit 2, file and object named, nothing written.
+  PF-4  The reader's exclusions (E-19 to E-edge-sort): exit 0, each object
+        named once with its reason, sorted (page legs: stage 6).
 
 Exit 0 on all-pass; loud exit 1 on any failure. Run from the repo root:
     python tests/importer/importer_behavior_proof.py
@@ -741,6 +749,705 @@ def pf10_key_lists():
          not _source_consistent(schema, flipped))
 
 
+# --------------------------------------------------------------------------- #
+# §4.6 stage 5 piece (ii): the netbox-dump reader on bundleA                   #
+# --------------------------------------------------------------------------- #
+# Every case is a literal mutation of the committed bundleA, written to a
+# scratch directory and imported in a subprocess (handover §15.1).
+
+BUNDLE_A = os.path.join(FIX, "bundleA")
+_BUNDLE_FILES = (
+    ("manifest", "manifest.json"),
+    ("devices", "dcim_devices.json"),
+    ("cables", "dcim_cables.json"),
+    ("ips", "ipam_ip_addresses.json"),
+    ("sessions", "plugins_bgp_session.json"),
+)
+_NB = "http://netbox.example.test"
+
+
+def _bundle():
+    out = {}
+    for key, name in _BUNDLE_FILES:
+        with open(os.path.join(BUNDLE_A, name), encoding="utf-8") as f:
+            out[key] = _json.load(f)
+    return out
+
+
+def _bundle_case(mutate=None, rendered=False, backend="netbox-dump", source=None):
+    """Write bundleA, mutated, to a scratch source (a value None omits its
+    file; a str is written raw), import it in a subprocess, and return
+    (result, scratch, source, out)."""
+    scratch = tempfile.mkdtemp(prefix="pf46b_")
+    src = os.path.join(scratch, "src")
+    out = os.path.join(scratch, "out")
+    if source:
+        shutil.copytree(source, src)
+    else:
+        os.makedirs(src)
+        b = _bundle()
+        if mutate:
+            mutate(b)
+        for key, name in _BUNDLE_FILES:
+            if b[key] is None:
+                continue
+            with open(os.path.join(src, name), "w", encoding="utf-8") as f:
+                f.write(b[key] if isinstance(b[key], str) else _json.dumps(b[key], indent=1))
+    if rendered:
+        shutil.copytree(os.path.join(POS, "rendered"), os.path.join(src, "rendered"))
+    r = subprocess.run(
+        [sys.executable, "-c",
+         "import sys;sys.path.insert(0,%r);"
+         "from cassian_import import run_import;"
+         "run_import(%r,%r,backend=%r)" % (_SRC, src, out, backend)],
+        capture_output=True, text=True,
+    )
+    return r, scratch, src, out
+
+
+def _nb_dev(i, name):
+    return {"description": "", "display": name, "id": i, "name": name,
+            "url": "%s/api/dcim/devices/%d/" % (_NB, i)}
+
+
+def _nb_iface(i, dev, name):
+    return {"_occupied": True, "cable": None, "description": "",
+            "device": _nb_dev(*dev), "display": name, "id": i, "name": name,
+            "url": "%s/api/dcim/interfaces/%d/" % (_NB, i)}
+
+
+def _nb_status(value):
+    return {"label": value.title(), "value": value}
+
+
+def _nb_device(i, name, status="active", lcd=None):
+    d = _json.loads(_json.dumps(_bundle()["devices"][1]))
+    d.update({"id": i, "name": name, "display": name, "status": _nb_status(status),
+              "local_context_data": lcd, "url": "%s/api/dcim/devices/%d/" % (_NB, i)})
+    return d
+
+
+def _nb_term(obj, otype="dcim.interface"):
+    return {"object": obj, "object_id": obj.get("id"), "object_type": otype}
+
+
+def _nb_cable(i, a, b, status="connected"):
+    """a and b: (interface id, (device id, device name), interface name), or a
+    termination dict."""
+    sides = []
+    for end in (a, b):
+        sides.append(end if isinstance(end, dict)
+                     else _nb_term(_nb_iface(end[0], end[1], end[2])))
+    c = _json.loads(_json.dumps(_bundle()["cables"][0]))
+    c.update({"id": i, "a_terminations": [sides[0]], "b_terminations": [sides[1]],
+              "status": _nb_status(status), "url": "%s/api/dcim/cables/%d/" % (_NB, i)})
+    return c
+
+
+def _nb_ip(i, address, iface, status="active", vrf=None):
+    p = _json.loads(_json.dumps(_bundle()["ips"][0]))
+    obj = _nb_iface(*iface)
+    p.update({"id": i, "address": address, "display": address, "assigned_object": obj,
+              "assigned_object_id": obj["id"], "status": _nb_status(status),
+              "url": "%s/api/ipam/ip-addresses/%d/" % (_NB, i),
+              "vrf": None if vrf is None else {"description": "", "display": vrf,
+                                               "id": 1, "name": vrf, "rd": None,
+                                               "url": _NB + "/api/ipam/vrfs/1/"}})
+    return p
+
+
+def _nb_session(i, dev, peer, local_as, remote_as, status="active", ra_id=None):
+    s = _json.loads(_json.dumps(_bundle()["sessions"][0]))
+    s.update({"id": i, "device": None if dev is None else _nb_dev(*dev),
+              "local_as": {"asn": local_as, "description": "", "display": "AS%d" % local_as,
+                           "id": local_as, "url": _NB + "/api/ipam/asns/1/"},
+              "remote_as": {"asn": remote_as, "description": "", "display": "AS%d" % remote_as,
+                            "id": remote_as, "url": _NB + "/api/ipam/asns/2/"},
+              "remote_address": {"address": peer, "description": "", "display": peer,
+                                 "id": 9000 + i if ra_id is None else ra_id,
+                                 "url": _NB + "/api/ipam/ip-addresses/9/"},
+              "status": _nb_status(status), "url": "%s/api/plugins/bgp/bgpsession/%d/" % (_NB, i)})
+    return s
+
+
+LEAF1, SPINE1, SPINE2, SPINE3, LEAF9 = (1, "leaf1"), (2, "spine1"), (3, "spine2"), (4, "spine3"), (9, "leaf9")
+OUTSIDE = (99, "siteb-spine1")
+
+
+def _add(key, *objs):
+    def m(b):
+        b[key].extend(_json.loads(_json.dumps(objs)))
+    return m
+
+
+def _all(*mutations):
+    def m(b):
+        for f in mutations:
+            f(b)
+    return m
+
+
+def _at(path, value):
+    """Set b[path...] = value, or delete the key when value is _DROP."""
+    def m(b):
+        node = b
+        for p in path[:-1]:
+            node = node[p]
+        if value is _DROP:
+            del node[path[-1]]
+        else:
+            node[path[-1]] = value
+    return m
+
+
+_DROP = object()
+
+
+def _spine2():
+    return _add("devices", _nb_device(3, "spine2", lcd={"cassian": {"router_id": "3.3.3.3"}}))
+
+
+def _e19():
+    return _all(
+        _spine2(),
+        _add("cables", _nb_cable(2, (22, SPINE1, "eth2"), (31, SPINE2, "eth1"))),
+        _add("ips", _nb_ip(3, "10.0.1.1/30", (22, SPINE1, "eth2")),
+             _nb_ip(4, "10.0.1.2/30", (31, SPINE2, "eth1"))),
+        _add("sessions", _nb_session(3, LEAF1, "10.0.1.2/30", 65001, 65003)),
+    )
+
+
+def _circuit_term():
+    return _nb_term({"circuit": {"cid": "CID-1001", "description": "", "display": "CID-1001",
+                                 "id": 7, "provider": None, "url": _NB + "/api/circuits/circuits/7/"},
+                     "display": "CID-1001: Termination A", "id": 501, "term_side": "A",
+                     "url": _NB + "/api/circuits/circuit-terminations/501/"},
+                    "circuits.circuittermination")
+
+
+def _frontport_term():
+    return _nb_term({"cable": None, "description": "", "device": _nb_dev(*SPINE1),
+                     "display": "fp1", "id": 601, "name": "fp1",
+                     "url": _NB + "/api/dcim/front-ports/601/"}, "dcim.frontport")
+
+
+def _e64b():
+    return _all(
+        _add("devices", _nb_device(9, "leaf9", status="decommissioning")),
+        _add("cables", _nb_cable(3, (91, LEAF9, "eth1"), (23, SPINE1, "eth3"))),
+        _add("ips", _nb_ip(5, "10.0.9.1/30", (91, LEAF9, "eth1")),
+             _nb_ip(6, "10.0.9.2/30", (23, SPINE1, "eth3"))),
+        _add("sessions", _nb_session(5, LEAF9, "10.0.9.2/30", 65009, 65002)),
+    )
+
+
+def _e71(name="siteb-spine1"):
+    out = (99, name)
+    return _all(
+        _add("cables", _nb_cable(4, (24, SPINE1, "eth4"), (991, out, "eth1"))),
+        _add("ips", _nb_ip(7, "10.9.9.1/30", (24, SPINE1, "eth4"))),
+    )
+
+
+_E71B = _add("ips", _nb_ip(8, "10.9.9.2/30", (991, OUTSIDE, "eth1")))
+_E71C = _add("sessions", _nb_session(7, OUTSIDE, "10.9.9.1/30", 65099, 65002))
+
+
+def _e72(ra_id=777):
+    return _add("sessions", _nb_session(8, LEAF1, "198.51.100.1/32", 65001, 65010, ra_id=ra_id))
+
+
+_X = "   excluded: "
+_L19 = (_X + "bgp-session leaf1 -> 10.0.1.2: non-adjacent peer: 10.0.1.2 is an address "
+        "of link spine1:eth2<->spine2:eth1, which leaf1 is not on; a generated lab "
+        "configures a neighbour only over the node's own links")
+_L21 = (_X + "bgp-session leaf1 -> 198.51.100.1: peer outside the declared topology: "
+        "198.51.100.1 lies outside every declared link's subnet")
+_L45 = _X + "bgp-session leaf1 -> 198.51.100.7: status planned is not active"
+_L43A = (_X + "cable leaf1:eth3 <-> circuits.circuittermination CID-1001 A: termination "
+         "circuits.circuittermination is not an interface; links connect interfaces")
+_L44A = (_X + "ip-address leaf1:eth1 2001:db8::1/64: IPv6 address; the importer reads "
+         "IPv4 link addresses only")
+_NO_LINK = "interface is on no imported link, so no link carries the address"
+
+_E21 = _add("sessions", _nb_session(6, LEAF1, "198.51.100.1/32", 65001, 65010))
+_E45 = _add("sessions", _nb_session(4, LEAF1, "198.51.100.7/32", 65001, 65010, status="planned"))
+_E43A = _add("cables", _nb_cable(6, (13, LEAF1, "eth3"), _circuit_term()))
+_E44A = _add("ips", _nb_ip(13, "2001:db8::1/64", (11, LEAF1, "eth1")))
+_E65 = _add("cables", _nb_cable(5, (12, LEAF1, "eth2"), (22, SPINE1, "eth2"), status="planned"))
+_E67 = _add("ips", _nb_ip(10, "172.16.0.1/24", (11, LEAF1, "eth1"), vrf="mgmt"))
+
+# (case, mutation, the exclusion lines in order, embedded, set aside, pair is golden)
+PF4_BUNDLE_CASES = [
+    ("E-19", _e19(), [_L19], 6, False),
+    ("E-21", _E21, [_L21], 4, True),
+    ("E-45", _E45, [_L45], 4, True),
+    ("E-43a", _E43A, [_L43A], 4, True),
+    ("E-43b", _add("cables", _nb_cable(2, (13, LEAF1, "eth3"), _frontport_term())),
+     [_X + "cable leaf1:eth3 <-> dcim.frontport spine1 fp1: termination dcim.frontport "
+      "is not an interface; links connect interfaces"], 4, True),
+    ("E-44a", _E44A, [_L44A], 4, True),
+    ("E-44b", _add("ips", _nb_ip(3, "10.0.9.9/24", (19, LEAF1, "eth9"))),
+     [_X + "ip-address leaf1:eth9 10.0.9.9/24: " + _NO_LINK], 4, True),
+    ("E-sort", _all(_e19(), _E21, _E43A, _E44A, _E45), [_L19, _L21, _L45, _L43A, _L44A], 6, False),
+    ("E-45b", _add("sessions", _nb_session(3, LEAF1, "2001:db8::2/64", 65001, 65010)),
+     [_X + "bgp-session leaf1 -> 2001:db8::2: IPv6 peer; the importer reads IPv4 "
+      "sessions only"], 4, True),
+    ("E-64a", _add("devices", _nb_device(9, "leaf9", status="decommissioning")),
+     [_X + "device leaf9: status decommissioning is not active"], 4, True),
+    ("E-64b", _e64b(),
+     [_X + "bgp-session leaf9 -> 10.0.9.2: device leaf9 is excluded",
+      _X + "cable leaf9:eth1 <-> spine1:eth3: device leaf9 is excluded",
+      _X + "device leaf9: status decommissioning is not active",
+      _X + "ip-address leaf9:eth1 10.0.9.1/30: device leaf9 is excluded",
+      _X + "ip-address spine1:eth3 10.0.9.2/30: " + _NO_LINK], 4, True),
+    ("E-65", _E65, [_X + "cable leaf1:eth2 <-> spine1:eth2: status planned is not connected"],
+     4, True),
+    ("E-66", _add("ips", _nb_ip(3, "10.0.0.9/30", (11, LEAF1, "eth1"), status="deprecated")),
+     [_X + "ip-address leaf1:eth1 10.0.0.9/30: status deprecated is not active"], 4, True),
+    ("E-67", _E67, [_X + "ip-address leaf1:eth1 172.16.0.1/24: in VRF mgmt; the importer "
+                    "models the global table only"], 4, True),
+    ("E-AP6", _all(_add("devices", _nb_device(3, "leaf2")),
+                   _add("sessions", _nb_session(3, (3, "leaf2"), "10.0.0.2/30", 65003, 65002,
+                                                status="planned"))),
+     [_X + "bgp-session leaf2 -> 10.0.0.2: status planned is not active"], 4, False),
+    ("E-AP7", _add("sessions", _nb_session(3, LEAF1, "198.51.100.7/32", 65099, 65010,
+                                           status="planned")),
+     [_L45], 4, True),
+    ("E-71a", _e71(),
+     [_X + "cable spine1:eth4 <-> siteb-spine1:eth1: device siteb-spine1 is not in this "
+      "site's bundle", _X + "ip-address spine1:eth4 10.9.9.1/30: " + _NO_LINK], 4, True),
+    ("E-71a nested name", _e71("other-name"),
+     [_X + "cable spine1:eth4 <-> other-name:eth1: device other-name is not in this "
+      "site's bundle", _X + "ip-address spine1:eth4 10.9.9.1/30: " + _NO_LINK], 4, True),
+    ("E-71b", _E71B, [_X + "ip-address siteb-spine1:eth1 10.9.9.2/30: device siteb-spine1 "
+                      "is not in this site's bundle"], 4, True),
+    ("E-71c", _E71C, [_X + "bgp-session siteb-spine1 -> 10.9.9.1: device siteb-spine1 is "
+                      "not in this site's bundle"], 4, True),
+    ("E-72", _e72(), [_L21], 4, True),
+    ("E-72 address in the bundle", _e72(ra_id=1), [_L21], 4, True),
+]
+
+# §19.1b: E-64b, E-65 with addresses, and E-67, together (E-G-sort).
+_E_G_SORT = _all(
+    _e64b(), _E65, _E67,
+    _add("ips", _nb_ip(11, "10.0.0.5/30", (12, LEAF1, "eth2")),
+         _nb_ip(12, "10.0.0.6/30", (22, SPINE1, "eth2"))),
+)
+_G_LINES = [
+    "bgp-session leaf9 -> 10.0.9.2: device leaf9 is excluded",
+    "cable leaf1:eth2 <-> spine1:eth2: status planned is not connected",
+    "cable leaf9:eth1 <-> spine1:eth3: device leaf9 is excluded",
+    "device leaf9: status decommissioning is not active",
+    "ip-address leaf1:eth1 172.16.0.1/24: in VRF mgmt; the importer models the global table only",
+    "ip-address leaf1:eth2 10.0.0.5/30: " + _NO_LINK,
+    "ip-address leaf9:eth1 10.0.9.1/30: device leaf9 is excluded",
+    "ip-address spine1:eth2 10.0.0.6/30: " + _NO_LINK,
+    "ip-address spine1:eth3 10.0.9.2/30: " + _NO_LINK,
+]
+PF4_BUNDLE_CASES += [
+    ("E-G-sort", _E_G_SORT, [_X + x for x in _G_LINES], 4, True),
+    ("E-edge-sort", _all(_e71(), _E71B, _E71C, _e72()),
+     [_L21, _X + "bgp-session siteb-spine1 -> 10.9.9.1: device siteb-spine1 is not in "
+      "this site's bundle",
+      _X + "cable spine1:eth4 <-> siteb-spine1:eth1: device siteb-spine1 is not in this "
+      "site's bundle",
+      _X + "ip-address siteb-spine1:eth1 10.9.9.2/30: device siteb-spine1 is not in this "
+      "site's bundle",
+      _X + "ip-address spine1:eth4 10.9.9.1/30: " + _NO_LINK], 4, True),
+]
+
+
+def _dump_block(out, n, m, k):
+    return [x.replace("backend: netbox)", "backend: netbox-dump)") for x in _block(out, n, m, k)]
+
+
+def _golden_equal(out):
+    for rel in ("topology.yaml", os.path.join("tests", "starter_invariants.yaml")):
+        with open(os.path.join(out, rel), "rb") as f, \
+                open(os.path.join(GOLDEN_SITEA, rel), "rb") as g:
+            if f.read() != g.read():
+                return False
+    return True
+
+
+def _node(topo, name):
+    for n in topo.get("nodes") or []:
+        if n.get("name") == name:
+            return n
+    return None
+
+
+def pf4_bundle_exclusions():
+    """PF-4, dump reader (REQ-46-19, -21, -25, -27, -43 to -45, -64 to -68,
+    -71, -72): exit 0; the exact block and exclusion lines, sorted; the pair
+    equals golden/siteA where the case adds nothing in scope. The page legs
+    land with stage 6 (handover §0.5)."""
+    for case, mutate, lines, n, golden in PF4_BUNDLE_CASES:
+        r, scratch, src, out = _bundle_case(mutate)
+        try:
+            want = _dump_block(out, n, 1, len(lines)) + lines
+            _rec("PF-4 " + case + " exit 0, block and exclusion lines exact "
+                 "(REQ-46-25, -27)",
+                 r.returncode == 0 and r.stdout.splitlines() == want,
+                 "rc=%d out=%s err=%s" % (r.returncode, r.stdout[-400:], r.stderr.strip()[:300]))
+            if r.returncode != 0:
+                continue
+            if golden:
+                _rec("PF-4 " + case + " pair equals golden/siteA (nothing excluded "
+                     "reaches the pair)", _golden_equal(out))
+            topo, starter = _load_pair(out)
+            if case == "E-64b":
+                names = [t.get("name") for t in topo.get("tests") or []]
+                _rec("PF-4 E-64b no node, link, session or starter check for leaf9 "
+                     "(REQ-46-64)",
+                     _node(topo, "leaf9") is None
+                     and not any("leaf9" in e for k in topo.get("links") or []
+                                 for e in k.get("endpoints"))
+                     and not any("leaf9" in str(x) for x in names), str(names))
+            if case == "E-AP6":
+                leaf2 = _node(topo, "leaf2") or {}
+                _rec("PF-4 E-AP6 leaf2 a node without asn, router_id or bgp (AP-6, R-3)",
+                     leaf2.get("name") == "leaf2"
+                     and not set(leaf2) & {"asn", "router_id", "bgp"}, str(leaf2))
+            if case == "E-AP7":
+                _rec("PF-4 E-AP7 leaf1's asn stays 65001 (AP-7)",
+                     (_node(topo, "leaf1") or {}).get("asn") == 65001)
+            if case == "E-sort":
+                _rec("PF-4 E-sort output equals the §19.0b walkthrough",
+                     r.stdout.replace(out, "/tmp/e-out").splitlines()
+                     == E_SORT_WALKTHROUGH.splitlines())
+            if case == "E-G-sort":
+                _rec("PF-4 E-G-sort output equals the §19.1b walkthrough",
+                     r.stdout.replace(out, "/tmp/g-out").splitlines()
+                     == G_SORT_WALKTHROUGH.splitlines())
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+    # E-72's negative leg: the remote-address object present in, or absent
+    # from, ipam/ip-addresses gives the same pair and the same line (REQ-46-72).
+    pairs = []
+    for ra_id in (777, 1):
+        r, scratch, src, out = _bundle_case(_e72(ra_id))
+        try:
+            pairs.append((r.returncode, r.stdout.replace(out, "<out>"),
+                          open(os.path.join(out, "topology.yaml"), "rb").read()
+                          if r.returncode == 0 else b""))
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+    _rec("PF-4 E-72 the reader opens no lookup: same pair and line either way "
+         "(REQ-46-72)", pairs[0] == pairs[1] and pairs[0][0] == 0)
+
+
+E_SORT_WALKTHROUGH = """\
+✅ IMPORT OK (authoritative input; backend: netbox-dump): wrote /tmp/e-out/topology.yaml
+   starter invariants (6): embedded in topology.yaml, copied to /tmp/e-out/tests/starter_invariants.yaml
+   set aside, need device configuration (1): /tmp/e-out/tests/starter_invariants.yaml
+   excluded by filter (5)
+   excluded: bgp-session leaf1 -> 10.0.1.2: non-adjacent peer: 10.0.1.2 is an address of link spine1:eth2<->spine2:eth1, which leaf1 is not on; a generated lab configures a neighbour only over the node's own links
+   excluded: bgp-session leaf1 -> 198.51.100.1: peer outside the declared topology: 198.51.100.1 lies outside every declared link's subnet
+   excluded: bgp-session leaf1 -> 198.51.100.7: status planned is not active
+   excluded: cable leaf1:eth3 <-> circuits.circuittermination CID-1001 A: termination circuits.circuittermination is not an interface; links connect interfaces
+   excluded: ip-address leaf1:eth1 2001:db8::1/64: IPv6 address; the importer reads IPv4 link addresses only
+"""
+G_SORT_WALKTHROUGH = """\
+✅ IMPORT OK (authoritative input; backend: netbox-dump): wrote /tmp/g-out/topology.yaml
+   starter invariants (4): embedded in topology.yaml, copied to /tmp/g-out/tests/starter_invariants.yaml
+   set aside, need device configuration (1): /tmp/g-out/tests/starter_invariants.yaml
+   excluded by filter (9)
+""" + "".join("   excluded: " + x + "\n" for x in _G_LINES)
+
+
+_MANIFEST_KEYS = ["endpoints", "format", "netbox_version", "plugins", "schema", "site"]
+_PROVEN = "the proven set is NetBox 4.6.8 with netbox-bgp 0.19.0"
+_CASSIAN = ["allowed:", "checks only that a declared route is present"]
+_DEV, _CAB, _IPS, _SES, _MAN = ("dcim_devices.json", "dcim_cables.json",
+                                "ipam_ip_addresses.json", "plugins_bgp_session.json",
+                                "manifest.json")
+
+
+def _iface_name_ip(name):
+    """The address's assigned interface carries the cable's interface ID
+    under another name (REQ-46-40, N-40b)."""
+    def m(b):
+        b["ips"][0]["assigned_object"]["name"] = name
+    return m
+
+
+
+def _two_iface_eth1(b):
+    b["ips"][0]["assigned_object"]["id"] = 12
+    b["ips"][0]["assigned_object_id"] = 12
+
+
+def _iface_name(name):
+    def m(b):
+        b["cables"][0]["a_terminations"][0]["object"]["name"] = name
+        b["ips"][0]["assigned_object"]["name"] = name
+    return m
+
+
+# (case, mutation, needles, the file the rejection names). Every case also
+# needs 're-run' and an empty --out (handover §15.1).
+PF2_BUNDLE_CASES = [
+    ("N-36", _at(("manifest",), None), [_MAN] + _MANIFEST_KEYS, _MAN),
+    ("N-37a", _at(("manifest", "extra"), 1), [_PROVEN], _MAN),
+    ("N-37b", _at(("manifest", "format"), 2), [_PROVEN], _MAN),
+    ("N-37c", _at(("manifest", "netbox_version"), "4.7.0"), [_PROVEN], _MAN),
+    ("N-37d", _at(("manifest", "plugins", "netbox_bgp"), "0.18.0"), [_PROVEN], _MAN),
+    ("N-37e", _at(("manifest", "plugins", "netbox_ospf"), "1.0.0"), [_PROVEN], _MAN),
+    ("N-38a", _at(("cables",), None), [], _CAB),
+    ("N-38b", _at(("cables",), "{not json"), [], _CAB),
+    ("N-38c", _at(("cables",), "{}"), [], _CAB),
+    ("N-40a", _at(("devices", 1, "id"), 1), ["object id", "'id'"], _DEV),
+    ("N-40b", _iface_name_ip("eth2"), ["object id", "interface id 11"], _IPS),
+    ("N-40c", _at(("devices", 0, "local_context_data"), _DROP),
+     ["object id", "'local_context_data'"], _DEV),
+    ("N-40d", _at(("devices", 0, "local_context_data"), "x"),
+     ["object id", "'local_context_data'"], _DEV),
+    ("N-41a", _at(("devices", 1, "name"), "leaf1"), ["object id", "device name 'leaf1'"], _DEV),
+    ("N-41b", _two_iface_eth1, ["object id", "two interfaces named eth1"], _IPS),
+    ("N-42a", _at(("devices", 0, "platform"), None), ["platform", "unsupported"], _DEV),
+    ("N-42b", _at(("devices", 0, "platform", "slug"), "eos"), ["platform", "unsupported"], _DEV),
+    ("N-43", lambda b: b["cables"][0]["a_terminations"].append(
+        _nb_term(_nb_iface(12, LEAF1, "eth2"))), ["object id", "2 terminations"], _CAB),
+    ("N-44", _add("ips", _nb_ip(3, "10.0.0.5/30", (11, LEAF1, "eth1"))),
+     ["object id", "two addresses"], _IPS),
+    ("N-45a", _at(("sessions", 0, "device"), None), ["object id", "'device' is missing"], _SES),
+    ("N-45b", _at(("sessions", 0, "remote_address"), None),
+     ["object id", "'remote_address' is missing"], _SES),
+    ("N-45c", _add("sessions", _nb_session(3, LEAF1, "198.51.100.1/32", 65099, 65010)),
+     ["object id", "local_as 65099 disagrees"], _SES),
+    ("N-46a", _at(("devices", 0, "local_context_data", "cassian", "next_hops"), []),
+     _CASSIAN, _DEV),
+    ("N-46b", _at(("devices", 0, "local_context_data", "cassian", "static_routes", 0,
+                   "next_hop"), "10.0.0.2"), _CASSIAN, _DEV),
+    ("N-46c", _at(("devices", 0, "local_context_data", "cassian", "static_routes", 0), {}),
+     ["object id", "'prefix' is missing"], _DEV),
+    ("N-46d", lambda b: b["devices"][0]["local_context_data"]["cassian"]["static_routes"]
+     .append({"prefix": "192.0.2.0/24"}), ["object id", "more than once"], _DEV),
+    ("N-47a", _at(("devices", 0, "rack_face"), "front"), ["object id", "unknown key 'rack_face'"],
+     _DEV),
+    ("N-47b", _at(("devices", 0, "platform", "color"), "red"),
+     ["object id", "unknown key 'platform.color'"], _DEV),
+    ("N-50a", _at(("devices",), []), ["'devices' must be a non-empty list"], _DEV),
+    ("N-50b", _all(_at(("devices", 0, "status"), _nb_status("offline")),
+                   _at(("devices", 1, "status"), _nb_status("offline"))),
+     ["no device is in service after the filter", "leaf1"], _DEV),
+    ("N-51", _at(("devices", 1, "site", "slug"), "siteB"), ["siteB", "siteA"], _DEV),
+    ("N-68c", _all(_at(("devices", 1, "status"), _nb_status("planned")),
+                   _at(("devices", 1, "rack_face"), "front")),
+     ["object id", "unknown key 'rack_face'"], _DEV),
+    ("N-70a", _at(("ips", 0, "status"), _nb_status("deprecated")),
+     ["the filter excluded the address 10.0.0.1/30", "deprecated"], _CAB),
+    ("N-70b", _at(("ips", 0, "vrf"), {"description": "", "display": "mgmt", "id": 1,
+                                      "name": "mgmt", "rd": None, "url": _NB}),
+     ["the filter excluded the address 10.0.0.1/30", "VRF"], _CAB),
+    # The shared path through the reader (R-n): N-n's needles, locator 'object id'.
+    ("R-1", _at(("sessions", 0, "remote_address", "address"), "not-an-address"),
+     ["object id", "not an IPv4 address"], _SES),
+    ("R-2", _at(("devices", 0, "local_context_data", "cassian", "static_routes", 0, "prefix"), ""),
+     ["object id", "'prefix' is missing"], _DEV),
+    ("R-5", lambda b: b["ips"].pop(1), ["object id", "without the other"], _CAB),
+    ("R-6", _at(("ips", 1, "address"), "10.0.1.2/30"),
+     ["object id", "not two distinct addresses of one IPv4 subnet"], _CAB),
+    ("R-9", _add("sessions", _nb_session(3, LEAF1, "10.0.0.2/30", 65001, 65002)),
+     ["more than once"], _SES),
+    ("R-10", _iface_name("Gi0/0/1"), ["object id", "not a valid Linux interface name"], _CAB),
+    ("R-11", _at(("devices", 0, "local_context_data", "cassian", "static_routes", 0, "prefix"),
+                 "192.0.2.1/24"), ["object id", "no host bits set"], _DEV),
+    ("R-12", _at(("ips", 0, "address"), "10.0.0.1"),
+     ["object id", "not an IPv4 interface address"], _CAB),
+    ("R-16", _all(_spine2(), _add("cables", _nb_cable(2, (12, LEAF1, "eth2"), (31, SPINE2, "eth1"))),
+                  _add("ips", _nb_ip(3, "10.0.0.1/30", (12, LEAF1, "eth2")),
+                       _nb_ip(4, "10.0.0.2/30", (31, SPINE2, "eth1")))),
+     ["object id", "far-end address of more than one"], _SES),
+    ("R-17", _all(_add("cables", _nb_cable(2, (12, LEAF1, "eth2"), (22, SPINE1, "eth2"))),
+                  _add("ips", _nb_ip(3, "10.0.0.5/30", (12, LEAF1, "eth2")),
+                       _nb_ip(4, "10.0.0.6/30", (22, SPINE1, "eth2")))),
+     ["object id", "more than one link"], _SES),
+    ("R-18", _at(("sessions", 0, "remote_address", "address"), "10.0.0.1/30"),
+     ["object id", "is not its far-end address"], _SES),
+    ("R-20", _all(_spine2(), _add("cables", _nb_cable(2, (22, SPINE1, "eth2"), (31, SPINE2, "eth1"))),
+                  _add("ips", _nb_ip(3, "10.0.1.1/29", (22, SPINE1, "eth2")),
+                       _nb_ip(4, "10.0.1.2/29", (31, SPINE2, "eth1"))),
+                  _add("sessions", _nb_session(3, LEAF1, "10.0.1.3/29", 65001, 65003))),
+     ["object id", "neither of its addresses"], _SES),
+    ("R-22", _all(_spine2(),
+                  _add("devices", _nb_device(4, "spine3", lcd={"cassian": {"router_id": "4.4.4.4"}})),
+                  _add("cables", _nb_cable(2, (31, SPINE2, "eth1"), (41, SPINE3, "eth1"))),
+                  _add("ips", _nb_ip(3, "10.0.0.2/30", (31, SPINE2, "eth1")),
+                       _nb_ip(4, "10.0.0.1/30", (41, SPINE3, "eth1")))),
+     ["object id", "in different ways"], _SES),
+    ("R-23", _at(("sessions", 0, "remote_as"), None), ["object id", "'remote_asn' is required"],
+     _SES),
+    ("R-24a", _at(("devices", 0, "local_context_data", "cassian", "router_id"), _DROP),
+     ["object id", "has a BGP session but no 'router_id'"], _DEV),
+    ("REQ-46-39 primary_ip4", _all(
+        _at(("devices", 0, "local_context_data", "cassian", "router_id"), _DROP),
+        _at(("devices", 0, "primary_ip4"), {"address": "1.1.1.1/32", "id": 50})),
+     ["object id", "no 'router_id'"], _DEV),
+]
+
+
+def pf2_bundle_rejections():
+    """PF-2, dump reader (REQ-46-36 to -51, -68, -70, and the shared path's
+    rejections through the reader): exit 2, the file, the needles and
+    're-run' named, nothing written."""
+    cases = [(c, m, n, f, "netbox-dump", None) for c, m, n, f in PF2_BUNDLE_CASES] + [
+        ("N-49a", None, ["netbox_export.json", "manifest.json"], "", "netbox-dump", POS),
+        ("N-49b", None, ["netbox_export.json", "manifest.json"], "", "netbox", BUNDLE_A),
+    ]
+    for case, mutate, needles, file, backend, source in cases:
+        r, scratch, src, out = _bundle_case(mutate, backend=backend, source=source)
+        try:
+            msg = r.stderr
+            missing = [x for x in needles + [file, "re-run"] if x not in msg]
+            written = _files_under(out)
+            _rec("PF-2 " + case + " rejected at exit 2, named, nothing written",
+                 r.returncode == 2 and not missing and not written,
+                 "rc=%d missing=%s written=%d msg=%s"
+                 % (r.returncode, missing, len(written), (msg.strip() or r.stdout)[:300]))
+            if case == "N-37c":
+                want = N37C_WALKTHROUGH.replace("<bundle>", src)
+                _rec("PF-2 N-37c message equals the §19.2 walkthrough", msg.strip() == want,
+                     msg.strip()[:240])
+            if case == "N-70a":
+                want = N70A_WALKTHROUGH.replace("<bundle>", src)
+                _rec("PF-2 N-70a message equals the §19.2 walkthrough", msg.strip() == want,
+                     msg.strip()[:300])
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+    # N-68a and N-68b: a filtered object escapes the later checks (exit 0).
+    for case, mutate, line in (
+        ("N-68a", _all(_add("devices", _nb_device(3, "leaf3", status="planned")),
+                       _at(("devices", 2, "platform", "slug"), "eos")),
+         _X + "device leaf3: status planned is not active"),
+        ("N-68b", _all(_E45, _at(("sessions", 2, "remote_address"), None)),
+         _X + "bgp-session leaf1 -> -: status planned is not active"),
+    ):
+        r, scratch, src, out = _bundle_case(mutate)
+        try:
+            _rec("PF-2 " + case + " a filtered object takes no part in later checks, "
+                 "exit 0 (REQ-46-68)",
+                 r.returncode == 0 and r.stdout.splitlines()[-1:] == [line],
+                 "rc=%d out=%s err=%s" % (r.returncode, r.stdout[-200:], r.stderr[:200]))
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+
+N37C_WALKTHROUGH = (
+    "ERROR: Invalid NetBox import: <bundle>/manifest.json: manifest: netbox_version "
+    "'4.7.0' is not in the proven set; the proven set is NetBox 4.6.8 with netbox-bgp "
+    "0.19.0. Capture the export at the proven versions and re-run."
+)
+N70A_WALKTHROUGH = (
+    "ERROR: Invalid NetBox import: <bundle>/dcim_cables.json: dcim/cables object id 1 "
+    "(leaf1:eth1<->spine1:eth1): the filter excluded the address 10.0.0.1/30 on "
+    "leaf1:eth1 (status deprecated is not active), so the link keeps one address; a link "
+    "needs both addresses or neither. Bring both addresses into service in the global "
+    "table, or neither and re-run."
+)
+
+
+def _permuted(b):
+    """REQ-46-52: every endpoint list reversed, every ID shifted by 1000
+    consistently, every created/last_updated changed, every URL's host changed."""
+    def walk(node):
+        if isinstance(node, dict):
+            for k, v in list(node.items()):
+                if k in ("id", "object_id", "assigned_object_id") and type(v) is int:
+                    node[k] = v + 1000
+                elif k in ("created", "last_updated"):
+                    node[k] = "2030-01-01T00:00:00.000000Z"
+                elif k in ("url", "display_url") and isinstance(v, str):
+                    node[k] = v.replace("netbox.example.test", "other.example.test")
+                else:
+                    walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+    for key in ("devices", "cables", "ips", "sessions"):
+        b[key].reverse()
+        walk(b[key])
+
+
+_SENTINELS = ("sentinel-host.invalid", "987654321", "1999-12-31T23:59:59.424242Z",
+              "SENTINEL-FREEFORM")
+
+
+def _sentinels(b):
+    """PF-3: sentinels in the URLs, an ID, the timestamps and a free-form field."""
+    def walk(node):
+        if isinstance(node, dict):
+            for k, v in list(node.items()):
+                if k in ("url", "display_url") and isinstance(v, str):
+                    node[k] = v.replace("netbox.example.test", _SENTINELS[0])
+                elif k in ("created", "last_updated"):
+                    node[k] = _SENTINELS[2]
+                elif k == "id" and v == 1 and node.get("name") == "leaf1":
+                    node[k] = int(_SENTINELS[1])
+                else:
+                    walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+    for key in ("devices", "cables", "ips", "sessions"):
+        walk(b[key])
+    b["devices"][0]["custom_fields"] = {"note": _SENTINELS[3], "nested": {"deep": {"x": 1}}}
+    b["devices"][0]["comments"] = _SENTINELS[3]
+
+
+def pf1_pf3_bundle():
+    """PF-1 (REQ-46-35 to -54 positives; P-7) and PF-3 (REQ-46-53) on bundleA."""
+    for case, mutate, rendered in (
+        ("bundleA", None, False),
+        ("bundleA with rendered/ (P-7)", None, True),
+        ("bundleA permuted: lists reversed, IDs +1000, timestamps and URL hosts "
+         "changed (REQ-46-52)", _permuted, False),
+        ("bundleA with local_context_data.other_tool (REQ-46-46, not inspected)",
+         _at(("devices", 0, "local_context_data", "other_tool"), {"x": {"y": 1}}), False),
+        ("bundleA with a planted object in custom_fields (REQ-46-47, not inspected)",
+         _at(("devices", 0, "custom_fields"), {"x": {"unknown": {"deep": 1}}}), False),
+    ):
+        r, scratch, src, out = _bundle_case(mutate, rendered=rendered)
+        try:
+            ok = r.returncode == 0 and _golden_equal(out)
+            if case == "bundleA":
+                ok = ok and r.stdout.splitlines() == _dump_block(out, 4, 1, 0)
+            _rec("PF-1 " + case + ": exit 0, pair equals golden/siteA (REQ-46-39)", ok,
+                 "rc=%d err=%s" % (r.returncode, r.stderr.strip()[:300]))
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+    try:
+        topo, _invs = produce_pair(BUNDLE_A, backend="netbox-dump")
+        _validate_emitted_pair(topo)
+        ensure_valid_topology(topo)
+        resolve_topology(topo)
+        _rec("PF-1 the reader's pair passes the model (REQ-46-54)", True)
+    except SystemExit as exc:
+        _rec("PF-1 the reader's pair passes the model (REQ-46-54)", False, str(exc))
+    r, scratch, src, out = _bundle_case(_sentinels)
+    try:
+        text = "".join(open(p, encoding="utf-8").read() for p in sorted(_files_under(out)))
+        found = [s for s in _SENTINELS if s in text]
+        _rec("PF-3 no URL, ID, timestamp or free-form sentinel in either output file "
+             "(REQ-46-53)", r.returncode == 0 and len(_files_under(out)) == 2 and not found,
+             "rc=%d found=%s err=%s" % (r.returncode, found, r.stderr[:200]))
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+    def renamed(b):
+        for key in ("devices", "cables", "ips", "sessions"):
+            b[key] = _json.loads(_json.dumps(b[key]).replace('"leaf1"', '"sentinel9"'))
+    r, scratch, src, out = _bundle_case(renamed)
+    try:
+        text = "".join(open(p, encoding="utf-8").read() for p in sorted(_files_under(out)))
+        _rec("PF-3 self-test: a sentinel in a read field (a device name) is found",
+             r.returncode == 0 and "sentinel9" in text, "rc=%d" % r.returncode)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
 def main():
     po1_determinism()
     po2_roundtrip()
@@ -751,6 +1458,9 @@ def main():
     pf5_golden_and_positives()
     pf11_render_site_a()
     pf10_key_lists()
+    pf1_pf3_bundle()
+    pf2_bundle_rejections()
+    pf4_bundle_exclusions()
     failed = [n for n, ok, _ in checks if not ok]
     for n, ok, detail in checks:
         print(("PASS" if ok else "FAIL") + "  " + n + (("  -- " + detail) if detail else ""))

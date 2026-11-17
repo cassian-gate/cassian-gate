@@ -56,6 +56,81 @@ class EchoBackend(ImporterBackend):
         return topo, []
 
 
+# §4.6 PF-6 (REQ-46-35, -54): the netbox-dump backend is registered, the future
+# backends are unchanged, and an importer defect in a backend's pair is caught
+# by the self-check with nothing written. Additions only; PO-5 above stands.
+
+class DefectBackend(ImporterBackend):
+    """Test-only backend whose pair links a node to an undeclared node."""
+
+    name = "defect"
+
+    def produce(self, source_dir):
+        topo = {
+            "name": "defect-topo",
+            "nodes": [{"name": "a", "type": "frr"}],
+            "links": [{"endpoints": ["a:eth1", "ghost:eth1"]}],
+        }
+        return topo, []
+
+
+def _run(backend, src, out):
+    import subprocess
+    return subprocess.run(
+        [sys.executable, "-c",
+         "import sys;sys.path.insert(0,%r);"
+         "from cassian_import import run_import;"
+         "run_import(%r,%r,backend=%r)" % (_SRC, src, out, backend)],
+        capture_output=True, text=True,
+    )
+
+
+def _r(name, ok, detail=""):
+    """record(), with the detail kept only for a failure."""
+    record(name, ok, "" if ok else detail)
+
+
+def pf6():
+    _r("PF-6 'netbox-dump' is registered in BACKENDS (REQ-46-35)",
+           cassian_import.BACKENDS.get("netbox-dump") is cassian_import.NetBoxDumpBackend
+           and sorted(cassian_import.BACKENDS) == ["netbox", "netbox-dump"])
+    _r("PF-6 FUTURE_BACKENDS is unchanged (REQ-46-35)",
+           cassian_import.FUTURE_BACKENDS == ("git-ansible", "cloudvision", "live-netbox"))
+    src = tempfile.mkdtemp(prefix="pf6src_")
+    try:
+        for backend, needles in (
+            ("live-netbox", ["defined-but-not-implemented", "netbox, netbox-dump"]),
+            ("netbox_dump", ["supported: netbox, netbox-dump", "re-run"]),
+        ):
+            out = tempfile.mkdtemp(prefix="pf6_")
+            try:
+                r = _run(backend, src, out)
+                _r("PF-6 --backend %s exits 2, naming the backends (REQ-46-35)" % backend,
+                       r.returncode == 2 and all(n in r.stderr for n in needles)
+                       and not os.listdir(out), "rc=%d %s" % (r.returncode, r.stderr.strip()[:160]))
+            finally:
+                shutil.rmtree(out, ignore_errors=True)
+        original = dict(cassian_import.BACKENDS)
+        cassian_import.BACKENDS["defect"] = DefectBackend
+        out = tempfile.mkdtemp(prefix="pf6d_")
+        try:
+            msg = ""
+            try:
+                run_import(src, os.path.join(out, "o"), backend="defect")
+            except SystemExit as exc:
+                msg = str(exc)
+            _r("PF-6 a backend's non-conformant pair is an importer defect, nothing "
+                   "written (REQ-46-54)",
+                   "importer defect" in msg and not os.path.exists(os.path.join(out, "o")),
+                   msg[:160])
+        finally:
+            cassian_import.BACKENDS.clear()
+            cassian_import.BACKENDS.update(original)
+            shutil.rmtree(out, ignore_errors=True)
+    finally:
+        shutil.rmtree(src, ignore_errors=True)
+
+
 def main():
     # Open/closed: registering a new backend is one registry entry. No edit to
     # the contract or to run_import / _select_backend / _validate_emitted_pair.
@@ -87,6 +162,8 @@ def main():
         cassian_import.BACKENDS.update(original)
         shutil.rmtree(scratch, ignore_errors=True)
         shutil.rmtree(src, ignore_errors=True)
+
+    pf6()
 
     failed = [n for n, ok, _ in checks if not ok]
     for n, ok, detail in checks:

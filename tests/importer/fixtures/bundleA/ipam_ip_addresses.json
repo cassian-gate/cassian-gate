@@ -1,0 +1,72 @@
+[
+ {
+  "address": "10.0.0.1/30",
+  "assigned_object": {
+   "_occupied": true,
+   "cable": null,
+   "description": "",
+   "device": {
+    "description": "",
+    "display": "leaf1",
+    "id": 1,
+    "name": "leaf1",
+    "url": "http://netbox.example.test/api/dcim/devices/1/"
+   },
+   "display": "eth1",
+   "id": 11,
+   "name": "eth1",
+   "url": "http://netbox.example.test/api/dcim/interfaces/11/"
+  },
+  "assigned_object_id": 11,
+  "assigned_object_type": "dcim.interface",
+  "comments": "",
+  "created": "2026-11-16T11:28:52.000000Z",
+  "custom_fields": {},
+  "description": "",
+  "display": "10.0.0.1/30",
+  "id": 1,
+  "last_updated": "2026-11-16T11:28:52.000000Z",
+  "status": {
+   "label": "Active",
+   "value": "active"
+  },
+  "tags": [],
+  "url": "http://netbox.example.test/api/ipam/ip-addresses/1/",
+  "vrf": null
+ },
+ {
+  "address": "10.0.0.2/30",
+  "assigned_object": {
+   "_occupied": true,
+   "cable": null,
+   "description": "",
+   "device": {
+    "description": "",
+    "display": "spine1",
+    "id": 2,
+    "name": "spine1",
+    "url": "http://netbox.example.test/api/dcim/devices/2/"
+   },
+   "display": "eth1",
+   "id": 21,
+   "name": "eth1",
+   "url": "http://netbox.example.test/api/dcim/interfaces/21/"
+  },
+  "assigned_object_id": 21,
+  "assigned_object_type": "dcim.interface",
+  "comments": "",
+  "created": "2026-11-16T11:28:52.000000Z",
+  "custom_fields": {},
+  "description": "",
+  "display": "10.0.0.2/30",
+  "id": 2,
+  "last_updated": "2026-11-16T11:28:52.000000Z",
+  "status": {
+   "label": "Active",
+   "value": "active"
+  },
+  "tags": [],
+  "url": "http://netbox.example.test/api/ipam/ip-addresses/2/",
+  "vrf": null
+ }
+]
