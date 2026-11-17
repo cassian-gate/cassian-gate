@@ -1448,6 +1448,31 @@ def pf1_pf3_bundle():
         shutil.rmtree(scratch, ignore_errors=True)
 
 
+def pf2_bundle_locators():
+    """46-S5-R1 (REQ-46-13): a reader rejection names its bundle object as
+    ``<endpoint> object id <id> (<name>)``, <name> being §6.1's object text
+    built from names; a session's NetBox name is not printed."""
+    for case, mutate, want in (
+        ("a device", _at(("devices", 1, "site", "slug"), "siteB"),
+         "dcim_devices.json: dcim/devices object id 2 (spine1): "),
+        ("a cable", _at(("ips", 0, "status"), _nb_status("deprecated")),
+         "dcim_cables.json: dcim/cables object id 1 (leaf1:eth1<->spine1:eth1): "),
+        ("an IP address", _add("ips", _nb_ip(3, "10.0.0.5/30", (11, LEAF1, "eth1"))),
+         "ipam_ip_addresses.json: ipam/ip-addresses object id 3 (leaf1:eth1 10.0.0.5/30): "),
+        ("a session, a part missing", _at(("sessions", 0, "remote_address"), None),
+         "plugins_bgp_session.json: plugins/bgp/session object id 1 (leaf1 -> -): "),
+        ("a session through the shared path", _at(("sessions", 0, "remote_as"), None),
+         "plugins_bgp_session.json: plugins/bgp/session object id 1 (leaf1 -> 10.0.0.2): "),
+    ):
+        r, scratch, src, out = _bundle_case(mutate)
+        try:
+            _rec("PF-2 locator of " + case + " rejection per 46-S5-R1 (REQ-46-13)",
+                 r.returncode == 2 and want in r.stderr and "leaf1 session" not in r.stderr,
+                 "rc=%d %s" % (r.returncode, r.stderr.strip()[:240]))
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+
 def main():
     po1_determinism()
     po2_roundtrip()
@@ -1460,6 +1485,7 @@ def main():
     pf10_key_lists()
     pf1_pf3_bundle()
     pf2_bundle_rejections()
+    pf2_bundle_locators()
     pf4_bundle_exclusions()
     failed = [n for n, ok, _ in checks if not ok]
     for n, ok, detail in checks:

@@ -926,7 +926,7 @@ DUMP_SCHEMA_KEYS = ("file", "sha256", "source")
 DUMP_SCHEMA_SOURCES = ("plugin serializer", "published")
 DUMP_CASSIAN_KEYS = ("router_id", "static_routes")
 DUMP_RECAPTURE = "Re-capture at the proven versions, or report the field"
-DUMP_FIX_IN_NETBOX = "Correct the object in NetBox and capture again"
+DUMP_FIX_IN_NETBOX = "Correct the object in NetBox, then capture the bundle again"
 
 # The nested objects the reader reads into, per row of DUMP_KEY_LISTS (B-47):
 # key -> the row its object is checked against. "[termination]" is a list of
@@ -1120,7 +1120,11 @@ class NetBoxDumpBackend(NetBoxBackend):
     # ---- (i) load checks, on every object (B-49, B-36 to B-38, B-47, B-40) - #
 
     def _where(self, endpoint: str, obj: dict) -> tuple:
-        """``<endpoint> object id <id> (<name>)`` in that endpoint's file."""
+        """``<endpoint> object id <id> (<name>)`` in that endpoint's file, where
+        ``<name>`` is §6.1's object text built from names (46-S5-R1): a
+        device's name; a cable as ``<a><-><b>``; an IP address as
+        ``<device>:<interface> <address>``; a session as ``<L> -> <X>``; ``-``
+        for a missing part. A session's NetBox ``name`` is not read."""
         oid = obj.get("id") if isinstance(obj, dict) else None
         return (self.files[endpoint], f"{endpoint} object id {oid} ({self._label(endpoint, obj)})")
 
