@@ -2,7 +2,7 @@
 
 These scripts produced the seeded NetBox export committed at `tests/importer/fixtures/netbox-seeded/`. That export is real output from a pinned NetBox instance, so `cassian import` is proven against what the NetBox API actually returns rather than a hand-written file (REQ-46-33).
 
-This is a non-authoritative helper and is not run in CI. The proofs read the committed bundle offline; they never start NetBox.
+This is a non-authoritative helper and is not run in CI, except `keylists.py`, which PF-10 runs offline on the committed schema. The proofs read the committed bundle offline; they never start NetBox.
 
 ## Files
 
@@ -11,6 +11,7 @@ This is a non-authoritative helper and is not run in CI. The proofs read the com
 | `pins.env` | The versions the bundle was captured at: NetBox 4.6.8, `netbox-bgp` 0.19.0, the `netbox-docker` image `netboxcommunity/netbox:v4.6.8-5.0.2`, and the PostgreSQL 18 and Valkey 9.1 images, each pinned by digest. It also sets the site slug, `site-a`. |
 | `seed.py` | Seeds a fresh instance through the REST API. Standard library only; it writes no file. |
 | `capture.py` | Runs the captures, each on a fresh stack: build, start, token, seed, capture, token check, teardown. Standard library only. |
+| `keylists.py` | Derives the importer's two key lists for each object it reads (the keys it reads, and the keys it knows and does not read) from the committed `schema.json`. Standard library only; offline. `src/cassian_import.py` holds the result as literals, and PF-10 re-derives them and compares. |
 
 ## The seeded site
 
@@ -43,6 +44,10 @@ The site also holds four objects that the importer must name and exclude. The im
 7. **Teardown.** It removes the containers, the volumes and the built image.
 
 After every capture it prints each file's sha256 and size.
+
+## The key lists
+
+`keylists.py` reads the published API schema the capture recorded. The keys the importer reads are stated in the script, from its field map; every other key of the object's schema component is known and not read, and a key in neither list is rejected. Two nested objects are untyped in the schema. A cable termination's `object`, or an IP address's `assigned_object`, whose type is `dcim.interface` takes its lists from the schema's `BriefInterface` component. A termination of any other type has no published shape: the importer excludes its cable, and reads only its device and name, or a circuit's ID and termination side, to name it.
 
 ## Run
 

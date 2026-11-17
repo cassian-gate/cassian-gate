@@ -25,6 +25,11 @@ with no lab and no containers (cassian-test-alone CI posture):
         set-aside section; the contract positives of §15.2.
   PF-11 §4.6 stage 2: every session siteA's import resolves renders as
         ' neighbor <X> remote-as <AS>' through the model's gen_frr_conf.
+  PF-10 §4.6 stage 5 piece (i): the module's key lists equal what
+        contrib/netbox-seed/keylists.py derives from the committed schema,
+        whose sha256 is the manifest's; the filter's fields and in-service
+        values are the schema's; the manifest's schema source is consistent;
+        each check is shown failing once on a mutated copy.
 
 Exit 0 on all-pass; loud exit 1 on any failure. Run from the repo root:
     python tests/importer/importer_behavior_proof.py
@@ -625,6 +630,117 @@ def pf11_render_site_a():
         shutil.rmtree(scratch, ignore_errors=True)
 
 
+# --------------------------------------------------------------------------- #
+# §4.6 stage 5 piece (i): PF-10 (handover REQ-46-34, -48, -69; B-48, B-69;    #
+# ruling 46-S4-R1), lab-free and offline. contrib/netbox-seed/keylists.py     #
+# derives the reader's key lists from the committed schema; they must equal   #
+# the module's literals. Each check also runs once on a mutated copy, which   #
+# it must reject (the §15.2 self-tests). REQ-46-47's legs come with the       #
+# reader, in piece (ii).                                                      #
+# --------------------------------------------------------------------------- #
+import hashlib as _hashlib  # noqa: E402
+import importlib.util as _ilu  # noqa: E402
+
+SEEDED = os.path.join(FIX, "netbox-seeded")
+KEYLISTS = os.path.join(_ROOT, "contrib", "netbox-seed", "keylists.py")
+
+
+def _keylists():
+    """contrib/netbox-seed/keylists.py, loaded from its path (B-48)."""
+    spec = _ilu.spec_from_file_location("keylists", KEYLISTS)
+    mod = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _differing(module_lists, derived):
+    """The labels whose two lists differ between the module's literals and the
+    derivation, each list compared sorted (REQ-46-48)."""
+    mine = {k: {"read": sorted(r), "known": sorted(n)}
+            for k, (r, n) in module_lists.items()}
+    return sorted(k for k in set(mine) | set(derived)
+                  if mine.get(k) != derived.get(k))
+
+
+def _filter_problems(kl, schema, fields, in_service):
+    """REQ-46-69: each filter field present on its object, and each in-service
+    value a member of its object's status.value enum, in the committed schema."""
+    problems = []
+    for ep in sorted(set(fields) | set(in_service)):
+        _name, props = kl.resolve(schema, ("endpoint", ep))
+        for field in fields.get(ep, ()):
+            if field not in props:
+                problems.append("%s: no field %s" % (ep, field))
+        status = (props.get("status") or {}).get("properties") or {}
+        enum = (status.get("value") or {}).get("enum") or []
+        if in_service.get(ep) not in enum:
+            problems.append("%s: in-service value %r not in %s"
+                            % (ep, in_service.get(ep), enum))
+    return problems
+
+
+def _source_consistent(schema, manifest):
+    """REQ-46-34: the manifest's schema.source is 'published' exactly when the
+    schema holds the netbox-bgp session endpoint."""
+    published = "/api/plugins/bgp/session/" in (schema.get("paths") or {})
+    return (manifest["schema"]["source"] == "published") == published
+
+
+def pf10_key_lists():
+    """PF-10 (REQ-46-34, -48, -69; 46-S4-R1)."""
+    import cassian_import as ci
+    with open(os.path.join(SEEDED, "manifest.json"), encoding="utf-8") as f:
+        manifest = _json.load(f)
+    with open(os.path.join(SEEDED, "schema.json"), "rb") as f:
+        raw = f.read()
+    digest = _hashlib.sha256(raw).hexdigest()
+    _rec("PF-10 sha256(schema.json) equals the manifest's and the module's "
+         "(REQ-46-48)",
+         digest == manifest["schema"]["sha256"] == ci.DUMP_SCHEMA_SHA256,
+         "schema=%s manifest=%s module=%s"
+         % (digest, manifest["schema"]["sha256"], ci.DUMP_SCHEMA_SHA256))
+    schema = _json.loads(raw.decode("utf-8"))
+    kl = _keylists()
+    try:
+        derived = kl.derive(schema)
+    except Exception as exc:  # noqa: BLE001 -- recorded as the check's failure
+        _rec("PF-10 keylists.py derives the lists from the committed schema "
+             "(REQ-46-48)", False, repr(exc))
+        return
+    differ = _differing(ci.DUMP_KEY_LISTS, derived)
+    _rec("PF-10 the module's key lists equal keylists.py's derivation "
+         "(REQ-46-48, B-48)", not differ, "differ=%s" % differ)
+    label = sorted(k for k in derived if derived[k]["known"])[0]
+    removed = _copy.deepcopy(derived)
+    removed[label]["known"] = removed[label]["known"][1:]
+    _rec("PF-10 self-test: one entry removed from a copy of the derived lists "
+         "is detected (REQ-46-48)",
+         _differing(ci.DUMP_KEY_LISTS, removed) == [label], "label=%s" % label)
+    _rec("PF-10 the interface's lists come from the schema's BriefInterface, "
+         "selected by dcim.interface (46-S4-R1)",
+         ci.DUMP_INTERFACE_TYPE == "dcim.interface"
+         and kl.TYPED_OBJECTS == {"dcim.interface": "BriefInterface"}
+         and kl.OBJECTS["interface"][0] == ("component", "BriefInterface")
+         and "BriefInterface" in schema["components"]["schemas"])
+    problems = _filter_problems(kl, schema, ci.DUMP_FILTER_FIELDS,
+                                ci.DUMP_IN_SERVICE)
+    _rec("PF-10 each filter field is on its object and each in-service value "
+         "is in its enum (REQ-46-69, B-69)", not problems, problems)
+    linked = dict(ci.DUMP_IN_SERVICE)
+    linked["dcim/cables"] = "linked"
+    caught = _filter_problems(kl, schema, ci.DUMP_FILTER_FIELDS, linked)
+    _rec("PF-10 self-test: 'connected' changed to 'linked' is detected "
+         "(REQ-46-69)", len(caught) == 1 and "'linked'" in caught[0], caught)
+    _rec("PF-10 schema.source is 'published' exactly when the schema holds "
+         "the session endpoint (REQ-46-34)", _source_consistent(schema, manifest))
+    flipped = _copy.deepcopy(manifest)
+    flipped["schema"]["source"] = (
+        "plugin serializer" if manifest["schema"]["source"] == "published"
+        else "published")
+    _rec("PF-10 self-test: the source value flipped is detected (REQ-46-34)",
+         not _source_consistent(schema, flipped))
+
+
 def main():
     po1_determinism()
     po2_roundtrip()
@@ -634,6 +750,7 @@ def main():
     pf4_contract_exclusions()
     pf5_golden_and_positives()
     pf11_render_site_a()
+    pf10_key_lists()
     failed = [n for n, ok, _ in checks if not ok]
     for n, ok, detail in checks:
         print(("PASS" if ok else "FAIL") + "  " + n + (("  -- " + detail) if detail else ""))

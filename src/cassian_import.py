@@ -97,6 +97,139 @@ NEEDS_DEVICE_CONFIGURATION_REASON = (
 )
 
 
+# --------------------------------------------------------------------------- #
+# The netbox-dump reader's key lists and filter values (§4.6 stage 5)         #
+# --------------------------------------------------------------------------- #
+
+# For each endpoint the reader reads, and each nested object it reads into,
+# the keys it reads and the keys it knows and does not read (§4.6 REQ-46-47,
+# IR-40). A key in neither list is rejected; a key it does not read is never
+# descended into. Derived from the committed NetBox 4.6.8 schema
+# (tests/importer/fixtures/netbox-seeded/schema.json, whose sha256 follows) by
+# contrib/netbox-seed/keylists.py and written here as literals, never
+# generated at run time (REQ-46-48, D-14); PF-10 re-derives and compares.
+# A cable termination's object and an IP address's assigned object take the
+# "interface" lists when their type is DUMP_INTERFACE_TYPE (46-S4-R1); a
+# termination of any other type is not key-checked beyond its "device" and
+# "circuit" (46-S4-R2).
+DUMP_SCHEMA_SHA256 = "2c4898aee0e41b4235c7ba350e636f57d7129ae8689df2fe0da6f724bdf89e0b"
+DUMP_INTERFACE_TYPE = "dcim.interface"
+DUMP_KEY_LISTS = {
+    "asn": (
+        ("asn",),
+        ("description", "display", "id", "url"),
+    ),
+    "circuit": (
+        ("cid",),
+        ("description", "display", "id", "provider", "url"),
+    ),
+    "dcim/cables": (
+        ("a_terminations", "b_terminations", "id", "status"),
+        (
+            "bundle", "color", "comments", "created", "custom_fields",
+            "description", "display", "display_url", "label", "last_updated",
+            "length", "length_unit", "owner", "profile", "tags", "tenant",
+            "type", "url",
+        ),
+    ),
+    "dcim/devices": (
+        ("id", "local_context_data", "name", "platform", "site", "status"),
+        (
+            "airflow", "asset_tag", "cluster", "comments", "config_context",
+            "config_template", "console_port_count",
+            "console_server_port_count", "created", "custom_fields",
+            "description", "device_bay_count", "device_type", "display",
+            "display_url", "face", "front_port_count", "interface_count",
+            "inventory_item_count", "last_updated", "latitude", "location",
+            "longitude", "module_bay_count", "oob_ip", "owner",
+            "parent_device", "position", "power_outlet_count",
+            "power_port_count", "primary_ip", "primary_ip4", "primary_ip6",
+            "rack", "rear_port_count", "role", "serial", "tags", "tenant",
+            "url", "vc_position", "vc_priority", "virtual_chassis",
+        ),
+    ),
+    "device": (
+        ("id", "name"),
+        ("description", "display", "url"),
+    ),
+    "interface": (
+        ("device", "id", "name"),
+        ("_occupied", "cable", "description", "display", "url"),
+    ),
+    "ip-address": (
+        ("address",),
+        (
+            "description", "display", "dns_name", "family", "id", "nat_inside",
+            "nat_outside", "url",
+        ),
+    ),
+    "ipam/ip-addresses": (
+        (
+            "address", "assigned_object", "assigned_object_type", "id",
+            "status", "vrf",
+        ),
+        (
+            "assigned_object_id", "comments", "created", "custom_fields",
+            "description", "display", "display_url", "dns_name", "family",
+            "last_updated", "nat_inside", "nat_outside", "owner", "role",
+            "tags", "tenant", "url",
+        ),
+    ),
+    "platform": (
+        ("slug",),
+        (
+            "_depth", "description", "device_count", "display", "id", "name",
+            "url", "virtualmachine_count",
+        ),
+    ),
+    "plugins/bgp/session": (
+        ("device", "id", "local_as", "remote_address", "remote_as", "status"),
+        (
+            "comments", "created", "custom_fields", "description", "display",
+            "export_policies", "extra_attributes", "import_policies",
+            "last_updated", "local_address", "max_prefixes", "name",
+            "peer_group", "prefix_list_in", "prefix_list_out",
+            "remote_as_macro", "site", "tags", "tenant", "url",
+            "virtualmachine",
+        ),
+    ),
+    "site": (
+        ("slug",),
+        ("description", "display", "id", "name", "url"),
+    ),
+    "status": (
+        ("value",),
+        ("label",),
+    ),
+    "termination": (
+        ("object", "object_type"),
+        ("object_id",),
+    ),
+    "vrf": (
+        ("name",),
+        ("description", "display", "id", "rd", "url"),
+    ),
+}
+
+# The filter's fields and in-service values (§4.6 REQ-46-64 to -69, B-69), as
+# the schema whose sha256 is DUMP_SCHEMA_SHA256 names them: status on the
+# four objects, read through its value, and vrf on IP addresses. PF-10 shows
+# each field present on its object and each value in its field's enum.
+DUMP_FILTER_FIELDS = {
+    "dcim/cables": ("status",),
+    "dcim/devices": ("status",),
+    "ipam/ip-addresses": ("status", "vrf"),
+    "plugins/bgp/session": ("status",),
+}
+DUMP_IN_SERVICE = {
+    "dcim/cables": "connected",
+    "dcim/devices": "active",
+    "ipam/ip-addresses": "active",
+    "plugins/bgp/session": "active",
+}
+
+
+
 def _text(value) -> str:
     """A declared name or address as the importer reads it (shipped form)."""
     return str(value or "").strip()
