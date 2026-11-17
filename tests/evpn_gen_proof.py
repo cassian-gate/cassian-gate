@@ -39,9 +39,31 @@ P-7 (§4.5-e WI-4, rule B10; REQ-45E-18; BL-P2-4.5c-227; handover §15.2 row 18)
              participant, or one expected peer, makes P7-EQUAL red; the selection without rule B10's
              lines yields no participant, and P7-SELECT is red.
 
-LEGS THAT ARRIVE LATER, under this script's extension model (a new `fabric.evpn` field adds an emission leg
-and a rejection leg): the declaration legs, the L998 negative leg among them (REQ-45E-19), with REQ-45E-36
-in WI-5; P-7's SONiC leg with addendum 01.
+DECLARATION (§4.5-e WI-5 piece (iv); REQ-45E-36, REQ-45E-19; scope amendment 01 A-4 row 8). Each misuse is a
+copy of the first corpus file with one change, handed to resolve_topology with cassian_common._QUIET_DIE set as
+`cassian validate --json` sets it; a rejection is the SystemExit carrying validate's message. Under this
+script's extension model each `fabric.evpn` field has an emission leg and a rejection leg:
+  D-PLACE    an evpn-shaped key outside `fabric.evpn` (a node's `evpn_vni`) is rejected, naming its path.
+  D-KEY      an unsupported key under `fabric.evpn` is rejected, naming it and listing the supported keys.
+  D-ENABLED  `enabled` that is not a boolean is rejected. Emission: `enabled: false` renders no EVPN section.
+  D-MODE     `mode` other than `vlan-aware` is rejected, naming `vlan-aware`. Emission: rendered with mode
+             `vlan-aware`, every participant carries `advertise-all-vni`.
+  D-ASN      `asn` 0, above 4294967295 or not an integer is rejected, naming the range. Emission: every
+             participant renders `router bgp <asn>` and `neighbor EVPN remote-as <asn>` with the declared asn,
+             for the corpus asn and for a changed one.
+  D-13A      A representative rejection (D-MODE) carries (a) what is wrong, (b) where (`fabric.evpn.mode`) and
+             (c) what would be valid (`'vlan-aware'`); the same misuse resolved twice gives the same bytes.
+  L998       The L998 refusal (REQ-45E-19; handover §15.2 row 19): an EVPN participant (a node with `role`) of
+             type sonic-vm, nft-fw or host, in a copy of the file with its tests removed, is rejected with the src/cassian_model.py message
+             "Topology invalid: node '<name>': EVPN participant nodes must use type: frr"; for sonic-vm the
+             rejection is also taken through `cassian validate --json` (cmd_validate, in process, on a copy of
+             the file in a temporary folder), which exits 2 with that message as its error.
+  D-NV       Non-vacuity: two model mutants, one line changed each, loaded in memory: (1) the L998 refusal
+             removed: a sonic-vm participant validates, and L998 goes red; (2) the mode check removed: D-MODE
+             goes red. Under neither does the real module change.
+
+LEGS THAT ARRIVE LATER, under this script's extension model: P-7's SONiC leg with addendum 01. If addendum 01
+implements the nine cells, it narrows the L998 leg to the node types still refused (proof-script ruling 2).
 
 ORACLE. The pinned session set was read back from gen_frr_conf's renders at cassian-gate 7a60164, before
 the derivation existed (src/cassian_model.py sha256
@@ -275,6 +297,210 @@ def p7(cassian_model, topos):
         check("P7-NV the selection without rule B10's lines yields no participant, so P7-SELECT is red", got == [], got)
 
 
+_REFUSAL = "EVPN participant nodes must use type: frr"
+
+
+def _doc():
+    import yaml
+    with open(os.path.join(_ROOT, CORPUS[0]), encoding="utf-8") as fh:
+        return yaml.safe_load(fh)
+
+
+def _resolve(model, doc):
+    from pathlib import Path
+    try:
+        return "ok", model.resolve_topology(doc, topo_path=Path(os.path.join(_ROOT, CORPUS[0])))
+    except SystemExit as exc:
+        return "die", str(exc)
+
+
+def _with(change):
+    import copy
+    doc = copy.deepcopy(_doc())
+    change(doc)
+    return doc
+
+
+def _participant(doc):
+    return next(n for n in doc["nodes"] if n.get("role") == "leaf")
+
+
+def _set_type(ntype):
+    """The participant's type changed; the file's tests and scenarios removed, so nothing else refuses it."""
+    def change(doc):
+        _participant(doc)["type"] = ntype
+        doc["tests"] = []
+        doc.pop("scenarios", None)
+    return change
+
+
+def l998_legs(model, label="L998"):
+    ok = True
+    for ntype in ("sonic-vm", "nft-fw", "host"):
+        doc = _with(_set_type(ntype))
+        name = _participant(doc)["name"]
+        o, msg = _resolve(model, doc)
+        want = "Topology invalid: node '%s': %s" % (name, _REFUSAL)
+        good = o == "die" and msg == want
+        if not good:
+            print("        %s %s: %s %s" % (label, ntype, o, msg if o == "die" else "validated"))
+        check("%s an EVPN participant of type %s is rejected with the L998 message" % (label, ntype), good)
+        ok &= good
+    return ok
+
+
+def l998_cli():
+    """The sonic-vm refusal through `cassian validate --json`: exit 2, the L998 message as the error."""
+    import argparse
+    import contextlib
+    import io
+    import json
+    import tempfile
+    import yaml
+    import cassian_common
+    import cassian_engine
+
+    doc = _with(_set_type("sonic-vm"))
+    name = _participant(doc)["name"]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "l998.yaml")
+        with open(path, "w", encoding="utf-8") as fh:
+            yaml.safe_dump(doc, fh, sort_keys=False)
+        out = io.StringIO()
+        prev = cassian_common._QUIET_DIE
+        code = None
+        try:
+            with contextlib.redirect_stdout(out):
+                cassian_engine.cmd_validate(argparse.Namespace(topology=path, json=True, contrib_path=None))
+        except SystemExit as exc:
+            code = exc.code
+        finally:
+            cassian_common._QUIET_DIE = prev
+    try:
+        payload = json.loads(out.getvalue())
+    except ValueError:
+        payload = {}
+    check("L998 `cassian validate --json` on a sonic-vm participant exits 2 with the L998 message",
+          code == 2 and payload.get("result") == "fail"
+          and payload.get("error") == "Topology invalid: node '%s': %s" % (name, _REFUSAL), (code, payload))
+
+
+def _rejects(model, change, *needles):
+    o, msg = _resolve(model, _with(change))
+    return o == "die" and all(n in msg for n in needles), msg
+
+
+def declaration_legs(model, label="D"):
+    ok = True
+
+    cases = (
+        ("PLACE", "an evpn-shaped key on a node (evpn_vni)",
+         lambda d: _participant(d).update(evpn_vni=10100), ("EVPN must be declared only at 'fabric.evpn'", "evpn_vni")),
+        ("KEY", "an unsupported key under fabric.evpn",
+         lambda d: d["fabric"]["evpn"].update(flavour="x"), ("unsupported key(s): flavour", "Supported keys are")),
+        ("ENABLED", "enabled: 'yes' (not a boolean)",
+         lambda d: d["fabric"]["evpn"].update(enabled="yes"), ("fabric.evpn.enabled must be boolean",)),
+        ("MODE", "mode: vlan-based",
+         lambda d: d["fabric"]["evpn"].update(mode="vlan-based"), ("fabric.evpn.mode must be 'vlan-aware'",)),
+        ("ASN", "asn: 0", lambda d: d["fabric"]["evpn"].update(asn=0),
+         ("fabric.evpn.asn must be an integer in range 1..4294967295",)),
+        ("ASN", "asn: 4294967296", lambda d: d["fabric"]["evpn"].update(asn=4294967296),
+         ("fabric.evpn.asn must be an integer in range 1..4294967295",)),
+        ("ASN", "asn: '65100' (a string)", lambda d: d["fabric"]["evpn"].update(asn="65100"),
+         ("fabric.evpn.asn must be an integer in range 1..4294967295",)),
+    )
+    for tag, what, change, needles in cases:
+        good, msg = _rejects(model, change, *needles)
+        if not good:
+            print("        %s-%s %s: %s" % (label, tag, what, msg))
+        check("%s-%s %s is rejected, naming %s" % (label, tag, what, " / ".join(needles)), good)
+        ok &= good
+    return ok
+
+
+def emission_legs(model):
+    frr_of = lambda topo: [n for n in topo["nodes"] if n.get("role")]
+    o, topo = _resolve(model, _doc())
+    if not check("D-EMIT the first corpus file resolves", o == "ok"):
+        return
+    asn = topo["fabric"]["evpn"]["asn"]
+    cfgs = [model.gen_frr_conf(n, topo) for n in frr_of(topo)]
+    check("D-ASN emission: every participant renders `router bgp %s` and `neighbor EVPN remote-as %s`" % (asn, asn),
+          cfgs and all(("router bgp %s" % asn) in c and (" neighbor EVPN remote-as %s" % asn) in c for c in cfgs))
+    o, topo2 = _resolve(model, _with(lambda d: d["fabric"]["evpn"].update(asn=65200)))
+    cfgs2 = [model.gen_frr_conf(n, topo2) for n in frr_of(topo2)] if o == "ok" else []
+    check("D-ASN emission: with asn 65200 declared, every participant renders 65200 and not %s" % asn,
+          cfgs2 and all("router bgp 65200" in c and " neighbor EVPN remote-as 65200" in c
+                        and ("router bgp %s" % asn) not in c for c in cfgs2))
+    check("D-MODE emission: every participant carries `advertise-all-vni` (mode vlan-aware)",
+          cfgs and all("  advertise-all-vni" in c for c in cfgs))
+    o, topo3 = _resolve(model, _with(lambda d: d["fabric"]["evpn"].update(enabled=False)))
+    cfgs3 = [model.gen_frr_conf(n, topo3) for n in frr_of(topo3)] if o == "ok" else None
+    check("D-ENABLED emission: with enabled: false the topology resolves and no participant renders EVPN",
+          cfgs3 is not None and all("l2vpn evpn" not in c and "peer-group EVPN" not in c for c in cfgs3),
+          o)
+
+
+def d13a(model):
+    o, msg = _resolve(model, _with(lambda d: d["fabric"]["evpn"].update(mode="vlan-based")))
+    check("D-13A (a) what is wrong and (b) where: `fabric.evpn.mode`", o == "die" and "fabric.evpn.mode" in msg, msg)
+    check("D-13A (c) what would be valid: 'vlan-aware'", "'vlan-aware'" in msg, msg)
+    _o, msg2 = _resolve(model, _with(lambda d: d["fabric"]["evpn"].update(mode="vlan-based")))
+    check("D-13A the same misuse gives the same message bytes twice", msg == msg2)
+
+
+def _model_mutant(old, new):
+    import types
+    path = os.path.join(_ROOT, "src", "cassian_model.py")
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    if text.count(old) != 1:
+        return None
+    mod = types.ModuleType("cassian_model_evpn_gen_mutant")
+    mod.__file__ = path
+    sys.modules[mod.__name__] = mod
+    try:
+        exec(compile(text.replace(old, new), "<cassian_model mutant>", "exec"), mod.__dict__)
+    finally:
+        sys.modules.pop(mod.__name__, None)
+    return mod
+
+
+def declaration(cassian_model):
+    declaration_legs(cassian_model)
+    emission_legs(cassian_model)
+    d13a(cassian_model)
+    l998_legs(cassian_model)
+    l998_cli()
+
+    import contextlib
+    import io
+    refusal = ('        if ntype != "frr":\n'
+               '            die(f"Topology invalid: node \'{name}\': EVPN participant nodes must use type: frr")\n')
+    mode = ('    if not isinstance(mode, str) or mode.strip() != "vlan-aware":\n'
+            '        die("Topology invalid: fabric.evpn.mode must be \'vlan-aware\'")\n')
+    for label, leg, old, run in (
+            ("the L998 refusal removed", "L998", refusal, lambda m: l998_legs(m, label="(mutant)")),
+            ("the mode check removed", "D-MODE", mode, lambda m: declaration_legs(m, label="(mutant)"))):
+        m = _model_mutant(old, "")
+        if m is None:
+            check("D-NV the mutant's anchor is found once (%s)" % label, False)
+            continue
+        n0, c0 = len(_FAILED), _COUNT[0]
+        with contextlib.redirect_stdout(io.StringIO()):
+            run(m)
+        red = [f for f in _FAILED[n0:] if f.startswith("(mutant)") and
+               (leg == "L998" or f.startswith("(mutant)-MODE"))]
+        del _FAILED[n0:]
+        _COUNT[0] = c0
+        if red:
+            print("MUTATION-FAIL: %s -> %s red" % (label, leg))
+        check("D-NV %s: %s goes red" % (label, leg), bool(red))
+        if leg == "L998":
+            o, _msg = _resolve(m, _with(_set_type("sonic-vm")))
+            check("D-NV under that mutant a sonic-vm EVPN participant validates", o == "ok", _msg)
+
+
 def main():
     import cassian_common
     import cassian_model
@@ -330,11 +556,12 @@ def main():
               and derive_ok(cassian_model, rel, topo)[0])
 
     p7(cassian_model, topos)
+    declaration(cassian_model)
 
     if _FAILED:
-        print("RESULT: RED -- %d checks, %d failed (evpn_gen_proof, §4.5-e WI-4)" % (_COUNT[0], len(_FAILED)))
+        print("RESULT: RED -- %d checks, %d failed (evpn_gen_proof, §4.5-e WI-4, WI-5)" % (_COUNT[0], len(_FAILED)))
         return 1
-    print("RESULT: GREEN -- %d checks, 0 failed (evpn_gen_proof, §4.5-e WI-4)" % _COUNT[0])
+    print("RESULT: GREEN -- %d checks, 0 failed (evpn_gen_proof, §4.5-e WI-4, WI-5)" % _COUNT[0])
     return 0
 
 

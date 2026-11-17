@@ -377,6 +377,7 @@ Every key listed below is REQUIRED on the failed-invariant record's `observed_st
 * `mac` is the test's queried MAC literal (lowercased canonical form).
 * `vni` is the test's queried VNI.
 * `evpn_routes` is filtered identically to §4.6 (declared host MACs only).
+* The record's `evidence.routes` keeps every MAC the read returned, including the MACs the substrate allocates to containers, which differ from run to run. Neither `cassian replay --verify-results` nor two-run reads `evidence`: replay compares each test's name, kind, expected, observed and verdict, and two-run compares expected, observed, verdict and `duration_ms`. `observed_state.evpn_routes` carries the declared host MACs only. A container MAC therefore never changes a compared field.
 * `evpn_mac_route_absent` payloads use `"type": "evpn_mac_route_absent"`; otherwise the schema is identical.
 
 #### 4.7.1) `evpn_mac_route_valid`

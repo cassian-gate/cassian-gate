@@ -285,7 +285,17 @@ for _s, _p in (
 # §4.5-e base: the proofs its own CI steps run (handover §6.7.4), one entry per step, entered
 # with the step (REQ-45E-15).
 for _p in ("wf_additions_only_proof.py",  # WI-3, REQ-45E-14, §6.7.4 row 2
-           "substrate_target_preservation_proof.py"):  # WI-3, REQ-45E-16, §6.7.4 row 3
+           "substrate_target_preservation_proof.py",  # WI-3, REQ-45E-16, §6.7.4 row 3
+           # WI-5, REQ-45E-29 to -36, §6.7.4 row 1: the EVPN-on-FRR family step (the row-4 hosted step
+           # runs `cassian up`/`test`, no proof file)
+           "evpn_authority_parity_proof.py",
+           "evpn_catalog_coherence_proof.py",
+           "evpn_eval_match_proof.py",
+           "evpn_four_quadrant_proof.py",
+           "evpn_render_boundary_proof.py",
+           "evpn_replay_determinism_proof.py",
+           "evpn_validate_rejection_proof.py",
+           "evpn_gen_proof.py"):
     check(f"§4.5-e proof is CI-wired: {_p} present in the gate", _p in gate)
     LISTED.append(_p)
 # Non-vacuity (handover §15.2, negative-proof row 16): with the proof listed, an in-memory

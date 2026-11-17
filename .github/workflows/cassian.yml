@@ -895,6 +895,49 @@ jobs:
           set -euo pipefail
           python tests/substrate_target_preservation_proof.py
 
+      # §4.5-e WI-5 (REQ-45E-29 to -36; BL-P2-4.5c-246; scope amendment 01 A-4; handover §6.7.4 row 1):
+      # the eight EVPN-on-FRR family scripts, lab-free. Each runs whatever the others do, and the
+      # step fails if any one is red. Additions only (REQ-45E-14).
+      - name: EVPN-on-FRR proof family — evpn_*_proof.py, eight scripts (§4.5-e WI-5, REQ-45E-29 to -36)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          rc=0
+          python tests/evpn_authority_parity_proof.py || rc=1
+          python tests/evpn_catalog_coherence_proof.py || rc=1
+          python tests/evpn_eval_match_proof.py || rc=1
+          python tests/evpn_four_quadrant_proof.py || rc=1
+          python tests/evpn_render_boundary_proof.py || rc=1
+          python tests/evpn_replay_determinism_proof.py || rc=1
+          python tests/evpn_validate_rejection_proof.py || rc=1
+          python tests/evpn_gen_proof.py || rc=1
+          exit "$rc"
+
+      # §4.5-e WI-5 (REQ-45E-25; BL-P2-4.5c-221 (i); handover §6.7.4 row 4): the hosted proof of
+      # evpn_mac_route_valid on FRR. One fixture outside topologies/ and examples/, two tests: one
+      # expects pass on a declared host MAC, one expects fail on an undeclared MAC. The step asserts
+      # that `cassian test` exits 0 and that both verdicts are pass in results.json. The trap tears
+      # the lab down on every exit, so the teardown sweep needs no entry for it. Additions only
+      # (REQ-45E-14).
+      - name: evpn_mac_route_valid hosted proof — tests/fixtures/evpn-mac-route-valid/topology.yaml (§4.5-e WI-5, REQ-45E-25)
+        if: success() || failure()
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: "1"
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          TOPO=tests/fixtures/evpn-mac-route-valid/topology.yaml
+          LAB=evpn-mac-route-valid
+          trap "./src/cassian.py down ${LAB} || true" EXIT
+          ./src/cassian.py up "$TOPO" --reconfigure
+          ./src/cassian.py test "$TOPO"
+          python -c 'import json, sys; t = json.load(open(sys.argv[1]))["tests"]; v = sorted((x["name"], x["verdict"]) for x in t); print(v); sys.exit(0 if len(v) == 2 and all(r == "pass" for _n, r in v) else 1)' "labs/clab-${LAB}/results.json"
+
       # §4.5-d VM-1 -- scope §9 row 15: one fixture, one boot, one declared FRR<->SONiC
       # session carrying REQ-45D-8 first, then -1, -16 and -19 (S29-R5), and the two
       # §15.2 negatives. The proof drives `cassian test --name` and `cassian status`
