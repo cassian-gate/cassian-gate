@@ -260,6 +260,7 @@ _INVARIANT_TYPES: tuple[str, ...] = (
     "route_not_advertised_to",
     "evpn_mac_route_present",
     "evpn_mac_route_absent",
+    "evpn_mac_route_valid",
     "evpn_vni_route_present",
     "evpn_bgp_session_up",
     "ospf_neighbor_up",
@@ -2657,7 +2658,7 @@ def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
                     f"tests[{i}]: invariant.type unsupported ({inv_type!r}) "
                     f"(supported: bgp_session_up, route_present, route_absent, "
                     f"bgp_med_equals, bgp_localpref_equals, bgp_community, bgp_as_path, route_advertised_to, route_not_advertised_to, "
-                    f"evpn_mac_route_present, evpn_mac_route_absent, "
+                    f"evpn_mac_route_present, evpn_mac_route_absent, evpn_mac_route_valid, "
                     f"evpn_vni_route_present, evpn_bgp_session_up, ospf_neighbor_up, interface_state)"
                 )
             t["type"] = inv_type
@@ -2925,7 +2926,7 @@ def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
                         f"src to be a node of type 'frr'"
                     )
 
-            elif inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent"):
+            elif inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent", "evpn_mac_route_valid"):
                 mac = t.get("mac")
                 if not isinstance(mac, str) or not mac.strip():
                     die(f"{ctx}: {inv_type} requires 'mac'")

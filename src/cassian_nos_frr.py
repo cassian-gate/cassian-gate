@@ -1177,7 +1177,13 @@ def _evpn_route_type_int(value):
 
 
 def _collect_evpn_routes(rt, lab, node, req: ObservationRequest) -> Observation:
-    """Probe + normalize FRR EVPN state for evpn_mac_route_present, evpn_mac_route_absent, evpn_vni_route_present."""
+    """Probe + normalize FRR EVPN state for evpn_mac_route_present, evpn_mac_route_absent, evpn_mac_route_valid,
+    evpn_vni_route_present.
+
+    §4.5-e WI-5, rule B08 (REQ-45E-25): for `evpn_mac_route_valid` the observation also carries `valid`, true iff
+    some path of a type-2 route matching the test's (`mac`, `vni`) has `valid` true. The other kinds' observation
+    is unchanged (REQ-45E-47).
+    """
     mac = str(req.params.get("mac") or "").strip().lower()
     vni_i = req.params.get("vni_i")
     cp = rt.exec(
@@ -1205,6 +1211,7 @@ def _collect_evpn_routes(rt, lab, node, req: ObservationRequest) -> Observation:
     raw = str(out or "").strip()
     evidence_entries: list = []
     present = False
+    valid = False
     parse_error = ""
 
     def _append_entry(mac_val, vni_val, state_val):
@@ -1215,7 +1222,7 @@ def _collect_evpn_routes(rt, lab, node, req: ObservationRequest) -> Observation:
             "route_type": state_val,
             "node": node,
         }
-        if req.kind in ("evpn_mac_route_present", "evpn_mac_route_absent") and not rec["mac"]:
+        if req.kind in ("evpn_mac_route_present", "evpn_mac_route_absent", "evpn_mac_route_valid") and not rec["mac"]:
             return
         evidence_entries.append(rec)
         if req.kind == "evpn_vni_route_present":
@@ -1288,8 +1295,19 @@ def _collect_evpn_routes(rt, lab, node, req: ObservationRequest) -> Observation:
 
                             if req.kind == "evpn_vni_route_present" and vni_val is None:
                                 continue
-                            if req.kind in ("evpn_mac_route_present", "evpn_mac_route_absent") and not mac_val:
+                            if req.kind in ("evpn_mac_route_present", "evpn_mac_route_absent", "evpn_mac_route_valid") and not mac_val:
                                 continue
+
+                            # §4.5-e WI-5, rule B08 (REQ-45E-25): a path marked valid on a type-2 route matching the
+                            # test's (mac, vni). Read before the per-route dedup below: one route's paths share a signature.
+                            if (
+                                req.kind == "evpn_mac_route_valid"
+                                and mac_val == mac
+                                and vni_val == vni_i
+                                and (state_val is None or str(state_val).lower() in ("2", "2-evpn", "macip", "type2"))
+                                and entry.get("valid") is True
+                            ):
+                                valid = True
 
                             sig = (mac_val, vni_val, state_val, node)
                             if sig in seen:
@@ -1309,6 +1327,8 @@ def _collect_evpn_routes(rt, lab, node, req: ObservationRequest) -> Observation:
         "present": present,
         "evidence_entries": evidence_entries,
     }
+    if req.kind == "evpn_mac_route_valid":
+        observed_state["valid"] = valid
     evidence = {
         "cmd": "vtysh -c 'show bgp l2vpn evpn route json'",
         "rc": rc,
@@ -1340,6 +1360,11 @@ _RE_EVPN_MAC_ROUTE_TEXT = re.compile(
     r"\[2\]:\[0\]:\[48\]:\[([0-9a-f:]{17})\]", re.IGNORECASE
 )
 
+# §4.5-e WI-5, rule B08 (REQ-45E-25): an EVPN prefix on a text line, and a type-2 MAC prefix with or without an
+# IP suffix. FRR 10.7.1 prints the prefix on every path line (session-5 capture; 45E-S5-R1).
+_RE_EVPN_PREFIX_TEXT = re.compile(r"\[[0-9]+\]:\S*")
+_RE_EVPN_MAC_PREFIX_TEXT = re.compile(r"\[2\]:\[0\]:\[48\]:\[([0-9a-f:]{17})\](?::\[|$)", re.IGNORECASE)
+
 
 def _collect_evpn_routes_text(rt, lab, node, req: ObservationRequest) -> Observation:
     """Supplementary text-mode EVPN MAC-route probe (REQ-45C-14, LD-45C-1).
@@ -1355,8 +1380,15 @@ def _collect_evpn_routes_text(rt, lab, node, req: ObservationRequest) -> Observa
     `evpn_vni_route_present` does not route to this leg -- it has no text
     fallback, matching the pre-migration core block, which gated on
     `inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent")`.
+
+    §4.5-e WI-5, rule B08 (REQ-45E-25): when the request asks for validity (`evpn_mac_route_valid`), the leg also
+    returns `valid_macs`, the MACs of `[2]:[0]:[48]:[<mac>]` prefixes, with or without an IP suffix, that hold a
+    valid path. A line whose first four characters contain `*` is a valid path; it belongs to the prefix on that
+    line or, when the line carries none, to the last prefix above it in the same `Route Distinguisher:` block.
+    The VNI is the test's. A request without validity is answered as before (REQ-45E-47).
     """
     vni_i = req.params.get("vni_i")
+    want_valid = bool(req.params.get("validity"))
     cp = rt.exec(
         lab,
         node,
@@ -1378,10 +1410,22 @@ def _collect_evpn_routes_text(rt, lab, node, req: ObservationRequest) -> Observa
         rc = getattr(cp, "returncode", None)
 
     records: list[dict] = []
+    valid_macs: set = set()
     parse_error = ""
     try:
         text = str(out or "")
+        last_prefix = None
         for line in text.splitlines():
+            if want_valid:
+                if line.startswith("Route Distinguisher:"):
+                    last_prefix = None
+                mp = _RE_EVPN_PREFIX_TEXT.search(line)
+                if mp:
+                    last_prefix = mp.group(0)
+                if "*" in line[:4] and last_prefix:
+                    mv = _RE_EVPN_MAC_PREFIX_TEXT.match(last_prefix)
+                    if mv:
+                        valid_macs.add(mv.group(1).lower())
             m = _RE_EVPN_MAC_ROUTE_TEXT.search(line)
             if not m:
                 continue
@@ -1397,9 +1441,12 @@ def _collect_evpn_routes_text(rt, lab, node, req: ObservationRequest) -> Observa
     except Exception as e:
         parse_error = f"text_parse={e}"
 
+    data = {"records": records, "parse_error": parse_error}
+    if want_valid:
+        data["valid_macs"] = sorted(valid_macs)
     return Observation(
         kind=req.kind,
-        data={"records": records, "parse_error": parse_error},
+        data=data,
         evidence={
             "cmd": "vtysh -c 'show bgp l2vpn evpn route'",
             "excerpt": str(out or "")[:_EVPN_TEXT_EXCERPT_CHARS],
@@ -1606,6 +1653,7 @@ _COLLECT_HANDLERS = {
     "evpn_bgp_session_up": _collect_evpn_bgp_summary,
     "evpn_mac_route_present": _collect_evpn_routes,
     "evpn_mac_route_absent": _collect_evpn_routes,
+    "evpn_mac_route_valid": _collect_evpn_routes,
     "evpn_vni_route_present": _collect_evpn_routes,
     "evpn_mac_route_text": _collect_evpn_routes_text,
     "ospf_neighbor_up": _collect_ospf_neighbors,
@@ -1645,6 +1693,7 @@ _FRR_CAPABILITIES: dict[str, CapabilityDisposition] = {
     "route_not_advertised_to": impl(),
     "evpn_mac_route_present": impl(),
     "evpn_mac_route_absent": impl(),
+    "evpn_mac_route_valid": impl(),
     "evpn_vni_route_present": impl(),
     "evpn_bgp_session_up": impl(),
     "ospf_neighbor_up": impl(),

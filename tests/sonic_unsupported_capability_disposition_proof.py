@@ -14,15 +14,16 @@ Before the repair, 7 of 15 invariant types did exactly that:
   route_absent                     (at expect: pass)
 
 Proof obligations:
-  P-UNSUP-ALL   every one of the 15 catalog types, at both polarities, takes
+  P-UNSUP-ALL   every one of the 16 catalog types, at both polarities, takes
                 the UNSUP disposition: record verdict="fail" then SystemExit(2).
   P-UNSUP-CTRL  per-row validator-hit control: the same declaration driven with
                 SUPPORTED provider evidence must REACH the predicate (no exit),
                 proving the row entered the branch under test rather than
                 firing an input validator. A row whose control does not pass
                 proves nothing about the disposition (Addendum rev 4, Rule 13).
-  P-UNSUP-CAT   the driven type set is exactly the 15 declared in
-                cassian_model.py -- enumerate the class, do not sample it
+  P-UNSUP-CAT   the driven type set is exactly the catalogue's, Site A
+                (`_INVARIANT_TYPES` in cassian_model.py): 16 types since §4.5-e
+                (45E-S4-R4) -- enumerate the class, do not sample it
                 (Addendum rev 4, Rule 14).
   P-UNSUP-NV    non-vacuity: the harness WOULD detect a non-exiting row.
 
@@ -133,6 +134,7 @@ DECLS = {
     "evpn_bgp_session_up": {"peer": "10.9.9.1"},
     "evpn_mac_route_present": {"mac": "aa:bb:cc:dd:ee:ff", "vni": 100},
     "evpn_mac_route_absent": {"mac": "aa:bb:cc:dd:ee:ff", "vni": 100},
+    "evpn_mac_route_valid": {"mac": "aa:bb:cc:dd:ee:ff", "vni": 100},
     "evpn_vni_route_present": {"vni": 100, "prefix": "1.1.1.1/32"},
     "route_advertised_to": {"prefix": "1.1.1.1/32", "peer": "10.9.9.1"},
     "route_not_advertised_to": {"prefix": "1.1.1.1/32", "peer": "10.9.9.1"},
@@ -173,9 +175,11 @@ def _drive(inv_type, expect, state, evidence):
 
 # ---- P-UNSUP-CAT: enumerate the class, do not sample it -------------------
 _model_src = open(os.path.join(_SRC, "cassian_model.py"), encoding="utf-8").read()
-check("P-UNSUP-CAT 15 types declared", len(DECLS) == 15)
-check("P-UNSUP-CAT every driven type appears in the model",
-      all(f'"{ty}"' in _model_src for ty in DECLS))
+check("P-UNSUP-CAT 16 types declared", len(DECLS) == 16)
+# §4.5-e (45E-S4-R4): compared with Site A both ways, as handover §6.7.2 L388 says it asserts, so a
+# kind missing from DECLS is red.
+check("P-UNSUP-CAT the driven type set is exactly the catalogue's (Site A)",
+      len(DECLS) == len(M._INVARIANT_TYPES) and set(DECLS) == set(M._INVARIANT_TYPES))
 check("P-UNSUP-CAT the seven repaired types are all driven",
       all(ty in DECLS for ty in REPAIRED))
 

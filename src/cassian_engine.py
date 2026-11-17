@@ -6155,7 +6155,7 @@ def cmd_test(args: argparse.Namespace) -> None:
 
             return vtysh_ok, predicate_ok, observed_state, evidence
 
-        if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent", "evpn_vni_route_present"):
+        if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent", "evpn_mac_route_valid", "evpn_vni_route_present"):
             mac = str(t.get("_mac") or "").strip().lower()
             vni_i = t.get("_vni_i")
             # Provider seam (REQ-45b-4): the parse filters by observation kind,
@@ -6184,7 +6184,11 @@ def cmd_test(args: argparse.Namespace) -> None:
             observed_state = dict(_obs.data)
             evidence = {k: v for k, v in _obs.evidence.items() if k != "probe_ok"}
 
-            predicate_ok = bool(observed_state.get("present"))
+            # §4.5-e WI-5, rule B08 (REQ-45E-25): the valid kind's predicate is a valid path.
+            if inv_type == "evpn_mac_route_valid":
+                predicate_ok = bool(observed_state.get("valid"))
+            else:
+                predicate_ok = bool(observed_state.get("present"))
 
             return vtysh_ok, predicate_ok, observed_state, evidence
 
@@ -7040,7 +7044,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             )
             return verdict
 
-        if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent", "evpn_vni_route_present"):
+        if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent", "evpn_mac_route_valid", "evpn_vni_route_present"):
             mac = str(t.get("mac") or "").strip().lower()
             vni = t.get("vni")
             try:
@@ -7048,7 +7052,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             except Exception:
                 vni_i = None
 
-            if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent"):
+            if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent", "evpn_mac_route_valid"):
                 if not mac or vni_i is None:
                     record_fn(
                         name=test_name,
@@ -7090,6 +7094,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             parse_error = str(last_evidence.get("parse_error") or "")
             evidence_entries = list(last_state.get("evidence_entries") or [])
             present = bool(last_state.get("present"))
+            valid = bool(last_state.get("valid"))
 
             if rc not in (0, None):
                 record_fn(
@@ -7115,7 +7120,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 )
                 raise SystemExit(2)
 
-            if not present and inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent"):
+            if not present and inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent", "evpn_mac_route_valid"):
                 # Supplementary text-mode leg (REQ-45C-14, LD-45C-1 ruled shape):
                 # a SECOND ObservationRequest of a distinct kind, issued only
                 # after the JSON leg returned no matching route. The provider
@@ -7128,7 +7133,12 @@ def cmd_test(args: argparse.Namespace) -> None:
                 try:
                     _sup = _nos_collect(
                         rt, lab, src, _nos_ntype(topo, src),
-                        ObservationRequest(kind="evpn_mac_route_text", params={"vni_i": vni_i}),
+                        ObservationRequest(
+                            kind="evpn_mac_route_text",
+                            # §4.5-e WI-5, rule B08 (REQ-45E-25): only the valid kind asks the text leg for validity
+                            # (REQ-45E-47).
+                            params=({"vni_i": vni_i, "validity": True} if inv_type == "evpn_mac_route_valid" else {"vni_i": vni_i}),
+                        ),
                         "cmd_test supplementary EVPN collection",
                     )
                 except NosCapabilityUnsupported:
@@ -7193,6 +7203,8 @@ def cmd_test(args: argparse.Namespace) -> None:
                     evidence_entries.append(rec)
                     if rec["mac"] == mac and rec["vni"] == vni_i:
                         present = True
+                if inv_type == "evpn_mac_route_valid" and mac in list(_sup.data.get("valid_macs") or []):
+                    valid = True
 
             if parse_error and not evidence_entries:
                 record_fn(
@@ -7266,6 +7278,9 @@ def cmd_test(args: argparse.Namespace) -> None:
                 observed = "pass" if present else "fail"
             elif inv_type == "evpn_mac_route_absent":
                 observed = "pass" if not present else "fail"
+            elif inv_type == "evpn_mac_route_valid":
+                # §4.5-e WI-5, rule B08 (REQ-45E-25): observed is pass iff a valid path was read.
+                observed = "pass" if valid else "fail"
             else:
                 observed = "pass" if present else "fail"
 
@@ -7328,6 +7343,8 @@ def cmd_test(args: argparse.Namespace) -> None:
                         "evpn_routes": evpn_routes_value,
                         "source_node": src,
                     }
+                    if inv_type == "evpn_mac_route_valid":
+                        observed_state_payload["valid"] = bool(valid)
                 if parse_error:
                     observed_state_payload["parse_error"] = str(parse_error)
 

@@ -631,7 +631,9 @@ try:
     # the oracle now also carries the five invariant test-path kinds' unanswered-read decisions.
     # Re-baselined by Stage-1 gap item (d)(2) WI-15 script 1b-ii (S1D2-S13-R1, -R2, S1D2-S17-R1, 2026-11-03): the
     # oracle now also carries the three run_invariant_test sites' unanswered-read decisions.
-    RIT_ORACLE_SHA256 = "ea079f3f819fd14268d8735cead931c0d5c40c894bc05a25acaa5800ca4bdbcf"
+    # Re-baselined by §4.5-e WI-5 piece (iii) (rule B08, REQ-45E-25; PBE-1b-10, REQ-45E-40, 2026-11-17): the oracle
+    # now also carries the evpn_mac_route_valid lines of the EVPN branch; nothing else in the function changed.
+    RIT_ORACLE_SHA256 = "d63347ad6017c276acee06c9ad36c2a209696e0dd5672257353240f3c091d810"
     # Re-baselined by Stage-1 gap item (d)(2) WI-13 (founder ruling D5, 2026-10-27): the oracle
     # is now the f015801 extraction plus WI-13's probe guards in the ping and tcp branches. HS-7
     # (tests/probe_unusable_verdict_proof.py) pins those branches' pre-WI-13 form to 02669cd.

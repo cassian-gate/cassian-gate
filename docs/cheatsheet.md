@@ -2176,6 +2176,31 @@ Required fields:
 - `mac`
 - `vni`
 
+### EVPN MAC Route Valid
+
+Validates that the node holds a type-2 route for the specified MAC and VNI with at least one path marked valid, a route the node can use. FRR only.
+
+Example:
+
+```yaml
+tests:
+  - name: leaf2_has_valid_host1_mac_route
+    kind: invariant
+    type: evpn_mac_route_valid
+    node: leaf2
+    mac: "00:11:22:33:44:55"
+    vni: 10100
+    expect: pass
+```
+
+Required fields:
+
+- `kind: invariant`
+- `type: evpn_mac_route_valid`
+- `node`
+- `mac`
+- `vni`
+
 ### EVPN VNI Route Present
 
 Validates that EVPN control-plane route presence exists for the specified VNI on the specified node.

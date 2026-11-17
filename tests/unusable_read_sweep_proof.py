@@ -102,6 +102,7 @@ FORMAT = {
     ("evpn_bgp_session_up", "frr"): "json",
     ("evpn_mac_route_absent", "frr"): "json",
     ("evpn_mac_route_present", "frr"): "json",
+    ("evpn_mac_route_valid", "frr"): "json",
     ("evpn_vni_route_present", "frr"): "json",
     ("exec", "frr"): "exec", ("exec", "nft-fw"): "exec", ("exec", "sonic-vm"): "exec",
     ("interface_state", "frr"): "json", ("interface_state", "nft-fw"): "json",
