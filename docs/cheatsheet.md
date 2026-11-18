@@ -1060,6 +1060,7 @@ Look for:
 - `summary.precheck.settle.kind: evpn-route-poll` and `outcome: accepted`
 - `summary.precheck.settle.absent_at_last` after a timeout
 - `timing.precheck.settle` for attempts, elapsed time and the final consecutive count (these vary from run to run and are excluded from the tamper digest)
+- `summary.readiness.outcome` (`ready` or `failed`) for the node-readiness gate that runs before the precheck, and `timing.readiness.elapsed_ms` for how long it took (excluded from the tamper digest)
 
 The gate decides only whether tests run; it never alters what a test that runs observes. When it fails, check that each listed host is up and has sent traffic on its access link, and that each leaf's EVPN session to the route reflector is Established. The full record is described under `--precheck-controlplane` in `docs/cli-reference-v1.md`.
 

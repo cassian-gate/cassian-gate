@@ -255,6 +255,11 @@ Precheck timing (`results.json`, `timing.precheck`; present only when the preche
 * `session_wait`: per wait, `node`, `elapsed_ms`, `attempts` and `attempts_reported`. For a wait a NOS provider drives, `attempts` is `null` and `attempts_reported` is `false`.
 * `settle`: `elapsed_ms`; for the route poll, also `attempts` and `final_consecutive`.
 
+Readiness record (`results.json`; written whenever the run reaches the node-readiness gate, which runs before the precheck whether or not the precheck is selected, on success and on failure):
+
+* `summary.readiness.outcome`: `"ready"` or `"failed"`; the same for the same outcome.
+* `timing.readiness.elapsed_ms`: how long the readiness wait took. It varies from run to run, and the tamper digest excludes the `timing` subtree.
+
 Listing:
 
 * `--list-scenarios`  

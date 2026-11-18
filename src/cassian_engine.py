@@ -10840,15 +10840,24 @@ def cmd_test(args: argparse.Namespace) -> None:
     # =============================================================================
     # 2) Node readiness gate (no control-plane assumptions yet)
     # =============================================================================
+    # REQ-45E-42 (ESC-7 ruling (a), rule B11): the readiness phase is recorded as one
+    # entry -- its outcome in summary.readiness, its elapsed time in timing.readiness
+    # (the timing subtree stays outside the tamper digest, D10) -- on success, and on
+    # failure before the existing failure write. Declared under DC v2.1 §14 item 8.
+    _rd_t0 = time.time()
     try:
         verify_lab_ready(rt, topo, lab)
     except SystemExit:
+        results["summary"]["readiness"] = {"outcome": "failed"}
+        results.setdefault("timing", {})["readiness"] = {"elapsed_ms": int(round((time.time() - _rd_t0) * 1000))}
         results["result"] = "fail"
         finished_at = time.time()
         results["summary"]["finished_at"] = finished_at
         results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
         write_results()
         raise
+    results["summary"]["readiness"] = {"outcome": "ready"}
+    results.setdefault("timing", {})["readiness"] = {"elapsed_ms": int(round((time.time() - _rd_t0) * 1000))}
 
     # =============================================================================
     # 2.5) Candidate Config Apply (v1.5) - gate-only, atomic, evidenced
