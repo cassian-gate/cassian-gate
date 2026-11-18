@@ -1577,6 +1577,79 @@ def pf11_render_seeded():
         shutil.rmtree(scratch, ignore_errors=True)
 
 
+# --------------------------------------------------------------------------- #
+# §4.6 stage 6: PF-4's page legs and REQ-46-25's docs leg (handover §0.5,     #
+# D2-5; §15.2). The PF-4 legs above hold each exclusion line to the code's    #
+# output; these hold the importer page's exclusion table to those lines.      #
+# --------------------------------------------------------------------------- #
+import re as _re  # noqa: E402
+
+IMPORTER_PAGE = os.path.join(_ROOT, "docs", "brownfield-importer.md")
+_PAGE_KINDS = ("bgp-session", "cable", "device", "ip-address")
+
+
+def _page_reasons(text):
+    """The importer page's exclusion table: (kind, reason) per row, in page
+    order. A row is a four-cell table line whose first cell is a backticked
+    kind and whose last cell is a Req-ID; its reason is the first backticked
+    text of the third cell."""
+    rows = []
+    for line in text.splitlines():
+        cells = [c.strip() for c in line.split("|")]
+        if len(cells) != 6 or not cells[1].startswith("`") \
+                or not cells[4].startswith("REQ-46-"):
+            continue
+        kind = cells[1].strip("`")
+        if kind not in _PAGE_KINDS:
+            continue
+        m = _re.search(r"`([^`]+)`", cells[3])
+        if m:
+            rows.append((kind, m.group(1)))
+    return rows
+
+
+def _reason_fits(template, reason):
+    """A page reason with its <...> parts filled equals the printed reason."""
+    pattern = _re.sub(r"<[^<>]+>", ".+", _re.escape(template))
+    return _re.fullmatch(pattern, reason) is not None
+
+
+def _line_kind_reason(line):
+    """'   excluded: <kind> <object>: <reason>' -> (kind, reason)."""
+    body = line[len(_X):] if line.startswith(_X) else line
+    kind, rest = body.split(" ", 1)
+    return kind, rest.split(": ", 1)[1]
+
+
+def pf4_page_and_docs_legs():
+    """PF-4's page legs (REQ-46-25, -59; D2-5): for every PF-4 case, the
+    importer page's exclusion table holds each printed line's kind and reason.
+    REQ-46-25's docs leg (§15.2): every reason the page states is one the code
+    prints in a PF-4 case, so a reason the page and the code disagree on fails
+    one side or the other."""
+    with open(IMPORTER_PAGE, encoding="utf-8") as f:
+        rows = _page_reasons(f.read())
+    cases = [("netbox " + c, [line]) for c, _m, _x, line, _n in PF4_CASES] + [
+        ("netbox-dump " + c, lines) for c, _m, lines, _n, _g in PF4_BUNDLE_CASES]
+    used = set()
+    for case, lines in cases:
+        if not lines:
+            continue
+        missing = []
+        for line in lines:
+            kind, reason = _line_kind_reason(line)
+            hit = [i for i, (k, t) in enumerate(rows)
+                   if k == kind and _reason_fits(t, reason)]
+            used.update(hit)
+            if not hit:
+                missing.append(line.strip()[:120])
+        _rec("PF-4 page, " + case + ": the importer page names each line's kind "
+             "and reason (REQ-46-25, -59)", not missing, "missing=%s" % missing)
+    unused = [rows[i] for i in range(len(rows)) if i not in used]
+    _rec("REQ-46-25 docs leg: every reason on the importer page is one the code "
+         "prints (%d rows)" % len(rows), bool(rows) and not unused, "unused=%s" % unused)
+
+
 def main():
     po1_determinism()
     po2_roundtrip()
@@ -1591,6 +1664,7 @@ def main():
     pf2_bundle_rejections()
     pf2_bundle_locators()
     pf4_bundle_exclusions()
+    pf4_page_and_docs_legs()
     pf8_seeded_export()
     pf11_render_seeded()
     failed = [n for n, ok, _ in checks if not ok]
