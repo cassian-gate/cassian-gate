@@ -80,15 +80,15 @@ Default behavior:
 Arguments:
 
 * `<source>`  
-  Brownfield source directory containing a committed NetBox-derived export (`netbox_export.json`) and rendered device configs under `rendered/`. This is Cassian Gate's **defined input contract**, not a raw NetBox API dump; see the [Brownfield Importer](brownfield-importer.md) guide.
+  Brownfield source directory in one of two layouts. For the default `netbox` backend: a committed NetBox-derived export (`netbox_export.json`), Cassian Gate's **defined input contract** rather than a raw NetBox API dump. For `netbox-dump`: a NetBox dump bundle captured from the REST API (`manifest.json` and four endpoint files). Either may carry rendered FRR configs under `rendered/`. See the [Brownfield Importer](brownfield-importer.md) guide.
 
 Flags:
 
 * `-o`, `--out <dir>` (required)  
-  Output directory for the emitted pair: an authoritative `topology.yaml` (with embedded scenario tests) and `tests/starter_invariants.yaml`.
+  Output directory for the emitted pair: an authoritative `topology.yaml` (with embedded scenario tests) and `tests/starter_invariants.yaml`, whose `needs_device_configuration` section sets aside the `route_present` checks for declared static routes, which pass only where routing comes from device configuration.
 
 * `--backend <name>`  
-  Importer backend (default: `netbox`). The backend seam is open for future sources; additional backends are planned but not yet available.
+  Importer backend (default: `netbox`). `netbox` reads Cassian Gate's defined contract (`netbox_export.json`); `netbox-dump` reads a NetBox dump bundle (`manifest.json` and four endpoint files) captured from NetBox 4.6.8 with the `netbox-bgp` plugin 0.19.0. The names `git-ansible`, `cloudvision` and `live-netbox` are reserved for future backends; selecting one is rejected with a corrective message.
 
 Behavior:
 

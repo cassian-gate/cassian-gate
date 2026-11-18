@@ -452,9 +452,7 @@ an `excluded:` line; nothing is guessed at.
 
 ## Status and roadmap
 
-This is a first, lab-free importer. It has been validated against an export from a NetBox instance seeded for the purpose: NetBox 4.6.8 with the `netbox-bgp` plugin 0.19.0, static routes held in device local context data, captured with the seed script in `contrib/netbox-seed/`. It has not been validated against a production NetBox inventory. Real-deployment validation (bringing the resulting topology up and
-confirming the invariants against running devices) is out of scope for this
-release.
+This is a first, lab-free importer. It has been validated against an export from a NetBox instance seeded for the purpose: NetBox 4.6.8 with the `netbox-bgp` plugin 0.19.0, static routes held in device local context data, captured with the seed script in `contrib/netbox-seed/`. It has not been validated against a production NetBox inventory. The topology it emits from the `siteA` fixture is brought up in CI and its starter invariants pass (`tests/importer/import_deploy_proof.py`). Static-route checks are set aside in `tests/starter_invariants.yaml`, because Cassian Gate does not configure static routes on the nodes it generates.
 
 Tracked for future work:
 
