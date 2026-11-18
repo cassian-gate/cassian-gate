@@ -517,9 +517,11 @@ try:
         return {"prefix": prefix}
 
     def rib_keys(o, prefix):
-        """Ruling (B): data keys equal FRR's; evidence = FRR's keys plus exactly parse_error."""
+        """Ruling (B): data keys equal FRR's; evidence = FRR's keys plus exactly parse_error.
+        FRR's IPv6 branch carries parse_error itself since BL-P2-4.5c-244 (REQ-45E-9; 45E-S1-R6),
+        so parse_error is counted once."""
         dk, ek = frr_keys(o.kind, RIB_AFTER, rib_params(prefix))
-        return sorted(o.data) == dk and sorted(o.evidence) == sorted(ek + ["parse_error"])
+        return sorted(o.data) == dk and sorted(o.evidence) == sorted(set(ek) | {"parse_error"})
 
     def rib_good(o):
         return o.evidence.get("probe_ok") is True and o.evidence.get("parse_error") == ""

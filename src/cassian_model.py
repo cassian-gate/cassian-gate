@@ -260,6 +260,7 @@ _INVARIANT_TYPES: tuple[str, ...] = (
     "route_not_advertised_to",
     "evpn_mac_route_present",
     "evpn_mac_route_absent",
+    "evpn_mac_route_valid",
     "evpn_vni_route_present",
     "evpn_bgp_session_up",
     "ospf_neighbor_up",
@@ -1682,6 +1683,58 @@ def build_node_links(topo: dict) -> dict:
 
     return links_by_node
 
+def fabric_evpn_session_set(topo: dict) -> "dict[str, list[tuple[str, str, bool]]] | None":
+    """The BGP session set of a `fabric.evpn` topology, derived once.
+
+    §4.5-e WI-4 (REQ-45E-17, REQ-45E-18; BL-P2-4.5c-227; scope S-7, E-LD-9, D-E-10;
+    PBE-1b-9). `gen_frr_conf` renders these peers and `cmd_test`'s precheck takes
+    these participants; neither walks the links for them itself.
+
+    Returns None when `fabric.evpn` is absent or not enabled. Otherwise a dict, in
+    topology node order, from each EVPN participant (an `frr` node whose role is
+    `spine` or `leaf`) to its peers as (peer name, peer IP, route-reflector
+    client), sorted by peer name, then peer IP. A leaf peers with each linked spine
+    that sets `evpn_rr`; a spine that sets `evpn_rr` peers with each linked leaf,
+    as its route-reflector client.
+    """
+    evpn = _validate_fabric_evpn_presence_only(topo)
+    if not evpn:
+        return None
+
+    nodes_by_name: dict[str, dict[str, Any]] = {}
+    for topo_node in topo.get("nodes", []) or []:
+        if isinstance(topo_node, dict):
+            topo_name = topo_node.get("name")
+            if isinstance(topo_name, str) and topo_name:
+                nodes_by_name[topo_name] = topo_node
+
+    links_by_node = build_node_links(topo)
+    sessions: dict[str, list[tuple[str, str, bool]]] = {}
+    for node in topo.get("nodes", []) or []:
+        if not isinstance(node, dict):
+            continue
+        name = node.get("name")
+        role = node.get("role")
+        if not isinstance(name, str) or not name:
+            continue
+        if node.get("type") != "frr" or not isinstance(role, str) or role not in {"spine", "leaf"}:
+            continue
+        peer_entries: list[tuple[str, str, bool]] = []
+        for l in links_by_node.get(name, []):
+            peer_name = l["peer"]
+            peer_node = nodes_by_name.get(peer_name) or {}
+            peer_role = peer_node.get("role")
+            if role == "leaf":
+                if peer_role == "spine" and bool(peer_node.get("evpn_rr")):
+                    peer_entries.append((peer_name, l["peer_ip"], False))
+            elif role == "spine" and bool(node.get("evpn_rr")):
+                if peer_role == "leaf":
+                    peer_entries.append((peer_name, l["peer_ip"], True))
+        peer_entries.sort(key=lambda item: (item[0], item[1]))
+        sessions[name] = peer_entries
+    return sessions
+
+
 def gen_frr_conf(node: dict, topo: dict) -> str:
     """
     Generate FRR integrated config.
@@ -1703,13 +1756,6 @@ def gen_frr_conf(node: dict, topo: dict) -> str:
         and isinstance(role, str)
         and role in {"spine", "leaf"}
     )
-
-    nodes_by_name: dict[str, dict[str, Any]] = {}
-    for topo_node in topo.get("nodes", []) or []:
-        if isinstance(topo_node, dict):
-            topo_name = topo_node.get("name")
-            if isinstance(topo_name, str) and topo_name:
-                nodes_by_name[topo_name] = topo_node
 
     links_by_node = build_node_links(topo)
     node_links = links_by_node.get(name, [])
@@ -1776,19 +1822,9 @@ def gen_frr_conf(node: dict, topo: dict) -> str:
         cfg.append("!")
 
     if is_evpn_participant:
-        peer_entries: list[tuple[str, str, bool]] = []
-        for l in node_links:
-            peer_name = l["peer"]
-            peer_node = nodes_by_name.get(peer_name) or {}
-            peer_role = peer_node.get("role")
-            if role == "leaf":
-                if peer_role == "spine" and bool(peer_node.get("evpn_rr")):
-                    peer_entries.append((peer_name, l["peer_ip"], False))
-            elif role == "spine" and bool(node.get("evpn_rr")):
-                if peer_role == "leaf":
-                    peer_entries.append((peer_name, l["peer_ip"], True))
-
-        peer_entries.sort(key=lambda item: (item[0], item[1]))
+        # §4.5-e WI-4, rule B09 (REQ-45E-17): the EVPN peers come from the one derivation of the
+        # fabric session set; this function no longer walks the links for them.
+        peer_entries = fabric_evpn_session_set(topo)[name]
 
         cfg.append(f"router bgp {evpn['asn']}")
         cfg.append(f" bgp router-id {rid}")
@@ -2622,7 +2658,7 @@ def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
                     f"tests[{i}]: invariant.type unsupported ({inv_type!r}) "
                     f"(supported: bgp_session_up, route_present, route_absent, "
                     f"bgp_med_equals, bgp_localpref_equals, bgp_community, bgp_as_path, route_advertised_to, route_not_advertised_to, "
-                    f"evpn_mac_route_present, evpn_mac_route_absent, "
+                    f"evpn_mac_route_present, evpn_mac_route_absent, evpn_mac_route_valid, "
                     f"evpn_vni_route_present, evpn_bgp_session_up, ospf_neighbor_up, interface_state)"
                 )
             t["type"] = inv_type
@@ -2890,7 +2926,7 @@ def resolve_topology(topo: dict, topo_path: "Path | None" = None) -> dict:
                         f"src to be a node of type 'frr'"
                     )
 
-            elif inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent"):
+            elif inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent", "evpn_mac_route_valid"):
                 mac = t.get("mac")
                 if not isinstance(mac, str) or not mac.strip():
                     die(f"{ctx}: {inv_type} requires 'mac'")

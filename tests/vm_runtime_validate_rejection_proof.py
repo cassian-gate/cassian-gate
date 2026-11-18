@@ -608,11 +608,13 @@ def main():
           _fo == "die" and _is_stock_reject(_fm, "10.1.0.1/32"))
 
     # Ruling A-prime: the admission vocabulary is the pre-hoist tuple, unchanged in
-    # content and order, and the admission rejection is byte-identical.
+    # content and order, and the admission rejection is byte-identical. §4.5-e admits
+    # evpn_mac_route_valid after evpn_mac_route_absent in both (REQ-45E-26; handover
+    # §6.7.2 L390; 45E-S4-R1); nothing else in either changes.
     _pre_hoist = ("bgp_session_up", "route_present", "route_absent", "bgp_med_equals",
                   "bgp_localpref_equals", "bgp_community", "bgp_as_path",
                   "route_advertised_to", "route_not_advertised_to",
-                  "evpn_mac_route_present", "evpn_mac_route_absent",
+                  "evpn_mac_route_present", "evpn_mac_route_absent", "evpn_mac_route_valid",
                   "evpn_vni_route_present", "evpn_bgp_session_up", "ospf_neighbor_up",
                   "interface_state")
     check("A-prime admitted vocabulary equals the pre-hoist tuple (content and order)",
@@ -623,8 +625,8 @@ def main():
               "tests[1]: invariant.type unsupported ('nope') (supported: bgp_session_up, "
               "route_present, route_absent, bgp_med_equals, bgp_localpref_equals, "
               "bgp_community, bgp_as_path, route_advertised_to, route_not_advertised_to, "
-              "evpn_mac_route_present, evpn_mac_route_absent, evpn_vni_route_present, "
-              "evpn_bgp_session_up, ospf_neighbor_up, interface_state)"))
+              "evpn_mac_route_present, evpn_mac_route_absent, evpn_mac_route_valid, "
+              "evpn_vni_route_present, evpn_bgp_session_up, ospf_neighbor_up, interface_state)"))
 
     failed = [n for n, ok in checks if not ok]
     for n, ok in checks:

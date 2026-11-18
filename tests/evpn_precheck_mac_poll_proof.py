@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """evpn_precheck_mac_poll_proof.py -- §4.5-d, S24-R5 (BL-P2-4.5c-53's named fix),
 with S28-R1 and S28-R2 (BL-P2-4.5c-220's fix), extended for BL-P2-4.5c-216's fix
-(S30-R1, S30-R2, S30-R9 to S30-R11, S30-R13 and S30-R15 to S30-R25).
+(S30-R1, S30-R2, S30-R9 to S30-R11, S30-R13 and S30-R15 to S30-R25), and for
+§4.5-e REQ-45E-42, the readiness record (ESC-7 ruling (a); rule B11; P-READY).
 
 The hosted differential that founder ruling S24-R5 (2026-10-06) binds, as applied
 by S25-R4 (2026-10-08): in `cmd_test`'s global control-plane precheck, an EVPN lab
@@ -102,13 +103,30 @@ Sections:
              domain keeps summary.precheck and drops timing.precheck; the record
              is attached right after `results` is created ("not-reached");
              the real `wait_for_bgp` reports its attempts and its timeout through
-             `stats` (driven with a fake runtime).
+             `stats` (driven with a fake runtime); a fabric lab with the participants
+             rule B10 derives (§4.5-e WI-4, REQ-45E-18) waits on each, in topology
+             node order, before the poll.
+  P-READY    (§4.5-e REQ-45E-42; ESC-7 ruling (a); rule B11; handover §15.2 row 42)
+             the readiness block of `cmd_test`, between two exact anchors, executed
+             from source against stubs and a fake clock: on success it records
+             summary.readiness.outcome "ready" and timing.readiness.elapsed_ms and
+             writes nothing; on failure it records "failed" and the elapsed time
+             before the existing failure write, then re-raises. The tamper digest's
+             domain keeps summary.readiness and drops timing.readiness. The live
+             block is the d396d5a block (frozen, sha256 pinned) with rule B11's lines
+             added and nothing else changed. Negative controls: that d396d5a block
+             (no record: both legs red), and the failure record moved after the
+             failure write (the failure leg red).
 
 Coverage limits (PBE-P2-8): lab-free; the fake clock stands in for wall time;
 the stubs stand in for the runtime, for `wait_for_bgp` (except where P-RECORD
-drives the real one) and for a provider's `convergence_wait`. P-REACH reads
+drives the real one) and for a provider's `convergence_wait`. P-READY stubs
+`verify_lab_ready` and the clock: it does not run a real readiness wait or time
+one, and it reads the block's record, not a results.json written by a run. P-REACH reads
 `_precheck_entry` with an empty participant list -- the worst case, and the
-measured one for every fabric topology; it does not derive participants itself,
+measured one for every fabric topology before §4.5-e WI-4's rule B10, which gives
+every fabric topology the participants of the fabric session set (REQ-45E-18;
+tests/evpn_gen_proof.py P-7 proves them); P-REACH does not derive participants itself,
 and it does not cover topologies the resolver rejects (they never reach the
 precheck). A SystemExit inside the precheck from anything but the waits, the
 guard and the poll's own refusals (a runtime failure inside the presence read,
@@ -129,6 +147,7 @@ import contextlib
 import glob
 import hashlib
 import io
+import json
 import os
 import pathlib
 import re
@@ -696,7 +715,7 @@ def _seen(r):
     return r
 
 
-# 1 -- a fabric lab as measured (no participant): the poll accepts.
+# 1 -- a fabric lab with no participant (the measured case before §4.5-e WI-4's rule B10): the poll accepts.
 _r = _seen(_rec(EVPN, ALL, parts=[]))
 check("P-RECORD fabric lab, no participant, accepted: summary.precheck as ruled",
       _r.summary == {"entered": True, "not_entered_reason": None, "participants": [], "session_wait": [],
@@ -713,6 +732,17 @@ check("P-RECORD with FRR participants: sorted names; one wait each, in the order
 check("P-RECORD ... each FRR wait's attempts come from wait_for_bgp's `stats` (attempts_reported true)",
       _r.timing["session_wait"] == [{"node": n, "elapsed_ms": 0, "attempts": 1, "attempts_reported": True} for n in _pn],
       str(_r.timing["session_wait"]))
+# 2b -- §4.5-e WI-4, rule B10 (REQ-45E-18): a fabric lab with the participants the fabric session set
+# gives it, in topology node order: one FRR wait each, in that order, then the poll accepts.
+_dp = [n for _name, _ips in (cassian_engine._precheck_fabric_participants(EVPN) or [])
+       for n in EVPN["nodes"] if n.get("name") == _name]
+_dn = [n["name"] for n in _dp]
+_r = _seen(_rec(EVPN, ALL, parts=_dp))
+check("P-RECORD fabric lab with its derived participants (rule B10, REQ-45E-18): each waited in topology node "
+      "order, established, bound 30; then the poll accepts",
+      bool(_dn) and _r.summary["participants"] == sorted(_dn)
+      and _r.summary["session_wait"] == _waits(_dn, ["established"] * len(_dn))
+      and _r.summary["settle"] == _settle("accepted") and _r.summary["outcome"] == "passed", str(_r.summary))
 # 3 -- the same outcome reached later: summary.precheck identical, timing.precheck not.
 _rl = _seen(_rec(EVPN, _late, parts=[]))
 _ra = _seen(_rec(EVPN, ALL, parts=[]))
@@ -951,6 +981,120 @@ check("P-RECORD the gate-mode hard-failure writer attaches the \"not-reached\" r
 check("P-RECORD the try body closes the record as passed, as its last statement",
       _gate_try is not None and ast.unparse(_gate_try.body[-1]) == "_pcr.passed(time.time())",
       ast.unparse(_gate_try.body[-1]) if _gate_try is not None else "none")
+
+# --- P-READY (§4.5-e REQ-45E-42; ESC-7 ruling (a); rule B11; handover §15.2 row 42) ---------------
+# The readiness block of cmd_test, between two exact anchors, executed from source as a function
+# against stubs and a fake clock, as the precheck body is above. BEFORE is the d396d5a text,
+# frozen and pinned; it writes no record, and so is the negative control.
+R_START = "    # 2) Node readiness gate (no control-plane assumptions yet)\n"
+R_END = "    # 2.5) Candidate Config Apply (v1.5) - gate-only, atomic, evidenced\n"
+READY_BEFORE = (
+    "# =============================================================================\n"
+    "try:\n"
+    "    verify_lab_ready(rt, topo, lab)\n"
+    "except SystemExit:\n"
+    "    results[\"result\"] = \"fail\"\n"
+    "    finished_at = time.time()\n"
+    "    results[\"summary\"][\"finished_at\"] = finished_at\n"
+    "    results[\"summary\"][\"duration_ms\"] = int((finished_at - started_at) * 1000)\n"
+    "    write_results()\n"
+    "    raise\n"
+    "\n"
+    "# =============================================================================\n"
+)
+READY_BEFORE_SHA = "10d0bbaf1717dd98162c42273aff34973e2b6812940697c50a62a99cdddae36b"
+READY_FAILED = ('    results["summary"]["readiness"] = {"outcome": "failed"}\n'
+                '    results.setdefault("timing", {})["readiness"] = '
+                '{"elapsed_ms": int(round((time.time() - _rd_t0) * 1000))}\n')
+
+
+def _dedent4(text):
+    return "".join(ln[4:] if ln.startswith("    ") else ln for ln in text.splitlines(True))
+
+
+_ri, _rj = ENGINE_SRC.find(R_START), ENGINE_SRC.find(R_END)
+check("P-READY the readiness block's anchors occur once each in the live engine, in order",
+      ENGINE_SRC.count(R_START) == 1 and ENGINE_SRC.count(R_END) == 1 and -1 < _ri < _rj, "%d %d" % (_ri, _rj))
+READY_LIVE = _dedent4(ENGINE_SRC[_ri + len(R_START):_rj]) if -1 < _ri < _rj else ""
+check("P-READY the frozen BEFORE text is the d396d5a block (sha256 pinned)", _sha(READY_BEFORE) == READY_BEFORE_SHA,
+      _sha(READY_BEFORE))
+# The live block is BEFORE with rule B11's lines added and nothing else changed: drop the comment
+# lines, the start mark and the two record writes on each path, and BEFORE remains, byte for byte.
+_rl = [ln for ln in READY_LIVE.splitlines(True)
+       if not (ln.lstrip().startswith("# REQ-45E-42") or ln.startswith("# entry --") or ln.startswith("# (the timing")
+               or ln.startswith("# failure before") or ln == "_rd_t0 = time.time()\n" or "[\"readiness\"]" in ln)]
+check("P-READY the live block is BEFORE plus rule B11's lines: the existing failure path is unchanged",
+      "".join(_rl) == READY_BEFORE, "".join(_rl)[:300])
+
+
+class _ReadyClock:
+    def __init__(self, now):
+        self.now = now
+
+    def time(self):
+        return self.now
+
+
+def _ready_run(body, fail, advance):
+    """Run the block; return (results, writes, exited). verify_lab_ready advances the clock."""
+    src = ("def _ready(results, started_at, rt, topo, lab, verify_lab_ready, write_results, time):\n"
+           + "".join(("    " + ln) if ln.strip() else ln for ln in body.splitlines(True)) + "    return None\n")
+    ns = {}
+    exec(compile(src, "<readiness block>", "exec"), ns)
+    clock = _ReadyClock(100.0)
+    results = {"result": "unknown", "summary": {"started_at": 90.0}}
+    writes = []
+
+    def _verify(rt, topo, lab):
+        clock.now += advance
+        if fail:
+            raise SystemExit(2)
+
+    def _write():
+        writes.append(json.loads(json.dumps(results)))
+
+    exited = False
+    try:
+        ns["_ready"](results, 90.0, None, {}, "lab", _verify, _write, clock)
+    except SystemExit:
+        exited = True
+    return results, writes, exited
+
+
+def _ready_ok(body):
+    """(success leg ok, failure leg ok) for a block text."""
+    r, w, x = _ready_run(body, False, 2.5)
+    ok_s = (not x and w == [] and r["summary"].get("readiness") == {"outcome": "ready"}
+            and r.get("timing") == {"readiness": {"elapsed_ms": 2500}})
+    r, w, x = _ready_run(body, True, 1.25)
+    ok_f = (x and len(w) == 1 and w[0]["result"] == "fail"
+            and w[0]["summary"].get("readiness") == {"outcome": "failed"}
+            and w[0].get("timing") == {"readiness": {"elapsed_ms": 1250}})
+    return ok_s, ok_f
+
+
+_rs, _rf = _ready_ok(READY_LIVE) if READY_LIVE else (False, False)
+check("P-READY success: summary.readiness.outcome \"ready\" and timing.readiness.elapsed_ms (2500), one entry, no write",
+      _rs)
+check("P-READY failure: SystemExit re-raised; the one failure write already carries outcome \"failed\" and elapsed_ms (1250)",
+      _rf)
+_rdom = cassian_engine._audit_filtered_domain({"summary": {"readiness": {"outcome": "ready"}},
+                                               "timing": {"readiness": {"elapsed_ms": 2500}}})
+check("P-READY the tamper digest's domain keeps summary.readiness and drops timing.readiness (D10)",
+      _rdom == {"summary": {"readiness": {"outcome": "ready"}}}, str(_rdom))
+# Non-vacuity (handover §15.2 row 42, "red if a record is missing"): BEFORE writes no record, and
+# a block that writes the failure record after the failure write leaves that write without it.
+_bs, _bf = _ready_ok(READY_BEFORE)
+if not _bs and not _bf:
+    print("MUTATION-FAIL: the readiness block without rule B11 -> no record (both P-READY legs red)")
+check("P-READY NV the d396d5a block (no record) fails both legs", not _bs and not _bf, "%s %s" % (_bs, _bf))
+_late = (READY_LIVE.replace(READY_FAILED, "", 1).replace("    write_results()\n", "    write_results()\n" + READY_FAILED, 1)
+         if READY_LIVE.count(READY_FAILED) == 1 else "")
+_ls, _lf = _ready_ok(_late) if _late else (True, True)
+if _ls and not _lf:
+    print("MUTATION-FAIL: the failure record written after the failure write -> P-READY failure leg red")
+check("P-READY NV the failure record moved after the failure write fails the failure leg only", _ls and not _lf,
+      "%s %s" % (_ls, _lf))
 
 fails =[n for n, ok, _d in checks if not ok]
 for n, ok, d in checks:

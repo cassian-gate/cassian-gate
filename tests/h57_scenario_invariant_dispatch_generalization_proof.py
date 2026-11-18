@@ -15,7 +15,7 @@ verdict, no "missing src/dst") is exercised separately as an operator
 verification command per the §6.7.2 extension model.
 
 Proof obligations (handover §15.2):
-  P-H57-COV  every one of the 13 catalog invariant types (sourced from
+  P-H57-COV  every one of the 16 catalog invariant types (sourced from
              cassian_model.py) routes through run_invariant_test from the
              scenario path -- the patched guard is type-agnostic
              (kind == "invariant"), with no per-inv_type gating.
@@ -47,7 +47,7 @@ _SRC = os.path.join(os.path.dirname(_HERE), "src")
 _ENGINE = os.path.join(_SRC, "cassian_engine.py")
 _MODEL = os.path.join(_SRC, "cassian_model.py")
 
-# Authoritative copy of the 13-type invariant catalog, used to cross-check the
+# Authoritative copy of the 16-type invariant catalog, used to cross-check the
 # catalog actually declared in cassian_model.py (drift guard).
 EXPECTED_CATALOG = (
     "bgp_session_up",
@@ -61,6 +61,7 @@ EXPECTED_CATALOG = (
     "route_not_advertised_to",
     "evpn_mac_route_present",
     "evpn_mac_route_absent",
+    "evpn_mac_route_valid",  # section 4.5-e (REQ-45E-26; 45E-S4-R1)
     "evpn_vni_route_present",
     "evpn_bgp_session_up",
     "ospf_neighbor_up",
@@ -139,7 +140,7 @@ def main():
         checks.append((name, bool(cond)))
 
     # --- catalog drift guard ---
-    check("catalog has 15 types", len(catalog) == 15)
+    check("catalog has 16 types", len(catalog) == 16)
     check("catalog matches expected set", set(catalog) == set(EXPECTED_CATALOG))
 
     # --- source validation of the patched dispatch seam ---

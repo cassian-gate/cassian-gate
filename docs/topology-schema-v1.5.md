@@ -63,7 +63,7 @@ v1.5 supports the following invariant types. Each type maps to a single determin
 | Type | Category | Required fields (in addition to `kind`, `type`, `name`, `expect`) |
 |---|---|---|
 | `bgp_session_up` | BGP session | `node`, `neighbor` (IPv4 literal of the BGP neighbor; canonical alias `dst` accepted) |
-| `evpn_bgp_session_up` | BGP session | `node`, `peer` (a known node name) |
+| `evpn_bgp_session_up` | BGP session | `node`, `peer` (a known node name; `peer` MUST NOT be the test's own `node`) |
 | `route_present` | Route | `node`, `prefix` (CIDR) |
 | `route_absent` | Route | `node`, `prefix` (CIDR) |
 | `route_advertised_to` | BGP policy | `node`, `peer` (a known node name), `prefix` (CIDR) |
@@ -75,21 +75,22 @@ v1.5 supports the following invariant types. Each type maps to a single determin
 | `evpn_vni_route_present` | EVPN | `node`, `vni` (integer) |
 | `evpn_mac_route_present` | EVPN | `node`, `mac` (canonical MAC literal), `vni` (integer) |
 | `evpn_mac_route_absent` | EVPN | `node`, `mac` (canonical MAC literal), `vni` (integer) |
+| `evpn_mac_route_valid` | EVPN | `node`, `mac` (canonical MAC literal), `vni` (integer) |
 | `ospf_neighbor_up` | OSPF | `src`, `neighbor` (IPv4 literal of the peer's router-ID); optional `state` (one of the 8 declarable FSM literals; default `Full`) |
 | `interface_state` | Linux interface | `node`, `interface` (interface name as seen inside the node namespace, e.g. `eth1`); optional `state` (one of `up`, `down`; default `up` materialised at Resolve) |
 
 Rules:
 
-* `peer` fields MUST reference a node declared in `nodes:`; the engine's blast-radius validator rejects unknown node references with a hard-failure
+* `peer` fields MUST reference a node declared in `nodes:`; the engine's blast-radius validator rejects unknown node references with a hard-failure. For `evpn_bgp_session_up`, `peer` MUST NOT be the test's own `node`
 * IPv4 literals (`dst` for `bgp_session_up`) bypass the node-name check and pass through verbatim
 * `ospf_neighbor_up`'s `neighbor` field MUST be an IPv4 literal of the peer's OSPF router-ID (NOT a node name); the resolver's IPv4-literal validator hard-fails on non-IPv4 input. The `src` field MUST reference a node of `type: frr` declared in `nodes:` (FRR-only NOS-tag enforcement; non-FRR `src` is rejected at validation with a deterministic error)
 * `interface_state`'s `interface` field MUST reference an interface present in the referenced node's resolved interface set (its link interfaces, `lo`, and any `interfaces:` declared on the node); a reference to an absent interface is rejected at validation time with a hard-failure (exit code `2`), parallel to the unknown-node reference rejection
-* `prefix` fields MUST be canonical IPv4 CIDR notation (e.g. `10.0.0.0/24`); non-canonical values are rejected at validation time
+* `prefix` fields MUST be canonical CIDR notation (e.g. `10.0.0.0/24`); non-canonical values are rejected at validation time. An IPv6 prefix (e.g. `2001:db8::/32`) validates. For `route_present` and `route_absent`, collection on `frr` and on `sonic-vm` fails an IPv6 prefix explicitly, as a collection failure naming IPv6 as unsupported (the read is IPv4 only), never a pass
 * `bgp_community`'s `expected` communities MUST each be a literal `AS:VAL` token (e.g. `65001:100`) or a well-known token (`no-export`, `no-advertise`, `local-AS`, `internet`; `internet` normalises to community `0:0` in FRR JSON form); `match` (`any` or `all`) is REQUIRED when `expected` is a list and REJECTED when `expected` is a scalar
 * `bgp_as_path`'s `as_path` MUST be a valid regular expression (compiled after translating the FRR-native `_` word-boundary idiom to a delimiter alternation); it is matched with `re.search` against the canonical space-separated, path-ordered AS-path string (operator `^` / `$` anchors are honoured). The `node` MUST reference a node of `type: frr` (a non-FRR or unknown `node` is rejected at validation). AS numbers are read in asplain notation as FRR emits them; BGP AS-confederation handling and 4-byte AS distinctions beyond FRR's native parsing are out of scope
 * `mac` fields MUST be canonical lowercase colon-separated form (e.g. `00:11:22:33:44:55`)
 * `vni` MUST be a positive integer matching a VNI declared in the topology's `vlans:` map
-* `route_absent` and `route_not_advertised_to` and `evpn_mac_route_absent` are the negative complements of their `_present` / `_advertised_to` peers; the verdict semantics flip accordingly (`expect: pass` means the route IS NOT present / IS NOT advertised / IS NOT in the EVPN MAC table)
+* `route_absent` and `route_not_advertised_to` and `evpn_mac_route_absent` are the negative complements of their `_present` / `_advertised_to` peers; the verdict semantics flip accordingly (`expect: pass` means the route IS NOT present / IS NOT advertised / the MAC's type-2 route IS NOT in the node's BGP EVPN table)
 * In a `fabric.evpn` lab, the EVPN kinds read state only after the control-plane precheck's route poll has accepted (every host declared under `fabric.evpn` present on every EVPN leaf on 3 consecutive polls); the precheck runs for every run without scenarios, and for a scenario run with `--precheck-controlplane`. If the poll does not accept within its bound, the run fails before any test reads state (see `--precheck-controlplane` in `docs/cli-reference-v1.md`)
 
 ---
@@ -139,7 +140,7 @@ Commands are constrained to a node-type-aware read-only allow-list at a single v
 |---|---|
 | `frr` | `vtysh -c "show …"` (read-only `show` commands) |
 | `nft-fw` | `nft list …` (e.g. `nft list ruleset`; mutating verbs such as `add` / `delete` / `flush` / `insert` / `replace` are denied) |
-| `sonic-vm` | `show …` (SONiC's own read-only `show` commands; `show techsupport` is denied) or `vtysh -c "show …"` (exactly one `-c` with a `show` payload) |
+| `sonic-vm` | `show …` (SONiC's own read-only `show` commands; refused: show followed by any leading part of "techsupport", from "t" to "techsupport", in any letter case, that is `t`, `te`, `tec`, `tech`, `techs`, `techsu`, `techsup`, `techsupp`, `techsuppo`, `techsuppor` and `techsupport`) or `vtysh -c "show …"` (exactly one `-c` with a `show` payload). The refusal applies to the `show` form, and a `vtysh -c` command is not refused by it. |
 
 A command outside the allow-list for the target's derived type is rejected at validation (exit code `2`) with a deterministic error; it never reaches runtime.
 
@@ -264,7 +265,7 @@ Every key listed below is REQUIRED on the failed-invariant record's `observed_st
 }
 ```
 
-* `peer` is the test's `peer` field, a known node name.
+* `peer` is the test's `peer` field, a known node name. `peer` MUST NOT be the test's own `node`.
 * `state` reflects the EVPN-AFI BGP session state.
 * `last_reset_reason` carries the most recent reset reason from FRR.
 
@@ -340,7 +341,7 @@ Every key listed below is REQUIRED on the failed-invariant record's `observed_st
       "mac": "<MAC literal>",
       "prefix": "<string, often empty>",
       "rd": "<string, often empty>",
-      "route_type": <int|string>,
+      "route_type": <int>,
       "vni": <int>
     }
   ],
@@ -351,7 +352,7 @@ Every key listed below is REQUIRED on the failed-invariant record's `observed_st
 ```
 
 * `evpn_routes` is the deterministic list of EVPN type-2 / type-5 routes observed for the queried `vni`, filtered to MAC literals declared in the topology's host nodes.
-* The `route_type` field may appear as either integer `2` or string `"2"` due to FRR's vtysh JSON output normalization; both forms are deterministic and pre-existing in the engine's evidence dedup.
+* `route_type` is an integer: `2` for a type-2 route. FRR's collection emits it as an integer from its JSON read, and from the supplementary text read that `evpn_mac_route_present` and `evpn_mac_route_absent` use (§4.7), so a route that both reads see is recorded once.
 
 ### 4.7) `evpn_mac_route_present` and `evpn_mac_route_absent`
 
@@ -362,7 +363,7 @@ Every key listed below is REQUIRED on the failed-invariant record's `observed_st
       "mac": "<MAC literal>",
       "prefix": "<string, often empty>",
       "rd": "<string, often empty>",
-      "route_type": <int|string>,
+      "route_type": <int>,
       "vni": <int>
     }
   ],
@@ -376,7 +377,35 @@ Every key listed below is REQUIRED on the failed-invariant record's `observed_st
 * `mac` is the test's queried MAC literal (lowercased canonical form).
 * `vni` is the test's queried VNI.
 * `evpn_routes` is filtered identically to §4.6 (declared host MACs only).
+* The record's `evidence.routes` keeps every MAC the read returned, including the MACs the substrate allocates to containers, which differ from run to run. Neither `cassian replay --verify-results` nor two-run reads `evidence`: replay compares each test's name, kind, expected, observed and verdict, and two-run compares expected, observed, verdict and `duration_ms`. `observed_state.evpn_routes` carries the declared host MACs only. A container MAC therefore never changes a compared field.
 * `evpn_mac_route_absent` payloads use `"type": "evpn_mac_route_absent"`; otherwise the schema is identical.
+
+#### 4.7.1) `evpn_mac_route_valid`
+
+`evpn_mac_route_valid` passes when the node holds a type-2 route for the test's `mac` and `vni` with at least one path marked valid. It is implemented on FRR; on other node types it is declared not implemented.
+
+```json
+{
+  "evpn_routes": [
+    {
+      "mac": "<MAC literal>",
+      "prefix": "<string, often empty>",
+      "rd": "<string, often empty>",
+      "route_type": <int>,
+      "vni": <int>
+    }
+  ],
+  "mac": "<queried MAC literal>",
+  "source_node": "<node where the test runs>",
+  "type": "evpn_mac_route_valid",
+  "valid": <bool>,
+  "vni": <int>
+}
+```
+
+* The payload is §4.7's, with `"type": "evpn_mac_route_valid"` and one added key, `valid`: whether a valid path was read.
+* It is read in two legs. First, `show bgp l2vpn evpn route json`: a path of a matching type-2 route whose `valid` is `true`. Second, only when that read shows no matching route, `show bgp l2vpn evpn route`: a path line whose first four characters carry `*` (FRR's legend: `* valid`), belonging to a `[2]:[0]:[48]:[<mac>]` prefix with or without an IP suffix. The text leg takes the VNI from the test.
+* `evpn_mac_route_present` and `evpn_mac_route_absent` read no validity and their payloads carry no `valid` key.
 
 ### 4.8) `ospf_neighbor_up`
 

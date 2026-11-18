@@ -29,7 +29,7 @@ That's the whole anatomy. The four moving parts are the **node**, the **command*
 
 - on an `frr` node: `vtysh -c "show …"` (any `show` command)
 - on an `nft-fw` node: `nft list …` (e.g. `nft list ruleset`)
-- on a `sonic-vm` node: `show …` (SONiC's own `show` commands, except `show techsupport`) or `vtysh -c "show …"`
+- on a `sonic-vm` node: `show …` (SONiC's own `show` commands; refused: show followed by any leading part of "techsupport", from "t" to "techsupport", in any letter case) or `vtysh -c "show …"`. The refusal applies to the `show` form, and a `vtysh -c` command is not refused by it.
 
 Anything else — a config change, a raw shell — is rejected when you run `cassian validate`, before anything is deployed.
 
