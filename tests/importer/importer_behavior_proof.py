@@ -38,6 +38,10 @@ with no lab and no containers (cassian-test-alone CI posture):
         the reader (R-n): exit 2, file and object named, nothing written.
   PF-4  The reader's exclusions (E-19 to E-edge-sort): exit 0, each object
         named once with its reason, sorted (page legs: stage 6).
+  PF-8  §4.6 stage 5 piece (iii): the committed seeded export through the
+        reader, with and without rendered/, equals golden/netbox-seeded; its
+        manifest names the proven set.
+  PF-11 The seeded export's resolved sessions render through gen_frr_conf.
 
 Exit 0 on all-pass; loud exit 1 on any failure. Run from the repo root:
     python tests/importer/importer_behavior_proof.py
@@ -1473,6 +1477,102 @@ def pf2_bundle_locators():
             shutil.rmtree(scratch, ignore_errors=True)
 
 
+# --------------------------------------------------------------------------- #
+# §4.6 stage 5 piece (iii): PF-8 (handover REQ-46-55; scope §5 C; P-7) and    #
+# PF-11's seeded leg (REQ-46-29, B-29), lab-free and offline. The reader takes#
+# the committed seeded export (capture 1, scope 3.10.6) with and without a    #
+# rendered/ copy; its pair equals golden/netbox-seeded/, generated from the   #
+# reader on that export and checked, before it was committed, against the     #
+# reader's pair from capture 2 (C-15; REQ-46-33's negative leg; REQ-46-52).   #
+# The golden is never regenerated to turn PF-8 green.                         #
+# --------------------------------------------------------------------------- #
+GOLDEN_SEEDED = os.path.join(FIX, "golden", "netbox-seeded")
+_PROVEN_VERSIONS = ("4.6.8", {"netbox_bgp": "0.19.0"})
+
+
+def _pair_equals(out, golden):
+    """True when both files of out's pair equal golden's, byte for byte."""
+    for rel in ("topology.yaml", os.path.join("tests", "starter_invariants.yaml")):
+        got = os.path.join(out, rel)
+        if not os.path.isfile(got):
+            return False
+        with open(got, "rb") as f, open(os.path.join(golden, rel), "rb") as g:
+            if f.read() != g.read():
+                return False
+    return True
+
+
+def pf8_seeded_export():
+    """PF-8 (REQ-46-55): the reader accepts the committed seeded export, with
+    and without a rendered/ copy (P-7); its pair equals golden/netbox-seeded/;
+    and the export's manifest names the proven set (REQ-46-37)."""
+    for case, rendered in (("the seeded export", False),
+                           ("the seeded export with rendered/ (P-7)", True)):
+        r, scratch, src, out = _bundle_case(rendered=rendered, source=SEEDED)
+        try:
+            _rec("PF-8 " + case + ": exit 0, pair equals golden/netbox-seeded "
+                 "(REQ-46-55)",
+                 r.returncode == 0 and _pair_equals(out, GOLDEN_SEEDED),
+                 "rc=%d err=%s" % (r.returncode, r.stderr.strip()[:300]))
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+    with open(os.path.join(SEEDED, "manifest.json"), encoding="utf-8") as f:
+        manifest = _json.load(f)
+    got = (manifest.get("netbox_version"), manifest.get("plugins"))
+    _rec("PF-8 the seeded export's manifest names the proven set: NetBox 4.6.8 "
+         "with netbox-bgp 0.19.0 (REQ-46-55, -37)",
+         got == _PROVEN_VERSIONS, "netbox_version=%r plugins=%r" % got)
+
+
+def _pf11_seeded_triples(stdout):
+    """(L, X, AS) of each active session in the seeded export's sessions file,
+    read from the file itself, less those the import names as excluded: the
+    sessions the import resolves (B-29)."""
+    with open(os.path.join(SEEDED, "plugins_bgp_session.json"), encoding="utf-8") as f:
+        sessions = _json.load(f)
+    excluded = set()
+    for line in stdout.splitlines():
+        line = line.strip()
+        if line.startswith("excluded: bgp-session "):
+            local, _, rest = line[len("excluded: bgp-session "):].partition(" -> ")
+            excluded.add((local, rest.split(": ", 1)[0]))
+    triples = []
+    for s in sessions:
+        if (s.get("status") or {}).get("value") != "active":
+            continue
+        local = (s.get("device") or {}).get("name")
+        x = ((s.get("remote_address") or {}).get("address") or "").split("/")[0]
+        if (local, x) not in excluded:
+            triples.append((local, x, (s.get("remote_as") or {}).get("asn")))
+    return sorted(triples)
+
+
+def pf11_render_seeded():
+    """PF-11, seeded leg (REQ-46-29): import the committed seeded export,
+    render each node of a resolved session through gen_frr_conf, and find
+    every session's line."""
+    scratch = tempfile.mkdtemp(prefix="pf11s_")
+    try:
+        out = os.path.join(scratch, "out")
+        r = subprocess.run(
+            [sys.executable, "-c",
+             "import sys;sys.path.insert(0,%r);"
+             "from cassian_import import run_import;"
+             "run_import(%r,%r,backend='netbox-dump')" % (_SRC, SEEDED, out)],
+            capture_output=True, text=True,
+        )
+        triples = _pf11_seeded_triples(r.stdout)
+        missing = (_pf11_missing(os.path.join(out, "topology.yaml"), triples)
+                   if r.returncode == 0 else triples)
+        _rec("PF-11 the seeded export: each resolved session renders ' neighbor "
+             "<X> remote-as <AS>' through gen_frr_conf (REQ-46-29)",
+             r.returncode == 0 and len(triples) == 4 and not missing,
+             "rc=%d n=%d missing=%s err=%s" % (r.returncode, len(triples), missing,
+                                              r.stderr.strip()[:200]))
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
 def main():
     po1_determinism()
     po2_roundtrip()
@@ -1487,6 +1587,8 @@ def main():
     pf2_bundle_rejections()
     pf2_bundle_locators()
     pf4_bundle_exclusions()
+    pf8_seeded_export()
+    pf11_render_seeded()
     failed = [n for n, ok, _ in checks if not ok]
     for n, ok, detail in checks:
         print(("PASS" if ok else "FAIL") + "  " + n + (("  -- " + detail) if detail else ""))
