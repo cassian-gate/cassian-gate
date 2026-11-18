@@ -1298,8 +1298,12 @@ def pf2_bundle_rejections():
     rejections through the reader): exit 2, the file, the needles and
     're-run' named, nothing written."""
     cases = [(c, m, n, f, "netbox-dump", None) for c, m, n, f in PF2_BUNDLE_CASES] + [
-        ("N-49a", None, ["netbox_export.json", "manifest.json"], "", "netbox-dump", POS),
-        ("N-49b", None, ["netbox_export.json", "manifest.json"], "", "netbox", BUNDLE_A),
+        ("N-49a", None, ["netbox_export.json", "manifest.json",
+                         "found no manifest.json here, and netbox_export.json is present"],
+         "", "netbox-dump", POS),
+        ("N-49b", None, ["netbox_export.json", "manifest.json",
+                         "found no netbox_export.json here, and manifest.json is present"],
+         "", "netbox", BUNDLE_A),
     ]
     for case, mutate, needles, file, backend, source in cases:
         r, scratch, src, out = _bundle_case(mutate, backend=backend, source=source)

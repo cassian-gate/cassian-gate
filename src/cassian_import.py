@@ -440,8 +440,9 @@ class NetBoxBackend(ImporterBackend):
                 _reject(
                     (str(source_dir), ""),
                     "the 'netbox' backend expects netbox_export.json and the "
-                    "'netbox-dump' backend expects manifest.json; neither is "
-                    f"present for the selected backend '{self.name}'",
+                    "'netbox-dump' backend expects manifest.json; the selected "
+                    f"backend '{self.name}' found no netbox_export.json here, "
+                    "and manifest.json is present",
                     "Select the backend that matches the layout",
                 )
             _reject(
@@ -1146,8 +1147,9 @@ class NetBoxDumpBackend(NetBoxBackend):
                 _reject(
                     (str(source_dir), ""),
                     "the 'netbox' backend expects netbox_export.json and the "
-                    "'netbox-dump' backend expects manifest.json; neither is "
-                    f"present for the selected backend '{self.name}'",
+                    "'netbox-dump' backend expects manifest.json; the selected "
+                    f"backend '{self.name}' found no manifest.json here, and "
+                    "netbox_export.json is present",
                     "Select the backend that matches the layout",
                 )
             _reject(  # B-36
