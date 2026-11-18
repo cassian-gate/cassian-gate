@@ -68,6 +68,7 @@ cassian preflight <topology.yaml>
 ```bash
 cassian import <source> --out <dir>                  # NetBox-derived export + rendered FRR configs -> topology + starter invariants
 cassian import <source> --out <dir> --backend netbox # --backend defaults to netbox
+cassian import <source> --out <dir> --backend netbox-dump   # NetBox dump bundle (manifest + endpoint files) -> topology + starter invariants
 ```
 
 Input is Cassian's **defined contract**, not a raw NetBox API dump (BGP/static-routes are plugin-only). See [Brownfield Importer](brownfield-importer.md).

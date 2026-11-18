@@ -1,0 +1,52 @@
+links:
+- endpoints:
+  - leaf1:eth1
+  - spine1:eth1
+  ipv4:
+  - 10.0.0.1/30
+  - 10.0.0.2/30
+name: siteA
+nodes:
+- asn: 65001
+  bgp:
+    neighbors:
+    - peer: spine1
+      remote_as: 65002
+  name: leaf1
+  router_id: 1.1.1.1
+  type: frr
+- asn: 65002
+  bgp:
+    neighbors:
+    - peer: leaf1
+      remote_as: 65001
+  name: spine1
+  router_id: 2.2.2.2
+  type: frr
+tests:
+- dst: 10.0.0.2
+  expect: pass
+  kind: invariant
+  name: starter_bgp_session_up_leaf1_10_0_0_2
+  node: leaf1
+  type: bgp_session_up
+- dst: 10.0.0.1
+  expect: pass
+  kind: invariant
+  name: starter_bgp_session_up_spine1_10_0_0_1
+  node: spine1
+  type: bgp_session_up
+- expect: pass
+  interface: eth1
+  kind: invariant
+  name: starter_interface_state_leaf1_eth1
+  node: leaf1
+  state: up
+  type: interface_state
+- expect: pass
+  interface: eth1
+  kind: invariant
+  name: starter_interface_state_spine1_eth1
+  node: spine1
+  state: up
+  type: interface_state
