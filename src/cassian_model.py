@@ -995,8 +995,14 @@ def _validate_fabric_evpn_presence_only(topo: dict) -> dict[str, Any] | None:
 
         if not isinstance(role, str) or role not in {"spine", "leaf"}:
             die(f"Topology invalid: node '{name}': role must be 'spine' or 'leaf'")
-        if ntype != "frr":
-            die(f"Topology invalid: node '{name}': EVPN participant nodes must use type: frr")
+        # §4.5-e addendum 01, rule B15 (REQ-45E-49 to -52, -54): FRR spines and leaves, and SONiC leaves.
+        if ntype == "sonic-vm":
+            if role == "spine":
+                die(f"Topology invalid: node '{name}': a sonic-vm node cannot be an EVPN spine; use role: leaf, or type: frr for the route reflector")
+            if str(node.get("sonic_mode") or "generated").strip().lower() == "preconfigured":
+                die(f"Topology invalid: node '{name}': a sonic-vm node with sonic_mode: preconfigured cannot be an EVPN participant; use sonic_mode: generated")
+        elif ntype != "frr":
+            die(f"Topology invalid: node '{name}': EVPN participant nodes must use type: frr, or type: sonic-vm with role: leaf")
 
         router_id = node.get("router_id")
         if not isinstance(router_id, str) or not router_id.strip():
@@ -1041,6 +1047,9 @@ def _validate_fabric_evpn_presence_only(topo: dict) -> dict[str, Any] | None:
         attach = attach.strip()
         if attach not in leaf_names:
             die(f"Topology invalid: host '{name}': attach must reference an EVPN leaf")
+        # §4.5-e addendum 01, rule B15 (REQ-45E-53, -54): no declared host on a SONiC leaf (SA2-LD-1).
+        if nodes_by_name[attach].get("type") == "sonic-vm":
+            die(f"Topology invalid: host '{name}': attach names a sonic-vm EVPN leaf; attach hosts to frr leaves (a SONiC leaf takes part in the EVPN control plane and carries no declared host)")
 
         vlan_id = _parse_vlan_id(node.get("vlan"), f"host '{name}' vlan")
         if vlan_id not in vlan_to_vni:
@@ -1717,7 +1726,11 @@ def fabric_evpn_session_set(topo: dict) -> "dict[str, list[tuple[str, str, bool]
         role = node.get("role")
         if not isinstance(name, str) or not name:
             continue
-        if node.get("type") != "frr" or not isinstance(role, str) or role not in {"spine", "leaf"}:
+        # §4.5-e addendum 01, rule B16 (REQ-45E-55, -56): an FRR spine or leaf as before, and a sonic-vm leaf.
+        if not isinstance(role, str) or not (
+            (node.get("type") == "frr" and role in {"spine", "leaf"})
+            or (node.get("type") == "sonic-vm" and role == "leaf")
+        ):
             continue
         peer_entries: list[tuple[str, str, bool]] = []
         for l in links_by_node.get(name, []):

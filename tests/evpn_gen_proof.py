@@ -53,17 +53,45 @@ script's extension model each `fabric.evpn` field has an emission leg and a reje
              for the corpus asn and for a changed one.
   D-13A      A representative rejection (D-MODE) carries (a) what is wrong, (b) where (`fabric.evpn.mode`) and
              (c) what would be valid (`'vlan-aware'`); the same misuse resolved twice gives the same bytes.
-  L998       The L998 refusal (REQ-45E-19; handover §15.2 row 19): an EVPN participant (a node with `role`) of
-             type sonic-vm, nft-fw or host, in a copy of the file with its tests removed, is rejected with the src/cassian_model.py message
-             "Topology invalid: node '<name>': EVPN participant nodes must use type: frr"; for sonic-vm the
-             rejection is also taken through `cassian validate --json` (cmd_validate, in process, on a copy of
-             the file in a temporary folder), which exits 2 with that message as its error.
-  D-NV       Non-vacuity: two model mutants, one line changed each, loaded in memory: (1) the L998 refusal
-             removed: a sonic-vm participant validates, and L998 goes red; (2) the mode check removed: D-MODE
-             goes red. Under neither does the real module change.
+  L998       The participant-type refusal, narrowed by addendum 01 (REQ-45E-50 supersedes REQ-45E-19 forward;
+             addendum 01 §15.2 row 50; proof-script ruling 2): an EVPN participant (a node with `role`) of type
+             nft-fw or host, in a copy of the file with its tests removed, is rejected with addendum 01 §6.6 row
+             U1, the src/cassian_model.py message "Topology invalid: node '<name>': EVPN participant nodes must
+             use type: frr, or type: sonic-vm with role: leaf"; for nft-fw the rejection is also taken through
+             `cassian validate --json` (cmd_validate, in process, on a copy of the file in a temporary folder),
+             which exits 2 with U1 as its error.
 
-LEGS THAT ARRIVE LATER, under this script's extension model: P-7's SONiC leg with addendum 01. If addendum 01
-implements the nine cells, it narrows the L998 leg to the node types still refused (proof-script ruling 2).
+ADDENDUM 01, WI-6 AND WI-4's MODEL SITE (rules B15 and B16; REQ-45E-49 to -56; addendum 01 §15.2 rows 49 to 56).
+Each case is the first corpus file with its tests and scenarios removed. `cassian validate --json` runs in process
+on a copy in a temporary folder, with the lab folder (cassian_artifacts.LABS_DIR) pointed there as well, because a
+passing validate writes its advisory coverage artifact; nothing is written under labs/.
+  P-10       leaf1 of type sonic-vm, with host1 (attached to leaf1) and its link removed: the topology resolves,
+             and `cassian validate --json` exits 0 with result pass (REQ-45E-49). host2 stays on the FRR leaf2,
+             so this is also row 53's positive control.
+  U2         spine1 of type sonic-vm is refused with U2 by ensure_valid_topology (REQ-45E-51).
+  U3         leaf1 of type sonic-vm with host1 still attached to it is refused with U3 (REQ-45E-53).
+  U4         The P-10 topology with leaf1's sonic_mode: preconfigured is refused with U4 (REQ-45E-52). validate
+             runs ensure_valid_topology before resolve_topology, whose sonic_config_db rules would refuse that
+             node first (src/cassian_engine.py cmd_validate), so the model leg calls ensure_valid_topology.
+  TEXT       Through `cassian validate --json`, U2 to U4 exit 2 and each error equals its addendum 01 §6.6 row
+             character for character, with the node's or host's name in place of <name>; U1 is L998's CLI
+             leg (REQ-45E-54). The rows are quoted below as _U.
+  S-SET      fabric_evpn_session_set on the P-10 topology returns the pinned session set: leaf1, now a
+             sonic-vm leaf, has the entry an FRR leaf has there, (spine1, 172.16.0.0, False), and spine1 lists
+             it as a client (REQ-45E-55; rule B16).
+  S-NEG      The P-10 topology without its spine1-leaf1 link is refused by the existing leaf-link rule
+             (REQ-45E-55, negative row).
+  An all-FRR fabric's session set and renders are unchanged (REQ-45E-56): E-DERIVE and E-EMIT above, unedited,
+  with tests/evpn_rr_next_hop_self_proof.py, unedited.
+  D-NV       Non-vacuity: three model mutants, one change each, loaded in memory: (1) the participant-type
+             refusal (U1) removed: an nft-fw leaf1 (host1 removed, as in P-10) validates, and L998 goes red;
+             (2) the mode check removed: D-MODE goes red; (3) rule B16's sonic-vm clause removed from
+             fabric_evpn_session_set: leaf1 has no entry, and S-SET goes red. Under none does the real
+             module change.
+
+LEGS THAT ARRIVE LATER, under this script's extension model: P-7's SONiC leg (addendum 01 §15.2 row 55, positive:
+generator peers = precheck participants = the SONiC provider's expected peers), with WI-4's SONiC consumer (rule
+B17).
 
 ORACLE. The pinned session set was read back from gen_frr_conf's renders at cassian-gate 7a60164, before
 the derivation existed (src/cassian_model.py sha256
@@ -297,7 +325,14 @@ def p7(cassian_model, topos):
         check("P7-NV the selection without rule B10's lines yields no participant, so P7-SELECT is red", got == [], got)
 
 
-_REFUSAL = "EVPN participant nodes must use type: frr"
+_REFUSAL = "EVPN participant nodes must use type: frr, or type: sonic-vm with role: leaf"
+# addendum 01 §6.6 rows U1 to U4, character for character (REQ-45E-54); _REFUSAL is U1 after its node prefix
+_U = {
+    "U1": "Topology invalid: node '<name>': EVPN participant nodes must use type: frr, or type: sonic-vm with role: leaf",
+    "U2": "Topology invalid: node '<name>': a sonic-vm node cannot be an EVPN spine; use role: leaf, or type: frr for the route reflector",
+    "U3": "Topology invalid: host '<name>': attach names a sonic-vm EVPN leaf; attach hosts to frr leaves (a SONiC leaf takes part in the EVPN control plane and carries no declared host)",
+    "U4": "Topology invalid: node '<name>': a sonic-vm node with sonic_mode: preconfigured cannot be an EVPN participant; use sonic_mode: generated",
+}
 
 
 def _doc():
@@ -336,7 +371,7 @@ def _set_type(ntype):
 
 def l998_legs(model, label="L998"):
     ok = True
-    for ntype in ("sonic-vm", "nft-fw", "host"):
+    for ntype in ("nft-fw", "host"):  # narrowed by addendum 01 (REQ-45E-50); a sonic-vm leaf is admitted (B15)
         doc = _with(_set_type(ntype))
         name = _participant(doc)["name"]
         o, msg = _resolve(model, doc)
@@ -344,45 +379,159 @@ def l998_legs(model, label="L998"):
         good = o == "die" and msg == want
         if not good:
             print("        %s %s: %s %s" % (label, ntype, o, msg if o == "die" else "validated"))
-        check("%s an EVPN participant of type %s is rejected with the L998 message" % (label, ntype), good)
+        check("%s an EVPN participant of type %s is rejected with U1" % (label, ntype), good)
         ok &= good
     return ok
 
 
 def l998_cli():
-    """The sonic-vm refusal through `cassian validate --json`: exit 2, the L998 message as the error."""
+    """The nft-fw refusal through `cassian validate --json`: exit 2, U1 as the error."""
+    doc = _with(_set_type("nft-fw"))
+    name = _participant(doc)["name"]
+    code, payload = _validate_json(doc)
+    check("L998 `cassian validate --json` on an nft-fw participant exits 2 with U1",
+          code == 2 and payload.get("result") == "fail"
+          and payload.get("error") == "Topology invalid: node '%s': %s" % (name, _REFUSAL), (code, payload))
+
+
+def _validate_json(doc):
+    """`cassian validate --json` (cmd_validate, in process) on a copy of doc in a temporary folder. The lab folder
+    points there too: a pass writes the advisory coverage artifact, and nothing is written under labs/.
+    Returns (exit code, payload)."""
     import argparse
     import contextlib
     import io
     import json
     import tempfile
+    from pathlib import Path
     import yaml
+    import cassian_artifacts
     import cassian_common
     import cassian_engine
 
-    doc = _with(_set_type("sonic-vm"))
-    name = _participant(doc)["name"]
     with tempfile.TemporaryDirectory() as tmp:
-        path = os.path.join(tmp, "l998.yaml")
+        path = os.path.join(tmp, "case.yaml")
         with open(path, "w", encoding="utf-8") as fh:
             yaml.safe_dump(doc, fh, sort_keys=False)
         out = io.StringIO()
-        prev = cassian_common._QUIET_DIE
+        prev_quiet, prev_labs = cassian_common._QUIET_DIE, cassian_artifacts.LABS_DIR
         code = None
         try:
+            cassian_artifacts.LABS_DIR = Path(tmp) / "labs"
             with contextlib.redirect_stdout(out):
                 cassian_engine.cmd_validate(argparse.Namespace(topology=path, json=True, contrib_path=None))
+            code = 0
         except SystemExit as exc:
             code = exc.code
         finally:
-            cassian_common._QUIET_DIE = prev
+            cassian_common._QUIET_DIE = prev_quiet
+            cassian_artifacts.LABS_DIR = prev_labs
     try:
         payload = json.loads(out.getvalue())
     except ValueError:
         payload = {}
-    check("L998 `cassian validate --json` on a sonic-vm participant exits 2 with the L998 message",
-          code == 2 and payload.get("result") == "fail"
-          and payload.get("error") == "Topology invalid: node '%s': %s" % (name, _REFUSAL), (code, payload))
+    return code, payload
+
+
+def _strip(doc):
+    doc["tests"] = []
+    doc.pop("scenarios", None)
+
+
+def _seq(*changes):
+    def change(doc):
+        for c in changes:
+            c(doc)
+    return change
+
+
+def _node(doc, name):
+    return next(n for n in doc["nodes"] if n.get("name") == name)
+
+
+def _drop_host1(doc):
+    """host1, which is attached to leaf1, removed with its link."""
+    doc["nodes"] = [n for n in doc["nodes"] if n.get("name") != "host1"]
+    doc["links"] = [l for l in doc["links"]
+                    if not any(str(e).split(":")[0] == "host1" for e in l.get("endpoints", []))]
+
+
+def _sonic_leaf(keep_host):
+    """leaf1 of type sonic-vm, tests and scenarios removed; host1 (attached to leaf1) and its link removed unless
+    keep_host."""
+    def change(doc):
+        _set_type("sonic-vm")(doc)
+        if not keep_host:
+            _drop_host1(doc)
+    return change
+
+
+def _unlink(a, b):
+    def change(doc):
+        doc["links"] = [l for l in doc["links"]
+                        if sorted(str(e).split(":")[0] for e in l.get("endpoints", [])) != sorted((a, b))]
+    return change
+
+
+def _ensure(model, doc):
+    try:
+        model.ensure_valid_topology(doc)
+    except SystemExit as exc:
+        return "die", str(exc)
+    return "ok", ""
+
+
+def _u(row, name):
+    return _U[row].replace("<name>", name)
+
+
+def _refusal_cases():
+    """(row, the name its message carries, the change) for U2 to U4."""
+    return (
+        ("U2", "spine1", _seq(_strip, lambda d: _node(d, "spine1").update(type="sonic-vm"))),
+        ("U3", "host1", _sonic_leaf(keep_host=True)),
+        ("U4", "leaf1", _seq(_sonic_leaf(keep_host=False),
+                             lambda d: _node(d, "leaf1").update(sonic_mode="preconfigured"))),
+    )
+
+
+def s_set(model, label="W"):
+    o, topo = _resolve(model, _with(_sonic_leaf(keep_host=False)))
+    got = model.fabric_evpn_session_set(topo) if o == "ok" else None
+    norm = None if got is None else {k: [tuple(p) for p in v] for k, v in got.items()}
+    ok = norm == _SESSIONS and list(norm or {}) == PARTICIPANT_ORDER
+    check("%s S-SET the P-10 topology's session set is the pinned one: sonic-vm leaf1 has (spine1, 172.16.0.0, "
+          "False), and spine1 lists it as a client" % label, ok, norm)
+    return ok
+
+
+def wi6_legs(model, label="W"):
+    """Addendum 01 rules B15 and B16 at model level (REQ-45E-49 to -55)."""
+    o, topo = _resolve(model, _with(_sonic_leaf(keep_host=False)))
+    check("%s P-10 the topology with leaf1 of type sonic-vm (host1 removed, host2 on the FRR leaf2) resolves" % label,
+          o == "ok", topo if o != "ok" else "")
+    s_set(model, label)
+    for row, name, change in _refusal_cases():
+        o, msg = _ensure(model, _with(change))
+        check("%s %s ensure_valid_topology refuses with addendum 01 §6.6 row %s" % (label, row, row),
+              o == "die" and msg == _u(row, name), msg)
+    o, msg = _resolve(model, _with(_seq(_sonic_leaf(keep_host=False), _unlink("spine1", "leaf1"))))
+    want = "Topology invalid: EVPN leaf 'leaf1' must have an explicit direct link to at least one EVPN RR spine"
+    check("%s S-NEG a sonic-vm leaf with no link to a route reflector is refused by the leaf-link rule" % label,
+          o == "die" and msg == want, msg)
+
+
+def wi6_cli():
+    """P-10 and TEXT through `cassian validate --json` (REQ-45E-49, -54)."""
+    code, payload = _validate_json(_with(_sonic_leaf(keep_host=False)))
+    check("W P-10 `cassian validate --json` on the topology with a sonic-vm leaf exits 0 with result pass",
+          code == 0 and payload.get("result") == "pass", (code, payload))
+    for row, name, change in _refusal_cases():
+        code, payload = _validate_json(_with(change))
+        check("W TEXT %s `cassian validate --json` exits 2 and its error is addendum 01 §6.6 row %s, character for "
+              "character" % (row, row),
+              code == 2 and payload.get("result") == "fail" and payload.get("error") == _u(row, name),
+              (code, payload))
 
 
 def _rejects(model, change, *needles):
@@ -472,16 +621,20 @@ def declaration(cassian_model):
     d13a(cassian_model)
     l998_legs(cassian_model)
     l998_cli()
+    wi6_legs(cassian_model)
+    wi6_cli()
 
     import contextlib
     import io
-    refusal = ('        if ntype != "frr":\n'
-               '            die(f"Topology invalid: node \'{name}\': EVPN participant nodes must use type: frr")\n')
+    refusal = ('        elif ntype != "frr":\n'
+               '            die(f"' + _U["U1"].replace("<name>", "{name}") + '")\n')
     mode = ('    if not isinstance(mode, str) or mode.strip() != "vlan-aware":\n'
             '        die("Topology invalid: fabric.evpn.mode must be \'vlan-aware\'")\n')
+    b16 = '            or (node.get("type") == "sonic-vm" and role == "leaf")\n'
     for label, leg, old, run in (
-            ("the L998 refusal removed", "L998", refusal, lambda m: l998_legs(m, label="(mutant)")),
-            ("the mode check removed", "D-MODE", mode, lambda m: declaration_legs(m, label="(mutant)"))):
+            ("the participant-type refusal (U1) removed", "L998", refusal, lambda m: l998_legs(m, label="(mutant)")),
+            ("the mode check removed", "D-MODE", mode, lambda m: declaration_legs(m, label="(mutant)")),
+            ("rule B16's sonic-vm clause removed", "S-SET", b16, lambda m: s_set(m, label="(mutant)"))):
         m = _model_mutant(old, "")
         if m is None:
             check("D-NV the mutant's anchor is found once (%s)" % label, False)
@@ -490,15 +643,15 @@ def declaration(cassian_model):
         with contextlib.redirect_stdout(io.StringIO()):
             run(m)
         red = [f for f in _FAILED[n0:] if f.startswith("(mutant)") and
-               (leg == "L998" or f.startswith("(mutant)-MODE"))]
+               (leg != "D-MODE" or f.startswith("(mutant)-MODE"))]
         del _FAILED[n0:]
         _COUNT[0] = c0
         if red:
             print("MUTATION-FAIL: %s -> %s red" % (label, leg))
         check("D-NV %s: %s goes red" % (label, leg), bool(red))
         if leg == "L998":
-            o, _msg = _resolve(m, _with(_set_type("sonic-vm")))
-            check("D-NV under that mutant a sonic-vm EVPN participant validates", o == "ok", _msg)
+            o, _msg = _resolve(m, _with(_seq(_set_type("nft-fw"), _drop_host1)))
+            check("D-NV under that mutant an nft-fw leaf1 (host1 removed) validates", o == "ok", _msg)
 
 
 def main():
@@ -559,9 +712,9 @@ def main():
     declaration(cassian_model)
 
     if _FAILED:
-        print("RESULT: RED -- %d checks, %d failed (evpn_gen_proof, §4.5-e WI-4, WI-5)" % (_COUNT[0], len(_FAILED)))
+        print("RESULT: RED -- %d checks, %d failed (evpn_gen_proof, §4.5-e WI-4, WI-5; addendum 01 WI-6)" % (_COUNT[0], len(_FAILED)))
         return 1
-    print("RESULT: GREEN -- %d checks, 0 failed (evpn_gen_proof, §4.5-e WI-4, WI-5)" % _COUNT[0])
+    print("RESULT: GREEN -- %d checks, 0 failed (evpn_gen_proof, §4.5-e WI-4, WI-5; addendum 01 WI-6)" % _COUNT[0])
     return 0
 
 
