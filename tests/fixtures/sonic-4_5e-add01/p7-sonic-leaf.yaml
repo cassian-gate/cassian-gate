@@ -1,0 +1,53 @@
+# §4.5-e handover addendum 01: P-7's SONiC leg (addendum 01 §15.2 row 55; rule B17; REQ-45E-55, -57).
+# tests/evpn_gen_proof.py (P7S), tests/evpn_precheck_mac_poll_proof.py (P-B17) and tests/sonic_precheck_proof.py
+# (REQ-45E-57) read this file by its explicit path. It is topologies/evpn_bgp_session_up.yaml with leaf1 of type
+# sonic-vm, its tests removed, and host1 (attached to leaf1) removed with its link: tests/evpn_gen_proof.py's
+# _sonic_leaf(keep_host=False), which that proof compares it with, its name apart. Lab-free: no lab is brought up
+# from it. It sits under tests/fixtures/, not topologies/ or examples/ (scope amendment 02 SA2-36.1; S2-1).
+name: evpn-sonic-leaf-p7
+
+fabric:
+  evpn:
+    enabled: true
+    mode: vlan-aware
+    asn: 65100
+
+nodes:
+  - name: spine1
+    type: frr
+    role: spine
+    evpn_rr: true
+    router_id: 10.255.0.1
+
+  - name: leaf1
+    type: sonic-vm
+    role: leaf
+    router_id: 10.255.0.11
+
+  - name: leaf2
+    type: frr
+    role: leaf
+    router_id: 10.255.0.12
+
+  - name: host2
+    type: host
+    attach: leaf2
+    vlan: 10
+    ip: 10.10.10.12/24
+    gw: 10.10.10.1
+    mac: "00:11:22:33:44:66"
+
+links:
+  - endpoints: ["spine1:eth1", "leaf1:eth1"]
+    ipv4: ["172.16.0.0/31", "172.16.0.1/31"]
+
+  - endpoints: ["spine1:eth2", "leaf2:eth1"]
+    ipv4: ["172.16.0.2/31", "172.16.0.3/31"]
+
+  - endpoints: ["host2:eth1", "leaf2:eth2"]
+
+vlans:
+  10:
+    vni: 10100
+
+tests: []

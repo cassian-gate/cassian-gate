@@ -11126,7 +11126,16 @@ def cmd_test(args: argparse.Namespace) -> None:
         The channel the widened `convergence_wait` contract carries (founder
         ruling 2026-08-25). Opaque to the provider contract: peer-IP strings
         only, no NOS vocabulary.
+
+        §4.5-e addendum 01, rule B17 (REQ-45E-57; BL-P2-4.5c-227; PBE-1b-9). For a participant of a
+        `fabric.evpn` topology it returns instead the peer IPs `_precheck_fabric_participants` derived
+        for it, in the session set's order. A fabric node declares no `asn`, so the linked-speaker walk
+        above finds no peer for it. Both call sites take this result: the precheck and the scenario
+        `wait_for_bgp` step for a non-FRR node. Neither call line is edited.
         """
+        for _fp_name, _fp_peer_ips in (_precheck_fabric_participants(topo) or ()):
+            if _fp_name == node_name:
+                return tuple(_fp_peer_ips)
         return tuple(sorted(
             str(l.get("peer_ip") or "").strip()
             for l in expected_bgp_peers(node_name)

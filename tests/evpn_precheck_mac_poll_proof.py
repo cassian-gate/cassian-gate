@@ -117,6 +117,14 @@ Sections:
              added and nothing else changed. Negative controls: that d396d5a block
              (no record: both legs red), and the failure record moved after the
              failure write (the failure leg red).
+  P-B17      (§4.5-e addendum 01, rule B17; REQ-45E-57; handover §15.2 row 57, positive) an LD-1
+             fabric with a sonic-vm leaf (the P-7 fixture,
+             tests/fixtures/sonic-4_5e-add01/p7-sonic-leaf.yaml), its participants as rule B10 selects
+             them: the live body hands the sonic-vm leaf's recording `convergence_wait` its session-set
+             peer IPs, through the engine's own `_expected_peer_ips` (AST-extracted with `_is_bgp_peer`
+             and `expected_bgp_peers`, bound with the names `cmd_test` binds); the FRR participants keep
+             the inline wait. Negative control: without rule B17's three lines the call carries the
+             linked BGP speakers, () for a fabric node, and P-B17 is red.
 
 Coverage limits (PBE-P2-8): lab-free; the fake clock stands in for wall time;
 the stubs stand in for the runtime, for `wait_for_bgp` (except where P-RECORD
@@ -316,13 +324,15 @@ class _Clock:
         self.t += float(s)
 
 
-def _run(body, topo, present, parts=None, providers=None, bgp_timeout=(), rec=None):
+def _run(body, topo, present, parts=None, providers=None, bgp_timeout=(), rec=None, epi=None):
     """present(attempt, leaf, mac) -> (probe_ok, predicate). Returns (trace, exited, msg, elapsed).
     `bgp_timeout`: node names whose FRR wait times out (S30-R20's report, then the die).
     `rec`: a list that receives the `_PrecheckRecord` after the run (the handler's call
     emulated on SystemExit, as `cmd_test`'s `except SystemExit:` makes it -- AST-checked
     in P-RECORD -- with the body's own `_pc_stats` at the exit, read from its frame;
-    `{}` when the body had not yet bound it, as `cmd_test` binds it before the try)."""
+    `{}` when the body had not yet bound it, as `cmd_test` binds it before the try).
+    `epi`: the `_expected_peer_ips` the body calls (default: a stub returning ("10.0.0.1",));
+    P-B17 passes the engine's own."""
     clock = _Clock()
     attempt = {"n": 0, "seen": set()}
 
@@ -361,7 +371,7 @@ def _run(body, topo, present, parts=None, providers=None, bgp_timeout=(), rec=No
         _old = sys.stderr
         sys.stderr = err
         try:
-            fn(topo, None, str(topo.get("name")), parts, wait_for_bgp, providers or {}, lambda _n: ("10.0.0.1",),
+            fn(topo, None, str(topo.get("name")), parts, wait_for_bgp, providers or {}, epi or (lambda _n: ("10.0.0.1",)),
                time, _evaluate_invariant_attempt, cassian_tests.retry_until, cassian_common.die, pcr)
         finally:
             sys.stderr = _old
@@ -1095,6 +1105,78 @@ if _ls and not _lf:
     print("MUTATION-FAIL: the failure record written after the failure write -> P-READY failure leg red")
 check("P-READY NV the failure record moved after the failure write fails the failure leg only", _ls and not _lf,
       "%s %s" % (_ls, _lf))
+
+# --- P-B17 (§4.5-e addendum 01, rule B17; REQ-45E-57; handover §15.2 row 57, positive) ---------------
+B17_FIXTURE = os.path.join(_ROOT, "tests", "fixtures", "sonic-4_5e-add01", "p7-sonic-leaf.yaml")
+B17_LINES = (
+    "        for _fp_name, _fp_peer_ips in (_precheck_fabric_participants(topo) or ()):\n"
+    "            if _fp_name == node_name:\n"
+    "                return tuple(_fp_peer_ips)\n")
+
+
+def _engine_epi(topo, without_b17=False):
+    """The engine's `_expected_peer_ips`, AST-extracted from ENGINE_SRC with `_is_bgp_peer` and
+    `expected_bgp_peers` and bound with the names `cmd_test` binds; with without_b17, rule B17's three
+    lines removed first. None unless each closure, and B17's lines, occur exactly once."""
+    src = ENGINE_SRC
+    if src.count(B17_LINES) != 1:
+        return None
+    if without_b17:
+        src = src.replace(B17_LINES, "", 1)
+    want = ("_is_bgp_peer", "expected_bgp_peers", "_expected_peer_ips")
+    found = {}
+    for nd in ast.walk(ast.parse(src)):
+        if isinstance(nd, ast.FunctionDef) and nd.name in want:
+            found.setdefault(nd.name, []).append(nd)
+    if sorted(found) != sorted(want) or any(len(v) != 1 for v in found.values()):
+        return None
+    nodes = [n for n in topo.get("nodes", []) if isinstance(n, dict)]
+    ns = {"NOS_PROVIDERS": cassian_engine.NOS_PROVIDERS, "nodes_by_name": {n["name"]: n for n in nodes},
+          "links_by_node": cassian_model.build_node_links(topo), "topo": topo,
+          "_precheck_fabric_participants": cassian_engine._precheck_fabric_participants}
+    for w in want:
+        exec(compile(ast.Module(body=found[w], type_ignores=[]), "<cassian_engine.py>", "exec"), ns)
+    return ns["_expected_peer_ips"]
+
+
+class _ConvergenceRecorder:
+    """A sonic-vm provider whose `convergence_wait` records its call and returns."""
+
+    def __init__(self):
+        self.calls = []
+
+    def convergence_wait(self, rt, lab, node, timeout, expected_peer_ips):
+        self.calls.append((node, int(timeout), tuple(expected_peer_ips)))
+
+
+def _b17_run(topo, epi):
+    """The live body on `topo`, its participants as rule B10 selects them; returns (calls, trace, exited, msg)."""
+    prov = _ConvergenceRecorder()
+    by_name = {n["name"]: n for n in topo["nodes"]}
+    parts = [by_name[name] for name, _ips in (cassian_engine._precheck_fabric_participants(topo) or [])]
+    trace, exited, msg, _el = _run(LIVE_BODY, topo, ALL, parts=parts, providers={"sonic-vm": prov}, epi=epi)
+    return prov.calls, trace, exited, msg
+
+
+_b17 = _resolved(B17_FIXTURE)
+_b17_set = dict(cassian_engine._precheck_fabric_participants(_b17) or [])
+_b17_new, _b17_old = _engine_epi(_b17), _engine_epi(_b17, without_b17=True)
+check("P-B17 the engine's _expected_peer_ips is found once, rule B17's lines in it once",
+      _b17_new is not None and _b17_old is not None)
+if _b17_new is not None and _b17_old is not None:
+    _c, _t, _x, _m = _b17_run(_b17, _b17_new)
+    check("P-B17 the sonic-vm leaf1's convergence_wait call carries its session-set peer IPs %s, bound 30"
+          % (_b17_set.get("leaf1"),),
+          _c == [("leaf1", 30, ("172.16.0.0",))] and _b17_set.get("leaf1") == ("172.16.0.0",) and not _x,
+          "%s exited=%s %s" % (_c, _x, _m))
+    check("P-B17 the FRR participants keep the inline wait, in topology node order (spine1, leaf2)",
+          [e[1] for e in _t if e[0] == "bgp"] == ["spine1", "leaf2"], str(_t))
+    _nc = _b17_run(_b17, _b17_old)[0]
+    if _nc == [("leaf1", 30, ())]:
+        print("MUTATION-FAIL: _expected_peer_ips without rule B17's lines -> leaf1 handed () (the linked BGP "
+              "speakers), P-B17 red")
+    check("P-B17 NV without rule B17's lines the call carries the linked BGP speakers, () for a fabric node",
+          _nc == [("leaf1", 30, ())], str(_nc))
 
 fails =[n for n, ok, _d in checks if not ok]
 for n, ok, d in checks:

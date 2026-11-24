@@ -89,9 +89,20 @@ passing validate writes its advisory coverage artifact; nothing is written under
              fabric_evpn_session_set: leaf1 has no entry, and S-SET goes red. Under none does the real
              module change.
 
-LEGS THAT ARRIVE LATER, under this script's extension model: P-7's SONiC leg (addendum 01 §15.2 row 55, positive:
-generator peers = precheck participants = the SONiC provider's expected peers), with WI-4's SONiC consumer (rule
-B17).
+ADDENDUM 01, WI-4's SONiC CONSUMER (rule B17; REQ-45E-55, -57; addendum 01 §15.2 row 55, positive).
+  P7S-FIXTURE  P-7's SONiC leg names its fixture by explicit path, tests/fixtures/sonic-4_5e-add01/p7-sonic-leaf.yaml
+               (scope amendment 02 SA2-36.1; LOCKED scope A-4 L1247). It is under tests/fixtures/, so P7-CENSUS and
+               the census of tests/evpn_rr_next_hop_self_proof.py stay exact. It is the P-10 topology: this script's
+               _sonic_leaf(keep_host=False) is its oracle, compared with it apart from its name.
+  P7S-EQUAL    Read as cmd_test reads it, the fixture's participants (_precheck_fabric_participants) are the
+               derivation's, in topology node order, none with an empty peer list. Each FRR participant's expected
+               peers equal its gen_frr_conf render. The sonic-vm leaf1's equal what the engine's own
+               _expected_peer_ips returns for it, (172.16.0.0,): that closure is AST-extracted from
+               src/cassian_engine.py with _is_bgp_peer and expected_bgp_peers and bound with the names cmd_test
+               binds (NOS_PROVIDERS, nodes_by_name, links_by_node, topo). The binding is this script's: it does not
+               run cmd_test.
+  P7S-NV       Non-vacuity: the same closure with rule B17's three lines removed returns the linked BGP speakers,
+               which for a fabric node are none, because no fabric node declares `asn`; P7S-EQUAL is then red.
 
 ORACLE. The pinned session set was read back from gen_frr_conf's renders at cassian-gate 7a60164, before
 the derivation existed (src/cassian_model.py sha256
@@ -323,6 +334,108 @@ def p7(cassian_model, topos):
         if got == []:
             print("MUTATION-FAIL: cmd_test's selection without rule B10 -> no participant, P7-SELECT red")
         check("P7-NV the selection without rule B10's lines yields no participant, so P7-SELECT is red", got == [], got)
+
+
+P7S_FIXTURE = "tests/fixtures/sonic-4_5e-add01/p7-sonic-leaf.yaml"
+# rule B17's three lines in src/cassian_engine.py's `_expected_peer_ips`, removed whole for P7S-NV
+_B17_LINES = (
+    "        for _fp_name, _fp_peer_ips in (_precheck_fabric_participants(topo) or ()):\n"
+    "            if _fp_name == node_name:\n"
+    "                return tuple(_fp_peer_ips)\n")
+
+
+def engine_expected_peer_ips(topo, without_b17=False):
+    """`cmd_test`'s `_expected_peer_ips` from the engine's own source: the closure, with `_is_bgp_peer` and
+    `expected_bgp_peers`, AST-extracted and bound with the names cmd_test binds (NOS_PROVIDERS, nodes_by_name,
+    links_by_node, topo). With without_b17, rule B17's three lines are removed from the source first. None unless
+    each closure, and B17's lines, occur exactly once."""
+    import ast
+    import cassian_engine
+    import cassian_model
+
+    with open(os.path.join(_ROOT, "src", "cassian_engine.py"), encoding="utf-8") as fh:
+        src = fh.read()
+    if src.count(_B17_LINES) != 1:
+        return None
+    if without_b17:
+        src = src.replace(_B17_LINES, "", 1)
+    want = ("_is_bgp_peer", "expected_bgp_peers", "_expected_peer_ips")
+    found = {}
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.FunctionDef) and node.name in want:
+            found.setdefault(node.name, []).append(node)
+    if sorted(found) != sorted(want) or any(len(v) != 1 for v in found.values()):
+        return None
+    nodes = [n for n in topo.get("nodes", []) if isinstance(n, dict)]
+    ns = {"NOS_PROVIDERS": cassian_engine.NOS_PROVIDERS, "nodes_by_name": {n["name"]: n for n in nodes},
+          "links_by_node": cassian_model.build_node_links(topo), "topo": topo,
+          "_precheck_fabric_participants": cassian_engine._precheck_fabric_participants}
+    for name in want:
+        exec(compile(ast.Module(body=found[name], type_ignores=[]), "<cassian_engine.py>", "exec"), ns)
+    return ns["_expected_peer_ips"]
+
+
+def p7s_equal(cassian_model, topo, participants, epi):
+    """P7S-EQUAL on a participant list [(name, expected peer IPs)] and an `_expected_peer_ips`; returns (ok, detail)."""
+    sessions = cassian_model.fabric_evpn_session_set(topo) or {}
+    derived = [(n, tuple(ip for _p, ip, _rr in peers)) for n, peers in sessions.items()]
+    if not participants or [(n, tuple(p)) for n, p in participants] != derived:
+        return False, ("participants", participants, "derivation", derived)
+    nodes = {n["name"]: n for n in topo.get("nodes", []) if isinstance(n, dict) and n.get("name")}
+    bad = []
+    for name, peer_ips in participants:
+        if not peer_ips:
+            bad.append((name, "no expected peer"))
+        elif nodes[name].get("type") == "sonic-vm":
+            got = tuple(epi(name))
+            if got != tuple(peer_ips):
+                bad.append((name, "the SONiC provider's expected peers", got, tuple(peer_ips)))
+        else:
+            gen_ips, _clients = rendered_peers(cassian_model.gen_frr_conf(nodes[name], topo))
+            if list(peer_ips) != gen_ips:
+                bad.append((name, "gen_frr_conf", gen_ips, list(peer_ips)))
+    if not any(nodes[n].get("type") == "sonic-vm" for n, _p in participants):
+        bad.append(("no sonic-vm participant",))
+    return not bad, bad
+
+
+def p7_sonic(cassian_model):
+    """P-7's SONiC leg (addendum 01 §15.2 row 55, positive; rule B17; REQ-45E-55, -57)."""
+    import yaml
+    from pathlib import Path
+    import cassian_engine
+
+    full = os.path.join(_ROOT, P7S_FIXTURE)
+    try:
+        with open(full, encoding="utf-8") as fh:
+            fdoc = yaml.safe_load(fh)
+    except OSError as exc:
+        check("P7S-FIXTURE %s is present" % P7S_FIXTURE, False, repr(exc))
+        return
+    unnamed = lambda d: {k: v for k, v in d.items() if k != "name"}
+    check("P7S-FIXTURE %s is the P-10 topology, its name apart (oracle: _sonic_leaf(keep_host=False))" % P7S_FIXTURE,
+          isinstance(fdoc, dict) and unnamed(fdoc) == unnamed(_with(_sonic_leaf(keep_host=False))))
+    try:
+        topo = cassian_model.resolve_topology(fdoc, topo_path=Path(full))
+    except SystemExit as exc:
+        check("P7S-FIXTURE %s resolves" % P7S_FIXTURE, False, str(exc))
+        return
+    seen = as_cmd_test_reads(topo)
+    parts = cassian_engine._precheck_fabric_participants(seen)
+    epi = engine_expected_peer_ips(seen)
+    check("P7S the engine's _expected_peer_ips is found once, rule B17's lines in it once", epi is not None)
+    if epi is None:
+        return
+    ok, bad = p7s_equal(cassian_model, topo, parts, epi)
+    check("P7S-EQUAL %s: generator peers = precheck participants = the SONiC provider's expected peers, and the "
+          "sonic-vm leaf1's are (172.16.0.0,)" % P7S_FIXTURE, ok and dict(parts or []).get("leaf1") == ("172.16.0.0",),
+          bad)
+    old = engine_expected_peer_ips(seen, without_b17=True)
+    red = old is not None and tuple(old("leaf1")) == () and not p7s_equal(cassian_model, topo, parts, old)[0]
+    if red:
+        print("MUTATION-FAIL: _expected_peer_ips without rule B17's lines -> the SONiC leaf derives none, P7S-EQUAL red")
+    check("P7S-NV without rule B17's lines the SONiC leaf derives none (the linked BGP speakers: no fabric node "
+          "declares asn), and P7S-EQUAL is red", red)
 
 
 _REFUSAL = "EVPN participant nodes must use type: frr, or type: sonic-vm with role: leaf"
@@ -709,12 +822,13 @@ def main():
               and derive_ok(cassian_model, rel, topo)[0])
 
     p7(cassian_model, topos)
+    p7_sonic(cassian_model)
     declaration(cassian_model)
 
     if _FAILED:
-        print("RESULT: RED -- %d checks, %d failed (evpn_gen_proof, §4.5-e WI-4, WI-5; addendum 01 WI-6)" % (_COUNT[0], len(_FAILED)))
+        print("RESULT: RED -- %d checks, %d failed (evpn_gen_proof, §4.5-e WI-4, WI-5; addendum 01 WI-6, WI-4's SONiC consumer)" % (_COUNT[0], len(_FAILED)))
         return 1
-    print("RESULT: GREEN -- %d checks, 0 failed (evpn_gen_proof, §4.5-e WI-4, WI-5; addendum 01 WI-6)" % _COUNT[0])
+    print("RESULT: GREEN -- %d checks, 0 failed (evpn_gen_proof, §4.5-e WI-4, WI-5; addendum 01 WI-6, WI-4's SONiC consumer)" % _COUNT[0])
     return 0
 
 

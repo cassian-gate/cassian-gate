@@ -25,6 +25,15 @@ CI, no `ssh`/`systemctl` enters the workflow, restoration is structural
 absence of an error. That last clause is Rule 13: a control that was never
 reached is indistinguishable from a control that passed.
 
+§4.5-e addendum 01, rule B17 (REQ-45E-57; handover §15.2 row 57). Lab-free: the
+engine's own `_expected_peer_ips`, AST-extracted with `_is_bgp_peer` and
+`expected_bgp_peers` and bound with the names `cmd_test` binds, hands a sonic-vm
+fabric participant its session-set peer IPs (the P-7 fixture,
+tests/fixtures/sonic-4_5e-add01/p7-sonic-leaf.yaml), and a sonic-vm node outside
+a fabric, or in a fabric topology but no participant, the linked BGP speakers,
+as without rule B17. Non-vacuity: without B17's three lines the fabric leaf is
+handed (), and the positive leg is red.
+
 Coverage limits (PBE-P2-8), stated rather than implied:
   1. The stub returns payloads in the shape continuation rider rev 11 §2
      records as MEASURED on `sonic-vm:202405` (`peers` keyed by peer IP with a
@@ -417,6 +426,84 @@ check("REQ-45C-24 _expected_peer_ips no longer claims to return DECLARED peers",
       "Peer IPs of the LINKED BGP speakers" in _eng_src
       and '"""Declared peer IPs for `node_name`, deterministic order.' not in _eng_src,
       "corrected in packet 4a; the linked/declared divergence IS REQ-45C-24")
+
+# --- REQ-45E-57 (§4.5-e addendum 01, rule B17; handover §15.2 row 57) --------
+# The engine's own `_expected_peer_ips`, AST-extracted with `_is_bgp_peer` and
+# `expected_bgp_peers` and bound with the names `cmd_test` binds (the pattern above).
+import yaml as _yaml  # noqa: E402
+import cassian_engine as _E  # noqa: E402
+import cassian_model as _M  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+
+_B17_LINES = (
+    "        for _fp_name, _fp_peer_ips in (_precheck_fabric_participants(topo) or ()):\n"
+    "            if _fp_name == node_name:\n"
+    "                return tuple(_fp_peer_ips)\n")
+
+
+def _engine_epi(topo, without_b17=False):
+    """The engine's `_expected_peer_ips` bound on `topo` as cmd_test binds it; with
+    without_b17, rule B17's three lines removed first. None unless each of the three
+    closures, and B17's lines, occur exactly once."""
+    src = _eng_src
+    if src.count(_B17_LINES) != 1:
+        return None
+    if without_b17:
+        src = src.replace(_B17_LINES, "", 1)
+    want = ("_is_bgp_peer", "expected_bgp_peers", "_expected_peer_ips")
+    found = {}
+    for nd in ast.walk(ast.parse(src)):
+        if isinstance(nd, ast.FunctionDef) and nd.name in want:
+            found.setdefault(nd.name, []).append(nd)
+    if sorted(found) != sorted(want) or any(len(v) != 1 for v in found.values()):
+        return None
+    nodes = [n for n in topo.get("nodes", []) if isinstance(n, dict)]
+    ns = {"NOS_PROVIDERS": _E.NOS_PROVIDERS, "nodes_by_name": {n["name"]: n for n in nodes},
+          "links_by_node": _M.build_node_links(topo), "topo": topo,
+          "_precheck_fabric_participants": _E._precheck_fabric_participants}
+    for w in want:
+        exec(compile(ast.Module(body=found[w], type_ignores=[]), "<engine>", "exec"), ns)
+    return ns["_expected_peer_ips"]
+
+
+_b17_fx = os.path.join(_ROOT, "tests", "fixtures", "sonic-4_5e-add01", "p7-sonic-leaf.yaml")
+with open(_b17_fx, encoding="utf-8") as _fh:
+    _b17_doc = _yaml.safe_load(_fh)
+_b17_topo = _yaml.safe_load(_yaml.safe_dump(_M.resolve_topology(_b17_doc, topo_path=_Path(_b17_fx)),
+                                            sort_keys=False))
+_b17_set = dict(_E._precheck_fabric_participants(_b17_topo) or [])
+_epi_new, _epi_old = _engine_epi(_b17_topo), _engine_epi(_b17_topo, without_b17=True)
+check("REQ-45E-57 the engine's _expected_peer_ips is found once, rule B17's lines in it once",
+      _epi_new is not None and _epi_old is not None)
+if _epi_new is not None and _epi_old is not None:
+    check("REQ-45E-57 a sonic-vm fabric participant (the P-7 fixture's leaf1) is handed its session-set peer IPs",
+          _epi_new("leaf1") == _b17_set.get("leaf1") == ("172.16.0.0",),
+          "got %s, session set %s" % (_epi_new("leaf1"), _b17_set.get("leaf1")))
+    _red = _epi_old("leaf1") == ()
+    if _red:
+        print("MUTATION-FAIL: without rule B17's lines the fabric leaf is handed the linked BGP speakers, ()")
+    check("REQ-45E-57 NV without rule B17's lines the fabric leaf is handed () (no fabric node declares asn), "
+          "so the leg above is red", _red, "got %s" % (_epi_old("leaf1"),))
+    _NF = {"name": "nf", "nodes": [
+        {"name": "s1", "type": "sonic-vm", "asn": 65001},
+        {"name": "s2", "type": "sonic-vm", "asn": 65002}],
+        "links": [{"endpoints": ["s1:eth1", "s2:eth1"],
+                   "ipv4": ["198.51.100.0/31", "198.51.100.1/31"]}]}
+    _nf_new, _nf_old = _engine_epi(_NF), _engine_epi(_NF, without_b17=True)
+    check("REQ-45E-57 a sonic-vm node outside a fabric keeps the linked BGP speakers, as without rule B17",
+          (_nf_new("s1"), _nf_new("s2")) == (_nf_old("s1"), _nf_old("s2"))
+          == (("198.51.100.1",), ("198.51.100.0",)),
+          "got %s %s" % ((_nf_new("s1"), _nf_new("s2")), (_nf_old("s1"), _nf_old("s2"))))
+    _MIX = _yaml.safe_load(_yaml.safe_dump(_b17_topo, sort_keys=False))
+    _MIX["nodes"] += [{"name": "s8", "type": "sonic-vm", "asn": 65008},
+                      {"name": "s9", "type": "sonic-vm", "asn": 65009}]
+    _MIX["links"] += [{"endpoints": ["s8:eth1", "s9:eth1"],
+                       "ipv4": ["198.51.100.8/31", "198.51.100.9/31"]}]
+    _mx_new, _mx_old = _engine_epi(_MIX), _engine_epi(_MIX, without_b17=True)
+    check("REQ-45E-57 in a fabric.evpn topology a sonic-vm node that is no participant keeps the linked "
+          "BGP speakers, as without rule B17",
+          _mx_new("s8") == _mx_old("s8") == ("198.51.100.9",) and _mx_new("leaf1") == ("172.16.0.0",),
+          "got %s %s %s" % (_mx_new("s8"), _mx_old("s8"), _mx_new("leaf1")))
 
 # --- Seam symbols the (VM) legs use, asserted LAB-FREE ----------------------
 # Rule 16: the (VM) path cannot run on the dev side, so a wrong symbol name
