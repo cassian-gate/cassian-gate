@@ -404,6 +404,14 @@ PF2_CASES = [
     ("N-24b", _drop(["devices", 0, "asn"]),
      ["devices[0]", "has a BGP session but no 'asn'"], False),
     ("N-24c", _n24c, ["devices[2]", "has a BGP session but no 'router_id'"], False),
+    # 46-S7-R2 under 46-S8-R4 (session-8 rulings note 2): a present site or
+    # cable end that is not a JSON object is rejected at exit 2.
+    ("46-S7-R2a", _set(["site"], "x"),
+     ["site: must be a JSON object with 'name' (got " + '"x"' + "). Correct the export"],
+     True),
+    ("46-S7-R2b", _set(["cables", 0, "a"], "leaf1:eth1"),
+     ["cables[0]: 'a' must be a JSON object with 'device' and 'interface' (got "
+      + '"leaf1:eth1"' + "). Correct the export"], True),
 ]
 
 
@@ -1246,6 +1254,17 @@ PF2_BUNDLE_CASES = [
     ("N-70b", _at(("ips", 0, "vrf"), {"description": "", "display": "mgmt", "id": 1,
                                       "name": "mgmt", "rd": None, "url": _NB}),
      ["the filter excluded the address 10.0.0.1/30", "VRF"], _CAB),
+    # 46-S8-R1 and 46-S8-R3 (session-8 rulings notes 1 and 2): an interface
+    # object (by its type field) that is null or absent is rejected at load.
+    ("46-S8-R1a", _at(("cables", 0, "a_terminations", 0, "object"), None),
+     ["object id", "'a_terminations[0].object' must be an object",
+      "Re-capture at the proven versions"], _CAB),
+    ("46-S8-R1b", _at(("ips", 0, "assigned_object"), None),
+     ["object id", "'assigned_object' must be an object",
+      "Re-capture at the proven versions"], _IPS),
+    ("46-S8-R3", _at(("cables", 0, "a_terminations", 0, "object"), _DROP),
+     ["object id", "'a_terminations[0].object' must be an object",
+      "Re-capture at the proven versions"], _CAB),
     # The shared path through the reader (R-n): N-n's needles, locator 'object id'.
     ("R-1", _at(("sessions", 0, "remote_address", "address"), "not-an-address"),
      ["object id", "not an IPv4 address"], _SES),

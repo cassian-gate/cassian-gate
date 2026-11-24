@@ -56,7 +56,8 @@ SUPPORTED_PLATFORMS = ("frr",)
 # Declaration -> invariant-type mapping. Each emitted type is a member of the
 # gate's recognized invariant set (cassian_model:2210) and is generated only
 # from an unambiguous declaration (REQ-414-INV-1, LD-5). Ambiguous or
-# unsupported declarations are omitted, never synthesized.
+# unsupported declarations are never synthesized: they are rejected at exit 2,
+# or excluded and named (§4.6).
 INVARIANT_ALLOWLIST = {
     "bgp_session": "bgp_session_up",   # session-up for a declared BGP peer
     "interface": "interface_state",    # interface-state for a declared interface
@@ -326,7 +327,9 @@ def _check_contract_keys(export: dict, loc: _ContractLocator) -> None:
     """Unknown-key strictness for the contract (§4.6 REQ-46-7, B-7; DC v2.1 §2).
     Objects are checked in file order, top level first; the first unknown key
     of an object, in sorted order, is reported. An entry that is not an object
-    is left to the build path's shipped type checks."""
+    is left to the build path's shipped type checks; a `site` or a cable end
+    present with a value that is not an object is rejected here (46-S7-R2,
+    46-S8-R4), and an absent one is left to the build path."""
 
     def check(where: tuple, obj, row: str) -> None:
         if not isinstance(obj, dict):
@@ -341,6 +344,12 @@ def _check_contract_keys(export: dict, loc: _ContractLocator) -> None:
             )
 
     check(loc.section("top level"), export, "top level")
+    if "site" in export and not isinstance(export["site"], dict):  # 46-S7-R2, 46-S8-R4
+        _reject(
+            loc.section("site"),
+            f"must be a JSON object with 'name' (got {_value_text(export, 'site')})",
+            "Correct the export",
+        )
     check(loc.section("site"), export.get("site"), "site")
     for key, row in (
         ("devices", "device"),
@@ -361,6 +370,13 @@ def _check_contract_keys(export: dict, loc: _ContractLocator) -> None:
             check(where, entry, row)
             if key == "cables" and isinstance(entry, dict):
                 for side in ("a", "b"):
+                    if side in entry and not isinstance(entry[side], dict):  # 46-S7-R2, 46-S8-R4
+                        _reject(
+                            loc.item("cables", i),
+                            f"'{side}' must be a JSON object with 'device' and "
+                            f"'interface' (got {_value_text(entry, side)})",
+                            "Correct the export",
+                        )
                     check(loc.cable_end(i, side), entry.get(side), "cable end")
 
 
@@ -1020,7 +1036,9 @@ def _dump_key_problem(obj: dict, row: str, path: str = ""):
     """The first key problem in ``obj`` against its row's two lists, and in
     each nested object the reader reads into (B-47): an unknown key (this
     object's keys in sorted order first, then its nested objects in key
-    order), or a nested value that is not an object. None if there is none."""
+    order), or a nested value that is not an object, or an interface object
+    (named by its type field) that is absent or null (46-S8-R1, 46-S8-R3).
+    None if there is none."""
     reads, knows = DUMP_KEY_LISTS[row]
     for key in sorted(obj):
         if key not in reads and key not in knows:
@@ -1030,9 +1048,14 @@ def _dump_key_problem(obj: dict, row: str, path: str = ""):
             )
     for key, sub in _DUMP_NESTED.get(row, ()):
         value = obj.get(key)
-        if value is None:
-            continue
         where = f"{path}{key}"
+        if value is None:
+            # 46-S8-R1, 46-S8-R3: an object whose type field names an interface
+            # must be present and an object; absent or null is rejected.
+            type_key = "object_type" if row == "termination" else "assigned_object_type"
+            if sub == "@interface" and obj.get(type_key) == DUMP_INTERFACE_TYPE:
+                return f"'{where}' must be an object"
+            continue
         if sub == "[termination]":
             if not isinstance(value, list) or not all(isinstance(t, dict) for t in value):
                 return f"'{where}' must be a list of termination objects"
