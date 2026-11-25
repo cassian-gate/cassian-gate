@@ -36,9 +36,17 @@ sonic-vm EVPN participant is handed its session-set peers in memory, that every
 other node is handed its own mapping, that an operator cannot supply the key,
 and that the engine's loop writes the fragment's record. A row-64 leg pins the
 guest-call sequence `provision` makes for the non-EVPN node s1 to the one
-measured at `9663477`. COVERAGE LIMIT (PBE-P2-8): the provider's own
-`provision` is not run on an EVPN participant here; its push, read-backs and
-session wait are rule B21's.
+measured at `9663477`.
+
+§4.5-e handover addendum 01, rule B21 (REQ-45E-65 to -71; §15.2 rows 65 to 71;
+rulings 45E-S11-R1 to -R3): the B21 legs at the end run the provider's own
+`provision` on the mapping the dispatch hands leaf1, against a recording
+stand-in guest, on the fake clock: the push and its argv, the first read-back,
+the session wait in both directions, the three failure texts of §6.6 rows U5
+to U7, one reconcile restart per call, and a second `provision`. COVERAGE LIMIT
+(PBE-P2-8): the stand-in's answers carry the shapes probe record 01 measured,
+but they are built here, not captured; the guest's own answers are the LIVE
+proof's (§15.2 rows 67 and 70).
 """
 import contextlib
 import inspect
@@ -692,6 +700,337 @@ _eleg("B18 to B21 REQ-45E-64 regression: for the non-EVPN sonic-vm node s1, prov
       "and makes the guest calls measured at 9663477, in order (sha256 65c71fa6, 7 calls)", _b64_sequence)
 _eleg("REQ-45E-64 NON-VACUITY: that comparison reads the same sequence with one guest call added as differing",
       _b64_sequence_nv)
+
+# §4.5-e handover addendum 01, rule B21 (REQ-45E-65 to -71; §15.2 rows 65 to 71; rulings 45E-S11-R1 to -R3): the
+# provider's own `provision` on leaf1, run on the mapping the engine's dispatch hands it (rule B18, above), against a
+# recording stand-in guest, on the fake clock. The stand-in's answers carry the shapes probe record 01 measured; they
+# are built here, never retyped captures: the EVPN summary keyed `peers` -> address -> `state` (§6.1, call [003]);
+# the neighbour read keyed by the address, with `neighborCapabilities.multiprotocolExtensions.l2VpnEvpn` an object
+# whose one key reads true (§6.3, call [028]; the probe's reader, batch C L62-L69), plus a second `l2VpnEvpn` object
+# under another capability (as batch C L568 shows one), which here reads negotiated so that a reader at the wrong
+# path is caught; and the `bgpd` running configuration with the block as §7 prints it. The RIB answer is the H1-b3
+# capture with leaf1's declared prefixes keyed onto one captured entry (derived, as the X legs derive theirs).
+_NL = chr(10)
+_PUSH_MEASURED = ["vtysh", "-c", "configure terminal", "-c", "router bgp 65100", "-c", "address-family l2vpn evpn",
+                  "-c", "neighbor 172.16.0.0 activate", "-c", "advertise-all-vni"]
+_READBACK_ARGV = ["vtysh", "-c", "show running-config bgpd"]
+_SUMMARY_JOINED = "vtysh -c show bgp l2vpn evpn summary json"
+_NBR_JOINED = "vtysh -c show bgp neighbors 172.16.0.0 json"
+_RUNNING_OK = _NL.join([
+    "!", "router bgp 65100", " neighbor 172.16.0.0 remote-as 65100",
+    " address-family ipv4 unicast", "  network 192.0.2.150/32", " exit-address-family",
+    " address-family l2vpn evpn", "  neighbor 172.16.0.0 activate", "  advertise-all-vni", " exit-address-family",
+    "exit", "!"]) + _NL
+_RUNNING_ONE_ABSENT = _RUNNING_OK.replace("  advertise-all-vni" + _NL, "")
+# The line present, but in another address-family block: a whole-file match would accept it (D23).
+_RUNNING_ELSEWHERE = _RUNNING_ONE_ABSENT.replace("  network 192.0.2.150/32" + _NL,
+                                                 "  network 192.0.2.150/32" + _NL + "  advertise-all-vni" + _NL)
+_REQ_U5_U6 = "required: report this with the guest's running configuration, then run cassian up again" + _NL
+_U5 = _NL.join(["ERROR: SONiC EVPN configuration push failed", "node: leaf1",
+                "reason: `vtysh` exited 1 while applying the EVPN lines",
+                "detail: the EVPN lines were not applied, so this node takes no part in the EVPN control plane"]) \
+    + _NL + _REQ_U5_U6
+_U6 = _NL.join(["ERROR: SONiC EVPN configuration is not in force", "node: leaf1",
+                "reason: 1 of 4 EVPN lines are absent from the running configuration after the push",
+                "detail: absent: advertise-all-vni"]) + _NL + _REQ_U5_U6
+_U6_ALL = ("reason: 4 of 4 EVPN lines are absent from the running configuration after the push" + _NL
+           + "detail: absent: router bgp 65100; address-family l2vpn evpn; neighbor 172.16.0.0 activate; "
+           + "advertise-all-vni" + _NL)
+_U7_DETAIL = ("detail: the EVPN lines are in force, but the EVPN family did not negotiate with these peers, so EVPN "
+              "checks on this node would read no routes from them" + _NL)
+_U7_REQUIRED = "required: check the peer's EVPN configuration for this node, then run cassian up again" + _NL
+_U7 = (_NL.join(["ERROR: SONiC EVPN session did not negotiate after the push", "node: leaf1",
+                 "reason: 172.16.0.0: Established, EVPN family advertised; after 30s (bound 30s)"]) + _NL
+       + _U7_DETAIL + _U7_REQUIRED)
+
+
+class _EvpnGuest(FakeRuntime):
+    """Recording stand-in guest for rule B21. `polls`: the peer's (state, capability key) at each EVPN summary
+    read, the last repeating; a state of None leaves the peer out of the summary."""
+
+    def __init__(self, rib, push_rc=0, running=_RUNNING_OK, polls=(("Established", "advertisedAndReceived"),)):
+        FakeRuntime.__init__(self, rib_script=[(0, rib)])
+        self.push_rc, self.running, self.polls, self.summaries = push_rc, running, list(polls), 0
+
+    def _poll(self):
+        return self.polls[min(max(self.summaries - 1, 0), len(self.polls) - 1)]
+
+    def exec(self, lab, node, argv, check=False, capture_output=True, interactive=False, timeout_s=None):
+        joined = " ".join(argv)
+        if list(argv[:3]) == ["vtysh", "-c", "configure terminal"]:
+            self.calls.append(list(argv))
+            return _CP(rc=self.push_rc)
+        if list(argv) == _READBACK_ARGV:
+            self.calls.append(list(argv))
+            return _CP(out=self.running)
+        if joined == _SUMMARY_JOINED:
+            self.calls.append(list(argv))
+            self.summaries += 1
+            state, _cap = self._poll()
+            peers = {} if state is None else {"172.16.0.0": {"hostname": "spine1", "state": state, "pfxRcd": 0}}
+            return _CP(out=json.dumps({"routerId": "192.0.2.150", "as": 65100, "peers": peers}))
+        if joined == _NBR_JOINED:
+            self.calls.append(list(argv))
+            state, cap = self._poll()
+            fams = {"ipv4Unicast": {"advertisedAndReceived": True}}
+            if cap:
+                fams["l2VpnEvpn"] = {cap: True}
+            return _CP(out=json.dumps({"172.16.0.0": {"bgpState": state or "Idle", "neighborCapabilities": {
+                "multiprotocolExtensions": fams,
+                "otherCapability": {"l2VpnEvpn": {"advertisedAndReceived": True}}}}}))
+        return FakeRuntime.exec(self, lab, node, argv, check, capture_output, interactive, timeout_s)
+
+
+def _leaf_handed():
+    return _evpn_run()[0].get("leaf1")
+
+
+def _leaf_rib():
+    if "rib" not in _cache:
+        overlay = S.gen_node_config(_leaf_handed(), _etopo(), _EFACTS)["config_db.json"]
+        one = _RIB_DOC["192.0.2.11/32"]
+        _cache["rib"] = json.dumps(dict(_RIB_DOC, **{p: one for p in S._declared_connected_prefixes(overlay)}))
+    return _cache["rib"]
+
+
+def _b21_run(guest, calls=1):
+    """`provision` leaf1 `calls` times on `guest`, on the fake clock: (exit code or None, stderr, clock)."""
+    def go():
+        for _ in range(calls):
+            S.provision(guest, "lab", "leaf1", _leaf_handed(), _etopo())
+    return _on_fake_clock(go)
+
+
+def _joined(guest):
+    return [" ".join(c) for c in guest.calls]
+
+
+def _bgp_starts(calls):
+    return [c for c in calls if "bgp" in c and any(w in c for w in ("start", "restart", "reload"))]
+
+
+def _b21_order():
+    g = _EvpnGuest(_leaf_rib())
+    code, err, _clk = _b21_run(g)
+    c, j = g.calls, _joined(g)
+    ok = (code is None and len(c) == 11 and c[3][:2] == ["sh", "-c"] and c[4][:3] == ["sudo", "config", "load"]
+          and tuple(c[5]) == S._BGP_RECONCILE_ARGV and j[6] == _RIB_JOINED and c[7] == _PUSH_MEASURED
+          and c[8] == _READBACK_ARGV and j[9] == _SUMMARY_JOINED and j[10] == _NBR_JOINED
+          and tuple(_READBACK_ARGV) == getattr(S, "_EVPN_RUNNING_CONFIG_ARGV", None))
+    return ok, "exit %r; calls %d; heads %s; stderr %r" % (code, len(c), [x[:3] for x in c], err[-200:])
+
+
+def _b21_order_nv():
+    g = _EvpnGuest(_leaf_rib())
+    _b21_run(g)
+    c = list(g.calls)
+    if len(c) != 11:
+        return False, "calls %d" % len(c)
+    swapped = c[:5] + [c[7], c[6], c[5]] + c[8:]
+    red = not (tuple(swapped[5]) == S._BGP_RECONCILE_ARGV and swapped[7] == _PUSH_MEASURED)
+    return red, "the order check reads the push before the restart as wrong: %s" % red
+
+
+def _b21_no_file():
+    g = _EvpnGuest(_leaf_rib())
+    code, _err, _clk = _b21_run(g)
+    writes = [c for c in g.calls if c[:2] == ["sh", "-c"]]
+    rule = S._sonic_exec_command_rule(list(_PUSH_MEASURED))
+    ok = (code is None and len(writes) == 1 and not any("advertise-all-vni" in " ".join(w) for w in writes)
+          and _PUSH_MEASURED in g.calls and rule[0] is False)
+    return ok, "writes %d; the operator's exec rule on the push: %r" % (len(writes), rule)
+
+
+def _b21_push_rc():
+    g = _EvpnGuest(_leaf_rib(), push_rc=1)
+    code, err, _clk = _b21_run(g)
+    after = g.calls[g.calls.index(_PUSH_MEASURED) + 1:] if _PUSH_MEASURED in g.calls else None
+    return code == 2 and _U5 in err and after == [], "exit %r; calls after the push %r; stderr %r" % (
+        code, after, err[-400:])
+
+
+def _b21_readback_absent():
+    g = _EvpnGuest(_leaf_rib(), running=_RUNNING_ONE_ABSENT)
+    code, err, _clk = _b21_run(g)
+    return code == 2 and _U6 in err and _SUMMARY_JOINED not in _joined(g), "exit %r; stderr %r" % (code, err[-400:])
+
+
+def _b21_readback_elsewhere():
+    g = _EvpnGuest(_leaf_rib(), running=_RUNNING_ELSEWHERE)
+    code, err, _clk = _b21_run(g)
+    return code == 2 and _U6 in err, "exit %r; stderr %r" % (code, err[-400:])
+
+
+def _b21_readback_elsewhere_nv():
+    red = "advertise-all-vni" in _RUNNING_ELSEWHERE and "advertise-all-vni" not in _RUNNING_ONE_ABSENT
+    return red, "a whole-file match finds the line in the decoy and not in the plain absence: %s" % red
+
+
+def _b21_readback_unanswered():
+    g = _EvpnGuest(_leaf_rib(), running="")
+    code, err, _clk = _b21_run(g)
+    return code == 2 and _U6_ALL in err, "exit %r; stderr %r" % (code, err[-400:])
+
+
+def _b21_wait_late():
+    g = _EvpnGuest(_leaf_rib(), polls=(("Idle", None), ("Established", "advertisedAndReceived")))
+    code, err, clk = _b21_run(g)
+    j = _joined(g)
+    ok = (code is None and j.count(_SUMMARY_JOINED) == 2 and j.count(_NBR_JOINED) == 1
+          and clk.sleeps == [S._CONVERGENCE_POLL_INTERVAL_S])
+    return ok, "exit %r; summaries %d; neighbour reads %d; sleeps %r" % (
+        code, j.count(_SUMMARY_JOINED), j.count(_NBR_JOINED), clk.sleeps)
+
+
+def _b21_wait_bound():
+    g = _EvpnGuest(_leaf_rib(), polls=(("Established", "advertised"),))
+    code, err, clk = _b21_run(g)
+    j = _joined(g)
+    ok = (code == 2 and _U7 in err and j.count(_SUMMARY_JOINED) == 31 and j.count(_NBR_JOINED) == 31
+          and clk.sleeps == [S._CONVERGENCE_POLL_INTERVAL_S] * 30)
+    return ok, "exit %r; summaries %d; sleeps %d; stderr %r" % (code, j.count(_SUMMARY_JOINED), len(clk.sleeps),
+                                                              err[-420:])
+
+
+def _b21_not_read():
+    g = _EvpnGuest(_leaf_rib(), polls=(("Idle", None),))
+    code, err, _clk = _b21_run(g)
+    line = "reason: 172.16.0.0: Idle, EVPN family not-read; after 30s (bound 30s)" + _NL
+    return (code == 2 and line in err and _NBR_JOINED not in _joined(g)), "exit %r; neighbour reads %d; %r" % (
+        code, _joined(g).count(_NBR_JOINED), err[-300:])
+
+
+def _b21_not_present():
+    g = _EvpnGuest(_leaf_rib(), polls=((None, None),))
+    code, err, _clk = _b21_run(g)
+    line = "reason: 172.16.0.0: not-present, EVPN family not-read; after 30s (bound 30s)" + _NL
+    return code == 2 and line in err, "exit %r; %r" % (code, err[-300:])
+
+
+def _b21_restarts():
+    seen = []
+    for kw in (dict(), dict(polls=(("Idle", None), ("Established", "advertisedAndReceived"))), dict(push_rc=1),
+               dict(running=_RUNNING_ONE_ABSENT), dict(polls=(("Established", "advertised"),))):
+        g = _EvpnGuest(_leaf_rib(), **kw)
+        _b21_run(g)
+        seen.append(_bgp_starts(g.calls) == [list(S._BGP_RECONCILE_ARGV)])
+    g = _EvpnGuest(_leaf_rib())
+    _b21_run(g, calls=2)
+    two = _bgp_starts(g.calls) == [list(S._BGP_RECONCILE_ARGV)] * 2
+    return all(seen) and two, "one restart per call, per leg: %r; two calls: %s" % (seen, two)
+
+
+def _b21_restarts_nv():
+    g = _EvpnGuest(_leaf_rib())
+    _b21_run(g)
+    added = g.calls + [list(S._BGP_RECONCILE_ARGV)]
+    red = _bgp_starts(g.calls) == [list(S._BGP_RECONCILE_ARGV)] and _bgp_starts(added) != [list(S._BGP_RECONCILE_ARGV)]
+    return red, "the count reads one added restart as a second start: %s" % red
+
+
+def _b21_second():
+    g = _EvpnGuest(_leaf_rib())
+    code, _err, _clk = _b21_run(g, calls=2)
+    c = g.calls
+    rs = [i for i, x in enumerate(c) if tuple(x) == S._BGP_RECONCILE_ARGV]
+    ps = [i for i, x in enumerate(c) if x == _PUSH_MEASURED]
+    bs = [i for i, x in enumerate(c) if x == _READBACK_ARGV]
+    ok = (code is None and len(rs) == len(ps) == len(bs) == 2 and rs[0] < ps[0] < bs[0] < rs[1] < ps[1] < bs[1])
+    return ok, "restarts %r; pushes %r; read-backs %r" % (rs, ps, bs)
+
+
+def _mutant(name, replacement, leg):
+    """Run `leg` with the provider's `name` replaced; the leg must go red."""
+    real = getattr(S, name, None)
+    if real is None:
+        return False, "the provider has no %s" % name
+    setattr(S, name, replacement)
+    try:
+        ok, detail = leg()
+    finally:
+        setattr(S, name, real)
+    return (not ok), detail
+
+
+def _every_peer_reads(rt_, lab, node, peer_ips):
+    _rc, raw = S._sonic_read(rt_, lab, node, S._EVPN_SUMMARY_ARGV)
+    caps = {ip: S._evpn_capability_value(S._sonic_read(rt_, lab, node, tuple(S._evpn_neighbor_argv(ip)))[1], ip)
+            for ip in peer_ips}
+    return S._peers_from_summary(raw), caps
+
+
+def _any_path_capability(raw, peer_ip):
+    def walk(o):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if k == "l2VpnEvpn" and isinstance(v, dict) and v.get("advertisedAndReceived") is True:
+                    return "advertisedAndReceived"
+                hit = walk(v)
+                if hit:
+                    return hit
+        return None
+    try:
+        return walk(json.loads(raw)) or "advertised"
+    except Exception:
+        return "absent"
+
+
+def _b21_not_read_nv():
+    red, detail = _mutant("_evpn_session_reads", _every_peer_reads, _b21_not_read)
+    if red:
+        print("MUTATION-FAIL: a wait that makes the neighbour read for a peer not Established -> the not-read leg "
+              "is red")
+    return red, detail
+
+
+def _b21_wait_removed_nv():
+    red, detail = _mutant("_await_evpn_sessions", lambda *a, **k: None, _b21_wait_bound)
+    if red:
+        print("MUTATION-FAIL: provision without the session wait -> the bound leg is red")
+    return red, detail
+
+
+def _b21_wrong_path_nv():
+    red, detail = _mutant("_evpn_capability_value", _any_path_capability, _b21_wait_bound)
+    if red:
+        print("MUTATION-FAIL: a capability reader at the wrong path reads the decoy as negotiated -> the bound leg "
+              "is red")
+    return red, detail
+
+
+_eleg("B21 REQ-45E-65 provision on leaf1: the mode assertion's reads, the staging write, config load, one reconcile "
+      "restart, the routing-daemon wait, then the push, the read-back, the summary and the neighbour read, in that "
+      "order; the push's argv is the measured form; the read-back's argv is row 67's, held once in the provider",
+      _b21_order)
+_eleg("B21 NON-VACUITY: that order check reads the push before the restart as wrong (predicate only)", _b21_order_nv)
+_eleg("B21 REQ-45E-65 NEGATIVE: no file is written for the fragment (one staging write, the overlay's), and the "
+      "operator's exec rule does not admit the push", _b21_no_file)
+_eleg("B21 REQ-45E-66, -69 the push returns 1: provision fails at once, exit 2, with U5 and 45E-S11-R3's detail, "
+      "and issues nothing after the push", _b21_push_rc)
+_eleg("B21 REQ-45E-67, -69 return code 0 and one fragment line absent: provision fails, exit 2, with U6 naming that "
+      "line, before any session read", _b21_readback_absent)
+_eleg("B21 REQ-45E-67 a fragment line present only in another address-family block counts absent (D23)",
+      _b21_readback_elsewhere)
+_eleg("B21 NON-VACUITY: a whole-file match finds that line, so the leg above tells the two apart (predicate only)",
+      _b21_readback_elsewhere_nv)
+_eleg("B21 REQ-45E-67 a read-back with no answer counts every line absent: U6, 4 of 4, each line named",
+      _b21_readback_unanswered)
+_eleg("B21 REQ-45E-68 the peer reads Idle, then Established with advertisedAndReceived: provision returns after that "
+      "poll (2 summaries, 1 neighbour read, 1 sleep)", _b21_wait_late)
+_eleg("B21 REQ-45E-68, -69 the peer stays Established with advertised: provision fails at the 30 s bound, exit 2, "
+      "with U7 naming the peer, its state, its value and the elapsed seconds (31 reads, 30 sleeps)", _b21_wait_bound)
+_eleg("B21 45E-S11-R1 a peer not Established gets no neighbour read, and U7 prints EVPN family not-read",
+      _b21_not_read)
+_eleg("B21 45E-S11-R2 a peer the summary does not list prints not-present", _b21_not_present)
+_eleg("B21 REQ-45E-70 across every leg, one _BGP_RECONCILE_ARGV per provision call and no other start of bgp",
+      _b21_restarts)
+_eleg("B21 NON-VACUITY: that count reads one added restart as a second start (predicate only)", _b21_restarts_nv)
+_eleg("B21 REQ-45E-71 a second provision on the same guest restarts, pushes and reads back again, in that order",
+      _b21_second)
+_eleg("B21 NON-VACUITY: a wait that reads the neighbour for a peer not Established fails the not-read leg",
+      _b21_not_read_nv)
+_eleg("B21 NON-VACUITY: provision without the session wait fails the bound leg", _b21_wait_removed_nv)
+_eleg("B21 NON-VACUITY: a capability reader at the wrong path fails the bound leg", _b21_wrong_path_nv)
 
 # --- report -----------------------------------------------------------------
 _failed = [c for c in _checks if not c[1]]

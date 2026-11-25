@@ -1403,6 +1403,201 @@ def _provision_preconfigured(rt: "Runtime", lab: str, node: str,
     return {"config_db.json": declared}
 
 
+# §4.5-e addendum 01, rule B21 (REQ-45E-65 to -71; rulings 45E-S11-R1 to -R3). After the routing-daemon wait,
+# `provision` pushes an EVPN participant's FRR fragment (rule B20) through `vtysh`, reads it back once, and waits,
+# bounded, until each session-set peer has negotiated the EVPN family. Single-sourced argv (PBE-P2-6): the proofs
+# import these rather than restating the commands. The forms are the ones probe record 01 measured: the push (§5,
+# call [039]), the `bgpd` running configuration (§7; SA2-O4), the EVPN summary (§6.1) and the neighbour read (§6.3).
+_EVPN_RUNNING_CONFIG_ARGV = ("vtysh", "-c", "show running-config bgpd")
+_EVPN_SUMMARY_ARGV = ("vtysh", "-c", "show bgp l2vpn evpn summary json")
+# The capability values a neighbour read can give (REQ-45E-84): the name of the one key that reads true under
+# `neighborCapabilities.multiprotocolExtensions.l2VpnEvpn`; `absent` when the read shows no EVPN family; and
+# `not-read` when no neighbour read was made (45E-S11-R1).
+_EVPN_CAPABILITY_VALUES = ("advertisedAndReceived", "advertised", "received")
+_EVPN_NEGOTIATED = "advertisedAndReceived"
+
+
+def _evpn_neighbor_argv(peer_ip: str) -> "list[str]":
+    """The neighbour read for one peer (REQ-45E-72): `show bgp neighbors <ip> json`."""
+    return ["vtysh", "-c", f"show bgp neighbors {peer_ip} json"]
+
+
+def _evpn_capability_value(raw: str, peer_ip: str) -> str:
+    """The EVPN capability value of one neighbour read (REQ-45E-84; 45E-S11-R1).
+
+    SHAPE, measured on the guest (probe record 01 §6.3, batch C call [028]; the probe's own reader, batch C
+    L62-L69): the read is an object keyed by the peer's address; under
+    `neighborCapabilities.multiprotocolExtensions` each address family is an object whose one key reads true --
+    `{"advertisedAndReceived": true}` for a negotiated family, `{"advertised": true}` when only this node sends it.
+    Read at that path only: the same read carries a second `l2VpnEvpn` object under another capability (batch C
+    L568), which is not the signal.
+
+    Returns that key's name, or `absent` when the read shows no EVPN family at that path, an unparseable read
+    included.
+
+    COVERAGE LIMIT (PBE-P2-8): the shape is FRR 8.5.4's on sonic-vm:202405 (D26). Another FRR may print another
+    shape; it would read `absent`, and the wait would fail loudly with U7 rather than pass.
+    """
+    try:
+        doc = json.loads((raw or "").strip())
+    except Exception:
+        return "absent"
+    entry = doc.get(peer_ip) if isinstance(doc, dict) else None
+    caps = entry.get("neighborCapabilities") if isinstance(entry, dict) else None
+    fams = caps.get("multiprotocolExtensions") if isinstance(caps, dict) else None
+    fam = fams.get("l2VpnEvpn") if isinstance(fams, dict) else None
+    if isinstance(fam, dict):
+        for value in _EVPN_CAPABILITY_VALUES:
+            if fam.get(value) is True:
+                return value
+    return "absent"
+
+
+def _evpn_session_reads(rt: "Runtime", lab: str, node: str,
+                        peer_ips: "list[str] | tuple[str, ...]") -> "tuple[dict[str, str], dict[str, str]]":
+    """REQ-45E-72's signal for each of `peer_ips` (45E-S11-R1): ({peer: FSM state}, {peer: capability value}).
+
+    One read of the EVPN summary first; then the neighbour read only for a peer that reads `Established`. A peer
+    with no neighbour read carries `not-read`. A peer the summary does not list has no entry in the first
+    mapping. This is the reader rule B23's session check reads the same signal with. STDOUT only (F-45C-C3-20).
+    """
+    _rc, raw = _sonic_read(rt, lab, node, _EVPN_SUMMARY_ARGV)
+    states = _peers_from_summary(raw)
+    caps: "dict[str, str]" = {}
+    for ip in peer_ips:
+        if states.get(ip) == "Established":
+            _rc, nraw = _sonic_read(rt, lab, node, tuple(_evpn_neighbor_argv(ip)))
+            caps[ip] = _evpn_capability_value(nraw, ip)
+        else:
+            caps[ip] = "not-read"
+    return states, caps
+
+
+def _push_evpn_fragment(rt: "Runtime", lab: str, node: str, lines: "list[str]") -> None:
+    """REQ-45E-65, -66: one `rt.exec` whose argv is `vtysh`, `-c`, `configure terminal`, then `-c` and one fragment
+    line for each line in order (probe record 01 §5, call [039]). Nothing is written to the guest's filesystem.
+    The push is the provider's own call: the operator's `exec` rule (`_sonic_exec_command_rule`) is unchanged and
+    does not admit it. A non-zero return code fails at once with U5.
+    """
+    argv = ["vtysh", "-c", "configure terminal"]
+    for line in lines:
+        argv += ["-c", line]
+    cp = rt.exec(lab, node, argv, check=False, capture_output=True)
+    rc = getattr(cp, "returncode", 1)
+    if rc != 0:
+        _fail(
+            "SONiC EVPN configuration push failed",
+            node,
+            f"`vtysh` exited {rc} while applying the EVPN lines",
+            "the EVPN lines were not applied, so this node takes no part in the EVPN control plane",
+            "report this with the guest's running configuration, then run cassian up again",
+        )
+
+
+def _absent_fragment_lines(running: str, lines: "list[str]") -> "list[str]":
+    """The fragment lines a `show running-config bgpd` read does not carry where they belong (REQ-45E-67; D23).
+
+    `lines` is the fragment REQ-45E-62 fixes: `router bgp <asn>`, `address-family l2vpn evpn`, then the lines
+    inside that block. Each is matched as a whole line, stripped of its indentation, inside its block -- never as
+    bytes or a position in the file. The block is the `address-family l2vpn evpn` lines of the top-level
+    `router bgp <asn>` block, as the guest prints them (probe record 01 §7: one space before `address-family`, two
+    before each line inside it, then ` exit-address-family`). A line elsewhere in the file does not count.
+
+    COVERAGE LIMIT (PBE-P2-8): this sees that a line is in the running configuration, not that FRR acted on it;
+    the session wait that follows is what sees the family negotiate.
+    """
+    head = lines[0] if len(lines) > 0 else None
+    family = lines[1] if len(lines) > 1 else None
+    in_router = in_family = found_head = found_family = False
+    block: "set[str]" = set()
+    for text in (running or "").splitlines():
+        stripped = text.strip()
+        if not text.startswith(" "):
+            in_router = stripped == head
+            found_head = found_head or in_router
+            in_family = False
+            continue
+        if not in_router:
+            continue
+        if not text.startswith("  "):
+            in_family = stripped == family
+            found_family = found_family or in_family
+            continue
+        if in_family:
+            block.add(stripped)
+    absent = []
+    for i, line in enumerate(lines):
+        if i == 0:
+            present = found_head
+        elif i == 1:
+            present = found_family
+        else:
+            present = found_family and line.strip() in block
+        if not present:
+            absent.append(line)
+    return absent
+
+
+def _read_back_evpn_fragment(rt: "Runtime", lab: str, node: str, lines: "list[str]") -> None:
+    """REQ-45E-67: the first read-back, straight after a push that returned 0. One read of
+    `_EVPN_RUNNING_CONFIG_ARGV`; every fragment line must be in its block (`_absent_fragment_lines`). Presence is
+    immediate, so nothing is polled (D24). If a line is absent, U6 names each absent line. A read with no answer
+    carries no line, so every line counts absent.
+    """
+    _rc, running = _sonic_read(rt, lab, node, _EVPN_RUNNING_CONFIG_ARGV)
+    absent = _absent_fragment_lines(running, lines)
+    if absent:
+        _fail(
+            "SONiC EVPN configuration is not in force",
+            node,
+            f"{len(absent)} of {len(lines)} EVPN lines are absent from the running configuration after the push",
+            "absent: " + "; ".join(absent),
+            "report this with the guest's running configuration, then run cassian up again",
+        )
+
+
+def _await_evpn_sessions(rt: "Runtime", lab: str, node: str, peer_ips: "list[str]",
+                         timeout: int = _ROUTING_DAEMON_WAIT_S) -> None:
+    """REQ-45E-68, -69: bounded wait, after the first read-back, until each session-set peer reads `Established`
+    in the EVPN summary and its neighbour read shows the EVPN family negotiated -- REQ-45E-72's signal, read as
+    `_evpn_session_reads` reads it (45E-S11-R1).
+
+    WHY THIS EXISTS. The push resets the BGP session to the activated peer: `Idle`, then `Established` about 3 s
+    later (probe record 01 §5; D30). A guest whose session never negotiates the family would otherwise leave
+    `up` clean while every EVPN read on it finds nothing.
+
+    BOUND: `timeout` seconds (`_ROUTING_DAEMON_WAIT_S`, 30 s), polled every `_CONVERGENCE_POLL_INTERVAL_S` (1 s);
+    at least one read is always issued. Nothing new is recorded at `up` (R.2 ruling 2). On the bound, U7 names
+    each peer not negotiated with its state (`not-present` when the summary does not list it), its capability
+    value, and the whole elapsed seconds (45E-S11-R2, -R3) -- never a hang, never silence (Doctrine 1.11).
+
+    COVERAGE LIMIT (PBE-P2-8): the wait sees each peer negotiate once. A loss after `up` returns is reported by the
+    next EVPN read on this node (U8, U11), not here.
+    """
+    want = [str(p) for p in peer_ips]
+    start = time.time()
+    deadline = start + max(int(timeout), 0)
+    while True:
+        states, caps = _evpn_session_reads(rt, lab, node, want)
+        pending = [ip for ip in want
+                   if not (states.get(ip) == "Established" and caps.get(ip) == _EVPN_NEGOTIATED)]
+        if not pending:
+            return
+        if time.time() >= deadline:
+            break
+        time.sleep(_CONVERGENCE_POLL_INTERVAL_S)
+    elapsed = int(time.time() - start)
+    _fail(
+        "SONiC EVPN session did not negotiate after the push",
+        node,
+        "; ".join(f"{ip}: {states.get(ip) or 'not-present'}, EVPN family {caps.get(ip, 'not-read')}"
+                  for ip in pending) + f"; after {elapsed}s (bound {max(int(timeout), 0)}s)",
+        "the EVPN lines are in force, but the EVPN family did not negotiate with these peers, so EVPN checks on "
+        "this node would read no routes from them",
+        "check the peer's EVPN configuration for this node, then run cassian up again",
+    )
+
+
 def provision(rt: "Runtime", lab: str, node: str, node_d: dict,
               topo: dict) -> "dict[str, Any] | None":
     """Probe, generate, supply, and return what was applied (R-C3-12/-14).
@@ -1505,6 +1700,19 @@ def provision(rt: "Runtime", lab: str, node: str, node_d: dict,
     # prefix this overlay declares, which the stock routes alone do not.
     _await_routing_daemon(rt, lab, node,
                           expected=_declared_connected_prefixes(overlay))
+
+    # §4.5-e addendum 01, rule B21 (REQ-45E-65 to -71; 45E-S11-R1 to -R3): an EVPN participant's mapping holds the
+    # fragment's entry (rule B20). Push it, read it back once, and wait for the node's session-set peers, which
+    # the engine handed it (rule B18). Every call does this, a second `provision` of a live guest included
+    # (REQ-45E-71). No start of `bgp` is added (REQ-45E-70): the push resets the session, it does not restart the
+    # unit. A mapping without the entry returns here as before (REQ-45E-64).
+    fragment = out.get(_FRR_EVPN_FRAGMENT_FILE)
+    if fragment is not None:
+        lines = [str(line) for line in (fragment.get("lines") or [])]
+        _push_evpn_fragment(rt, lab, node, lines)
+        _read_back_evpn_fragment(rt, lab, node, lines)
+        _await_evpn_sessions(rt, lab, node,
+                             [str(ip) for _peer, ip in (node_d.get(_EVPN_SESSION_PEERS_KEY) or [])])
 
     return out
 
