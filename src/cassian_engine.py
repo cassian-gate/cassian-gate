@@ -250,6 +250,15 @@ def _command_uses_workspace_labs(cmd: str) -> bool:
         "cleanup",
     }
 
+# §4.5-e addendum 01, rule B18 (REQ-45E-58): the in-memory key under which `_provision_nos_providers` hands a
+# sonic-vm EVPN participant its session-set peers, on a shallow copy of its node mapping. The SONiC provider
+# reads the same name (its `_EVPN_SESSION_PEERS_KEY`); tests/sonic_provision_supply_proof.py drives this
+# dispatch into the provider's own generation, so the two cannot drift apart unseen. The name carries "evpn",
+# so `validate` refuses it anywhere outside `fabric.evpn` (`_validate_fabric_evpn_presence_only`): an operator
+# cannot supply it.
+_EVPN_SESSION_PEERS_KEY = "_cassian_evpn_session_peers"
+
+
 def _provision_nos_providers(rt, lab_name: str, topo: dict) -> None:
     """Dispatch `nos_ready` and `provision` for every node whose provider wires them.
 
@@ -257,7 +266,13 @@ def _provision_nos_providers(rt, lab_name: str, topo: dict) -> None:
     unwired provider is never invoked and never fails loud for merely existing.
     A provider with `provision` deferred but `nos_ready` wired (FRR, S31-R10)
     is dispatched for `nos_ready` only.
+
+    §4.5-e addendum 01, rule B18 (REQ-45E-58; PBE-1b-9): the EVPN session set is derived once, before the
+    loop. A sonic-vm node that is one of its participants is handed its peers, as (name, IP) in the set's
+    order, on a shallow copy of its node mapping; every other node is handed its own mapping, as before.
+    Neither `n` nor `topo` is changed, so the key reaches no file.
     """
+    evpn_sessions = fabric_evpn_session_set(topo) or {}
     for n in topo.get("nodes", []) or []:
         if not isinstance(n, dict):
             continue
@@ -302,7 +317,11 @@ def _provision_nos_providers(rt, lab_name: str, topo: dict) -> None:
         if provision_deferred:
             continue
 
-        applied = prov.provision(rt, lab_name, name, n, topo)
+        node_d = n
+        if n.get("type") == "sonic-vm" and name in evpn_sessions:
+            node_d = dict(n)
+            node_d[_EVPN_SESSION_PEERS_KEY] = [(peer, ip) for peer, ip, _rr_client in evpn_sessions[name]]
+        applied = prov.provision(rt, lab_name, name, node_d, topo)
         if not applied:
             continue
         for fname, content in applied.items():

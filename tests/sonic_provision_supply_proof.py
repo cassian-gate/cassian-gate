@@ -26,6 +26,19 @@ from (`topologies/probe-sonic-bgp-pair.yaml`'s s1: loopback 192.0.2.11, link
 "stock-only" tables the X legs use are derived from that capture by removing
 keys, never retyped. `tests/sonic_status_collect_proof.py` (VM) is the second
 regression test.
+
+§4.5-e handover addendum 01, rules B18 to B20 (REQ-45E-58, -63, -64; §15.2 rows 58,
+63 and 64): the B18 and B20 legs at the end run the engine's own dispatch,
+`_provision_nos_providers`, on the resolved LD-1 topology of
+`tests/fixtures/sonic-4_5e-add01/p7-sonic-leaf.yaml`, with a recording provider
+whose `provision` returns the SONiC provider's own generation. They prove that a
+sonic-vm EVPN participant is handed its session-set peers in memory, that every
+other node is handed its own mapping, that an operator cannot supply the key,
+and that the engine's loop writes the fragment's record. A row-64 leg pins the
+guest-call sequence `provision` makes for the non-EVPN node s1 to the one
+measured at `9663477`. COVERAGE LIMIT (PBE-P2-8): the provider's own
+`provision` is not run on an EVPN participant here; its push, read-backs and
+session wait are rule B21's.
 """
 import contextlib
 import inspect
@@ -418,6 +431,267 @@ _leg("X6 S37-R9 with nothing declared, the first served table is ready (S29-R7's
 _leg("X7 S37-R9 provision returns once the declared prefixes are in the table", _x7_provision_late)
 _leg("X7 S37-R9 NON-VACUITY: provision on a guest whose table never carries them fails loud, exit 2",
      _x7_provision_never)
+
+# --- §4.5-e addendum 01: rules B18 to B20 (REQ-45E-58, -63, -64; §15.2 rows 58, 63 and 64) -------------------
+# The engine's dispatch, `_provision_nos_providers`, runs for real on the LD-1 topology of
+# tests/fixtures/sonic-4_5e-add01/p7-sonic-leaf.yaml (sonic-vm leaf1; FRR spine1, the route reflector; FRR leaf2),
+# resolved and read back as `cmd_up` reads topology.resolved.yaml. The registry holds one recording provider for
+# sonic-vm: its `provision` records the node mapping it is handed and returns the SONiC provider's own generation
+# for it, which the engine's loop writes. So the engine's key and the provider's are bound by behaviour. Every leg
+# is guarded by `_eleg`: on a tree without these rules, or on a loud exit, it records a FAIL, never a traceback.
+import copy  # noqa: E402
+import hashlib  # noqa: E402
+import shutil  # noqa: E402
+import tempfile  # noqa: E402
+import types  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+
+import yaml  # noqa: E402
+
+import cassian_common as C  # noqa: E402
+import cassian_engine as E  # noqa: E402
+import cassian_model as M  # noqa: E402
+
+_P7 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "sonic-4_5e-add01",
+                   "p7-sonic-leaf.yaml")
+_P7_DOC = yaml.safe_load(io.open(_P7, encoding="utf-8").read())
+_EFACTS = {"hwsku": "Force10-S6000", "port_order": S._SONIC_PORT_MAPS["Force10-S6000"]}
+_ELINES = ["router bgp 65100", "address-family l2vpn evpn", "neighbor 172.16.0.0 activate",
+           "advertise-all-vni"]
+_FRAG = os.path.join("lab", "leaf1", "frr_evpn_fragment.json")
+_CDB = os.path.join("lab", "leaf1", "config_db.json")
+_KEY = getattr(S, "_EVPN_SESSION_PEERS_KEY", None)
+_EVPN_TABLES = ("VLAN", "VXLAN_TUNNEL", "VXLAN_EVPN_NVO", "VXLAN_TUNNEL_MAP", "BGP_NEIGHBOR")
+_seen = []
+_cache = {}
+
+
+def _eleg(name, thunk):
+    try:
+        ok, detail = thunk()
+    except (Exception, SystemExit) as e:  # noqa: BLE001
+        ok, detail = False, "raised %r" % (e,)
+    check(name, ok, detail)
+
+
+def _etopo():
+    if "topo" not in _cache:
+        _cache["topo"] = yaml.safe_load(yaml.safe_dump(
+            M.resolve_topology(copy.deepcopy(_P7_DOC), topo_path=_Path(_P7)), sort_keys=False))
+        _cache["before"] = json.dumps(_cache["topo"], sort_keys=True)
+    return _cache["topo"]
+
+
+def _eleaf():
+    return next(n for n in _etopo()["nodes"] if n.get("name") == "leaf1")
+
+
+def _rec_provision(rt_, lab, name, node_d, topo):
+    _seen.append((name, node_d))
+    return S.gen_node_config(node_d, topo, _EFACTS)
+
+
+_REC = types.SimpleNamespace(node_type="sonic-vm", runtime_requirement="vm",
+                             nos_ready=lambda rt_, lab, node: None, provision=_rec_provision)
+
+
+def _dispatch(topo, fn=None):
+    """Run the engine's dispatch (or `fn`, a mutant of it) with the recording provider. Returns
+    ({node: the mapping handed to provision}, {path under the run directory: bytes written})."""
+    del _seen[:]
+    tmp = tempfile.mkdtemp(prefix="prov-b18-")
+    real = (E.NOS_PROVIDERS, E.verify_sonic_vm_ready, E.node_cfg_dir)
+    try:
+        E.NOS_PROVIDERS = {"sonic-vm": _REC}
+        E.verify_sonic_vm_ready = lambda rt_, lab, node: None
+        E.node_cfg_dir = lambda lab, node: _Path(tmp) / lab / node
+        (fn or E._provision_nos_providers)(FakeRuntime(), "lab", topo)
+        written = {}
+        for top, _dirs, files in os.walk(tmp):
+            for f in files:
+                p = os.path.join(top, f)
+                written[os.path.relpath(p, tmp)] = io.open(p, "rb").read()
+        return dict(_seen), written
+    finally:
+        E.NOS_PROVIDERS, E.verify_sonic_vm_ready, E.node_cfg_dir = real
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _evpn_run():
+    if "run" not in _cache:
+        _cache["run"] = _dispatch(_etopo())
+    return _cache["run"]
+
+
+def _canonical_bytes(obj):
+    tmp = tempfile.mkdtemp(prefix="prov-canon-")
+    try:
+        p = _Path(tmp) / "x.json"
+        write_json_canonical(p, obj)
+        return p.read_bytes()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _handed_peers(handed):
+    got = handed.get("leaf1")
+    return got.get(_KEY) if isinstance(got, dict) and _KEY is not None else None
+
+
+def _b18_positive():
+    handed, _w = _evpn_run()
+    peers = _handed_peers(handed)
+    return peers == [("spine1", "172.16.0.0")], "leaf1 handed %r" % (peers,)
+
+
+def _b18_set():
+    sset = M.fabric_evpn_session_set(_etopo()) or {}
+    mine = [(p, ip) for p, ip, _rr in sset.get("leaf1", [])]
+    return mine == _handed_peers(_evpn_run()[0]) == [("spine1", "172.16.0.0")], "set %r" % (sset.get("leaf1"),)
+
+
+def _b18_copy():
+    handed, _w = _evpn_run()
+    got, own = handed.get("leaf1"), _eleaf()
+    _h, written = _evpn_run()
+    ok = (isinstance(got, dict) and got is not own and _KEY is not None and _KEY not in own
+          and {k: v for k, v in got.items() if k != _KEY} == own
+          and json.dumps(_etopo(), sort_keys=True) == _cache["before"]
+          and bool(written) and not any(_KEY.encode("utf-8") in b for b in written.values()))
+    return ok, "copy %s; leaf1's own keys %s; files written %d" % (got is not own, sorted(own), len(written))
+
+
+def _b18_other():
+    handed, _w = _dispatch(TOPO)
+    return handed.get("s1") is NODE and (_KEY or "") not in NODE, "s1 handed its own mapping: %s" % (
+        handed.get("s1") is NODE,)
+
+
+def _b18_mutant():
+    src = inspect.getsource(E._provision_nos_providers)
+    line = "applied = prov.provision(rt, lab_name, name, node_d, topo)"
+    if src.count(line) != 1:
+        return False, "B18's hand-over line found %d times" % src.count(line)
+    ns = {}
+    exec(compile(src.replace(line, "applied = prov.provision(rt, lab_name, name, n, topo)"),
+                 "<b18-mutant>", "exec"), E.__dict__, ns)
+    handed, written = _dispatch(_etopo(), fn=ns["_provision_nos_providers"])
+    red = _handed_peers(handed) is None and _FRAG not in written and _CDB in written
+    if red:
+        print("MUTATION-FAIL: the engine's dispatch without rule B18's hand-over -> leaf1 is handed no peers "
+              "and no fragment is written")
+    return red, "mutant: leaf1 handed %r; written %s" % (_handed_peers(handed), sorted(written))
+
+
+def _b20_written():
+    _h, written = _evpn_run()
+    frag = written.get(_FRAG)
+    return (frag == _canonical_bytes({"lines": _ELINES}) and sorted(written) == sorted([_CDB, _FRAG])), \
+        "written %s; fragment %r" % (sorted(written), (frag or b"")[:160])
+
+
+def _b20_only_provider():
+    src_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src")
+    names = sorted(f for f in os.listdir(src_dir) if f.endswith(".py")
+                   and "frr_evpn_fragment.json" in io.open(os.path.join(src_dir, f), encoding="utf-8").read())
+    return names == ["cassian_nos_sonic.py"], "src/ files naming it: %s" % names
+
+
+def _no_evpn(out):
+    ov = (out or {}).get("config_db.json") or {}
+    return (list(out or {}) == ["config_db.json"] and not any(t in ov for t in _EVPN_TABLES)
+            and "bgp_asn" not in ov.get("DEVICE_METADATA", {}).get("localhost", {}))
+
+
+def _b18_negative():
+    out = S.gen_node_config(_eleaf(), _etopo(), _EFACTS)
+    return _no_evpn(out), "entries %s; tables %s" % (list(out), sorted(out.get("config_db.json", {})))
+
+
+def _b18_negative_nv():
+    # A provider that derived the peers from the links would render them without being handed any.
+    leaf = dict(_eleaf())
+    leaf[_KEY] = [(p, ips[1]) for p, ips in sorted(S._bgp_link_ips_for_node("leaf1", _etopo()).items())]
+    red = not _no_evpn(S.gen_node_config(leaf, _etopo(), _EFACTS))
+    if red:
+        print("MUTATION-FAIL: a provider deriving its peers from the links -> the negative leg is red")
+    return red, "links give %r" % (leaf[_KEY],)
+
+
+def _validate(doc):
+    real = C._QUIET_DIE
+    C._QUIET_DIE = True
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            M.ensure_valid_topology(doc)
+        return None
+    except SystemExit as e:
+        return str(e.code)
+    finally:
+        C._QUIET_DIE = real
+
+
+def _b18_unsuppliable():
+    doc = copy.deepcopy(_P7_DOC)
+    next(n for n in doc["nodes"] if n["name"] == "leaf1")[_KEY] = [["spine1", "172.16.0.0"]]
+    ctl, msg = _validate(copy.deepcopy(_P7_DOC)), _validate(doc)
+    return ctl is None and msg is not None and str(_KEY) in msg, "control %r; with the key %r" % (ctl, msg)
+
+
+_eleg("B18 REQ-45E-58 the engine hands sonic-vm leaf1 its session-set peers, (name, IP) in the set's order",
+      _b18_positive)
+_eleg("B18 REQ-45E-58 those peers are the model's session set for leaf1 (PBE-1b-9: derived once, in the model)",
+      _b18_set)
+_eleg("B18 REQ-45E-58 the mapping handed over is a copy: leaf1's own mapping and the topology are unchanged, and "
+      "no file the dispatch writes holds the key", _b18_copy)
+_eleg("B18 REQ-45E-58 any other node is handed its own mapping, exactly as before", _b18_other)
+_eleg("B18 NON-VACUITY: the engine's dispatch with rule B18's hand-over reverted hands leaf1 no peers and writes "
+      "no fragment", _b18_mutant)
+_eleg("B18 REQ-45E-58 an operator cannot supply the key: validate refuses it on a node and names it; the same "
+      "topology without it validates", _b18_unsuppliable)
+_eleg("B18 REQ-45E-58 NEGATIVE: leaf1's mapping without the peers, in the same EVPN topology, renders no fragment "
+      "and no EVPN table", _b18_negative)
+_eleg("B18 NON-VACUITY: a provider deriving the peers from the links fails that negative leg", _b18_negative_nv)
+_eleg("B20 REQ-45E-63 the engine's loop writes frr_evpn_fragment.json for leaf1 beside config_db.json, byte-equal "
+      "to write_json_canonical of {\"lines\": [...]}, and nothing else", _b20_written)
+_eleg("B20 REQ-45E-63 NEGATIVE: in src/ only the SONiC provider names frr_evpn_fragment.json", _b20_only_provider)
+
+# §15.2 row 64 (REQ-45E-64): the guest calls `provision` makes for the non-EVPN sonic-vm node s1, in order, as at
+# `9663477`. Pinned, never recomputed: patch/45e-s10/measure-seq.py ran this file's own fake against the trees at
+# 9663477 and 92ad60f (both with cassian_nos_sonic.py at 7c518f0d, the handover's §14.1 digest at 9663477),
+# twice each, on 2026-11-25, and measured this sha256 of the sequence's JSON (sort_keys) and this count: the mode
+# read, the hwsku read, the PORT read, the staging write, `config load`, the BGP restart, the RIB read.
+_SEQ_AT_9663477 = ("65c71fa62949193e346ef9d40eb200b238edd45002e8afb521f2b2825e3ef843", 7)
+
+
+def _seq_digest(calls):
+    return hashlib.sha256(json.dumps(calls, sort_keys=True).encode("utf-8")).hexdigest(), len(calls)
+
+
+def _s1_sequence():
+    rt_ = FakeRuntime()
+    out = S.provision(rt_, "lab", "s1", NODE, TOPO)
+    return rt_.calls, out
+
+
+def _b64_sequence():
+    calls, out = _s1_sequence()
+    got = _seq_digest(calls)
+    return (got == _SEQ_AT_9663477 and list(out) == ["config_db.json"]), "sequence %s; heads %s; mapping %s" % (
+        got, [c[:2] for c in calls], list(out))
+
+
+def _b64_sequence_nv():
+    calls, _out = _s1_sequence()
+    added = calls + [["vtysh", "-c", "configure terminal"]]
+    return (_seq_digest(calls) == _SEQ_AT_9663477 and _seq_digest(added) != _SEQ_AT_9663477), \
+        "with one call added: %s" % (_seq_digest(added),)
+
+
+_eleg("B18 to B21 REQ-45E-64 regression: for the non-EVPN sonic-vm node s1, provision returns config_db.json only "
+      "and makes the guest calls measured at 9663477, in order (sha256 65c71fa6, 7 calls)", _b64_sequence)
+_eleg("REQ-45E-64 NON-VACUITY: that comparison reads the same sequence with one guest call added as differing",
+      _b64_sequence_nv)
 
 # --- report -----------------------------------------------------------------
 _failed = [c for c in _checks if not c[1]]

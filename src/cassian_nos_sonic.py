@@ -358,12 +358,29 @@ def _bgp_link_ips_for_node(node_name: str, topo: dict) -> dict[str, tuple[str, s
     return out
 
 
+# §4.5-e addendum 01, rules B18 to B20 (REQ-45E-58 to -63; rulings 45E-S10-R1 and -R2).
+# The engine hands a sonic-vm EVPN participant its session-set peers under this key, on a shallow copy of its
+# node mapping, in memory only (the engine's `_EVPN_SESSION_PEERS_KEY`; this provider imports neither the engine
+# nor the model, so the name is held twice and tests/sonic_provision_supply_proof.py binds the two by behaviour).
+_EVPN_SESSION_PEERS_KEY = "_cassian_evpn_session_peers"
+# Cassian's tunnel name, defined once (rider R-1, S2-11): rule B19 generates with it, and SONiC's EVPN
+# convergence leg (rule B29) reads it. 8 characters, so the guest's kernel device `cassvtep-<VLAN id>` fits 15.
+_CASSIAN_VTEP_NAME = "cassvtep"
+# The NVO entry's name: the literal probe record 01 measured (45E-S10-R1).
+_CASSIAN_EVPN_NVO_NAME = "nvo1"
+# The fragment's record in the node's configuration directory (REQ-45E-63; LD-2): one key, `lines`.
+_FRR_EVPN_FRAGMENT_FILE = "frr_evpn_fragment.json"
+
+
 def gen_node_config(
     node: dict, topo: dict, facts: "Mapping[str, Any] | None" = None
 ) -> "dict[str, Any] | None":
     """Generate the SONiC `config_db.json` OVERLAY for one node (LD-45C-2).
 
-    Returns {"config_db.json": <overlay>} -- a filename -> content mapping.
+    Returns {"config_db.json": <overlay>} -- a filename -> content mapping. For a
+    sonic-vm EVPN participant, whose node mapping carries the session-set peers
+    (rule B18), the mapping holds a second entry, `frr_evpn_fragment.json`: the
+    fragment's record (rules B19 and B20; `_render_evpn_participant`).
     WRITES NOTHING: core serializes through `write_json_canonical`
     (REQ-45C-20/-42; design §:254).
 
@@ -422,6 +439,16 @@ def gen_node_config(
             f"Loopback0|{rid}/32": {},
         }
 
+    # §4.5-e addendum 01, rules B19 and B20 (REQ-45E-59 to -62): a node mapping that
+    # carries the session-set peers is a sonic-vm EVPN participant. Its BGP render is
+    # the fabric's, as `gen_frr_conf` renders an FRR participant (cassian_model.py
+    # L1804-L1814): its own `asn` and `bgp.neighbors`, if declared, are not rendered.
+    # Without the peers key the render below is unchanged.
+    if _EVPN_SESSION_PEERS_KEY in node:
+        fragment = _render_evpn_participant(overlay, node, name, rid, topo)
+        _assert_overlay_platform_clean(overlay, name)
+        return {"config_db.json": overlay, _FRR_EVPN_FRAGMENT_FILE: {"lines": fragment}}
+
     # REQ-45C-2 core: declared `asn` and `bgp.neighbors` render here. The
     # targets are MEASURED on sonic-vm:202405 build fecd4ec81 -- `BGP_GLOBALS`
     # does not exist on this image; the ASN lives in
@@ -474,6 +501,92 @@ def gen_node_config(
 
     _assert_overlay_platform_clean(overlay, name)
     return {"config_db.json": overlay}
+
+
+def _render_evpn_participant(overlay: dict, node: dict, name: str, rid: str,
+                             topo: dict) -> "list[str]":
+    """Rules B19 and B20 for one sonic-vm EVPN participant (REQ-45E-59 to -62).
+
+    Adds to `overlay`, in place: the fabric's ASN as `bgp_asn`; one `BGP_NEIGHBOR`
+    entry per session-set peer, in the shape the declared render authors (`asn`,
+    `local_addr`, `name`); one `VLAN` entry `Vlan<id>` and one `VXLAN_TUNNEL_MAP`
+    entry `cassvtep|map_<vni>_Vlan<id>` (45E-S10-R2) per VLAN the resolved
+    `fabric.evpn` declares, in VLAN order; the `VXLAN_TUNNEL` entry `cassvtep` with
+    the node's router_id as `src_ip`; and the `VXLAN_EVPN_NVO` entry `nvo1` naming
+    that tunnel (45E-S10-R1). No mode key, no platform key, no `INTERFACE` entry.
+
+    Returns the fragment (REQ-45E-62): `router bgp <asn>`, `address-family l2vpn
+    evpn`, one `neighbor <ip> activate` per peer in the order received, then
+    `advertise-all-vni`, and no other line. The peers are the engine's (rule B18);
+    the links are read only for this node's own address toward a peer it was
+    handed, never to decide a peer. A pure function of its arguments (D21).
+    """
+    fabric = topo.get("fabric") if isinstance(topo.get("fabric"), dict) else {}
+    evpn = fabric.get("evpn") if isinstance(fabric.get("evpn"), dict) else {}
+    try:
+        asn_text = str(int(evpn.get("asn")))
+    except (TypeError, ValueError):
+        asn_text = ""
+    vlans = evpn.get("vlans")
+    vlan_vnis: list[tuple[int, int]] = []
+    if isinstance(vlans, dict):
+        try:
+            vlan_vnis = sorted((int(str(k)), int(v["vni"])) for k, v in vlans.items())
+        except (TypeError, ValueError, KeyError):
+            vlan_vnis = []
+    if not asn_text or not vlan_vnis:
+        _fail(
+            "SONiC EVPN generation requires the resolved fabric.evpn",
+            name,
+            "the topology handed to generation carries no fabric.evpn asn or no vlans",
+            "an EVPN participant's tables and fragment are rendered from the resolved "
+            "fabric.evpn that `up` reads from topology.resolved.yaml; this is a "
+            "generation defect",
+            "report this with the topology that produced it",
+        )
+    if not rid:
+        _fail(
+            "SONiC EVPN generation requires a router_id",
+            name,
+            "this EVPN participant has no router_id",
+            "the VXLAN tunnel's source address is the node's router_id (REQ-45E-60), "
+            "and validate requires one for every EVPN participant; this is a "
+            "generation defect",
+            "report this with the topology that produced it",
+        )
+    link_ips = _bgp_link_ips_for_node(name, topo)
+    neighbors: dict[str, dict] = {}
+    activate: list[str] = []
+    for entry in node.get(_EVPN_SESSION_PEERS_KEY) or []:
+        pair = tuple(entry) if isinstance(entry, (list, tuple)) else ()
+        peer_name, peer_ip = (str(pair[0]), str(pair[1])) if len(pair) == 2 else ("", "")
+        local = link_ips.get(peer_name)
+        if local is None or local[1] != peer_ip:
+            _fail(
+                "SONiC EVPN generation found a session peer with no matching link",
+                name,
+                f"session-set peer {peer_name!r} at {peer_ip!r} has no link from "
+                "this node with that address",
+                "the session set and the declared links must agree; generation "
+                "never guesses a neighbour's local address; this is a generation "
+                "defect",
+                "report this with the topology that produced it",
+            )
+        neighbors[peer_ip] = {"asn": asn_text, "local_addr": local[0], "name": peer_name}
+        activate.append(f"neighbor {peer_ip} activate")
+    overlay["DEVICE_METADATA"]["localhost"]["bgp_asn"] = asn_text
+    overlay["BGP_NEIGHBOR"] = neighbors
+    vlan_table: dict[str, dict] = {}
+    tunnel_map: dict[str, dict] = {}
+    for vlan_id, vni in vlan_vnis:
+        vlan_name = f"Vlan{vlan_id}"
+        vlan_table[vlan_name] = {"vlanid": str(vlan_id)}
+        tunnel_map[f"{_CASSIAN_VTEP_NAME}|map_{vni}_{vlan_name}"] = {"vlan": vlan_name, "vni": str(vni)}
+    overlay["VLAN"] = vlan_table
+    overlay["VXLAN_TUNNEL"] = {_CASSIAN_VTEP_NAME: {"src_ip": rid}}
+    overlay["VXLAN_EVPN_NVO"] = {_CASSIAN_EVPN_NVO_NAME: {"source_vtep": _CASSIAN_VTEP_NAME}}
+    overlay["VXLAN_TUNNEL_MAP"] = tunnel_map
+    return [f"router bgp {asn_text}", "address-family l2vpn evpn", *activate, "advertise-all-vni"]
 
 
 def _assert_overlay_platform_clean(overlay: dict, node: str) -> None:
