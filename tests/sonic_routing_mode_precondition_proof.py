@@ -19,7 +19,8 @@ WHAT THIS COVERS -- §15.2's four REQ-45C-44 rows, and which are NOT here:
                         persisted declaration, same boot
                         -> LEG 7, under `req44pos` (LD-45C-R35 R1)
 
-THREE MODES. With no argv the six lab-free legs run and both (VM) legs
+THREE MODES. With no argv the lab-free legs (LEG 1 to 6, and LEG 6b of §4.5-e
+addendum 01) run and both (VM) legs
 report BLOCKED; `req44pos <topo> <lab>` additionally runs LEG 7 and
 `req44neg <topo> <lab>` LEG 8, each against a real guest. The lab-free
 legs replay their guest read through a fake runtime, so they prove the
@@ -176,6 +177,71 @@ mod_src = open(os.path.join(root, "src", "cassian_nos_sonic.py"),
 check("leaf-import constraint: provider does not import cassian_model",
       "import cassian_model" not in mod_src
       and "from cassian_model" not in mod_src)
+
+# --- LEG 6b: §4.5-e addendum 01 (§15.2 row 61; SA2-P7; REQ-45E-61) ---------------
+# An EVPN participant -- leaf1 of tests/fixtures/sonic-4_5e-add01/p7-sonic-leaf.yaml,
+# resolved, handed the peers the engine hands it (rule B18) -- generates no mode key
+# and no platform key, and a guest seeded with a mode key is refused before any
+# probe, generation or supply. The legs above are unedited: one leg per participant
+# class.
+import json  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+
+import yaml  # noqa: E402
+
+import cassian_model as M  # noqa: E402
+
+
+def _leg6b_inputs():
+    p7 = os.path.join(root, "tests", "fixtures", "sonic-4_5e-add01", "p7-sonic-leaf.yaml")
+    with open(p7, encoding="utf-8") as fh:
+        doc = yaml.safe_load(fh)
+    topo = yaml.safe_load(yaml.safe_dump(M.resolve_topology(doc, topo_path=_Path(p7)), sort_keys=False))
+    part = dict(next(n for n in topo["nodes"] if n.get("name") == "leaf1"))
+    part[getattr(S, "_EVPN_SESSION_PEERS_KEY", None)] = [
+        (p, ip) for p, ip, _rr in M.fabric_evpn_session_set(topo)["leaf1"]]
+    return topo, part
+
+
+def _mode_clean(ov):
+    loc = ov.get("DEVICE_METADATA", {}).get("localhost", {})
+    return ("PORT" not in ov and not any(k in loc for k in ("hwsku", "platform", "mac"))
+            and not any(k in json.dumps(ov, sort_keys=True) for k in S._FORBIDDEN_MODE_KEYS))
+
+
+try:
+    _etopo, _part = _leg6b_inputs()
+    _eout = S.gen_node_config(_part, _etopo, {"hwsku": "Force10-S6000",
+                                              "port_order": S._SONIC_PORT_MAPS["Force10-S6000"]})
+    _eov = _eout.get("config_db.json", {})
+    _ok = "frr_evpn_fragment.json" in _eout and _mode_clean(_eov)
+    _detail = "entries %s; localhost keys %s" % (
+        list(_eout), sorted(_eov.get("DEVICE_METADATA", {}).get("localhost", {})))
+except (Exception, SystemExit) as _exc:  # noqa: BLE001
+    _ok, _detail = False, "raised %r" % (_exc,)
+check("REQ-45E-61 an EVPN participant's generation holds no mode key and no platform key", _ok, _detail)
+
+try:
+    _mut = json.loads(json.dumps(_eov))
+    _mut.setdefault("DEVICE_METADATA", {}).setdefault("localhost", {})[S._FORBIDDEN_MODE_KEYS[0]] = "unified"
+    _ok, _detail = (not _mode_clean(_mut)), "seeded %s" % S._FORBIDDEN_MODE_KEYS[0]
+except (Exception, SystemExit) as _exc:  # noqa: BLE001
+    _ok, _detail = False, "raised %r" % (_exc,)
+check("LEG 6b NON-VACUITY: the same predicate reads an overlay seeded with a mode key as failing", _ok, _detail)
+
+try:
+    rt = _FakeRuntime(_seeded("docker_routing_config_mode", "unified"))
+    code = None
+    try:
+        S.provision(rt, "lab", "leaf1", _part, _etopo)
+    except SystemExit as exc:
+        code = exc.code
+    _ok = code == 2 and [tuple(c) for c in rt.calls] == [S._DEVICE_METADATA_ARGV]
+    _detail = "exit=%r calls=%r" % (code, rt.calls)
+except (Exception, SystemExit) as _exc:  # noqa: BLE001
+    _ok, _detail = False, "raised %r" % (_exc,)
+check("REQ-45E-61 a guest seeded with a mode key is refused before generation for an EVPN participant: "
+      "exit 2, after one guest read, the mode read", _ok, _detail)
 
 # --- LEG 7: the (VM) leg ------------------------------------------------------
 

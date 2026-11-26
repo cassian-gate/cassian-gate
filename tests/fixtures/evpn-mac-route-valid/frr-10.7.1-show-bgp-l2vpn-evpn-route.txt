@@ -1,0 +1,52 @@
+BGP table version is 4, local router ID is 10.255.0.12
+Status codes:  s suppressed, d damped, h history, u unsorted, * valid, > best, = multipath,
+               i internal, r RIB-failure, S Stale, R Removed
+Origin codes:  i - IGP, e - EGP, ? - incomplete
+EVPN type-1 prefix: [1]:[EthTag]:[ESI]:[IPlen]:[VTEP-IP]:[Frag-id]
+EVPN type-2 prefix: [2]:[EthTag]:[MAClen]:[MAC]:[IPlen]:[IP]
+EVPN type-3 prefix: [3]:[EthTag]:[IPlen]:[OrigIP]
+EVPN type-4 prefix: [4]:[ESI]:[IPlen]:[OrigIP]
+EVPN type-5 prefix: [5]:[EthTag]:[IPlen]:[IP]
+
+   Network          Next Hop            Metric LocPrf Weight Path
+                    Extended Community
+Route Distinguisher: 10.255.0.11:2
+ *>i [2]:[0]:[48]:[00:11:22:33:44:55] RD 10.255.0.11:2
+                    10.255.0.11                   100      0 i
+                    RT:65100:10100 ET:8
+   i [2]:[0]:[48]:[00:11:22:33:44:55] RD 10.255.0.11:2
+                    192.0.2.254                   100      0 i
+                    RT:65100:10100 ET:8
+ *>i [2]:[0]:[48]:[00:11:22:33:44:55]:[32]:[10.10.10.11] RD 10.255.0.11:2
+                    10.255.0.11                   100      0 i
+                    RT:65100:10100 ET:8
+   i [2]:[0]:[48]:[00:11:22:33:44:55]:[32]:[10.10.10.11] RD 10.255.0.11:2
+                    192.0.2.254                   100      0 i
+                    RT:65100:10100 ET:8
+ *>i [2]:[0]:[48]:[aa:c1:ab:82:f1:d8]:[128]:[fe80::a8c1:abff:fe82:f1d8] RD 10.255.0.11:2
+                    10.255.0.11                   100      0 i
+                    RT:65100:10100 ET:8
+   i [2]:[0]:[48]:[aa:c1:ab:82:f1:d8]:[128]:[fe80::a8c1:abff:fe82:f1d8] RD 10.255.0.11:2
+                    192.0.2.254                   100      0 i
+                    RT:65100:10100 ET:8
+ *>i [3]:[0]:[32]:[10.255.0.11] RD 10.255.0.11:2
+                    10.255.0.11                   100      0 i
+                    RT:65100:10100 ET:8
+   i [3]:[0]:[32]:[10.255.0.11] RD 10.255.0.11:2
+                    192.0.2.254                   100      0 i
+                    RT:65100:10100 ET:8
+Route Distinguisher: 10.255.0.12:2
+ *>  [2]:[0]:[48]:[00:11:22:33:44:66] RD 10.255.0.12:2
+                    10.255.0.12                        32768 i
+                    ET:8 RT:65100:10100
+ *>  [2]:[0]:[48]:[00:11:22:33:44:66]:[32]:[10.10.10.12] RD 10.255.0.12:2
+                    10.255.0.12                        32768 i
+                    ET:8 RT:65100:10100
+ *>  [2]:[0]:[48]:[aa:b6:46:97:77:f0]:[128]:[fe80::a8b6:46ff:fe97:77f0] RD 10.255.0.12:2
+                    10.255.0.12                        32768 i
+                    ET:8 RT:65100:10100
+ *>  [3]:[0]:[32]:[10.255.0.12] RD 10.255.0.12:2
+                    10.255.0.12                        32768 i
+                    ET:8 RT:65100:10100
+
+Displayed 8 prefixes (12 paths)

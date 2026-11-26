@@ -33,6 +33,14 @@ Coverage limits (PBE-P2-8), stated rather than implied:
   3. Rendering is proven; ACCEPTANCE by the guest is not. That a SONiC device
      ingests BGP_NEIGHBOR as written and reaches Established is REQ-45C-22,
      which is VM-bound and travels with WI-3.
+
+§4.5-e handover addendum 01, rules B19 and B20 (REQ-45E-59 to -62, -64; §15.2
+rows 59, 60, 62 and 64; rulings 45E-S10-R1 and -R2): the legs at the end
+generate for a sonic-vm EVPN participant, leaf1 of
+`tests/fixtures/sonic-4_5e-add01/p7-sonic-leaf.yaml`, handed its session-set
+peers as the engine hands them (rule B18). COVERAGE LIMIT (PBE-P2-8):
+generation only. That the guest accepts the four tables and the fragment is
+the live proof's (REQ-45E-60, -67); the push is rule B21's.
 """
 import io
 import json
@@ -329,6 +337,264 @@ check("REQ-45C-23 NON-VACUITY: undeclared keys leave the overlay byte-unchanged"
                  sort_keys=True) == json.dumps(bov, sort_keys=True),
       "cassian_model.py binds asn :1613, router_id :1562, bgp.neighbors :1614, "
       "networks :1730 -- the SONiC leg reads that set and no more")
+
+# --- §4.5-e addendum 01: rules B19 and B20 (REQ-45E-59 to -62, -64; §15.2 rows 59, 60, 62, 64) -------------
+# leaf1 of tests/fixtures/sonic-4_5e-add01/p7-sonic-leaf.yaml, resolved and read back as `cassian up` reads
+# topology.resolved.yaml, handed the session-set peers as the engine hands them (rule B18). A variant adds a second
+# route reflector (spine2, linked to leaf1) and a second VLAN (20 -> VNI 10200), so "one entry per declared VLAN"
+# and the peer order are each read on more than one. Rulings 45E-S10-R1 and -R2 fix the NVO entry's name and the
+# map key. Every leg is guarded by `_dleg`: on a tree without these rules, or on a loud exit, it records a FAIL,
+# never a traceback.
+import contextlib  # noqa: E402
+import copy  # noqa: E402
+import re  # noqa: E402
+import shutil  # noqa: E402
+import tempfile  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+
+import yaml  # noqa: E402
+
+import cassian_model as M  # noqa: E402
+
+
+def _dleg(name, thunk):
+    try:
+        ok, detail = thunk()
+    except (Exception, SystemExit) as e:  # noqa: BLE001
+        ok, detail = False, "raised %r" % (e,)
+    check(name, ok, detail)
+
+
+_P7 = os.path.join(_HERE, "fixtures", "sonic-4_5e-add01", "p7-sonic-leaf.yaml")
+_P7_DOC = yaml.safe_load(io.open(_P7, encoding="utf-8").read())
+_VDOC = copy.deepcopy(_P7_DOC)
+_VDOC["nodes"].insert(1, {"name": "spine2", "type": "frr", "role": "spine", "evpn_rr": True,
+                          "router_id": "10.255.0.2"})
+_VDOC["links"].append({"endpoints": ["spine2:eth1", "leaf1:eth2"], "ipv4": ["172.16.0.4/31", "172.16.0.5/31"]})
+_VDOC["vlans"][20] = {"vni": 10200}
+_KEY = getattr(S, "_EVPN_SESSION_PEERS_KEY", None)
+_LINES4 = ["router bgp 65100", "address-family l2vpn evpn", "neighbor 172.16.0.0 activate", "advertise-all-vni"]
+_SPINE1 = {"asn": "65100", "local_addr": "172.16.0.1", "name": "spine1"}
+_SPINE2 = {"asn": "65100", "local_addr": "172.16.0.5", "name": "spine2"}
+_EV = {}
+
+
+def _ev(variant=False):
+    """(resolved topology, leaf1's own mapping, leaf1's peers as the engine hands them)."""
+    k = "v" if variant else "b"
+    if k not in _EV:
+        topo = yaml.safe_load(yaml.safe_dump(M.resolve_topology(copy.deepcopy(_VDOC if variant else _P7_DOC),
+                                                                topo_path=_Path(_P7)), sort_keys=False))
+        leaf = next(n for n in topo["nodes"] if n.get("name") == "leaf1")
+        _EV[k] = (topo, leaf, [(p, ip) for p, ip, _rr in M.fabric_evpn_session_set(topo)["leaf1"]])
+    return _EV[k]
+
+
+def _gen(variant=False, peers=None, node=None):
+    topo, leaf, set_peers = _ev(variant)
+    d = dict(node if node is not None else leaf)
+    d[_KEY] = list(set_peers if peers is None else peers)
+    return S.gen_node_config(d, topo, FACTS)
+
+
+def _plain():
+    topo, leaf, _p = _ev()
+    return S.gen_node_config(leaf, topo, FACTS)
+
+
+def _canon(obj):
+    d = tempfile.mkdtemp(prefix="sonic-gen-evpn-")
+    try:
+        p = _Path(d) / "x.json"
+        write_json_canonical(p, obj)
+        return p.read_bytes()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def _exit_of(thunk):
+    err, code = io.StringIO(), None
+    try:
+        with contextlib.redirect_stderr(err):
+            thunk()
+    except SystemExit as e:
+        code = e.code
+    return code, err.getvalue()
+
+
+def _p_base(out):
+    ov = out.get("config_db.json") or {}
+    return (list(out) == ["config_db.json", "frr_evpn_fragment.json"]
+            and ov.get("DEVICE_METADATA", {}).get("localhost", {}).get("bgp_asn") == "65100"
+            and ov.get("BGP_NEIGHBOR") == {"172.16.0.0": _SPINE1})
+
+
+def _p_tables(out):
+    ov = out.get("config_db.json") or {}
+    return (ov.get("VLAN") == {"Vlan10": {"vlanid": "10"}}
+            and ov.get("VXLAN_TUNNEL") == {"cassvtep": {"src_ip": "10.255.0.11"}}
+            and ov.get("VXLAN_EVPN_NVO") == {"nvo1": {"source_vtep": "cassvtep"}}
+            and ov.get("VXLAN_TUNNEL_MAP") == {"cassvtep|map_10100_Vlan10": {"vlan": "Vlan10", "vni": "10100"}})
+
+
+def _four_forms(lines):
+    return (isinstance(lines, list) and len(lines) >= 3 and re.fullmatch(r"router bgp \d+", lines[0]) is not None
+            and lines[1] == "address-family l2vpn evpn" and lines[-1] == "advertise-all-vni"
+            and all(re.fullmatch(r"neighbor \S+ activate", l) is not None for l in lines[2:-1]))
+
+
+def _b19_base():
+    out = _gen()
+    ov = out["config_db.json"]
+    return _p_base(out), "entries %s; bgp_asn %r; BGP_NEIGHBOR %r" % (
+        list(out), ov.get("DEVICE_METADATA", {}).get("localhost", {}).get("bgp_asn"), ov.get("BGP_NEIGHBOR"))
+
+
+def _b19_tables():
+    out = _gen()
+    ov = out["config_db.json"]
+    return (_p_tables(out) and S._CASSIAN_VTEP_NAME == "cassvtep" and S._CASSIAN_EVPN_NVO_NAME == "nvo1"
+            and len(S._CASSIAN_VTEP_NAME + "-4094") <= 15), "%r" % (
+        {t: ov.get(t) for t in ("VLAN", "VXLAN_TUNNEL", "VXLAN_EVPN_NVO", "VXLAN_TUNNEL_MAP")},)
+
+
+def _b19_nv():
+    out = _plain()
+    return (not _p_base(out) and not _p_tables(out)), "the render without the peers: entries %s" % (list(out),)
+
+
+def _b19_variant():
+    out = _gen(variant=True)
+    ov = out["config_db.json"]
+    ok = (ov.get("VLAN") == {"Vlan10": {"vlanid": "10"}, "Vlan20": {"vlanid": "20"}}
+          and ov.get("VXLAN_TUNNEL_MAP") == {"cassvtep|map_10100_Vlan10": {"vlan": "Vlan10", "vni": "10100"},
+                                            "cassvtep|map_10200_Vlan20": {"vlan": "Vlan20", "vni": "10200"}}
+          and ov.get("BGP_NEIGHBOR") == {"172.16.0.0": _SPINE1, "172.16.0.4": _SPINE2}
+          and len(ov.get("VXLAN_TUNNEL") or {}) == 1 and len(ov.get("VXLAN_EVPN_NVO") or {}) == 1
+          and out.get("frr_evpn_fragment.json") == {"lines": [
+              "router bgp 65100", "address-family l2vpn evpn", "neighbor 172.16.0.0 activate",
+              "neighbor 172.16.0.4 activate", "advertise-all-vni"]})
+    return ok, "VLAN %r; map %r; neighbours %r; fragment %r" % (
+        ov.get("VLAN"), ov.get("VXLAN_TUNNEL_MAP"), sorted(ov.get("BGP_NEIGHBOR") or {}),
+        out.get("frr_evpn_fragment.json"))
+
+
+def _b19_clean():
+    out, plain = _gen(), _plain()["config_db.json"]
+    ov = out["config_db.json"]
+    loc = ov.get("DEVICE_METADATA", {}).get("localhost", {})
+    ok = ("frr_evpn_fragment.json" in out and sorted(loc) == ["bgp_asn", "hostname"] and "PORT" not in ov
+          and not any(k in json.dumps(ov, sort_keys=True) for k in S._FORBIDDEN_MODE_KEYS)
+          and ov.get("INTERFACE") == plain.get("INTERFACE")
+          and ov.get("LOOPBACK_INTERFACE") == plain.get("LOOPBACK_INTERFACE"))
+    return ok, "localhost keys %s; INTERFACE %r" % (sorted(loc), ov.get("INTERFACE"))
+
+
+def _b19_nokey():
+    out = _plain()
+    want = {"config_db.json": {"DEVICE_METADATA": {"localhost": {"hostname": "leaf1"}},
+                               "INTERFACE": {"Ethernet0": {}, "Ethernet0|172.16.0.1/31": {}},
+                               "LOOPBACK_INTERFACE": {"Loopback0": {}, "Loopback0|10.255.0.11/32": {}}}}
+    ok = list(out) == list(want) and all(_canon(out[f]) == _canon(want[f]) for f in want)
+    return ok, "rendered %r" % (out,)
+
+
+def _b19_parity():
+    topo, leaf, _p = _ev()
+    decl = dict(leaf)
+    decl["asn"] = 65999
+    decl["bgp"] = {"neighbors": [{"peer": "spine1", "remote_as": 65998}]}
+    ov = _gen(node=decl)["config_db.json"]
+    declared = S.gen_node_config(decl, topo, FACTS)["config_db.json"]
+    ok = (ov.get("DEVICE_METADATA", {}).get("localhost", {}).get("bgp_asn") == "65100"
+          and ov.get("BGP_NEIGHBOR") == {"172.16.0.0": _SPINE1}
+          and declared["DEVICE_METADATA"]["localhost"].get("bgp_asn") == "65999")
+    return ok, "participant bgp_asn %r; the same node without the peers %r" % (
+        ov.get("DEVICE_METADATA", {}).get("localhost", {}).get("bgp_asn"),
+        declared["DEVICE_METADATA"]["localhost"].get("bgp_asn"))
+
+
+def _b20_lines():
+    lines = (_gen().get("frr_evpn_fragment.json") or {}).get("lines")
+    return lines == _LINES4 and _four_forms(lines), "lines %r" % (lines,)
+
+
+def _b20_forms_nv():
+    bad = (_LINES4[:3] + ["vni 10100"] + _LINES4[3:], _LINES4[:3] + ["advertise-svi-ip"] + _LINES4[3:],
+           ["address-family l2vpn evpn"] + _LINES4)
+    red = _four_forms(_LINES4) and not any(_four_forms(b) for b in bad)
+    return red, "accepted %s" % [_four_forms(b) for b in bad]
+
+
+def _b20_det():
+    a = {f: _canon(c) for f, c in _gen().items()}
+    b = {f: _canon(c) for f, c in _gen().items()}
+    return (len(a) == 2 and a == b), "%s" % {f: len(v) for f, v in a.items()}
+
+
+def _b20_follows():
+    base = _gen().get("frr_evpn_fragment.json")
+    moved = _gen(variant=True, peers=[("spine2", "172.16.0.4")]).get("frr_evpn_fragment.json")
+    want = {"lines": ["router bgp 65100", "address-family l2vpn evpn", "neighbor 172.16.0.4 activate",
+                      "advertise-all-vni"]}
+    return (base != moved and moved == want), "moved %r" % (moved,)
+
+
+def _g_fabric():
+    topo, leaf, peers = _ev()
+    d = dict(leaf)
+    d[_KEY] = peers
+    t1, t2 = copy.deepcopy(topo), copy.deepcopy(topo)
+    del t1["fabric"]["evpn"]["vlans"]
+    del t2["fabric"]["evpn"]["asn"]
+    c1, e1 = _exit_of(lambda: S.gen_node_config(d, t1, FACTS))
+    c2, e2 = _exit_of(lambda: S.gen_node_config(d, t2, FACTS))
+    s = "SONiC EVPN generation requires the resolved fabric.evpn"
+    return (c1 == 2 and c2 == 2 and s in e1 and s in e2), "exits %r, %r" % (c1, c2)
+
+
+def _g_rid():
+    topo, leaf, peers = _ev()
+    d = {k: v for k, v in leaf.items() if k != "router_id"}
+    d[_KEY] = peers
+    c, e = _exit_of(lambda: S.gen_node_config(d, topo, FACTS))
+    return (c == 2 and "SONiC EVPN generation requires a router_id" in e), "exit %r" % (c,)
+
+
+def _g_peer():
+    topo, leaf, _p = _ev()
+    res = []
+    for peers in ([("spine1", "172.16.0.9")], [("spine9", "172.16.0.0")]):
+        d = dict(leaf)
+        d[_KEY] = peers
+        res.append(_exit_of(lambda: S.gen_node_config(d, topo, FACTS)))
+    s = "SONiC EVPN generation found a session peer with no matching link"
+    return all(c == 2 and s in e for c, e in res), "exits %r" % [c for c, _e in res]
+
+
+_dleg("B19 REQ-45E-59 leaf1: the fabric's ASN as bgp_asn, BGP_NEIGHBOR exactly its session-set peer in the "
+      "declared render's shape, and the mapping holds config_db.json then frr_evpn_fragment.json", _b19_base)
+_dleg("B19 REQ-45E-59, -60 the four tables: Vlan10; the tunnel cassvtep, its src_ip the router_id; the NVO entry "
+      "nvo1 naming it (45E-S10-R1); the map cassvtep|map_10100_Vlan10 (45E-S10-R2)", _b19_tables)
+_dleg("B19 NON-VACUITY: the two predicates above read leaf1's render without the peers as failing", _b19_nv)
+_dleg("B19 B20 REQ-45E-60, -62 two declared VLANs give two VLAN and two map entries; two route reflectors give "
+      "two neighbours and two activate lines in the set's order; one tunnel and one NVO entry", _b19_variant)
+_dleg("B19 REQ-45E-61 no mode key and no platform key; EVPN adds and removes no INTERFACE or LOOPBACK_INTERFACE "
+      "entry (equal to leaf1's render without the peers)", _b19_clean)
+_dleg("B19 REQ-45E-64 without the peers key leaf1 renders exactly its routing-neutral overlay, byte for byte "
+      "through write_json_canonical (this leg is green on the provider before these rules too)", _b19_nokey)
+_dleg("B19 an EVPN participant's BGP render is the fabric's, as gen_frr_conf renders an FRR participant "
+      "(cassian_model.py L1804-L1814): a declared asn and bgp.neighbors are not rendered for it", _b19_parity)
+_dleg("B20 REQ-45E-62 leaf1's fragment: router bgp 65100, address-family l2vpn evpn, neighbor 172.16.0.0 activate, "
+      "advertise-all-vni; each line one of the four forms", _b20_lines)
+_dleg("B20 REQ-45E-62 NON-VACUITY: the four-form check refuses a vni line, an advertise-svi-ip line and a "
+      "misplaced line", _b20_forms_nv)
+_dleg("B20 REQ-45E-62 D21: two generations give equal bytes for both entries, through write_json_canonical",
+      _b20_det)
+_dleg("B20 REQ-45E-62 NEGATIVE: a changed peer changes the fragment; it follows its input", _b20_follows)
+_dleg("B19 guard: fabric.evpn without vlans, or without asn, fails loud, exit 2", _g_fabric)
+_dleg("B19 guard: a participant without router_id fails loud, exit 2", _g_rid)
+_dleg("B19 guard: a session peer with no link at that address, or an unknown peer, fails loud, exit 2", _g_peer)
 
 # --- Report -----------------------------------------------------------------
 _failed = [c for c in _checks if not c[1]]

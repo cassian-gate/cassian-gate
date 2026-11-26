@@ -358,12 +358,29 @@ def _bgp_link_ips_for_node(node_name: str, topo: dict) -> dict[str, tuple[str, s
     return out
 
 
+# §4.5-e addendum 01, rules B18 to B20 (REQ-45E-58 to -63; rulings 45E-S10-R1 and -R2).
+# The engine hands a sonic-vm EVPN participant its session-set peers under this key, on a shallow copy of its
+# node mapping, in memory only (the engine's `_EVPN_SESSION_PEERS_KEY`; this provider imports neither the engine
+# nor the model, so the name is held twice and tests/sonic_provision_supply_proof.py binds the two by behaviour).
+_EVPN_SESSION_PEERS_KEY = "_cassian_evpn_session_peers"
+# Cassian's tunnel name, defined once (rider R-1, S2-11): rule B19 generates with it, and SONiC's EVPN
+# convergence leg (rule B29) reads it. 8 characters, so the guest's kernel device `cassvtep-<VLAN id>` fits 15.
+_CASSIAN_VTEP_NAME = "cassvtep"
+# The NVO entry's name: the literal probe record 01 measured (45E-S10-R1).
+_CASSIAN_EVPN_NVO_NAME = "nvo1"
+# The fragment's record in the node's configuration directory (REQ-45E-63; LD-2): one key, `lines`.
+_FRR_EVPN_FRAGMENT_FILE = "frr_evpn_fragment.json"
+
+
 def gen_node_config(
     node: dict, topo: dict, facts: "Mapping[str, Any] | None" = None
 ) -> "dict[str, Any] | None":
     """Generate the SONiC `config_db.json` OVERLAY for one node (LD-45C-2).
 
-    Returns {"config_db.json": <overlay>} -- a filename -> content mapping.
+    Returns {"config_db.json": <overlay>} -- a filename -> content mapping. For a
+    sonic-vm EVPN participant, whose node mapping carries the session-set peers
+    (rule B18), the mapping holds a second entry, `frr_evpn_fragment.json`: the
+    fragment's record (rules B19 and B20; `_render_evpn_participant`).
     WRITES NOTHING: core serializes through `write_json_canonical`
     (REQ-45C-20/-42; design §:254).
 
@@ -422,6 +439,16 @@ def gen_node_config(
             f"Loopback0|{rid}/32": {},
         }
 
+    # §4.5-e addendum 01, rules B19 and B20 (REQ-45E-59 to -62): a node mapping that
+    # carries the session-set peers is a sonic-vm EVPN participant. Its BGP render is
+    # the fabric's, as `gen_frr_conf` renders an FRR participant (cassian_model.py
+    # L1804-L1814): its own `asn` and `bgp.neighbors`, if declared, are not rendered.
+    # Without the peers key the render below is unchanged.
+    if _EVPN_SESSION_PEERS_KEY in node:
+        fragment = _render_evpn_participant(overlay, node, name, rid, topo)
+        _assert_overlay_platform_clean(overlay, name)
+        return {"config_db.json": overlay, _FRR_EVPN_FRAGMENT_FILE: {"lines": fragment}}
+
     # REQ-45C-2 core: declared `asn` and `bgp.neighbors` render here. The
     # targets are MEASURED on sonic-vm:202405 build fecd4ec81 -- `BGP_GLOBALS`
     # does not exist on this image; the ASN lives in
@@ -474,6 +501,92 @@ def gen_node_config(
 
     _assert_overlay_platform_clean(overlay, name)
     return {"config_db.json": overlay}
+
+
+def _render_evpn_participant(overlay: dict, node: dict, name: str, rid: str,
+                             topo: dict) -> "list[str]":
+    """Rules B19 and B20 for one sonic-vm EVPN participant (REQ-45E-59 to -62).
+
+    Adds to `overlay`, in place: the fabric's ASN as `bgp_asn`; one `BGP_NEIGHBOR`
+    entry per session-set peer, in the shape the declared render authors (`asn`,
+    `local_addr`, `name`); one `VLAN` entry `Vlan<id>` and one `VXLAN_TUNNEL_MAP`
+    entry `cassvtep|map_<vni>_Vlan<id>` (45E-S10-R2) per VLAN the resolved
+    `fabric.evpn` declares, in VLAN order; the `VXLAN_TUNNEL` entry `cassvtep` with
+    the node's router_id as `src_ip`; and the `VXLAN_EVPN_NVO` entry `nvo1` naming
+    that tunnel (45E-S10-R1). No mode key, no platform key, no `INTERFACE` entry.
+
+    Returns the fragment (REQ-45E-62): `router bgp <asn>`, `address-family l2vpn
+    evpn`, one `neighbor <ip> activate` per peer in the order received, then
+    `advertise-all-vni`, and no other line. The peers are the engine's (rule B18);
+    the links are read only for this node's own address toward a peer it was
+    handed, never to decide a peer. A pure function of its arguments (D21).
+    """
+    fabric = topo.get("fabric") if isinstance(topo.get("fabric"), dict) else {}
+    evpn = fabric.get("evpn") if isinstance(fabric.get("evpn"), dict) else {}
+    try:
+        asn_text = str(int(evpn.get("asn")))
+    except (TypeError, ValueError):
+        asn_text = ""
+    vlans = evpn.get("vlans")
+    vlan_vnis: list[tuple[int, int]] = []
+    if isinstance(vlans, dict):
+        try:
+            vlan_vnis = sorted((int(str(k)), int(v["vni"])) for k, v in vlans.items())
+        except (TypeError, ValueError, KeyError):
+            vlan_vnis = []
+    if not asn_text or not vlan_vnis:
+        _fail(
+            "SONiC EVPN generation requires the resolved fabric.evpn",
+            name,
+            "the topology handed to generation carries no fabric.evpn asn or no vlans",
+            "an EVPN participant's tables and fragment are rendered from the resolved "
+            "fabric.evpn that `up` reads from topology.resolved.yaml; this is a "
+            "generation defect",
+            "report this with the topology that produced it",
+        )
+    if not rid:
+        _fail(
+            "SONiC EVPN generation requires a router_id",
+            name,
+            "this EVPN participant has no router_id",
+            "the VXLAN tunnel's source address is the node's router_id (REQ-45E-60), "
+            "and validate requires one for every EVPN participant; this is a "
+            "generation defect",
+            "report this with the topology that produced it",
+        )
+    link_ips = _bgp_link_ips_for_node(name, topo)
+    neighbors: dict[str, dict] = {}
+    activate: list[str] = []
+    for entry in node.get(_EVPN_SESSION_PEERS_KEY) or []:
+        pair = tuple(entry) if isinstance(entry, (list, tuple)) else ()
+        peer_name, peer_ip = (str(pair[0]), str(pair[1])) if len(pair) == 2 else ("", "")
+        local = link_ips.get(peer_name)
+        if local is None or local[1] != peer_ip:
+            _fail(
+                "SONiC EVPN generation found a session peer with no matching link",
+                name,
+                f"session-set peer {peer_name!r} at {peer_ip!r} has no link from "
+                "this node with that address",
+                "the session set and the declared links must agree; generation "
+                "never guesses a neighbour's local address; this is a generation "
+                "defect",
+                "report this with the topology that produced it",
+            )
+        neighbors[peer_ip] = {"asn": asn_text, "local_addr": local[0], "name": peer_name}
+        activate.append(f"neighbor {peer_ip} activate")
+    overlay["DEVICE_METADATA"]["localhost"]["bgp_asn"] = asn_text
+    overlay["BGP_NEIGHBOR"] = neighbors
+    vlan_table: dict[str, dict] = {}
+    tunnel_map: dict[str, dict] = {}
+    for vlan_id, vni in vlan_vnis:
+        vlan_name = f"Vlan{vlan_id}"
+        vlan_table[vlan_name] = {"vlanid": str(vlan_id)}
+        tunnel_map[f"{_CASSIAN_VTEP_NAME}|map_{vni}_{vlan_name}"] = {"vlan": vlan_name, "vni": str(vni)}
+    overlay["VLAN"] = vlan_table
+    overlay["VXLAN_TUNNEL"] = {_CASSIAN_VTEP_NAME: {"src_ip": rid}}
+    overlay["VXLAN_EVPN_NVO"] = {_CASSIAN_EVPN_NVO_NAME: {"source_vtep": _CASSIAN_VTEP_NAME}}
+    overlay["VXLAN_TUNNEL_MAP"] = tunnel_map
+    return [f"router bgp {asn_text}", "address-family l2vpn evpn", *activate, "advertise-all-vni"]
 
 
 def _assert_overlay_platform_clean(overlay: dict, node: str) -> None:
@@ -1290,6 +1403,239 @@ def _provision_preconfigured(rt: "Runtime", lab: str, node: str,
     return {"config_db.json": declared}
 
 
+# §4.5-e addendum 01, rule B21 (REQ-45E-65 to -71; rulings 45E-S11-R1 to -R4). After the routing-daemon wait,
+# `provision` pushes an EVPN participant's FRR fragment (rule B20) through `vtysh`, reads it back once, and waits,
+# bounded, until each session-set peer has negotiated the EVPN family. Single-sourced argv (PBE-P2-6): the proofs
+# import these rather than restating the commands. The forms are the ones probe record 01 measured: the push (§5,
+# call [039]), the `bgpd` running configuration (§7; SA2-O4), the EVPN summary (§6.1) and the neighbour read (§6.3).
+_EVPN_RUNNING_CONFIG_ARGV = ("vtysh", "-c", "show running-config bgpd")
+_EVPN_SUMMARY_ARGV = ("vtysh", "-c", "show bgp l2vpn evpn summary json")
+# The capability values a neighbour read can give (REQ-45E-84): the name of the one key that reads true under
+# `neighborCapabilities.multiprotocolExtensions.l2VpnEvpn`; `absent` when the read shows no EVPN family; and
+# `not-read` when no neighbour read was made (45E-S11-R1).
+_EVPN_CAPABILITY_VALUES = ("advertisedAndReceived", "advertised", "received")
+_EVPN_NEGOTIATED = "advertisedAndReceived"
+# 45E-S11-R4 (row 86, L183; D24, L536): a read that gives no answer is reported as no answer, never as `absent`,
+# `not-present` or "not found". In the session wait it stands as a peer's state (a summary read with no answer) or
+# as its capability value (a neighbour read with no answer).
+_EVPN_NO_ANSWER = "no-answer"
+
+
+def _evpn_json_answer(rc: "Any", raw: str) -> "dict | None":
+    """The JSON object one of B21's JSON reads answered with, or None when it gave no answer (45E-S11-R4; row 86):
+    a non-zero exit, or output not in the reader's format -- nothing printed, output that is not JSON, or JSON that
+    is not an object (rulings note 2 §5). An object is an answer, whatever it lists."""
+    if rc != 0:
+        return None
+    try:
+        doc = json.loads((raw or "").strip())
+    except Exception:
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def _evpn_neighbor_argv(peer_ip: str) -> "list[str]":
+    """The neighbour read for one peer (REQ-45E-72): `show bgp neighbors <ip> json`."""
+    return ["vtysh", "-c", f"show bgp neighbors {peer_ip} json"]
+
+
+def _evpn_capability_value(raw: str, peer_ip: str) -> str:
+    """The EVPN capability value of one neighbour read (REQ-45E-84; 45E-S11-R1).
+
+    SHAPE, measured on the guest (probe record 01 §6.3, batch C call [028]; the probe's own reader, batch C
+    L62-L69): the read is an object keyed by the peer's address; under
+    `neighborCapabilities.multiprotocolExtensions` each address family is an object whose one key reads true --
+    `{"advertisedAndReceived": true}` for a negotiated family, `{"advertised": true}` when only this node sends it.
+    Read at that path only: the same read carries a second `l2VpnEvpn` object under another capability (batch C
+    L568), which is not the signal.
+
+    Returns that key's name, or `absent` when the read answered and shows no EVPN family at that path. Output that
+    is not a JSON object is no answer and returns `no-answer`, never `absent` (45E-S11-R4; row 86); a non-zero
+    exit is told apart by the caller, which reads the return code (`_evpn_session_reads`).
+
+    COVERAGE LIMIT (PBE-P2-8): the shape is FRR 8.5.4's on sonic-vm:202405 (D26). Another FRR may print another
+    shape; it would read `absent`, and the wait would fail loudly with U7 rather than pass.
+    """
+    doc = _evpn_json_answer(0, raw)
+    if doc is None:
+        return _EVPN_NO_ANSWER
+    entry = doc.get(peer_ip)
+    caps = entry.get("neighborCapabilities") if isinstance(entry, dict) else None
+    fams = caps.get("multiprotocolExtensions") if isinstance(caps, dict) else None
+    fam = fams.get("l2VpnEvpn") if isinstance(fams, dict) else None
+    if isinstance(fam, dict):
+        for value in _EVPN_CAPABILITY_VALUES:
+            if fam.get(value) is True:
+                return value
+    return "absent"
+
+
+def _evpn_session_reads(rt: "Runtime", lab: str, node: str,
+                        peer_ips: "list[str] | tuple[str, ...]") -> "tuple[dict[str, str], dict[str, str]]":
+    """REQ-45E-72's signal for each of `peer_ips` (45E-S11-R1): ({peer: FSM state}, {peer: capability value}).
+
+    One read of the EVPN summary first; then the neighbour read only for a peer that reads `Established`. A peer
+    with no neighbour read carries `not-read`. A peer the summary does not list has no entry in the first
+    mapping. This is the reader rule B23's session check reads the same signal with. STDOUT only (F-45C-C3-20).
+
+    NO ANSWER (45E-S11-R4; row 86; D24). Each read's return code is read, never discarded. A summary read with no
+    answer (`_evpn_json_answer`) gives every one of `peer_ips` the state `no-answer`, and no neighbour read is made;
+    a summary that answered and does not list a peer leaves it out, as before (`not-present` in U7). A neighbour
+    read with no answer gives the capability value `no-answer`. `_peers_from_summary`, which `convergence_wait`
+    shares, is not changed: the distinction is made here, before it is called.
+    """
+    rc, raw = _sonic_read(rt, lab, node, _EVPN_SUMMARY_ARGV)
+    if _evpn_json_answer(rc, raw) is None:
+        return ({str(ip): _EVPN_NO_ANSWER for ip in peer_ips}, {str(ip): "not-read" for ip in peer_ips})
+    states = _peers_from_summary(raw)
+    caps: "dict[str, str]" = {}
+    for ip in peer_ips:
+        if states.get(ip) == "Established":
+            nrc, nraw = _sonic_read(rt, lab, node, tuple(_evpn_neighbor_argv(ip)))
+            caps[ip] = _EVPN_NO_ANSWER if _evpn_json_answer(nrc, nraw) is None else _evpn_capability_value(nraw, ip)
+        else:
+            caps[ip] = "not-read"
+    return states, caps
+
+
+def _push_evpn_fragment(rt: "Runtime", lab: str, node: str, lines: "list[str]") -> None:
+    """REQ-45E-65, -66: one `rt.exec` whose argv is `vtysh`, `-c`, `configure terminal`, then `-c` and one fragment
+    line for each line in order (probe record 01 §5, call [039]). Nothing is written to the guest's filesystem.
+    The push is the provider's own call: the operator's `exec` rule (`_sonic_exec_command_rule`) is unchanged and
+    does not admit it. A non-zero return code fails at once with U5.
+    """
+    argv = ["vtysh", "-c", "configure terminal"]
+    for line in lines:
+        argv += ["-c", line]
+    cp = rt.exec(lab, node, argv, check=False, capture_output=True)
+    rc = getattr(cp, "returncode", 1)
+    if rc != 0:
+        _fail(
+            "SONiC EVPN configuration push failed",
+            node,
+            f"`vtysh` exited {rc} while applying the EVPN lines",
+            "the EVPN lines were not applied, so this node takes no part in the EVPN control plane",
+            "report this with the guest's running configuration, then run cassian up again",
+        )
+
+
+def _absent_fragment_lines(running: str, lines: "list[str]") -> "list[str]":
+    """The fragment lines a `show running-config bgpd` read does not carry where they belong (REQ-45E-67; D23).
+
+    `lines` is the fragment REQ-45E-62 fixes: `router bgp <asn>`, `address-family l2vpn evpn`, then the lines
+    inside that block. Each is matched as a whole line, stripped of its indentation, inside its block -- never as
+    bytes or a position in the file. The block is the `address-family l2vpn evpn` lines of the top-level
+    `router bgp <asn>` block, as the guest prints them (probe record 01 §7: one space before `address-family`, two
+    before each line inside it, then ` exit-address-family`). A line elsewhere in the file does not count.
+
+    COVERAGE LIMIT (PBE-P2-8): this sees that a line is in the running configuration, not that FRR acted on it;
+    the session wait that follows is what sees the family negotiate.
+    """
+    head = lines[0] if len(lines) > 0 else None
+    family = lines[1] if len(lines) > 1 else None
+    in_router = in_family = found_head = found_family = False
+    block: "set[str]" = set()
+    for text in (running or "").splitlines():
+        stripped = text.strip()
+        if not text.startswith(" "):
+            in_router = stripped == head
+            found_head = found_head or in_router
+            in_family = False
+            continue
+        if not in_router:
+            continue
+        if not text.startswith("  "):
+            in_family = stripped == family
+            found_family = found_family or in_family
+            continue
+        if in_family:
+            block.add(stripped)
+    absent = []
+    for i, line in enumerate(lines):
+        if i == 0:
+            present = found_head
+        elif i == 1:
+            present = found_family
+        else:
+            present = found_family and line.strip() in block
+        if not present:
+            absent.append(line)
+    return absent
+
+
+def _read_back_evpn_fragment(rt: "Runtime", lab: str, node: str, lines: "list[str]") -> None:
+    """REQ-45E-67: the first read-back, straight after a push that returned 0. One read of
+    `_EVPN_RUNNING_CONFIG_ARGV`; every fragment line must be in its block (`_absent_fragment_lines`). Presence is
+    immediate, so nothing is polled (D24). If a line is absent, U6 names each absent line.
+
+    NO ANSWER (45E-S11-R4; row 86; D24). A read that exits non-zero, or prints nothing (empty, or white space only),
+    is not read as a configuration without the lines: it fails at once with its own text, whatever it printed.
+    """
+    rc, running = _sonic_read(rt, lab, node, _EVPN_RUNNING_CONFIG_ARGV)
+    if rc != 0 or not (running or "").strip():
+        _fail(
+            "SONiC EVPN configuration could not be read back",
+            node,
+            (f"`vtysh` exited {rc} reading the running configuration after the push" if rc != 0
+             else "the running configuration read after the push printed nothing"),
+            "nothing was read, so whether the EVPN lines are in force is not known",
+            "report this with the guest's running configuration, then run cassian up again",
+        )
+    absent = _absent_fragment_lines(running, lines)
+    if absent:
+        _fail(
+            "SONiC EVPN configuration is not in force",
+            node,
+            f"{len(absent)} of {len(lines)} EVPN lines are absent from the running configuration after the push",
+            "absent: " + "; ".join(absent),
+            "report this with the guest's running configuration, then run cassian up again",
+        )
+
+
+def _await_evpn_sessions(rt: "Runtime", lab: str, node: str, peer_ips: "list[str]",
+                         timeout: int = _ROUTING_DAEMON_WAIT_S) -> None:
+    """REQ-45E-68, -69: bounded wait, after the first read-back, until each session-set peer reads `Established`
+    in the EVPN summary and its neighbour read shows the EVPN family negotiated -- REQ-45E-72's signal, read as
+    `_evpn_session_reads` reads it (45E-S11-R1).
+
+    WHY THIS EXISTS. The push resets the BGP session to the activated peer: `Idle`, then `Established` about 3 s
+    later (probe record 01 §5; D30). A guest whose session never negotiates the family would otherwise leave
+    `up` clean while every EVPN read on it finds nothing.
+
+    BOUND: `timeout` seconds (`_ROUTING_DAEMON_WAIT_S`, 30 s), polled every `_CONVERGENCE_POLL_INTERVAL_S` (1 s);
+    at least one read is always issued. Nothing new is recorded at `up` (R.2 ruling 2). On the bound, U7 names
+    each peer not negotiated with its state (`not-present` when a summary that answered does not list it,
+    `no-answer` when the summary read gave no answer), its capability value (`no-answer` when the neighbour read
+    gave none), and the whole elapsed seconds (45E-S11-R2 to -R4) -- never a hang, never silence (Doctrine 1.11).
+    A read with no answer is polled again like any other, up to the bound (45E-S11-R4).
+
+    COVERAGE LIMIT (PBE-P2-8): the wait sees each peer negotiate once. A loss after `up` returns is reported by the
+    next EVPN read on this node (U8, U11), not here.
+    """
+    want = [str(p) for p in peer_ips]
+    start = time.time()
+    deadline = start + max(int(timeout), 0)
+    while True:
+        states, caps = _evpn_session_reads(rt, lab, node, want)
+        pending = [ip for ip in want
+                   if not (states.get(ip) == "Established" and caps.get(ip) == _EVPN_NEGOTIATED)]
+        if not pending:
+            return
+        if time.time() >= deadline:
+            break
+        time.sleep(_CONVERGENCE_POLL_INTERVAL_S)
+    elapsed = int(time.time() - start)
+    _fail(
+        "SONiC EVPN session did not negotiate after the push",
+        node,
+        "; ".join(f"{ip}: {states.get(ip) or 'not-present'}, EVPN family {caps.get(ip, 'not-read')}"
+                  for ip in pending) + f"; after {elapsed}s (bound {max(int(timeout), 0)}s)",
+        "the EVPN lines are in force, but the EVPN family did not negotiate with these peers, so EVPN checks on "
+        "this node would read no routes from them",
+        "check the peer's EVPN configuration for this node, then run cassian up again",
+    )
+
+
 def provision(rt: "Runtime", lab: str, node: str, node_d: dict,
               topo: dict) -> "dict[str, Any] | None":
     """Probe, generate, supply, and return what was applied (R-C3-12/-14).
@@ -1393,6 +1739,19 @@ def provision(rt: "Runtime", lab: str, node: str, node_d: dict,
     _await_routing_daemon(rt, lab, node,
                           expected=_declared_connected_prefixes(overlay))
 
+    # §4.5-e addendum 01, rule B21 (REQ-45E-65 to -71; 45E-S11-R1 to -R3): an EVPN participant's mapping holds the
+    # fragment's entry (rule B20). Push it, read it back once, and wait for the node's session-set peers, which
+    # the engine handed it (rule B18). Every call does this, a second `provision` of a live guest included
+    # (REQ-45E-71). No start of `bgp` is added (REQ-45E-70): the push resets the session, it does not restart the
+    # unit. A mapping without the entry returns here as before (REQ-45E-64).
+    fragment = out.get(_FRR_EVPN_FRAGMENT_FILE)
+    if fragment is not None:
+        lines = [str(line) for line in (fragment.get("lines") or [])]
+        _push_evpn_fragment(rt, lab, node, lines)
+        _read_back_evpn_fragment(rt, lab, node, lines)
+        _await_evpn_sessions(rt, lab, node,
+                             [str(ip) for _peer, ip in (node_d.get(_EVPN_SESSION_PEERS_KEY) or [])])
+
     return out
 
 
@@ -1401,10 +1760,12 @@ def _sonic_exec_command_rule(argv: "list[str]") -> "tuple[bool, str]":
 
     Two accepted forms, default-deny otherwise:
 
-    * ``show \u2026`` -- ``argv[0] == "show"``, excluding ``show techsupport``
-      (founder ruling D4, 2026-09-24), which interrupts the device and writes a
-      dump. ``show auto-techsupport`` is a different subcommand and stays
-      accepted. D4 narrows this form only.
+    * ``show \u2026`` -- ``argv[0] == "show"``, excluding ``show`` followed by
+      any leading part of ``techsupport``, from ``t`` to ``techsupport``, in
+      any letter case (founder ruling D4, 2026-09-24; every leading part by
+      BL-P2-4.5c-239, REQ-45E-1). ``show techsupport`` interrupts the device and
+      writes a dump. ``show auto-techsupport`` is a different subcommand, not a
+      leading part, and stays accepted. D4 narrows this form only.
     * ``vtysh -c "show \u2026"`` -- EXACTLY three arguments (founder ruling D2,
       2026-09-24). The guest's ``/usr/bin/vtysh`` is a wrapper that passes every
       argument to FRR's vtysh, which honours repeated ``-c`` and ``-b`` / ``-f``
@@ -1422,7 +1783,10 @@ def _sonic_exec_command_rule(argv: "list[str]") -> "tuple[bool, str]":
         "'show \u2026' or 'vtysh -c \"show \u2026\"'"
     )
     if argv[0] == "show":
-        if len(argv) > 1 and argv[1] == "techsupport":
+        # BL-P2-4.5c-239 (REQ-45E-1, rule B01): refuse ``show`` followed by any
+        # non-empty leading part of ``techsupport``, in any letter case. Decided
+        # from argv alone -- no help text is read and no guest is called.
+        if len(argv) > 1 and argv[1] != "" and "techsupport".startswith(argv[1].lower()):
             return (False, _reason)
         return (True, "")
     if argv[0] != "vtysh" or len(argv) != 3 or argv[1] != "-c":
@@ -2084,8 +2448,9 @@ def _sonic_normalize_bgp_summary(text: str) -> str:
 
     We intentionally discard volatile counters/timers and keep only:
     - neighbor address
-    - ASN (best-effort parse)
-    - state (Established vs Idle/Active/etc.)
+    - ASN (the column the header line names `AS`)
+    - state (the column the header line names `State/PfxRcd`; a numeric
+      value means Established, otherwise Idle/Active/etc.)
 
     Output format (one per neighbor):
       <NEIGHBOR> AS=<ASN or ?> STATE=<STATE>
@@ -2093,11 +2458,19 @@ def _sonic_normalize_bgp_summary(text: str) -> str:
     lines = (text or "").splitlines()
     out: list[str] = []
     in_table = False
+    # BL-P2-4.5c-234 (REQ-45E-3, rule B02): AS and STATE are read from the columns
+    # the header line names, located by the header's own tokens. None when the
+    # header carries no such token.
+    as_col: int | None = None
+    state_col: int | None = None
 
     for line in lines:
         # Detect the table header
         if ("Neighbor" in line) and ("Up/Down" in line):
             in_table = True
+            header = line.split()
+            as_col = next((i for i, tok in enumerate(header) if tok == "AS"), None)
+            state_col = next((i for i, tok in enumerate(header) if tok == "State/PfxRcd"), None)
             out.append(line.rstrip())
             continue
 
@@ -2121,16 +2494,18 @@ def _sonic_normalize_bgp_summary(text: str) -> str:
             out.append(line.rstrip())
             continue
 
-        # Heuristic: AS is the first integer token shortly after the neighbor/V columns
+        # AS: the row's token in the header's AS column, when it is all digits.
         asn: str | None = None
-        for tok in parts[1:6]:
-            if tok.isdigit():
-                asn = tok
-                break
+        if as_col is not None and as_col < len(parts) and parts[as_col].isdigit():
+            asn = parts[as_col]
 
-        # Last token often is State/PfxRcd. If it's numeric => Established.
-        last = parts[-1]
-        state = "Established" if last.isdigit() else last
+        # STATE: the row's token in the header's State/PfxRcd column; numeric =>
+        # Established. Without that column, the last token, as before.
+        if state_col is not None and state_col < len(parts):
+            st = parts[state_col]
+        else:
+            st = parts[-1]
+        state = "Established" if st.isdigit() else st
 
         out.append(f"{nbr} AS={asn or '?'} STATE={state}")
 
@@ -2272,7 +2647,8 @@ SONIC_PROVIDER = NosProvider(
     # -- legs the ratified design does NOT assign to SONiC (NG-9) --
     doctor_checks=deferred_leg("doctor_checks", "unassigned"),
     exec_command_rule=_sonic_exec_command_rule,
-    exec_allowed_forms="show \u2026 or vtysh -c \"show \u2026\" (not show techsupport)",
+    exec_allowed_forms=("show \u2026 or vtysh -c \"show \u2026\" (refused: show followed by any "
+                        "leading part of \"techsupport\", from \"t\" to \"techsupport\", in any letter case)"),
     state_profiles={},
     state_argv_allow=deferred_leg("state_argv_allow", "§4.5-f"),
 )

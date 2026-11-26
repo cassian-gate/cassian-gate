@@ -785,6 +785,91 @@
       }
     },
     {
+      "id": "evpn_mac_route_valid",
+      "kind": "invariant",
+      "limitations": [
+        "The check reads two legs: the JSON route table first and, when it shows no matching route, the text table's status codes, where `*` marks a valid path; the text leg takes the VNI from the test."
+      ],
+      "parameters": {
+        "constraints": [],
+        "params": [
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "expect",
+            "required": false,
+            "types": [
+              "enum"
+            ],
+            "values": [
+              "fail",
+              "pass"
+            ]
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "mac",
+            "required": true,
+            "types": [
+              "mac"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [
+              "src"
+            ],
+            "enforced": "validate",
+            "name": "node",
+            "required": true,
+            "types": [
+              "node"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "tags",
+            "required": false,
+            "types": [
+              "string_list"
+            ],
+            "values": null
+          },
+          {
+            "aliases": [],
+            "enforced": "validate",
+            "name": "vni",
+            "required": true,
+            "types": [
+              "integer"
+            ],
+            "values": null
+          }
+        ],
+        "unknown_keys": "accepted"
+      },
+      "status": {
+        "frr": {
+          "detail": null,
+          "reason": null,
+          "state": "implemented"
+        },
+        "nft-fw": {
+          "detail": null,
+          "reason": "capability 'evpn_mac_route_valid' is not declared by NOS provider 'nft-fw' (deny-by-default)",
+          "state": "not implemented"
+        },
+        "sonic-vm": {
+          "detail": null,
+          "reason": "capability 'evpn_mac_route_valid' is not declared by NOS provider 'sonic-vm' (deny-by-default)",
+          "state": "not implemented"
+        }
+      }
+    },
+    {
       "id": "evpn_vni_route_present",
       "kind": "invariant",
       "limitations": [],
@@ -936,7 +1021,7 @@
           "state": "implemented"
         },
         "sonic-vm": {
-          "detail": "show … or vtysh -c \"show …\" (not show techsupport)",
+          "detail": "show … or vtysh -c \"show …\" (refused: show followed by any leading part of \"techsupport\", from \"t\" to \"techsupport\", in any letter case)",
           "reason": null,
           "state": "implemented"
         }

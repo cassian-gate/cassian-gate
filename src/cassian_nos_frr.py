@@ -861,6 +861,21 @@ def _collect_bgp_as_path(rt, lab, node, req: ObservationRequest) -> Observation:
 def _collect_route_prefix_table(rt, lab, node, req: ObservationRequest) -> Observation:
     """Probe + normalize FRR routing state for route_present, route_absent."""
     norm_prefix = str(req.params.get("prefix") or "").strip()
+    # BL-P2-4.5c-244 (REQ-45E-9, rule B04): FRR's read is the IPv4 RIB only. An IPv6
+    # prefix is an explicit collection failure, as on SONiC (cassian_nos_sonic
+    # _sonic_collect_route_table): no read is issued and the read is not vouched for.
+    try:
+        _is_v6 = ipaddress.ip_network(norm_prefix, strict=False).version == 6
+    except ValueError:
+        _is_v6 = False
+    if _is_v6:
+        return Observation(
+            kind=req.kind,
+            data={"norm_prefix": norm_prefix, "present": False, "observed_prefixes": []},
+            evidence=dict({"cmd": "", "rc": None,
+                           "parse_error": "IPv6 prefix unsupported on frr (IPv4 RIB read only)"},
+                          probe_ok=False),
+        )
     cp = rt.exec(
         lab,
         node,
@@ -1146,8 +1161,29 @@ def _collect_evpn_bgp_summary(rt, lab, node, req: ObservationRequest) -> Observa
     )
 
 
+_RE_EVPN_ROUTE_TYPE_DIGITS = re.compile(r"[0-9]+")
+
+
+def _evpn_route_type_int(value):
+    """§4.5-e WI-5, rule B07 (REQ-45E-21): the canonical `route_type` of an EVPN route entry.
+
+    An int is used as is; a string of ASCII digits is converted with int(); any other
+    value stays as received. The provider normalises; the engine's dedup and sort code
+    is unchanged (scope rule 3).
+    """
+    if isinstance(value, str) and _RE_EVPN_ROUTE_TYPE_DIGITS.fullmatch(value):
+        return int(value)
+    return value
+
+
 def _collect_evpn_routes(rt, lab, node, req: ObservationRequest) -> Observation:
-    """Probe + normalize FRR EVPN state for evpn_mac_route_present, evpn_mac_route_absent, evpn_vni_route_present."""
+    """Probe + normalize FRR EVPN state for evpn_mac_route_present, evpn_mac_route_absent, evpn_mac_route_valid,
+    evpn_vni_route_present.
+
+    §4.5-e WI-5, rule B08 (REQ-45E-25): for `evpn_mac_route_valid` the observation also carries `valid`, true iff
+    some path of a type-2 route matching the test's (`mac`, `vni`) has `valid` true. The other kinds' observation
+    is unchanged (REQ-45E-47).
+    """
     mac = str(req.params.get("mac") or "").strip().lower()
     vni_i = req.params.get("vni_i")
     cp = rt.exec(
@@ -1175,6 +1211,7 @@ def _collect_evpn_routes(rt, lab, node, req: ObservationRequest) -> Observation:
     raw = str(out or "").strip()
     evidence_entries: list = []
     present = False
+    valid = False
     parse_error = ""
 
     def _append_entry(mac_val, vni_val, state_val):
@@ -1185,7 +1222,7 @@ def _collect_evpn_routes(rt, lab, node, req: ObservationRequest) -> Observation:
             "route_type": state_val,
             "node": node,
         }
-        if req.kind in ("evpn_mac_route_present", "evpn_mac_route_absent") and not rec["mac"]:
+        if req.kind in ("evpn_mac_route_present", "evpn_mac_route_absent", "evpn_mac_route_valid") and not rec["mac"]:
             return
         evidence_entries.append(rec)
         if req.kind == "evpn_vni_route_present":
@@ -1252,11 +1289,25 @@ def _collect_evpn_routes(rt, lab, node, req: ObservationRequest) -> Observation:
                                 state_val = entry.get("type")
                             if isinstance(state_val, str):
                                 state_val = state_val.strip()
+                            # §4.5-e WI-5, rule B07 (REQ-45E-21; BL-P2-4.5c-43): `route_type` is an int.
+                            # A string of digits is converted; any other value stays as received.
+                            state_val = _evpn_route_type_int(state_val)
 
                             if req.kind == "evpn_vni_route_present" and vni_val is None:
                                 continue
-                            if req.kind in ("evpn_mac_route_present", "evpn_mac_route_absent") and not mac_val:
+                            if req.kind in ("evpn_mac_route_present", "evpn_mac_route_absent", "evpn_mac_route_valid") and not mac_val:
                                 continue
+
+                            # §4.5-e WI-5, rule B08 (REQ-45E-25): a path marked valid on a type-2 route matching the
+                            # test's (mac, vni). Read before the per-route dedup below: one route's paths share a signature.
+                            if (
+                                req.kind == "evpn_mac_route_valid"
+                                and mac_val == mac
+                                and vni_val == vni_i
+                                and (state_val is None or str(state_val).lower() in ("2", "2-evpn", "macip", "type2"))
+                                and entry.get("valid") is True
+                            ):
+                                valid = True
 
                             sig = (mac_val, vni_val, state_val, node)
                             if sig in seen:
@@ -1276,6 +1327,8 @@ def _collect_evpn_routes(rt, lab, node, req: ObservationRequest) -> Observation:
         "present": present,
         "evidence_entries": evidence_entries,
     }
+    if req.kind == "evpn_mac_route_valid":
+        observed_state["valid"] = valid
     evidence = {
         "cmd": "vtysh -c 'show bgp l2vpn evpn route json'",
         "rc": rc,
@@ -1307,6 +1360,11 @@ _RE_EVPN_MAC_ROUTE_TEXT = re.compile(
     r"\[2\]:\[0\]:\[48\]:\[([0-9a-f:]{17})\]", re.IGNORECASE
 )
 
+# §4.5-e WI-5, rule B08 (REQ-45E-25): an EVPN prefix on a text line, and a type-2 MAC prefix with or without an
+# IP suffix. FRR 10.7.1 prints the prefix on every path line (session-5 capture; 45E-S5-R1).
+_RE_EVPN_PREFIX_TEXT = re.compile(r"\[[0-9]+\]:\S*")
+_RE_EVPN_MAC_PREFIX_TEXT = re.compile(r"\[2\]:\[0\]:\[48\]:\[([0-9a-f:]{17})\](?::\[|$)", re.IGNORECASE)
+
 
 def _collect_evpn_routes_text(rt, lab, node, req: ObservationRequest) -> Observation:
     """Supplementary text-mode EVPN MAC-route probe (REQ-45C-14, LD-45C-1).
@@ -1322,8 +1380,15 @@ def _collect_evpn_routes_text(rt, lab, node, req: ObservationRequest) -> Observa
     `evpn_vni_route_present` does not route to this leg -- it has no text
     fallback, matching the pre-migration core block, which gated on
     `inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent")`.
+
+    §4.5-e WI-5, rule B08 (REQ-45E-25): when the request asks for validity (`evpn_mac_route_valid`), the leg also
+    returns `valid_macs`, the MACs of `[2]:[0]:[48]:[<mac>]` prefixes, with or without an IP suffix, that hold a
+    valid path. A line whose first four characters contain `*` is a valid path; it belongs to the prefix on that
+    line or, when the line carries none, to the last prefix above it in the same `Route Distinguisher:` block.
+    The VNI is the test's. A request without validity is answered as before (REQ-45E-47).
     """
     vni_i = req.params.get("vni_i")
+    want_valid = bool(req.params.get("validity"))
     cp = rt.exec(
         lab,
         node,
@@ -1345,17 +1410,29 @@ def _collect_evpn_routes_text(rt, lab, node, req: ObservationRequest) -> Observa
         rc = getattr(cp, "returncode", None)
 
     records: list[dict] = []
+    valid_macs: set = set()
     parse_error = ""
     try:
         text = str(out or "")
+        last_prefix = None
         for line in text.splitlines():
+            if want_valid:
+                if line.startswith("Route Distinguisher:"):
+                    last_prefix = None
+                mp = _RE_EVPN_PREFIX_TEXT.search(line)
+                if mp:
+                    last_prefix = mp.group(0)
+                if "*" in line[:4] and last_prefix:
+                    mv = _RE_EVPN_MAC_PREFIX_TEXT.match(last_prefix)
+                    if mv:
+                        valid_macs.add(mv.group(1).lower())
             m = _RE_EVPN_MAC_ROUTE_TEXT.search(line)
             if not m:
                 continue
             rec = {
                 "mac": str(m.group(1).lower() or "").strip().lower(),
                 "vni": vni_i,
-                "route_type": "2",
+                "route_type": 2,  # §4.5-e WI-5, rule B07 (REQ-45E-21): an int, as the JSON leg's
                 "node": node,
             }
             if not rec["mac"]:
@@ -1364,9 +1441,12 @@ def _collect_evpn_routes_text(rt, lab, node, req: ObservationRequest) -> Observa
     except Exception as e:
         parse_error = f"text_parse={e}"
 
+    data = {"records": records, "parse_error": parse_error}
+    if want_valid:
+        data["valid_macs"] = sorted(valid_macs)
     return Observation(
         kind=req.kind,
-        data={"records": records, "parse_error": parse_error},
+        data=data,
         evidence={
             "cmd": "vtysh -c 'show bgp l2vpn evpn route'",
             "excerpt": str(out or "")[:_EVPN_TEXT_EXCERPT_CHARS],
@@ -1573,6 +1653,7 @@ _COLLECT_HANDLERS = {
     "evpn_bgp_session_up": _collect_evpn_bgp_summary,
     "evpn_mac_route_present": _collect_evpn_routes,
     "evpn_mac_route_absent": _collect_evpn_routes,
+    "evpn_mac_route_valid": _collect_evpn_routes,
     "evpn_vni_route_present": _collect_evpn_routes,
     "evpn_mac_route_text": _collect_evpn_routes_text,
     "ospf_neighbor_up": _collect_ospf_neighbors,
@@ -1612,6 +1693,7 @@ _FRR_CAPABILITIES: dict[str, CapabilityDisposition] = {
     "route_not_advertised_to": impl(),
     "evpn_mac_route_present": impl(),
     "evpn_mac_route_absent": impl(),
+    "evpn_mac_route_valid": impl(),
     "evpn_vni_route_present": impl(),
     "evpn_bgp_session_up": impl(),
     "ospf_neighbor_up": impl(),
@@ -1644,8 +1726,9 @@ def normalize_bgp_summary(text: str) -> str:
 
     We intentionally discard volatile counters/timers and keep only:
     - neighbor address
-    - ASN (best-effort parse)
-    - state (Established vs Idle/Active/etc.)
+    - ASN (the column the header line names `AS`)
+    - state (the column the header line names `State/PfxRcd`; a numeric
+      value means Established, otherwise Idle/Active/etc.)
 
     Output format (one per neighbor):
       <NEIGHBOR> AS=<ASN or ?> STATE=<STATE>
@@ -1653,11 +1736,19 @@ def normalize_bgp_summary(text: str) -> str:
     lines = (text or "").splitlines()
     out: list[str] = []
     in_table = False
+    # BL-P2-4.5c-234 (REQ-45E-3, rule B02): AS and STATE are read from the columns
+    # the header line names, located by the header's own tokens. None when the
+    # header carries no such token.
+    as_col: int | None = None
+    state_col: int | None = None
 
     for line in lines:
         # Detect the table header
         if ("Neighbor" in line) and ("Up/Down" in line):
             in_table = True
+            header = line.split()
+            as_col = next((i for i, tok in enumerate(header) if tok == "AS"), None)
+            state_col = next((i for i, tok in enumerate(header) if tok == "State/PfxRcd"), None)
             out.append(line.rstrip())
             continue
 
@@ -1681,16 +1772,18 @@ def normalize_bgp_summary(text: str) -> str:
             out.append(line.rstrip())
             continue
 
-        # Heuristic: AS is the first integer token shortly after the neighbor/V columns
+        # AS: the row's token in the header's AS column, when it is all digits.
         asn: str | None = None
-        for tok in parts[1:6]:
-            if tok.isdigit():
-                asn = tok
-                break
+        if as_col is not None and as_col < len(parts) and parts[as_col].isdigit():
+            asn = parts[as_col]
 
-        # Last token often is State/PfxRcd. If it's numeric => Established.
-        last = parts[-1]
-        state = "Established" if last.isdigit() else last
+        # STATE: the row's token in the header's State/PfxRcd column; numeric =>
+        # Established. Without that column, the last token, as before.
+        if state_col is not None and state_col < len(parts):
+            st = parts[state_col]
+        else:
+            st = parts[-1]
+        state = "Established" if st.isdigit() else st
 
         out.append(f"{nbr} AS={asn or '?'} STATE={state}")
 

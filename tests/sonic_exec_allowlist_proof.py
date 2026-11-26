@@ -4,11 +4,15 @@
 `SONIC_PROVIDER.exec_command_rule` replaces its `deferred_leg` placeholder and
 becomes a default-deny read-only allow-list accepting exactly two forms:
 
-  * ``show ...``             -- ``argv[0] == "show"``, excluding ``show
-                               techsupport`` (founder ruling D4, 2026-09-24).
-                               ``show auto-techsupport`` is a distinct
-                               subcommand and stays accepted. D4 narrows this
-                               form only, by its own words.
+  * ``show ...``             -- ``argv[0] == "show"``, excluding ``show``
+                               followed by any leading part of
+                               ``techsupport``, from ``t`` to
+                               ``techsupport``, in any letter case (founder
+                               ruling D4, 2026-09-24; every leading part by
+                               BL-P2-4.5c-239, REQ-45E-1). ``show
+                               auto-techsupport`` is a distinct subcommand,
+                               not a leading part, and stays accepted. D4
+                               narrows this form only, by its own words.
   * ``vtysh -c "show ..."``  -- EXACTLY three arguments (founder ruling D2,
                                2026-09-24). The guest's ``/usr/bin/vtysh`` is a
                                wrapper passing every argument to FRR's vtysh,
@@ -27,7 +31,12 @@ Proof obligations:
                 payload -- the shapes the D3 chain proved FRR admits.
   P-SXA-D4      ``show techsupport`` is refused at every arity; ``show
                 auto-techsupport`` is accepted. The discriminating pair is the
-                point of the ruling and is asserted as a pair.
+                point of the ruling and is asserted as a pair. REQ-45E-1: each
+                of the eleven leading parts of ``techsupport``, ``t`` to
+                ``techsupport``, is refused in lower, upper, title and mixed
+                case; near misses that are not leading parts stay accepted;
+                and the rule decides from argv alone (it reads no help text
+                and calls no guest: D06).
   P-SXA-CLAUSE  a real ``resolve_topology`` rejection renders the
                 registry-derived ``Allowed:`` clause carrying the ``sonic-vm``
                 segment, and the ``frr`` and ``nft-fw`` segments are
@@ -82,7 +91,8 @@ def allowed(cmd):
 # one byte of either.
 FRR_SEG = 'frr -> vtysh -c "show \u2026"'
 NFT_SEG = "nft-fw -> nft list \u2026"
-SONIC_SEG = 'sonic-vm -> show \u2026 or vtysh -c "show \u2026" (not show techsupport)'
+SONIC_SEG = ('sonic-vm -> show \u2026 or vtysh -c "show \u2026" (refused: show followed by any leading '
+             'part of "techsupport", from "t" to "techsupport", in any letter case)')
 
 ACCEPT = [
     "show",
@@ -91,6 +101,12 @@ ACCEPT = [
     "show interfaces status",
     "show auto-techsupport",
     "show auto-techsupport global",
+    # REQ-45E-1 near misses: not a leading part of ``techsupport``
+    "show tacacs",
+    "show techsupportx",
+    "show TECH-SUPPORT",
+    # Q-8: the refusal applies to the ``show`` form only
+    'vtysh -c "show techsupport"',
     'vtysh -c "show ip bgp summary"',
     'vtysh -c "show"',
     'vtysh -c "SHOW ip route"',
@@ -100,6 +116,12 @@ REFUSE = [
     # D4
     "show techsupport",
     "show techsupport --allow-process-stop",
+    # REQ-45E-1: the handover's named failing forms
+    "show t",
+    "show tech",
+    "show techsup",
+    "show Techsupport",
+    "show TECHSUPPORT",
     # D2: every non-three-argument vtysh shape the D3 chain proved FRR admits
     'vtysh -c "show version" -c "configure terminal"',
     'vtysh -b -c "show version"',
@@ -139,6 +161,33 @@ check(
     "P-SXA-D4 discriminating pair: techsupport refused AND auto-techsupport accepted",
     (not allowed("show techsupport")[0]) and allowed("show auto-techsupport")[0],
 )
+
+# REQ-45E-1 (BL-P2-4.5c-239): every leading part, in every letter case. The eleven words
+# are written out, not derived from the rule's own string.
+LEADING_PARTS = ("t", "te", "tec", "tech", "techs", "techsu", "techsup", "techsupp",
+                 "techsuppo", "techsuppor", "techsupport")
+
+
+def _cases(w):
+    mixed = "".join(c.upper() if i % 2 else c for i, c in enumerate(w))
+    return sorted({w, w.upper(), w.title(), mixed})
+
+
+_lp_accepted = ["show " + v for w in LEADING_PARTS for v in _cases(w) if allowed("show " + v)[0]]
+check("P-SXA-D4 REQ-45E-1 each of the %d leading parts is refused in every case tried" % len(LEADING_PARTS),
+      len(LEADING_PARTS) == 11 and not _lp_accepted, "accepted: %r" % _lp_accepted)
+_lp_reasons = {allowed("show " + v)[1] for w in LEADING_PARTS for v in _cases(w)}
+check("P-SXA-D4 REQ-45E-1 every leading-part refusal carries D4's one standard reason",
+      _lp_reasons == {allowed("show techsupport")[1]}, repr(sorted(_lp_reasons)))
+_near = ("show auto-techsupport", "show tacacs", "show techsupportx", "show TECH-SUPPORT", "show tea")
+check("P-SXA-D4 REQ-45E-1 near misses that are not leading parts stay accepted",
+      all(allowed(c)[0] for c in _near), repr([c for c in _near if not allowed(c)[0]]))
+_code = S._sonic_exec_command_rule.__code__
+_names = set(_code.co_names) | set(_code.co_varnames)
+check("P-SXA-D4 D06 the rule decides from argv alone: one parameter, no runtime, exec or help name",
+      _code.co_argcount == 1 and _code.co_varnames[0] == "argv"
+      and not (_names & {"rt", "exec", "run", "subprocess", "help", "popen", "system"}),
+      repr(sorted(_names)))
 
 for _c in REFUSE_MODEL:
     _ok, _why = allowed(_c)

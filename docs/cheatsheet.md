@@ -743,7 +743,7 @@ Which references are rejected:
 
 Support boundary:
 
-- supported current surfaces for `sonic-vm`: lifecycle (`up` / `status` / `down`), node readiness, **ping tests** (executed against the guest), **`exec` tests** that run a read-only `show …` (except `show techsupport`) or `vtysh -c "show …"` command on the guest, and the test kinds and invariant types in the implemented set above
+- supported current surfaces for `sonic-vm`: lifecycle (`up` / `status` / `down`), node readiness, **ping tests** (executed against the guest), **`exec` tests** that run a read-only `show …` (refused: show followed by any leading part of "techsupport", from "t" to "techsupport", in any letter case) or `vtysh -c "show …"` command on the guest, and the test kinds and invariant types in the implemented set above. The refusal applies to the `show` form, and a `vtysh -c` command is not refused by it.
 - unsupported current surfaces: test kinds and invariant types outside the implemented set above (the deferred list the validation rejection message derives), guest-file `copy_*`, and candidate-config input against `sonic-vm` / NOS VM nodes
 
 Scope boundary:
@@ -1060,6 +1060,7 @@ Look for:
 - `summary.precheck.settle.kind: evpn-route-poll` and `outcome: accepted`
 - `summary.precheck.settle.absent_at_last` after a timeout
 - `timing.precheck.settle` for attempts, elapsed time and the final consecutive count (these vary from run to run and are excluded from the tamper digest)
+- `summary.readiness.outcome` (`ready` or `failed`) for the node-readiness gate that runs before the precheck, and `timing.readiness.elapsed_ms` for how long it took (excluded from the tamper digest)
 
 The gate decides only whether tests run; it never alters what a test that runs observes. When it fails, check that each listed host is up and has sent traffic on its access link, and that each leaf's EVPN session to the route reflector is Established. The full record is described under `--precheck-controlplane` in `docs/cli-reference-v1.md`.
 
@@ -1208,7 +1209,7 @@ When the built-in invariant catalog can't express the check you need, an `exec` 
 - name: bgp_peer_established
   kind: exec
   src: r1                                    # target node; type derived (frr | nft-fw | sonic-vm)
-  command: vtysh -c "show bgp summary json"  # read-only: frr -> vtysh -c "show …"; nft-fw -> nft list …; sonic-vm -> show … or vtysh -c "show …" (not show techsupport)
+  command: vtysh -c "show bgp summary json"  # read-only: frr -> vtysh -c "show …"; nft-fw -> nft list …; sonic-vm -> show … or vtysh -c "show …" (refused: show followed by any leading part of "techsupport", from "t" to "techsupport", in any letter case)
   assertion:
     field:
       path: [ipv4Unicast, peers, "10.0.0.2", state]
@@ -2172,6 +2173,31 @@ Required fields:
 
 - `kind: invariant`
 - `type: evpn_mac_route_absent`
+- `node`
+- `mac`
+- `vni`
+
+### EVPN MAC Route Valid
+
+Validates that the node holds a type-2 route for the specified MAC and VNI with at least one path marked valid, a route the node can use. FRR only.
+
+Example:
+
+```yaml
+tests:
+  - name: leaf2_has_valid_host1_mac_route
+    kind: invariant
+    type: evpn_mac_route_valid
+    node: leaf2
+    mac: "00:11:22:33:44:55"
+    vni: 10100
+    expect: pass
+```
+
+Required fields:
+
+- `kind: invariant`
+- `type: evpn_mac_route_valid`
 - `node`
 - `mac`
 - `vni`

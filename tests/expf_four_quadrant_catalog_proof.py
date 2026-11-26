@@ -5,7 +5,7 @@
 §1.14 Invariant-Driven Support / uniformity).
 
 Proves that the four-quadrant expect-fail verdict contract for `kind: invariant`
-is UNIFORM across the operative 15-type catalog, computed from the single
+is UNIFORM across the operative 16-type catalog, computed from the single
 canonical dispatch seam in run_invariant_test (cassian_engine.py), rather than
 coincidental per-type correctness. run_invariant_test and its helper
 _evaluate_invariant_attempt are nested closures inside cmd_test (cassian_engine.py
@@ -22,13 +22,13 @@ captured in SNAPSHOT_MAPPING.txt (v2 ≡ v484 pin). Engine is byte-unchanged by
 §4.5 (REQ-EXPF-PRES-1/2): this harness proves and locks already-correct logic.
 
 Proof obligations (handover §15.2):
-  P-EXPF-CAT   the operative catalog is exactly the 15 types declared in
+  P-EXPF-CAT   the operative catalog is exactly the 16 types declared in
                cassian_model.py (drift guard).
   P-EXPF-UNIF  every verdict VALUE assignment in run_invariant_test is either the
                canonical seam `verdict = "pass" if observed == expected else
                "fail"` or the B06 error/guard-path constant `verdict="fail"` —
                there is no divergent per-type verdict path (REQ-EXPF-4 / B05).
-  P-EXPF-Q     for all 15 types x the four (expect, observed) quadrants, the
+  P-EXPF-Q     for all 16 types x the four (expect, observed) quadrants, the
                canonical seam yields the contract verdict: Q1 pass/pass->pass,
                Q2 pass/fail->fail, Q3 fail/fail->pass, Q4 fail/pass->fail
                (REQ-EXPF-1/2/3; B01-B04).
@@ -53,12 +53,15 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
 _SRC = os.path.join(_ROOT, "src")
 _TOPO = os.path.join(_ROOT, "topologies")
+# §4.5-e WI-5 (45E-S4-R1): P-EXPF-COV also reads the base's hosted fixture, which carries
+# evpn_mac_route_valid's expect: fail test; no file is added under topologies/ (handover §14.3).
+_VALID_FIXTURE = os.path.join(_ROOT, "tests", "fixtures", "evpn-mac-route-valid")
 
 _ENGINE = os.path.join(_SRC, "cassian_engine.py")
 _MODEL = os.path.join(_SRC, "cassian_model.py")
 _TESTS = os.path.join(_SRC, "cassian_tests.py")
 
-# Authoritative 15-type operative catalog (cross-checked against cassian_model.py).
+# Authoritative 16-type operative catalog (cross-checked against cassian_model.py).
 EXPECTED_CATALOG = (
     "bgp_session_up",
     "route_present",
@@ -71,6 +74,7 @@ EXPECTED_CATALOG = (
     "route_not_advertised_to",
     "evpn_mac_route_present",
     "evpn_mac_route_absent",
+    "evpn_mac_route_valid",
     "evpn_vni_route_present",
     "evpn_bgp_session_up",
     "ospf_neighbor_up",
@@ -166,7 +170,7 @@ def main():
         checks.append((name, bool(cond)))
 
     # --- P-EXPF-CAT: catalog drift guard ---
-    check("P-EXPF-CAT catalog has 15 types", len(catalog) == 15)
+    check("P-EXPF-CAT catalog has 16 types", len(catalog) == 16)
     check("P-EXPF-CAT catalog matches expected set", set(catalog) == set(EXPECTED_CATALOG))
     check("P-EXPF-CAT catalog order preserved", tuple(catalog) == EXPECTED_CATALOG)
 
@@ -182,7 +186,7 @@ def main():
           val_assigns and not divergent)
     check("P-EXPF-UNIF no divergent per-type verdict path", divergent == [])
 
-    # --- P-EXPF-Q: four-quadrant contract, uniform across all 15 types from the seam ---
+    # --- P-EXPF-Q: four-quadrant contract, uniform across all 16 types from the seam ---
     for t in catalog:
         for q, spec in QUADRANTS.items():
             check(f"P-EXPF-Q {t} {q} {spec['expect']}/{spec['observed']}->{spec['verdict']}",
@@ -224,11 +228,12 @@ def main():
 
     # --- P-EXPF-COV: each catalog type has an expect: fail topology fixture ---
     topo_files = []
-    if os.path.isdir(_TOPO):
-        for dirpath, _dirs, files in os.walk(_TOPO):
-            for fn in files:
-                if fn.endswith((".yaml", ".yml")):
-                    topo_files.append(os.path.join(dirpath, fn))
+    for _cov_root in (_TOPO, _VALID_FIXTURE):
+        if os.path.isdir(_cov_root):
+            for dirpath, _dirs, files in os.walk(_cov_root):
+                for fn in files:
+                    if fn.endswith((".yaml", ".yml")):
+                        topo_files.append(os.path.join(dirpath, fn))
     topo_blob = {p: _read(p) for p in topo_files}
     for t in catalog:
         covered = any(

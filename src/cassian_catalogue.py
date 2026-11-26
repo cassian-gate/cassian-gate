@@ -96,6 +96,11 @@ STATUS_CLASSES = {
 
 # Declared limitation notes, per check, in declared order.
 LIMITATIONS = {
+    "evpn_mac_route_valid": (
+        "The check reads two legs: the JSON route table first and, when it shows no "
+        "matching route, the text table's status codes, where `*` marks a valid path; "
+        "the text leg takes the VNI from the test.",
+    ),
     "interface_state": (
         "On a container-runtime node, the engine first checks that the node's "
         "iproute2 can emit JSON (`ip -j link show lo`); if it cannot, the test "
@@ -265,6 +270,11 @@ CHECK_PARAMETERS = {
         "constraints": (),
     },
     "evpn_mac_route_present": {
+        "unknown_keys": "accepted",
+        "params": (_EXPECT, _MAC, _NODE_SRC, _TAGS, _VNI),
+        "constraints": (),
+    },
+    "evpn_mac_route_valid": {
         "unknown_keys": "accepted",
         "params": (_EXPECT, _MAC, _NODE_SRC, _TAGS, _VNI),
         "constraints": (),

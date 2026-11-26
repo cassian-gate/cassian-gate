@@ -1,0 +1,75 @@
+# §4.5-e base, WI-5 (REQ-45E-25; handover §6.7.4 row 4, §14.2): the hosted fixture for evpn_mac_route_valid.
+# It sits outside topologies/ and examples/, so evpn_rr_next_hop_self_proof.py's fabric.evpn census is
+# unchanged (handover §14.3). Its two tests: one expects pass on a declared host MAC, one expects fail on
+# an undeclared MAC. The text capture beside it is FRR 10.7.1's `show bgp l2vpn evpn route` (45E-S5-R1).
+name: evpn-mac-route-valid
+
+fabric:
+  evpn:
+    enabled: true
+    mode: vlan-aware
+    asn: 65100
+
+nodes:
+  - name: spine1
+    type: frr
+    role: spine
+    evpn_rr: true
+    router_id: 10.255.0.1
+
+  - name: leaf1
+    type: frr
+    role: leaf
+    router_id: 10.255.0.11
+
+  - name: leaf2
+    type: frr
+    role: leaf
+    router_id: 10.255.0.12
+
+  - name: host1
+    type: host
+    attach: leaf1
+    vlan: 10
+    ip: 10.10.10.11/24
+    gw: 10.10.10.1
+    mac: "00:11:22:33:44:55"
+
+  - name: host2
+    type: host
+    attach: leaf2
+    vlan: 10
+    ip: 10.10.10.12/24
+    gw: 10.10.10.1
+    mac: "00:11:22:33:44:66"
+
+links:
+  - endpoints: ["spine1:eth1", "leaf1:eth1"]
+    ipv4: ["172.16.0.0/31", "172.16.0.1/31"]
+
+  - endpoints: ["spine1:eth2", "leaf2:eth1"]
+    ipv4: ["172.16.0.2/31", "172.16.0.3/31"]
+
+  - endpoints: ["host1:eth1", "leaf1:eth2"]
+  - endpoints: ["host2:eth1", "leaf2:eth2"]
+
+vlans:
+  10:
+    vni: 10100
+
+tests:
+  - name: leaf2_has_valid_host1_mac_route
+    kind: invariant
+    type: evpn_mac_route_valid
+    node: leaf2
+    mac: "00:11:22:33:44:55"
+    vni: 10100
+    expect: pass
+
+  - name: leaf2_has_no_valid_route_for_undeclared_mac
+    kind: invariant
+    type: evpn_mac_route_valid
+    node: leaf2
+    mac: "00:11:22:33:44:77"
+    vni: 10100
+    expect: fail

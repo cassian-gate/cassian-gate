@@ -94,7 +94,7 @@ from cassian_candidate import (
 )
 from cassian_two_run import _cmd_test_two_run
 from cassian_runtime_container import _normalize_prefix, verify_lab_ready, verify_sonic_vm_ready
-from cassian_model import build_node_links
+from cassian_model import build_node_links, fabric_evpn_session_set
 from cassian_tests import (
     ensure_nc,
     node_first_ipv4,
@@ -250,6 +250,15 @@ def _command_uses_workspace_labs(cmd: str) -> bool:
         "cleanup",
     }
 
+# §4.5-e addendum 01, rule B18 (REQ-45E-58): the in-memory key under which `_provision_nos_providers` hands a
+# sonic-vm EVPN participant its session-set peers, on a shallow copy of its node mapping. The SONiC provider
+# reads the same name (its `_EVPN_SESSION_PEERS_KEY`); tests/sonic_provision_supply_proof.py drives this
+# dispatch into the provider's own generation, so the two cannot drift apart unseen. The name carries "evpn",
+# so `validate` refuses it anywhere outside `fabric.evpn` (`_validate_fabric_evpn_presence_only`): an operator
+# cannot supply it.
+_EVPN_SESSION_PEERS_KEY = "_cassian_evpn_session_peers"
+
+
 def _provision_nos_providers(rt, lab_name: str, topo: dict) -> None:
     """Dispatch `nos_ready` and `provision` for every node whose provider wires them.
 
@@ -257,7 +266,13 @@ def _provision_nos_providers(rt, lab_name: str, topo: dict) -> None:
     unwired provider is never invoked and never fails loud for merely existing.
     A provider with `provision` deferred but `nos_ready` wired (FRR, S31-R10)
     is dispatched for `nos_ready` only.
+
+    §4.5-e addendum 01, rule B18 (REQ-45E-58; PBE-1b-9): the EVPN session set is derived once, before the
+    loop. A sonic-vm node that is one of its participants is handed its peers, as (name, IP) in the set's
+    order, on a shallow copy of its node mapping; every other node is handed its own mapping, as before.
+    Neither `n` nor `topo` is changed, so the key reaches no file.
     """
+    evpn_sessions = fabric_evpn_session_set(topo) or {}
     for n in topo.get("nodes", []) or []:
         if not isinstance(n, dict):
             continue
@@ -302,7 +317,11 @@ def _provision_nos_providers(rt, lab_name: str, topo: dict) -> None:
         if provision_deferred:
             continue
 
-        applied = prov.provision(rt, lab_name, name, n, topo)
+        node_d = n
+        if n.get("type") == "sonic-vm" and name in evpn_sessions:
+            node_d = dict(n)
+            node_d[_EVPN_SESSION_PEERS_KEY] = [(peer, ip) for peer, ip, _rr_client in evpn_sessions[name]]
+        applied = prov.provision(rt, lab_name, name, node_d, topo)
         if not applied:
             continue
         for fname, content in applied.items():
@@ -2898,14 +2917,17 @@ def cmd_status(args: argparse.Namespace) -> None:
         cname = node_rec["container"]
         state = str(node_rec.get("state") or ("running" if node_rec.get("running") else "missing"))
         print(f"  - {name:<8} ({cname}) : {state}")
+        # BL-P2-4.5c-235 (REQ-45E-6, rule B03): each block below prints only when THIS
+        # node's record says it is running -- never the record loop's last value.
+        node_running = bool(node_rec.get("running"))
 
-        if running and show_intf and "interfaces" in node_rec and node_rec["interfaces"]:
+        if node_running and show_intf and "interfaces" in node_rec and node_rec["interfaces"]:
             print("      IF:")
             for line in node_rec["interfaces"]:
                 print(f"      {line}")
 
         # Human output (founder ruling S27-R8): the record guard's capability check.
-        if (running and bgp_enabled and node_rec.get("type") in NOS_PROVIDERS
+        if (node_running and bgp_enabled and node_rec.get("type") in NOS_PROVIDERS
                 and capability_for(NOS_PROVIDERS[node_rec.get("type")],
                                    "status_bgp_summary").state == CAP_IMPL):
             bgp = node_rec.get("bgp") or {}
@@ -2935,7 +2957,7 @@ def cmd_status(args: argparse.Namespace) -> None:
                     for line in raw_text:
                         print(f"      {line}")
 
-        if (running and routes_enabled and node_rec.get("type") in NOS_PROVIDERS
+        if (node_running and routes_enabled and node_rec.get("type") in NOS_PROVIDERS
                 and capability_for(NOS_PROVIDERS[node_rec.get("type")],
                                    "status_routes").state == CAP_IMPL):
             rts = node_rec.get("routes") or {}
@@ -3612,6 +3634,21 @@ def _precheck_entry(topo: dict, bgp_participants: list, selected: bool):
     if bgp_participants or fabric:
         return True, None, None
     return False, "no-bgp-intent", None
+
+
+def _precheck_fabric_participants(topo: dict):
+    """`cmd_test`'s precheck participants for a topology with `fabric.evpn` enabled, each with its
+    expected peer IPs, taken from the model's one derivation of the fabric session set
+    (`fabric_evpn_session_set`), in topology node order; None for any other topology.
+
+    §4.5-e WI-4, rule B10 (REQ-45E-18; BL-P2-4.5c-227; PBE-1b-9). The generator renders the same
+    peers in the same order (REQ-45E-17), so a participant's expected peers are the generator's
+    peers for that node. A topology without `fabric.evpn` keeps `cmd_test`'s asn-gated derivation.
+    """
+    sessions = fabric_evpn_session_set(topo)
+    if sessions is None:
+        return None
+    return [(name, tuple(ip for _peer, ip, _rr in peers)) for name, peers in sessions.items()]
 
 
 class _PrecheckRecord:
@@ -6137,7 +6174,7 @@ def cmd_test(args: argparse.Namespace) -> None:
 
             return vtysh_ok, predicate_ok, observed_state, evidence
 
-        if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent", "evpn_vni_route_present"):
+        if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent", "evpn_mac_route_valid", "evpn_vni_route_present"):
             mac = str(t.get("_mac") or "").strip().lower()
             vni_i = t.get("_vni_i")
             # Provider seam (REQ-45b-4): the parse filters by observation kind,
@@ -6166,7 +6203,11 @@ def cmd_test(args: argparse.Namespace) -> None:
             observed_state = dict(_obs.data)
             evidence = {k: v for k, v in _obs.evidence.items() if k != "probe_ok"}
 
-            predicate_ok = bool(observed_state.get("present"))
+            # §4.5-e WI-5, rule B08 (REQ-45E-25): the valid kind's predicate is a valid path.
+            if inv_type == "evpn_mac_route_valid":
+                predicate_ok = bool(observed_state.get("valid"))
+            else:
+                predicate_ok = bool(observed_state.get("present"))
 
             return vtysh_ok, predicate_ok, observed_state, evidence
 
@@ -7022,7 +7063,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             )
             return verdict
 
-        if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent", "evpn_vni_route_present"):
+        if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent", "evpn_mac_route_valid", "evpn_vni_route_present"):
             mac = str(t.get("mac") or "").strip().lower()
             vni = t.get("vni")
             try:
@@ -7030,7 +7071,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             except Exception:
                 vni_i = None
 
-            if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent"):
+            if inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent", "evpn_mac_route_valid"):
                 if not mac or vni_i is None:
                     record_fn(
                         name=test_name,
@@ -7072,6 +7113,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             parse_error = str(last_evidence.get("parse_error") or "")
             evidence_entries = list(last_state.get("evidence_entries") or [])
             present = bool(last_state.get("present"))
+            valid = bool(last_state.get("valid"))
 
             if rc not in (0, None):
                 record_fn(
@@ -7097,7 +7139,7 @@ def cmd_test(args: argparse.Namespace) -> None:
                 )
                 raise SystemExit(2)
 
-            if not present and inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent"):
+            if not present and inv_type in ("evpn_mac_route_present", "evpn_mac_route_absent", "evpn_mac_route_valid"):
                 # Supplementary text-mode leg (REQ-45C-14, LD-45C-1 ruled shape):
                 # a SECOND ObservationRequest of a distinct kind, issued only
                 # after the JSON leg returned no matching route. The provider
@@ -7110,7 +7152,12 @@ def cmd_test(args: argparse.Namespace) -> None:
                 try:
                     _sup = _nos_collect(
                         rt, lab, src, _nos_ntype(topo, src),
-                        ObservationRequest(kind="evpn_mac_route_text", params={"vni_i": vni_i}),
+                        ObservationRequest(
+                            kind="evpn_mac_route_text",
+                            # §4.5-e WI-5, rule B08 (REQ-45E-25): only the valid kind asks the text leg for validity
+                            # (REQ-45E-47).
+                            params=({"vni_i": vni_i, "validity": True} if inv_type == "evpn_mac_route_valid" else {"vni_i": vni_i}),
+                        ),
                         "cmd_test supplementary EVPN collection",
                     )
                 except NosCapabilityUnsupported:
@@ -7175,6 +7222,8 @@ def cmd_test(args: argparse.Namespace) -> None:
                     evidence_entries.append(rec)
                     if rec["mac"] == mac and rec["vni"] == vni_i:
                         present = True
+                if inv_type == "evpn_mac_route_valid" and mac in list(_sup.data.get("valid_macs") or []):
+                    valid = True
 
             if parse_error and not evidence_entries:
                 record_fn(
@@ -7248,6 +7297,9 @@ def cmd_test(args: argparse.Namespace) -> None:
                 observed = "pass" if present else "fail"
             elif inv_type == "evpn_mac_route_absent":
                 observed = "pass" if not present else "fail"
+            elif inv_type == "evpn_mac_route_valid":
+                # §4.5-e WI-5, rule B08 (REQ-45E-25): observed is pass iff a valid path was read.
+                observed = "pass" if valid else "fail"
             else:
                 observed = "pass" if present else "fail"
 
@@ -7310,6 +7362,8 @@ def cmd_test(args: argparse.Namespace) -> None:
                         "evpn_routes": evpn_routes_value,
                         "source_node": src,
                     }
+                    if inv_type == "evpn_mac_route_valid":
+                        observed_state_payload["valid"] = bool(valid)
                 if parse_error:
                     observed_state_payload["parse_error"] = str(parse_error)
 
@@ -9887,7 +9941,7 @@ def cmd_test(args: argparse.Namespace) -> None:
             "interval_s": float(interval_s),
             "per_attempt_timeout_s": int(per_attempt_timeout_s),
             "succeeded": bool(succeeded),
-            "time_to_success_ms": (int(first_success_ms) if (expected == "pass") else None),
+            "time_to_success_ms": (int(first_success_ms) if (expected == "pass" and first_success_ms is not None) else None),
             "time_to_first_success_ms": (int(first_success_ms) if (expected == "fail" and succeeded) else None),
             "last_rc": getattr(last_cp, "returncode", None),
         }
@@ -10805,15 +10859,24 @@ def cmd_test(args: argparse.Namespace) -> None:
     # =============================================================================
     # 2) Node readiness gate (no control-plane assumptions yet)
     # =============================================================================
+    # REQ-45E-42 (ESC-7 ruling (a), rule B11): the readiness phase is recorded as one
+    # entry -- its outcome in summary.readiness, its elapsed time in timing.readiness
+    # (the timing subtree stays outside the tamper digest, D10) -- on success, and on
+    # failure before the existing failure write. Declared under DC v2.1 §14 item 8.
+    _rd_t0 = time.time()
     try:
         verify_lab_ready(rt, topo, lab)
     except SystemExit:
+        results["summary"]["readiness"] = {"outcome": "failed"}
+        results.setdefault("timing", {})["readiness"] = {"elapsed_ms": int(round((time.time() - _rd_t0) * 1000))}
         results["result"] = "fail"
         finished_at = time.time()
         results["summary"]["finished_at"] = finished_at
         results["summary"]["duration_ms"] = int((finished_at - started_at) * 1000)
         write_results()
         raise
+    results["summary"]["readiness"] = {"outcome": "ready"}
+    results.setdefault("timing", {})["readiness"] = {"elapsed_ms": int(round((time.time() - _rd_t0) * 1000))}
 
     # =============================================================================
     # 2.5) Candidate Config Apply (v1.5) - gate-only, atomic, evidenced
@@ -11082,7 +11145,16 @@ def cmd_test(args: argparse.Namespace) -> None:
         The channel the widened `convergence_wait` contract carries (founder
         ruling 2026-08-25). Opaque to the provider contract: peer-IP strings
         only, no NOS vocabulary.
+
+        §4.5-e addendum 01, rule B17 (REQ-45E-57; BL-P2-4.5c-227; PBE-1b-9). For a participant of a
+        `fabric.evpn` topology it returns instead the peer IPs `_precheck_fabric_participants` derived
+        for it, in the session set's order. A fabric node declares no `asn`, so the linked-speaker walk
+        above finds no peer for it. Both call sites take this result: the precheck and the scenario
+        `wait_for_bgp` step for a non-FRR node. Neither call line is edited.
         """
+        for _fp_name, _fp_peer_ips in (_precheck_fabric_participants(topo) or ()):
+            if _fp_name == node_name:
+                return tuple(_fp_peer_ips)
         return tuple(sorted(
             str(l.get("peer_ip") or "").strip()
             for l in expected_bgp_peers(node_name)
@@ -11172,6 +11244,14 @@ def cmd_test(args: argparse.Namespace) -> None:
     for n in bgp_speakers:
         if expected_bgp_peers(n["name"]):
             bgp_participants.append(n)
+    # §4.5-e WI-4, rule B10 (REQ-45E-18; BL-P2-4.5c-227): a fabric.evpn topology takes its precheck
+    # participants from the model's one derivation of the fabric session set, in topology node order
+    # (`_precheck_fabric_participants`); each FRR participant then waits through the existing inline
+    # wait below. Every other topology keeps the asn-gated derivation above. Declared under DC v2.1
+    # §14 item 8.
+    _fabric_participants = _precheck_fabric_participants(topo)
+    if _fabric_participants is not None:
+        bgp_participants = [nodes_by_name[_name] for _name, _peer_ips in _fabric_participants]
 
     # Convergence semantics:
     # - Default tests: the precheck is selected; whether it runs is
