@@ -1403,7 +1403,7 @@ def _provision_preconfigured(rt: "Runtime", lab: str, node: str,
     return {"config_db.json": declared}
 
 
-# §4.5-e addendum 01, rule B21 (REQ-45E-65 to -71; rulings 45E-S11-R1 to -R3). After the routing-daemon wait,
+# §4.5-e addendum 01, rule B21 (REQ-45E-65 to -71; rulings 45E-S11-R1 to -R4). After the routing-daemon wait,
 # `provision` pushes an EVPN participant's FRR fragment (rule B20) through `vtysh`, reads it back once, and waits,
 # bounded, until each session-set peer has negotiated the EVPN family. Single-sourced argv (PBE-P2-6): the proofs
 # import these rather than restating the commands. The forms are the ones probe record 01 measured: the push (§5,
@@ -1415,6 +1415,23 @@ _EVPN_SUMMARY_ARGV = ("vtysh", "-c", "show bgp l2vpn evpn summary json")
 # `not-read` when no neighbour read was made (45E-S11-R1).
 _EVPN_CAPABILITY_VALUES = ("advertisedAndReceived", "advertised", "received")
 _EVPN_NEGOTIATED = "advertisedAndReceived"
+# 45E-S11-R4 (row 86, L183; D24, L536): a read that gives no answer is reported as no answer, never as `absent`,
+# `not-present` or "not found". In the session wait it stands as a peer's state (a summary read with no answer) or
+# as its capability value (a neighbour read with no answer).
+_EVPN_NO_ANSWER = "no-answer"
+
+
+def _evpn_json_answer(rc: "Any", raw: str) -> "dict | None":
+    """The JSON object one of B21's JSON reads answered with, or None when it gave no answer (45E-S11-R4; row 86):
+    a non-zero exit, or output not in the reader's format -- nothing printed, output that is not JSON, or JSON that
+    is not an object (rulings note 2 §5). An object is an answer, whatever it lists."""
+    if rc != 0:
+        return None
+    try:
+        doc = json.loads((raw or "").strip())
+    except Exception:
+        return None
+    return doc if isinstance(doc, dict) else None
 
 
 def _evpn_neighbor_argv(peer_ip: str) -> "list[str]":
@@ -1432,17 +1449,17 @@ def _evpn_capability_value(raw: str, peer_ip: str) -> str:
     Read at that path only: the same read carries a second `l2VpnEvpn` object under another capability (batch C
     L568), which is not the signal.
 
-    Returns that key's name, or `absent` when the read shows no EVPN family at that path, an unparseable read
-    included.
+    Returns that key's name, or `absent` when the read answered and shows no EVPN family at that path. Output that
+    is not a JSON object is no answer and returns `no-answer`, never `absent` (45E-S11-R4; row 86); a non-zero
+    exit is told apart by the caller, which reads the return code (`_evpn_session_reads`).
 
     COVERAGE LIMIT (PBE-P2-8): the shape is FRR 8.5.4's on sonic-vm:202405 (D26). Another FRR may print another
     shape; it would read `absent`, and the wait would fail loudly with U7 rather than pass.
     """
-    try:
-        doc = json.loads((raw or "").strip())
-    except Exception:
-        return "absent"
-    entry = doc.get(peer_ip) if isinstance(doc, dict) else None
+    doc = _evpn_json_answer(0, raw)
+    if doc is None:
+        return _EVPN_NO_ANSWER
+    entry = doc.get(peer_ip)
     caps = entry.get("neighborCapabilities") if isinstance(entry, dict) else None
     fams = caps.get("multiprotocolExtensions") if isinstance(caps, dict) else None
     fam = fams.get("l2VpnEvpn") if isinstance(fams, dict) else None
@@ -1460,14 +1477,22 @@ def _evpn_session_reads(rt: "Runtime", lab: str, node: str,
     One read of the EVPN summary first; then the neighbour read only for a peer that reads `Established`. A peer
     with no neighbour read carries `not-read`. A peer the summary does not list has no entry in the first
     mapping. This is the reader rule B23's session check reads the same signal with. STDOUT only (F-45C-C3-20).
+
+    NO ANSWER (45E-S11-R4; row 86; D24). Each read's return code is read, never discarded. A summary read with no
+    answer (`_evpn_json_answer`) gives every one of `peer_ips` the state `no-answer`, and no neighbour read is made;
+    a summary that answered and does not list a peer leaves it out, as before (`not-present` in U7). A neighbour
+    read with no answer gives the capability value `no-answer`. `_peers_from_summary`, which `convergence_wait`
+    shares, is not changed: the distinction is made here, before it is called.
     """
-    _rc, raw = _sonic_read(rt, lab, node, _EVPN_SUMMARY_ARGV)
+    rc, raw = _sonic_read(rt, lab, node, _EVPN_SUMMARY_ARGV)
+    if _evpn_json_answer(rc, raw) is None:
+        return ({str(ip): _EVPN_NO_ANSWER for ip in peer_ips}, {str(ip): "not-read" for ip in peer_ips})
     states = _peers_from_summary(raw)
     caps: "dict[str, str]" = {}
     for ip in peer_ips:
         if states.get(ip) == "Established":
-            _rc, nraw = _sonic_read(rt, lab, node, tuple(_evpn_neighbor_argv(ip)))
-            caps[ip] = _evpn_capability_value(nraw, ip)
+            nrc, nraw = _sonic_read(rt, lab, node, tuple(_evpn_neighbor_argv(ip)))
+            caps[ip] = _EVPN_NO_ANSWER if _evpn_json_answer(nrc, nraw) is None else _evpn_capability_value(nraw, ip)
         else:
             caps[ip] = "not-read"
     return states, caps
@@ -1541,10 +1566,21 @@ def _absent_fragment_lines(running: str, lines: "list[str]") -> "list[str]":
 def _read_back_evpn_fragment(rt: "Runtime", lab: str, node: str, lines: "list[str]") -> None:
     """REQ-45E-67: the first read-back, straight after a push that returned 0. One read of
     `_EVPN_RUNNING_CONFIG_ARGV`; every fragment line must be in its block (`_absent_fragment_lines`). Presence is
-    immediate, so nothing is polled (D24). If a line is absent, U6 names each absent line. A read with no answer
-    carries no line, so every line counts absent.
+    immediate, so nothing is polled (D24). If a line is absent, U6 names each absent line.
+
+    NO ANSWER (45E-S11-R4; row 86; D24). A read that exits non-zero, or prints nothing (empty, or white space only),
+    is not read as a configuration without the lines: it fails at once with its own text, whatever it printed.
     """
-    _rc, running = _sonic_read(rt, lab, node, _EVPN_RUNNING_CONFIG_ARGV)
+    rc, running = _sonic_read(rt, lab, node, _EVPN_RUNNING_CONFIG_ARGV)
+    if rc != 0 or not (running or "").strip():
+        _fail(
+            "SONiC EVPN configuration could not be read back",
+            node,
+            (f"`vtysh` exited {rc} reading the running configuration after the push" if rc != 0
+             else "the running configuration read after the push printed nothing"),
+            "nothing was read, so whether the EVPN lines are in force is not known",
+            "report this with the guest's running configuration, then run cassian up again",
+        )
     absent = _absent_fragment_lines(running, lines)
     if absent:
         _fail(
@@ -1568,8 +1604,10 @@ def _await_evpn_sessions(rt: "Runtime", lab: str, node: str, peer_ips: "list[str
 
     BOUND: `timeout` seconds (`_ROUTING_DAEMON_WAIT_S`, 30 s), polled every `_CONVERGENCE_POLL_INTERVAL_S` (1 s);
     at least one read is always issued. Nothing new is recorded at `up` (R.2 ruling 2). On the bound, U7 names
-    each peer not negotiated with its state (`not-present` when the summary does not list it), its capability
-    value, and the whole elapsed seconds (45E-S11-R2, -R3) -- never a hang, never silence (Doctrine 1.11).
+    each peer not negotiated with its state (`not-present` when a summary that answered does not list it,
+    `no-answer` when the summary read gave no answer), its capability value (`no-answer` when the neighbour read
+    gave none), and the whole elapsed seconds (45E-S11-R2 to -R4) -- never a hang, never silence (Doctrine 1.11).
+    A read with no answer is polled again like any other, up to the bound (45E-S11-R4).
 
     COVERAGE LIMIT (PBE-P2-8): the wait sees each peer negotiate once. A loss after `up` returns is reported by the
     next EVPN read on this node (U8, U11), not here.

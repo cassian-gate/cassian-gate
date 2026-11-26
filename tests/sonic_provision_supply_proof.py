@@ -43,7 +43,11 @@ rulings 45E-S11-R1 to -R3): the B21 legs at the end run the provider's own
 `provision` on the mapping the dispatch hands leaf1, against a recording
 stand-in guest, on the fake clock: the push and its argv, the first read-back,
 the session wait in both directions, the three failure texts of §6.6 rows U5
-to U7, one reconcile restart per call, and a second `provision`. COVERAGE LIMIT
+to U7, one reconcile restart per call, and a second `provision`. Ruling
+45E-S11-R4 (packet 4a; row 86, D24): each of the three reads that gives no
+answer -- a non-zero exit, nothing printed, or, for the two JSON reads, output
+that is not a JSON object -- is reported as no answer, never as absent or not
+found; two in-proof mutants restore packet 4's forms. COVERAGE LIMIT
 (PBE-P2-8): the stand-in's answers carry the shapes probe record 01 measured,
 but they are built here, not captured; the guest's own answers are the LIVE
 proof's (§15.2 rows 67 and 70).
@@ -733,9 +737,13 @@ _U5 = _NL.join(["ERROR: SONiC EVPN configuration push failed", "node: leaf1",
 _U6 = _NL.join(["ERROR: SONiC EVPN configuration is not in force", "node: leaf1",
                 "reason: 1 of 4 EVPN lines are absent from the running configuration after the push",
                 "detail: absent: advertise-all-vni"]) + _NL + _REQ_U5_U6
-_U6_ALL = ("reason: 4 of 4 EVPN lines are absent from the running configuration after the push" + _NL
-           + "detail: absent: router bgp 65100; address-family l2vpn evpn; neighbor 172.16.0.0 activate; "
-           + "advertise-all-vni" + _NL)
+# 45E-S11-R4's read-back failure (rulings note 2 §3): its own text, never U6's absent lines.
+_NOANS_HEAD = "ERROR: SONiC EVPN configuration could not be read back" + _NL + "node: leaf1" + _NL
+_NOANS_TAIL = "detail: nothing was read, so whether the EVPN lines are in force is not known" + _NL + _REQ_U5_U6
+_NOANS_EMPTY = (_NOANS_HEAD + "reason: the running configuration read after the push printed nothing" + _NL
+                + _NOANS_TAIL)
+_NOANS_RC1 = (_NOANS_HEAD + "reason: `vtysh` exited 1 reading the running configuration after the push" + _NL
+              + _NOANS_TAIL)
 _U7_DETAIL = ("detail: the EVPN lines are in force, but the EVPN family did not negotiate with these peers, so EVPN "
               "checks on this node would read no routes from them" + _NL)
 _U7_REQUIRED = "required: check the peer's EVPN configuration for this node, then run cassian up again" + _NL
@@ -748,9 +756,19 @@ class _EvpnGuest(FakeRuntime):
     """Recording stand-in guest for rule B21. `polls`: the peer's (state, capability key) at each EVPN summary
     read, the last repeating; a state of None leaves the peer out of the summary."""
 
-    def __init__(self, rib, push_rc=0, running=_RUNNING_OK, polls=(("Established", "advertisedAndReceived"),)):
+    def __init__(self, rib, push_rc=0, running=_RUNNING_OK, polls=(("Established", "advertisedAndReceived"),),
+                 running_rc=0, summary=None, neighbour=None):
         FakeRuntime.__init__(self, rib_script=[(0, rib)])
         self.push_rc, self.running, self.polls, self.summaries = push_rc, running, list(polls), 0
+        # 45E-S11-R4's cases: the read-back's return code; for the summary and the neighbour read, an override
+        # (rc, stdout, polls): stdout None keeps the built answer, so a non-zero exit with a full answer can be
+        # stated; polls names the summary polls it applies on (None: every poll).
+        self.running_rc, self.summary, self.neighbour = running_rc, summary, neighbour
+
+    def _answer(self, override, built):
+        if override is None or (override[2] is not None and self.summaries not in override[2]):
+            return _CP(out=built)
+        return _CP(rc=override[0], out=built if override[1] is None else override[1])
 
     def _poll(self):
         return self.polls[min(max(self.summaries - 1, 0), len(self.polls) - 1)]
@@ -762,22 +780,23 @@ class _EvpnGuest(FakeRuntime):
             return _CP(rc=self.push_rc)
         if list(argv) == _READBACK_ARGV:
             self.calls.append(list(argv))
-            return _CP(out=self.running)
+            return _CP(rc=self.running_rc, out=self.running)
         if joined == _SUMMARY_JOINED:
             self.calls.append(list(argv))
             self.summaries += 1
             state, _cap = self._poll()
             peers = {} if state is None else {"172.16.0.0": {"hostname": "spine1", "state": state, "pfxRcd": 0}}
-            return _CP(out=json.dumps({"routerId": "192.0.2.150", "as": 65100, "peers": peers}))
+            return self._answer(self.summary, json.dumps({"routerId": "192.0.2.150", "as": 65100, "peers": peers}))
         if joined == _NBR_JOINED:
             self.calls.append(list(argv))
             state, cap = self._poll()
             fams = {"ipv4Unicast": {"advertisedAndReceived": True}}
             if cap:
                 fams["l2VpnEvpn"] = {cap: True}
-            return _CP(out=json.dumps({"172.16.0.0": {"bgpState": state or "Idle", "neighborCapabilities": {
-                "multiprotocolExtensions": fams,
-                "otherCapability": {"l2VpnEvpn": {"advertisedAndReceived": True}}}}}))
+            return self._answer(self.neighbour, json.dumps({"172.16.0.0": {
+                "bgpState": state or "Idle", "neighborCapabilities": {
+                    "multiprotocolExtensions": fams,
+                    "otherCapability": {"l2VpnEvpn": {"advertisedAndReceived": True}}}}}))
         return FakeRuntime.exec(self, lab, node, argv, check, capture_output, interactive, timeout_s)
 
 
@@ -866,10 +885,22 @@ def _b21_readback_elsewhere_nv():
     return red, "a whole-file match finds the line in the decoy and not in the plain absence: %s" % red
 
 
-def _b21_readback_unanswered():
-    g = _EvpnGuest(_leaf_rib(), running="")
+def _readback_case(**kw):
+    g = _EvpnGuest(_leaf_rib(), **kw)
     code, err, _clk = _b21_run(g)
-    return code == 2 and _U6_ALL in err, "exit %r; stderr %r" % (code, err[-400:])
+    return code, err, _SUMMARY_JOINED in _joined(g)
+
+
+def _b21_readback_unanswered():
+    seen = [_readback_case(running=r) for r in ("", _NL, "  " + _NL + _NL)]
+    ok = all(c == 2 and _NOANS_EMPTY in e and "absent" not in e and not s for c, e, s in seen)
+    return ok, " | ".join("exit %r; session read %s; stderr %r" % (c, s, e[-240:]) for c, e, s in seen)
+
+
+def _b21_readback_rc():
+    seen = [_readback_case(running=r, running_rc=1) for r in (_RUNNING_OK, "")]
+    ok = all(c == 2 and _NOANS_RC1 in e and "absent" not in e and not s for c, e, s in seen)
+    return ok, " | ".join("exit %r; session read %s; stderr %r" % (c, s, e[-240:]) for c, e, s in seen)
 
 
 def _b21_wait_late():
@@ -907,10 +938,54 @@ def _b21_not_present():
     return code == 2 and line in err, "exit %r; %r" % (code, err[-300:])
 
 
+_U7_HEAD = "ERROR: SONiC EVPN session did not negotiate after the push" + _NL + "node: leaf1" + _NL
+_NOANS_STATE = "reason: 172.16.0.0: no-answer, EVPN family not-read; after 30s (bound 30s)" + _NL
+_NOANS_FAMILY = "reason: 172.16.0.0: Established, EVPN family no-answer; after 30s (bound 30s)" + _NL
+# Output that is not in the reader's format (rulings note 2 §5): a stand-in error line, nothing, a JSON array.
+_UNFORMATTED = ("% Unknown command" + _NL, "", "[]")
+
+
+def _wait_case(**kw):
+    g = _EvpnGuest(_leaf_rib(), **kw)
+    code, err, clk = _b21_run(g)
+    j = _joined(g)
+    return code, err, j.count(_SUMMARY_JOINED), j.count(_NBR_JOINED), len(clk.sleeps)
+
+
+def _b21_summary_rc():
+    c, e, s, n, z = _wait_case(summary=(1, None, None))
+    ok = c == 2 and (_U7_HEAD + _NOANS_STATE + _U7_DETAIL + _U7_REQUIRED) in e and (s, n, z) == (31, 0, 30)
+    return ok, "exit %r; summaries %d; neighbour reads %d; sleeps %d; stderr %r" % (c, s, n, z, e[-320:])
+
+
+def _b21_summary_unformatted():
+    seen = [_wait_case(summary=(0, out, None)) for out in _UNFORMATTED]
+    ok = all(c == 2 and _NOANS_STATE in e and n == 0 for c, e, s, n, z in seen)
+    return ok, " | ".join("exit %r; neighbour reads %d; %r" % (c, n, e[-200:]) for c, e, s, n, z in seen)
+
+
+def _b21_neighbour_rc():
+    c, e, s, n, z = _wait_case(neighbour=(1, None, None))
+    ok = c == 2 and (_U7_HEAD + _NOANS_FAMILY + _U7_DETAIL + _U7_REQUIRED) in e and (s, n, z) == (31, 31, 30)
+    return ok, "exit %r; summaries %d; neighbour reads %d; sleeps %d; stderr %r" % (c, s, n, z, e[-320:])
+
+
+def _b21_neighbour_unformatted():
+    seen = [_wait_case(neighbour=(0, out, None)) for out in _UNFORMATTED]
+    ok = all(c == 2 and _NOANS_FAMILY in e and "family absent" not in e for c, e, s, n, z in seen)
+    return ok, " | ".join("exit %r; %r" % (c, e[-200:]) for c, e, s, n, z in seen)
+
+
+def _b21_no_answer_then_negotiated():
+    c, e, s, n, z = _wait_case(summary=(0, "", {1}))
+    return c is None and (s, n, z) == (2, 1, 1), "exit %r; summaries %d; neighbour reads %d; sleeps %d" % (c, s, n, z)
+
+
 def _b21_restarts():
     seen = []
     for kw in (dict(), dict(polls=(("Idle", None), ("Established", "advertisedAndReceived"))), dict(push_rc=1),
-               dict(running=_RUNNING_ONE_ABSENT), dict(polls=(("Established", "advertised"),))):
+               dict(running=_RUNNING_ONE_ABSENT), dict(polls=(("Established", "advertised"),)),
+               dict(running=""), dict(running_rc=1), dict(summary=(1, None, None)), dict(neighbour=(1, None, None))):
         g = _EvpnGuest(_leaf_rib(), **kw)
         _b21_run(g)
         seen.append(_bgp_starts(g.calls) == [list(S._BGP_RECONCILE_ARGV)])
@@ -998,6 +1073,38 @@ def _b21_wrong_path_nv():
     return red, detail
 
 
+def _old_readback(rt_, lab, node, lines):
+    """Packet 4's read-back (cassian-gate@4ec9c72): its return code discarded, so a read with no answer counted
+    every line absent."""
+    _rc, running = S._sonic_read(rt_, lab, node, S._EVPN_RUNNING_CONFIG_ARGV)
+    absent = S._absent_fragment_lines(running, lines)
+    if absent:
+        S._fail("SONiC EVPN configuration is not in force", node,
+                "%d of %d EVPN lines are absent from the running configuration after the push" % (
+                    len(absent), len(lines)),
+                "absent: " + "; ".join(absent),
+                "report this with the guest's running configuration, then run cassian up again")
+
+
+def _b21_readback_rc_nv():
+    red, detail = _mutant("_read_back_evpn_fragment", _old_readback, _b21_readback_rc)
+    if red:
+        print("MUTATION-FAIL: a read-back that discards its return code -> the exit-1 read-back leg is red")
+    return red, detail
+
+
+def _b21_rc_blind_nv():
+    real = getattr(S, "_evpn_json_answer", None)
+    if real is None:
+        return False, "the provider has no _evpn_json_answer"
+    red1, d1 = _mutant("_evpn_json_answer", lambda rc, raw: real(0, raw), _b21_summary_rc)
+    red2, d2 = _mutant("_evpn_json_answer", lambda rc, raw: real(0, raw), _b21_neighbour_rc)
+    if red1 and red2:
+        print("MUTATION-FAIL: a JSON reader that discards the return code -> the exit-1 summary and neighbour legs "
+              "are red")
+    return red1 and red2, d1 + " | " + d2
+
+
 _eleg("B21 REQ-45E-65 provision on leaf1: the mode assertion's reads, the staging write, config load, one reconcile "
       "restart, the routing-daemon wait, then the push, the read-back, the summary and the neighbour read, in that "
       "order; the push's argv is the measured form; the read-back's argv is row 67's, held once in the provider",
@@ -1013,8 +1120,11 @@ _eleg("B21 REQ-45E-67 a fragment line present only in another address-family blo
       _b21_readback_elsewhere)
 _eleg("B21 NON-VACUITY: a whole-file match finds that line, so the leg above tells the two apart (predicate only)",
       _b21_readback_elsewhere_nv)
-_eleg("B21 REQ-45E-67 a read-back with no answer counts every line absent: U6, 4 of 4, each line named",
-      _b21_readback_unanswered)
+_eleg("B21 45E-S11-R4 (re-aimed from packet 4's leg 'a read-back with no answer counts every line absent: U6, 4 "
+      "of 4'): a read-back that exits 0 and prints nothing, or white space only, fails, exit 2, with its own text, "
+      "never U6's absent lines, and makes no session read", _b21_readback_unanswered)
+_eleg("B21 45E-S11-R4 a read-back that exits 1 fails, exit 2, with its own text naming the code, even when it printed "
+      "the whole block, and makes no session read", _b21_readback_rc)
 _eleg("B21 REQ-45E-68 the peer reads Idle, then Established with advertisedAndReceived: provision returns after that "
       "poll (2 summaries, 1 neighbour read, 1 sleep)", _b21_wait_late)
 _eleg("B21 REQ-45E-68, -69 the peer stays Established with advertised: provision fails at the 30 s bound, exit 2, "
@@ -1022,6 +1132,17 @@ _eleg("B21 REQ-45E-68, -69 the peer stays Established with advertised: provision
 _eleg("B21 45E-S11-R1 a peer not Established gets no neighbour read, and U7 prints EVPN family not-read",
       _b21_not_read)
 _eleg("B21 45E-S11-R2 a peer the summary does not list prints not-present", _b21_not_present)
+_eleg("B21 45E-S11-R4 an EVPN summary read that exits 1, even with a full answer, prints no-answer as the peer's "
+      "state at the 30 s bound (31 summaries, 30 sleeps), with no neighbour read", _b21_summary_rc)
+_eleg("B21 45E-S11-R4 an EVPN summary read that exits 0 with output that is not JSON, nothing, or JSON that is not an "
+      "object prints no-answer as the peer's state (rulings note 2 §5)", _b21_summary_unformatted)
+_eleg("B21 45E-S11-R4 a neighbour read that exits 1, even reading negotiated, prints EVPN family no-answer at the "
+      "bound (31 neighbour reads)", _b21_neighbour_rc)
+_eleg("B21 45E-S11-R4 a neighbour read that exits 0 with output that is not JSON, nothing, or JSON that is not an "
+      "object prints EVPN family no-answer, never absent (rulings note 2 §5)", _b21_neighbour_unformatted)
+_eleg("B21 45E-S11-R4 regression: a read with no answer is polled again: a summary that prints nothing on the first "
+      "poll, then negotiated, returns after that poll (2 summaries, 1 neighbour read, 1 sleep)",
+      _b21_no_answer_then_negotiated)
 _eleg("B21 REQ-45E-70 across every leg, one _BGP_RECONCILE_ARGV per provision call and no other start of bgp",
       _b21_restarts)
 _eleg("B21 NON-VACUITY: that count reads one added restart as a second start (predicate only)", _b21_restarts_nv)
@@ -1031,6 +1152,10 @@ _eleg("B21 NON-VACUITY: a wait that reads the neighbour for a peer not Establish
       _b21_not_read_nv)
 _eleg("B21 NON-VACUITY: provision without the session wait fails the bound leg", _b21_wait_removed_nv)
 _eleg("B21 NON-VACUITY: a capability reader at the wrong path fails the bound leg", _b21_wrong_path_nv)
+_eleg("B21 NON-VACUITY: a read-back that discards its return code (packet 4's form) fails the exit-1 read-back leg",
+      _b21_readback_rc_nv)
+_eleg("B21 NON-VACUITY: a JSON reader that discards the return code fails the exit-1 summary and neighbour legs",
+      _b21_rc_blind_nv)
 
 # --- report -----------------------------------------------------------------
 _failed = [c for c in _checks if not c[1]]
