@@ -580,8 +580,12 @@ class NetBoxBackend(ImporterBackend):
         nodes = []
         names: set = set()
         index: dict = {}  # device name -> its position in 'devices'
+        # RP-14 (ruling 4 (a)): the sort key reads an entry only when it is an
+        # object, so an entry of any other JSON type reaches the type check
+        # below (the shipped text) instead of failing inside the key.
         for i, dev in sorted(
-            enumerate(devices), key=lambda p: str((p[1] or {}).get("name") or "")
+            enumerate(devices),
+            key=lambda p: str(p[1].get("name") or "") if isinstance(p[1], dict) else "",
         ):
             if not isinstance(dev, dict):
                 _reject(
@@ -589,6 +593,10 @@ class NetBoxBackend(ImporterBackend):
                     "each entry in 'devices' must be an object",
                     "Correct the export",
                 )
+            if dev.get("name") is not None and not isinstance(dev.get("name"), str):
+                # RP-12 (ruling 3; 46-S10-R5): a device name present and not a
+                # string; null or empty keeps "a device is missing 'name'".
+                _reject_not_text(loc.item("devices", i), "name", dev["name"])
             name = _text(dev.get("name"))
             if not name:
                 _reject(
@@ -777,10 +785,12 @@ class NetBoxBackend(ImporterBackend):
         seen: dict = {}  # (local_device, peer address) -> position
         for i, sess in sorted(
             enumerate(sessions),
+            # RP-14 (ruling 4 (a)): as for devices, the key reads an entry only
+            # when it is an object.
             key=lambda p: (
-                str((p[1] or {}).get("local_device") or ""),
-                str((p[1] or {}).get("peer_ip") or ""),
-            ),
+                str(p[1].get("local_device") or ""),
+                str(p[1].get("peer_ip") or ""),
+            ) if isinstance(p[1], dict) else ("", ""),
         ):
             if not isinstance(sess, dict):
                 _reject(
@@ -1477,6 +1487,14 @@ class NetBoxDumpBackend(NetBoxBackend):
             by_filter = None
             if not reason and status != DUMP_IN_SERVICE["ipam/ip-addresses"]:  # B-66
                 reason = by_filter = f"status {status or '-'} is not active"
+            if not reason and "vrf" not in ip:
+                # RP-13 (ruling 3; B-67's constraint; 46-S10-R6): an address
+                # that B-71, B-64 and B-66 have not excluded, with no vrf key,
+                # is refused rather than read as the global table; "vrf": null
+                # is the global table.
+                _reject(self._where("ipam/ip-addresses", ip),
+                        "'vrf' is missing (null means the global table)",
+                        "Capture the bundle again")
             if not reason and ip.get("vrf") is not None:  # B-67
                 reason = by_filter = (f"in VRF {_dump_name(ip['vrf'])}; the importer "
                                       f"models the global table only")
@@ -1521,6 +1539,13 @@ class NetBoxDumpBackend(NetBoxBackend):
         site = manifest["site"].strip()
         names: dict = {}
         for d in kept["dcim/devices"]:  # B-41
+            if d.get("name") is not None and not isinstance(d.get("name"), str):
+                # RP-11 (ruling 3; 46-S10-R4): a kept device whose name is not a
+                # string; its label slot reads '-'. Null or empty is left to the
+                # field map, as shipped.
+                _reject(self._where("dcim/devices", _names_as_text(d)),
+                        f"'name' must be a string (got {json.dumps(d['name'])})",
+                        DUMP_FIX_IN_NETBOX)
             name = _text(d.get("name"))
             if name and name in names:
                 _reject(self._where("dcim/devices", d), f"device name '{name}' is also "

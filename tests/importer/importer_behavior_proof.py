@@ -514,6 +514,49 @@ PF2_CASES += [
 ]
 
 
+def _name_as(value):
+    """leaf1 named `value`, and every reference to it written str(value), so
+    that only the name's type is wrong (rev 5 RP-12)."""
+    def mutate(e):
+        ref = str(value)
+        for d in e["devices"]:
+            if d["name"] == "leaf1":
+                d["name"] = value
+        for c in e["cables"]:
+            for side in ("a", "b"):
+                if c[side]["device"] == "leaf1":
+                    c[side]["device"] = ref
+        for s in e["bgp_sessions"]:
+            if s["local_device"] == "leaf1":
+                s["local_device"] = ref
+        for r in e["static_routes"]:
+            if r["device"] == "leaf1":
+                r["device"] = ref
+    return mutate
+
+
+def _append_entry(key, value):
+    def mutate(e):
+        e[key].append(value)
+    return mutate
+
+
+# Rev 5 §10.3 (rulings 3 and 4): a device name that is not a string (RP-12;
+# 46-S10-R5); an entry of devices or bgp_sessions that is not an object, at a
+# new index, whatever its JSON type (RP-14; the shipped text).
+PF2_CASES += [
+    ("RP-12a", _name_as(7),
+     ["devices[0]: 'name' must be a string (got 7). Correct the export"], True),
+    ("RP-12b", _name_as(True),
+     ["devices[0]: 'name' must be a string (got true). Correct the export"], True),
+] + [
+    ("RP-14 %s[2]=%s" % (key, shown), _append_entry(key, value),
+     ["%s[2]: each entry in '%s' must be an object. Correct the export" % (key, key)], True)
+    for key in ("devices", "bgp_sessions")
+    for shown, value in (("7", 7), ('"x"', "x"), ("true", True), ('["x"]', ["x"]))
+]
+
+
 def pf2_contract_rejections():
     """PF-2 (REQ-46-1 to -24, -13): each case exits 2 with the file, the entry,
     the needles and 're-run' named, and writes nothing."""
@@ -1339,6 +1382,25 @@ def _iface_name(name):
     return m
 
 
+def _dev1_name(value):
+    """Device id 1 (leaf1) named `value` wherever it is nested (rev 5 RP-11;
+    as Appendix B.6 sets it)."""
+    def walk(node):
+        if isinstance(node, dict):
+            if str(node.get("url", "")).endswith("/api/dcim/devices/1/"):
+                node["name"] = value
+            for v in list(node.values()):
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    def m(b):
+        for key in ("devices", "cables", "ips", "sessions"):
+            walk(b[key])
+    return m
+
+
 # (case, mutation, needles, the file the rejection names). Every case also
 # needs 're-run' and an empty --out (handover §15.1).
 PF2_BUNDLE_CASES = [
@@ -1446,6 +1508,24 @@ PF2_BUNDLE_CASES = [
      ["dcim/cables object id 1 (leaf1:-<->spine1:eth1): 'a_terminations[0].object.name' "
       "must be a string (got 7). Correct the object in NetBox, then capture the bundle "
       "again"], _CAB),
+    # Rev 5 §10.3 (ruling 3) through the reader: a kept device whose name is
+    # not a string, set wherever it is nested (RP-11; 46-S10-R4); a kept
+    # address with no vrf key (RP-13; 46-S10-R6).
+    ("RP-11a", _dev1_name(["leaf1"]),
+     ["dcim/devices object id 1 (-): 'name' must be a string (got [\"leaf1\"]). Correct the "
+      "object in NetBox, then capture the bundle again"], _DEV),
+    ("RP-11b", _dev1_name({"a": 1}),
+     ["dcim/devices object id 1 (-): 'name' must be a string (got {\"a\": 1}). Correct the "
+      "object in NetBox, then capture the bundle again"], _DEV),
+    ("RP-11c", _dev1_name(7),
+     ["dcim/devices object id 1 (-): 'name' must be a string (got 7). Correct the object in "
+      "NetBox, then capture the bundle again"], _DEV),
+    ("RP-11d", _dev1_name(True),
+     ["dcim/devices object id 1 (-): 'name' must be a string (got true). Correct the object "
+      "in NetBox, then capture the bundle again"], _DEV),
+    ("RP-13", _at(("ips", 0, "vrf"), _DROP),
+     ["ipam/ip-addresses object id 1 (leaf1:eth1 10.0.0.1/30): 'vrf' is missing (null means "
+      "the global table). Capture the bundle again"], _IPS),
     ("R-16", _all(_spine2(), _add("cables", _nb_cable(2, (12, LEAF1, "eth2"), (31, SPINE2, "eth1"))),
                   _add("ips", _nb_ip(3, "10.0.0.1/30", (12, LEAF1, "eth2")),
                        _nb_ip(4, "10.0.0.2/30", (31, SPINE2, "eth1")))),
