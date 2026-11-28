@@ -293,6 +293,35 @@ def _reject_interface_name(where: tuple, name: str) -> None:
     )
 
 
+def _reject_not_text(where: tuple, field: str, value) -> None:
+    """A contract field present, not null, and not a string (ruling 2 and the
+    rulings of 2026-11-27 17:37; texts 46-S10-R1, -R3, -R5, -R7)."""
+    _reject(where, f"'{field}' must be a string (got {json.dumps(value)})", "Correct the export")
+
+
+def _list_or_omitted(export: dict, key: str, loc) -> list:
+    """RP-10 (ruling 2): a contract list key is a list, or omitted; null reads
+    as omitted; any other value, falsy included, is rejected (shipped text)."""
+    items = export.get(key)
+    if items is None:
+        return []
+    if not isinstance(items, list):
+        _reject(loc.section(key), f"'{key}' must be a list", "Correct the export")
+    return items
+
+
+def _names_as_text(obj):
+    """A copy of a bundle object for a rejection's label (46-S10-R2, -R4): a
+    nested name that is not a string reads as missing, so its slot in the
+    label shows '-' rather than the refused value."""
+    if isinstance(obj, dict):
+        return {k: (None if k == "name" and not isinstance(v, str) else _names_as_text(v))
+                for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_names_as_text(v) for v in obj]
+    return obj
+
+
 class _ContractLocator:
     """The locator table (§4.6 §13): for each contract entry, the file and the
     object text a rejection names (REQ-46-13). The contract backend's entries
@@ -584,7 +613,16 @@ class NetBoxBackend(ImporterBackend):
                 )
             conf = str(rendered_dir / f"{name}.conf")
             # router_id: export field, corroborated by rendered config (NB-2).
-            export_rid = _text(dev.get("router_id")) or None
+            rid = dev.get("router_id")
+            if rid is not None and (not isinstance(rid, str) or rid == ""):
+                # RP-23 (the ruling on HOLD-2; 46-S10-R8): a router_id present
+                # and not a non-empty string; null reads as omitted (HOLD-4).
+                _reject(
+                    loc.device(i),
+                    f"'router_id' must be an IPv4 address (got {json.dumps(rid)})",
+                    "Correct the export",
+                )
+            export_rid = _text(rid) or None
             rendered_rid = (rendered.get(name) or {}).get("router_id")
             router_id = self._corroborate(
                 loc.device(i), conf, "router_id", export_rid, rendered_rid
@@ -627,9 +665,7 @@ class NetBoxBackend(ImporterBackend):
         return export_val if export_val is not None else rendered_val
 
     def _build_links(self, export: dict, node_names: set, loc) -> tuple[list, list, list]:
-        cables = export.get("cables") or []
-        if not isinstance(cables, list):
-            _reject(loc.section("cables"), "'cables' must be a list", "Correct the export")
+        cables = _list_or_omitted(export, "cables", loc)  # RP-10 (ruling 2)
         links = []
         interfaces: list = []  # (device, interface) declared via cable endpoints
         rows = []
@@ -642,6 +678,12 @@ class NetBoxBackend(ImporterBackend):
                 )
             a = cable.get("a") or {}
             b = cable.get("b") or {}
+            for side, end in (("a", a), ("b", b)):
+                for key in ("device", "interface"):
+                    if end.get(key) is not None and not isinstance(end.get(key), str):
+                        # RP-22 (device; the ruling on HOLD-1) and RP-7
+                        # (interface; ruling 2): 46-S10-R7, 46-S10-R1.
+                        _reject_not_text(loc.item("cables", i), f"{side}.{key}", end[key])
             # RP-1 (ruling 1): an interface name is checked, printed and
             # written as written; device names keep the shipped trim.
             ad, ai = _text(a.get("device")), _as_written(a.get("interface"))
@@ -665,7 +707,17 @@ class NetBoxBackend(ImporterBackend):
             for iface in (ai, bi):
                 if not _valid_interface_name(iface):
                     _reject_interface_name(loc.cable(i), iface)
-            declared = [k for k in ("a_ip", "b_ip") if cable.get(k)]
+            for ip_key in ("a_ip", "b_ip"):  # RP-24 (the ruling on HOLD-3; 46-S10-R9)
+                v = cable.get(ip_key)
+                if v is not None and not isinstance(v, str):
+                    _reject(
+                        loc.cable(i),
+                        f"'{ip_key}' must be an IPv4 interface address (got {json.dumps(v)})",
+                        "Correct the export",
+                    )
+            # Null reads as omitted (HOLD-4); "" is declared, and REQ-46-12's
+            # check rejects it as written (B-12, ruling 1; reading i).
+            declared = [k for k in ("a_ip", "b_ip") if cable.get(k) is not None]
             if len(declared) == 1:
                 _reject(
                     loc.cable(i),
@@ -718,13 +770,7 @@ class NetBoxBackend(ImporterBackend):
         far-end node through the links (§4.6 IR-41, direction A), and return the
         (local_device, peer_ip) pairs usable for bgp_session_up invariants, with
         the local devices of every session that reached this path."""
-        sessions = export.get("bgp_sessions") or []
-        if not isinstance(sessions, list):
-            _reject(
-                loc.section("bgp_sessions"),
-                "'bgp_sessions' must be a list",
-                "Correct the export",
-            )
+        sessions = _list_or_omitted(export, "bgp_sessions", loc)  # RP-10 (ruling 2)
         by_name = {n["name"]: n for n in nodes}
         pairs = []
         locals_seen: set = set()
@@ -742,6 +788,9 @@ class NetBoxBackend(ImporterBackend):
                     "each entry in 'bgp_sessions' must be an object",
                     "Correct the export",
                 )
+            if sess.get("local_device") is not None and not isinstance(sess.get("local_device"), str):
+                # RP-22 (the ruling on HOLD-1; 46-S10-R7)
+                _reject_not_text(loc.item("bgp_sessions", i), "local_device", sess["local_device"])
             local = _text(sess.get("local_device"))
             peer_ip = _text(sess.get("peer_ip"))
             if local not in node_names:
@@ -910,6 +959,9 @@ class NetBoxBackend(ImporterBackend):
         """The build path (§4.6 §13; pass order §8 / D-17)."""
         self.exclusions = []
         site = export.get("site") or {}
+        if site.get("name") is not None and not isinstance(site.get("name"), str):
+            # RP-9 (ruling 2; 46-S10-R3): a site.name present and not a string.
+            _reject_not_text(loc.section("site"), "site.name", site["name"])
         name = str(site.get("name") or "").strip()
         if not name:
             _reject(
@@ -1479,11 +1531,19 @@ class NetBoxDumpBackend(NetBoxBackend):
         for endpoint in ("dcim/cables", "ipam/ip-addresses"):
             for obj in kept[endpoint]:
                 if endpoint == "dcim/cables":
-                    objs = [t["object"] for side in ("a_terminations", "b_terminations")
-                            for t in (obj.get(side) or [])]
+                    objs = [(f"{side}[{k}].object", t["object"])
+                            for side in ("a_terminations", "b_terminations")
+                            for k, t in enumerate(obj.get(side) or [])]
                 else:
-                    objs = [obj["assigned_object"]]
-                for iface in objs:
+                    objs = [("assigned_object", obj["assigned_object"])]
+                for path, iface in objs:
+                    iname = iface.get("name")
+                    if iname is not None and not isinstance(iname, str):
+                        # RP-8 (rulings 1 and 2; 46-S10-R2): an interface name
+                        # that is not a string; its label slot reads '-'.
+                        _reject(self._where(endpoint, _names_as_text(obj)),
+                                f"'{path}.name' must be a string (got {json.dumps(iname)})",
+                                DUMP_FIX_IN_NETBOX)
                     if _as_written(iface.get("name")) != _text(iface.get("name")):
                         # RP-2 (ruling 1): a padded interface name of a kept
                         # cable or address is rejected as written (B-10).
@@ -1713,13 +1773,7 @@ BACKENDS = {
 # --------------------------------------------------------------------------- #
 
 def _collect_static_routes(export: dict, node_names: set, loc) -> list:
-    routes = export.get("static_routes") or []
-    if not isinstance(routes, list):
-        _reject(
-            loc.section("static_routes"),
-            "'static_routes' must be a list",
-            "Correct the export",
-        )
+    routes = _list_or_omitted(export, "static_routes", loc)  # RP-10 (ruling 2)
     out = []
     seen: dict = {}  # (device, prefix) -> position
     for i, r in enumerate(routes):
@@ -1729,6 +1783,9 @@ def _collect_static_routes(export: dict, node_names: set, loc) -> list:
                 "each entry in 'static_routes' must be an object",
                 "Correct the export",
             )
+        if r.get("device") is not None and not isinstance(r.get("device"), str):
+            # RP-22 (the ruling on HOLD-1; 46-S10-R7)
+            _reject_not_text(loc.item("static_routes", i), "device", r["device"])
         dev = _text(r.get("device"))
         prefix = _as_written(r.get("prefix"))  # RP-3 (ruling 1): as written
         if dev not in node_names:

@@ -328,6 +328,27 @@ def _append_copy(key):
     return mutate
 
 
+def _with_node(name, path, value):
+    """A device named `name` added and export[path] set to `value`, so that
+    only the value's type is wrong (rev 5 RP-22)."""
+    def mutate(e):
+        _add_device(e, name)
+        _set(path, value)(e)
+    return mutate
+
+
+def _dev_n9(**fields):
+    """A device n9, with no session, carrying `fields` (rev 5 RP-23)."""
+    def mutate(e):
+        _add_device(e, "n9", **fields)
+    return mutate
+
+
+def _no_ips(e):
+    del e["cables"][0]["a_ip"]
+    del e["cables"][0]["b_ip"]
+
+
 # (case, mutation, needles, rendered/ copied?) -- handover §15.2, PF-2 contract.
 PF2_CASES = [
     ("N-1a", _drop(["bgp_sessions", 0, "peer_ip"]),
@@ -429,6 +450,67 @@ PF2_CASES = [
      ["cables[0]", "a_ip ' 10.0.0.1/30' is not an IPv4 interface address"], True),
     ("RP-5b", _set(["cables", 0, "b_ip"], "10.0.0.2/30 "),
      ["cables[0]", "b_ip '10.0.0.2/30 ' is not an IPv4 interface address"], True),
+    # Rev 5 §10.2 (ruling 2; the rulings of 17:37 on HOLD-1 to HOLD-3): texts
+    # 46-S10-R1, -R3, -R7, -R8, -R9 (session-10 rulings note).
+    ("RP-7a", _set(["cables", 0, "a", "interface"], True),
+     ["cables[0]: 'a.interface' must be a string (got true). Correct the export"], True),
+    ("RP-7b", _set(["cables", 0, "a", "interface"], 5),
+     ["cables[0]: 'a.interface' must be a string (got 5). Correct the export"], True),
+    ("RP-7c", _set(["cables", 0, "a", "interface"], ["x"]),
+     ["cables[0]: 'a.interface' must be a string (got [\"x\"]). Correct the export"], True),
+    ("RP-9a", _set(["site", "name"], 5),
+     ["site: 'site.name' must be a string (got 5). Correct the export"], True),
+    ("RP-9b", _set(["site", "name"], True),
+     ["site: 'site.name' must be a string (got true). Correct the export"], True),
+    ("RP-9c", _set(["site", "name"], {"x": 1}),
+     ["site: 'site.name' must be a string (got {\"x\": 1}). Correct the export"], True),
+    ("RP-22a", _with_node("7", ["cables", 0, "a", "device"], 7),
+     ["cables[0]: 'a.device' must be a string (got 7). Correct the export"], True),
+    ("RP-22b", _with_node("7", ["bgp_sessions", 0, "local_device"], 7),
+     ["bgp_sessions[0]: 'local_device' must be a string (got 7). Correct the export"], True),
+    ("RP-22c", _with_node("7", ["static_routes", 0, "device"], 7),
+     ["static_routes[0]: 'device' must be a string (got 7). Correct the export"], True),
+    ("RP-22d", _with_node("True", ["static_routes", 0, "device"], True),
+     ["static_routes[0]: 'device' must be a string (got true). Correct the export"], True),
+    ("RP-23a", _dev_n9(router_id=0),
+     ["'n9': 'router_id' must be an IPv4 address (got 0). Correct the export"], True),
+    ("RP-23b", _dev_n9(router_id=False),
+     ["'n9': 'router_id' must be an IPv4 address (got false). Correct the export"], True),
+    ("RP-23c", _dev_n9(router_id=""),
+     ["'n9': 'router_id' must be an IPv4 address (got \"\"). Correct the export"], True),
+    ("RP-23d", _dev_n9(router_id=[]),
+     ["'n9': 'router_id' must be an IPv4 address (got []). Correct the export"], True),
+    ("RP-23e", _dev_n9(router_id={}),
+     ["'n9': 'router_id' must be an IPv4 address (got {}). Correct the export"], True),
+    ("RP-23f", _dev_n9(router_id=True),
+     ["'n9': 'router_id' must be an IPv4 address (got true). Correct the export"], True),
+    ("RP-23g", _set(["devices", 0, "router_id"], ""),
+     ["devices[0] '", "'router_id' must be an IPv4 address (got \"\"). Correct the export"], True),
+    ("RP-24a", _both_ips(0, 0),
+     ["cables[0] '", "'a_ip' must be an IPv4 interface address (got 0). Correct the export"], True),
+    ("RP-24b", _both_ips(False, False),
+     ["cables[0] '", "'a_ip' must be an IPv4 interface address (got false). Correct the export"],
+     True),
+    ("RP-24c", _both_ips([], []),
+     ["cables[0] '", "'a_ip' must be an IPv4 interface address (got []). Correct the export"], True),
+    ("RP-24d", _both_ips("", ""),
+     ["cables[0] '", "a_ip '' is not an IPv4 interface address"], True),
+    ("RP-24e", _set(["cables", 0, "a_ip"], 7),
+     ["cables[0] '", "'a_ip' must be an IPv4 interface address (got 7). Correct the export"], True),
+    ("RP-24f", _set(["cables", 0, "a_ip"], ""),
+     ["cables[0] '", "a_ip '' is not an IPv4 interface address"], True),
+]
+# RP-10 (ruling 2; rev 5 §10.2): a list key is a list or omitted; any other
+# value, falsy included, is rejected with the shipped text; devices: null is
+# read as omitted and then rejected as before.
+PF2_CASES += [
+    ("RP-10 %s=%s" % (key, shown), _set([key], value),
+     ["%s: '%s' must be a list. Correct the export" % (key, key)], True)
+    for key in ("cables", "bgp_sessions", "static_routes")
+    for shown, value in (("0", 0), ("false", False), ('""', ""), ("{}", {}))
+] + [
+    ("RP-10 devices=null", _set(["devices"], None),
+     ["devices: 'devices' must be a non-empty list. Correct the export"], True),
 ]
 
 
@@ -453,6 +535,48 @@ def pf2_contract_rejections():
                      msg.strip() == want, msg.strip()[:240])
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _pair_bytes(export):
+    """Import `export` (rendered/ copied) and return (exit code, the pair's
+    bytes, stderr); a file the import did not write reads as None."""
+    r, scratch, src, out = _import_case(export)
+    try:
+        pair = []
+        for rel in ("topology.yaml", os.path.join("tests", "starter_invariants.yaml")):
+            p = os.path.join(out, rel)
+            if os.path.isfile(p):
+                with open(p, "rb") as f:
+                    pair.append(f.read())
+            else:
+                pair.append(None)
+        return r.returncode, pair, r.stderr
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+# (case, the mutation with the value, the mutation with the key omitted): rev 5
+# §10.2, null read as the key omitted (RP-10; HOLD-4 for RP-23 and RP-24) and
+# an empty list read as a list (RP-10).
+PF2_POSITIVES = [
+    ("RP-10 %s=%s" % (key, shown), _set([key], value), _drop([key]))
+    for key in ("cables", "bgp_sessions", "static_routes")
+    for shown, value in (("null", None), ("[]", []))
+] + [
+    ("RP-23 router_id=null", _dev_n9(router_id=None), _dev_n9()),
+    ("RP-24 a_ip=b_ip=null", _both_ips(None, None), _no_ips),
+]
+
+
+def pf2_contract_positives():
+    """Rev 5 §10.2 (RP-10, RP-23, RP-24; HOLD-4): each case exits 0 and writes
+    the pair of the same input with the key omitted, byte for byte."""
+    for case, with_value, omitted in PF2_POSITIVES:
+        rc1, pair1, err1 = _pair_bytes(_mutated(with_value))
+        rc2, pair2, err2 = _pair_bytes(_mutated(omitted))
+        _rec("PF-2 " + case + " reads as the key omitted: exit 0, the same pair",
+             rc1 == 0 and rc2 == 0 and pair1 == pair2 and None not in pair1,
+             "rc=%d/%d err=%s" % (rc1, rc2, (err1 or err2).strip()[:200]))
 
 
 def _load_pair(out):
@@ -1312,6 +1436,16 @@ PF2_BUNDLE_CASES = [
      _DEV),
     ("RP-6", _at(("ips", 0, "address"), "10.0.0.1/30 "),
      ["object id", "'10.0.0.1/30 ' is not an IPv4 interface address"], _CAB),
+    # RP-8 (rulings 1 and 2, rev 5 §10.2; 46-S10-R2): an interface name that is
+    # not a string, set wherever the interface's ID is carried.
+    ("RP-8a", _iface_name(True),
+     ["dcim/cables object id 1 (leaf1:-<->spine1:eth1): 'a_terminations[0].object.name' "
+      "must be a string (got true). Correct the object in NetBox, then capture the bundle "
+      "again"], _CAB),
+    ("RP-8b", _iface_name(7),
+     ["dcim/cables object id 1 (leaf1:-<->spine1:eth1): 'a_terminations[0].object.name' "
+      "must be a string (got 7). Correct the object in NetBox, then capture the bundle "
+      "again"], _CAB),
     ("R-16", _all(_spine2(), _add("cables", _nb_cable(2, (12, LEAF1, "eth2"), (31, SPINE2, "eth1"))),
                   _add("ips", _nb_ip(3, "10.0.0.1/30", (12, LEAF1, "eth2")),
                        _nb_ip(4, "10.0.0.2/30", (31, SPINE2, "eth1")))),
@@ -1707,6 +1841,7 @@ def main():
     po3_rejection()
     po4_boundedness()
     pf2_contract_rejections()
+    pf2_contract_positives()
     pf4_contract_exclusions()
     pf5_golden_and_positives()
     pf11_render_site_a()
