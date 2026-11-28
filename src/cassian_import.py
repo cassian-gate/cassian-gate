@@ -271,6 +271,28 @@ def _valid_interface_name(name: str) -> bool:
     return not any(c in "/:" or c.isspace() for c in name)
 
 
+def _as_written(value) -> str:
+    """A name, prefix or link address as ruling 1 of 2026-11-27 reads it (B-10
+    to B-12 apply to the value as written; Chat 4's DRAFT rev 5 §10.1): a
+    string with content is kept as written, padding included; an empty or
+    all-whitespace string, or a value that is not a string, keeps the
+    shipped reading (_text)."""
+    if isinstance(value, str) and value.strip():
+        return value
+    return _text(value)
+
+
+def _reject_interface_name(where: tuple, name: str) -> None:
+    """REQ-46-10's rejection (B-10; §6.6's text), for a name read as written."""
+    _reject(
+        where,
+        f"interface name '{name}' is not a valid Linux interface name (1 to 15 "
+        f"bytes; no '/', ':' or whitespace; not '.' or '..')",
+        "Cassian Gate does not rename interfaces; use the name the device has in "
+        "its namespace, for example 'eth1'",
+    )
+
+
 class _ContractLocator:
     """The locator table (§4.6 §13): for each contract entry, the file and the
     object text a rejection names (REQ-46-13). The contract backend's entries
@@ -620,8 +642,10 @@ class NetBoxBackend(ImporterBackend):
                 )
             a = cable.get("a") or {}
             b = cable.get("b") or {}
-            ad, ai = _text(a.get("device")), _text(a.get("interface"))
-            bd, bi = _text(b.get("device")), _text(b.get("interface"))
+            # RP-1 (ruling 1): an interface name is checked, printed and
+            # written as written; device names keep the shipped trim.
+            ad, ai = _text(a.get("device")), _as_written(a.get("interface"))
+            bd, bi = _text(b.get("device")), _as_written(b.get("interface"))
             for dev, iface, side in ((ad, ai, "a"), (bd, bi, "b")):
                 if not dev or not iface:
                     _reject(
@@ -640,14 +664,7 @@ class NetBoxBackend(ImporterBackend):
             # §4.6 checks, in the order REQ-46-10, -5, -12, -6 (§8 pass 4).
             for iface in (ai, bi):
                 if not _valid_interface_name(iface):
-                    _reject(
-                        loc.cable(i),
-                        f"interface name '{iface}' is not a valid Linux interface "
-                        f"name (1 to 15 bytes; no '/', ':' or whitespace; not '.' "
-                        f"or '..')",
-                        "Cassian Gate does not rename interfaces; use the name the "
-                        "device has in its namespace, for example 'eth1'",
-                    )
+                    _reject_interface_name(loc.cable(i), iface)
             declared = [k for k in ("a_ip", "b_ip") if cable.get(k)]
             if len(declared) == 1:
                 _reject(
@@ -659,7 +676,7 @@ class NetBoxBackend(ImporterBackend):
             ipv4 = []
             ifaces = []
             for ip_key in declared:
-                v = str(cable.get(ip_key)).strip()
+                v = _as_written(cable.get(ip_key))  # RP-5 (ruling 1): as written
                 try:
                     iface_addr = ipaddress.IPv4Interface(v) if "/" in v else None
                 except ValueError:
@@ -1467,6 +1484,10 @@ class NetBoxDumpBackend(NetBoxBackend):
                 else:
                     objs = [obj["assigned_object"]]
                 for iface in objs:
+                    if _as_written(iface.get("name")) != _text(iface.get("name")):
+                        # RP-2 (ruling 1): a padded interface name of a kept
+                        # cable or address is rejected as written (B-10).
+                        _reject_interface_name(self._where(endpoint, obj), iface["name"])
                     key = (devices[_dump_id(iface["device"])].get("name"), _dump_name(iface))
                     iid = _dump_id(iface)
                     if key in ifaces and ifaces[key] != iid:
@@ -1591,8 +1612,8 @@ class NetBoxDumpBackend(NetBoxBackend):
             (ad, ai), (bd, bi) = ends[_dump_id(c)]
             entry = {"a": {"device": ad, "interface": ai}, "b": {"device": bd, "interface": bi}}
             for key, end in (("a_ip", (ad, ai)), ("b_ip", (bd, bi))):
-                if end in addresses:
-                    entry[key] = addresses[end][0]
+                if end in addresses:  # RP-6 (ruling 1): the address as written
+                    entry[key] = _as_written(addresses[end][1].get("address"))
             cables.append(((f"{ad}:{ai}", f"{bd}:{bi}"), entry, self._where("dcim/cables", c)))
         for _key, entry, where in sorted(cables, key=lambda r: r[0]):
             contract["cables"].append(entry)
@@ -1656,7 +1677,7 @@ class NetBoxDumpBackend(NetBoxBackend):
             if "prefix" not in entry:
                 _reject(at, f"static_routes[{k}]: 'prefix' is missing; a static "
                         f"route needs its prefix", DUMP_FIX_IN_NETBOX)
-            prefix = _text(entry["prefix"])
+            prefix = _as_written(entry["prefix"])  # RP-4 (ruling 1): as written
             if prefix in seen:
                 _reject(at, f"prefix '{prefix}' is declared more than once "
                         f"(static_routes[{seen[prefix]}] and [{k}])", "Remove the duplicate")
@@ -1709,7 +1730,7 @@ def _collect_static_routes(export: dict, node_names: set, loc) -> list:
                 "Correct the export",
             )
         dev = _text(r.get("device"))
-        prefix = _text(r.get("prefix"))
+        prefix = _as_written(r.get("prefix"))  # RP-3 (ruling 1): as written
         if dev not in node_names:
             _reject(
                 loc.route(i),

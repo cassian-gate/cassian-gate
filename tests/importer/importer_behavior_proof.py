@@ -412,6 +412,23 @@ PF2_CASES = [
     ("46-S7-R2b", _set(["cables", 0, "a"], "leaf1:eth1"),
      ["cables[0]: 'a' must be a JSON object with 'device' and 'interface' (got "
       + '"leaf1:eth1"' + "). Correct the export"], True),
+    # Ruling 1 of 2026-11-27 (Chat 4's DRAFT rev 5 §10.1): B-10 to B-12 apply
+    # to the value as written; a padded interface name, prefix or link
+    # address is rejected with its REQ text, the value printed as written.
+    ("RP-1a", _set(["cables", 0, "a", "interface"], "eth1 "),
+     ["cables[0]", "interface name 'eth1 ' is not a valid Linux interface name"], True),
+    ("RP-1b", _set(["cables", 0, "a", "interface"], "\teth1"),
+     ["cables[0]", "interface name '\teth1' is not a valid Linux interface name"], True),
+    ("RP-3a", _set(["static_routes", 0, "prefix"], "192.0.2.0/24 "),
+     ["static_routes[0]", "prefix '192.0.2.0/24 ' is not an IPv4 network with no host bits set"],
+     True),
+    ("RP-3b", _set(["static_routes", 0, "prefix"], " 192.0.2.0/24"),
+     ["static_routes[0]", "prefix ' 192.0.2.0/24' is not an IPv4 network with no host bits set"],
+     True),
+    ("RP-5a", _set(["cables", 0, "a_ip"], " 10.0.0.1/30"),
+     ["cables[0]", "a_ip ' 10.0.0.1/30' is not an IPv4 interface address"], True),
+    ("RP-5b", _set(["cables", 0, "b_ip"], "10.0.0.2/30 "),
+     ["cables[0]", "b_ip '10.0.0.2/30 ' is not an IPv4 interface address"], True),
 ]
 
 
@@ -1280,6 +1297,21 @@ PF2_BUNDLE_CASES = [
                  "192.0.2.1/24"), ["object id", "no host bits set"], _DEV),
     ("R-12", _at(("ips", 0, "address"), "10.0.0.1"),
      ["object id", "not an IPv4 interface address"], _CAB),
+    # Ruling 1 (rev 5 §10.1) through the reader: a padded interface name of a
+    # kept cable or address (RP-2), cassian route prefix (RP-4) or kept link
+    # address (RP-6), each rejected with its REQ text, as written.
+    ("RP-2a", _iface_name("eth1 "),
+     ["object id", "interface name 'eth1 ' is not a valid Linux interface name"], _CAB),
+    ("RP-2b", _at(("cables", 0, "a_terminations", 0, "object", "name"), "eth1 "),
+     ["object id", "interface name 'eth1 ' is not a valid Linux interface name"], _CAB),
+    ("RP-2c", _at(("ips", 0, "assigned_object", "name"), "eth1 "),
+     ["object id", "interface name 'eth1 ' is not a valid Linux interface name"], _IPS),
+    ("RP-4", _at(("devices", 0, "local_context_data", "cassian", "static_routes", 0, "prefix"),
+                 " 192.0.2.0/24"),
+     ["object id", "prefix ' 192.0.2.0/24' is not an IPv4 network with no host bits set"],
+     _DEV),
+    ("RP-6", _at(("ips", 0, "address"), "10.0.0.1/30 "),
+     ["object id", "'10.0.0.1/30 ' is not an IPv4 interface address"], _CAB),
     ("R-16", _all(_spine2(), _add("cables", _nb_cable(2, (12, LEAF1, "eth2"), (31, SPINE2, "eth1"))),
                   _add("ips", _nb_ip(3, "10.0.0.1/30", (12, LEAF1, "eth2")),
                        _nb_ip(4, "10.0.0.2/30", (31, SPINE2, "eth1")))),
