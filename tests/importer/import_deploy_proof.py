@@ -146,12 +146,18 @@ def starter_verdicts(path):
 
 
 def lab_containers():
-    """(docker exit code, names of containers of the lab, running or not)."""
+    """(docker exit code, names of containers of the lab, running or not). With
+    no docker executable the check raises nothing: it prints why and returns
+    127 and no names, so no-lab is recorded FAIL and named (RP-18; M-11)."""
     prefix = "clab-%s-" % LAB
-    r = subprocess.run(["docker", "ps", "-a", "--filter", "name=^" + prefix,
-                        "--format", "{{.Names}}"],
-                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                       text=True, errors="replace")
+    try:
+        r = subprocess.run(["docker", "ps", "-a", "--filter", "name=^" + prefix,
+                            "--format", "{{.Names}}"],
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           text=True, errors="replace")
+    except OSError as e:
+        print("     docker ps could not run: %s" % e)
+        return 127, []
     return r.returncode, sorted(n for n in r.stdout.split() if n.startswith(prefix))
 
 

@@ -622,6 +622,34 @@ def pf2_contract_positives():
              "rc=%d/%d err=%s" % (rc1, rc2, (err1 or err2).strip()[:200]))
 
 
+def _rp17_two_links(e):
+    """siteA's export plus a third device and a second, addressed cable."""
+    _add_device(e, "spine2")
+    _add_cable(e, ("leaf1", "eth2"), ("spine2", "eth1"), "10.0.1.1/30", "10.0.1.2/30")
+
+
+def _rp17_reversed(e):
+    """The same export with its four lists in the other order."""
+    _rp17_two_links(e)
+    for key in ("devices", "cables", "bgp_sessions", "static_routes"):
+        e[key].reverse()
+
+
+def rp17_contract_two_orders():
+    """RP-17 (ruling 5; rev 5 §10.4; the page's "all source iteration is
+    sorted"): siteA's export with a third device and a second, addressed
+    cable, its four lists in two orders, gives one pair, which holds both
+    links."""
+    rc1, pair1, err1 = _pair_bytes(_mutated(_rp17_two_links))
+    rc2, pair2, err2 = _pair_bytes(_mutated(_rp17_reversed))
+    links = (yaml.safe_load(pair1[0].decode("utf-8")) or {}).get("links") if pair1[0] else None
+    _rec("PF-1 RP-17 contract, two links: the four lists in two orders give one pair "
+         "(ruling 5)",
+         rc1 == 0 and rc2 == 0 and pair1 == pair2 and None not in pair1
+         and len(links or []) == 2,
+         "rc=%d/%d links=%s err=%s" % (rc1, rc2, len(links or []), (err1 or err2).strip()[:200]))
+
+
 def _load_pair(out):
     with open(os.path.join(out, "topology.yaml"), encoding="utf-8") as f:
         topo = yaml.safe_load(f)
@@ -1253,6 +1281,44 @@ PF4_BUNDLE_CASES += [
       _X + "ip-address spine1:eth4 10.9.9.1/30: " + _NO_LINK], 4, True),
 ]
 
+# Rev 5 §10.4, RP-15 (ruling 5; D-19; REQ-46-68): nine precedence legs. Each is
+# bundleA plus an object two reasons fit; the line is the first reason in
+# D-19's order, as the shipped module prints it, and the pair is golden/siteA/.
+_RP15_LEAF9 = _add("devices", _nb_device(9, "leaf9", status="planned"))
+_RP15_LEAF9_LINE = _X + "device leaf9: status planned is not active"
+PF4_BUNDLE_CASES += [
+    ("RP-15a", _add("ips", _nb_ip(10, "172.16.0.1/24", (11, LEAF1, "eth1"), status="deprecated",
+                                  vrf="mgmt")),
+     [_X + "ip-address leaf1:eth1 172.16.0.1/24: status deprecated is not active"], 4, True),
+    ("RP-15b", _all(_RP15_LEAF9, _add("ips", _nb_ip(5, "172.16.0.1/24", (91, LEAF9, "eth1"),
+                                                   status="deprecated"))),
+     [_RP15_LEAF9_LINE, _X + "ip-address leaf9:eth1 172.16.0.1/24: device leaf9 is excluded"],
+     4, True),
+    ("RP-15c", _add("ips", _nb_ip(13, "2001:db8::1/64", (11, LEAF1, "eth1"), vrf="mgmt")),
+     [_X + "ip-address leaf1:eth1 2001:db8::1/64: in VRF mgmt; the importer models the global "
+      "table only"], 4, True),
+    ("RP-15d", _add("ips", _nb_ip(13, "2001:db8::1/64", (19, LEAF1, "eth9"))),
+     [_X + "ip-address leaf1:eth9 2001:db8::1/64: IPv6 address; the importer reads IPv4 link "
+      "addresses only"], 4, True),
+    ("RP-15e", _all(_RP15_LEAF9, _add("cables", _nb_cable(7, (91, LEAF9, "eth1"),
+                                                         (991, OUTSIDE, "eth1")))),
+     [_X + "cable leaf9:eth1 <-> siteb-spine1:eth1: device siteb-spine1 is not in this site's "
+      "bundle", _RP15_LEAF9_LINE], 4, True),
+    ("RP-15f", _all(_RP15_LEAF9, _add("cables", _nb_cable(7, (91, LEAF9, "eth1"),
+                                                         (24, SPINE1, "eth4"), status="planned"))),
+     [_X + "cable leaf9:eth1 <-> spine1:eth4: device leaf9 is excluded", _RP15_LEAF9_LINE],
+     4, True),
+    ("RP-15g", _add("cables", _nb_cable(6, (13, LEAF1, "eth3"), _circuit_term(), status="planned")),
+     [_X + "cable leaf1:eth3 <-> circuits.circuittermination CID-1001 A: status planned is not "
+      "connected"], 4, True),
+    ("RP-15h", _all(_RP15_LEAF9, _add("sessions", _nb_session(9, LEAF9, "10.0.0.9/32", 65009, 65002,
+                                                             status="planned"))),
+     [_X + "bgp-session leaf9 -> 10.0.0.9: device leaf9 is excluded", _RP15_LEAF9_LINE], 4, True),
+    ("RP-15i", _add("sessions", _nb_session(3, LEAF1, "2001:db8::2/64", 65001, 65010,
+                                           status="planned")),
+     [_X + "bgp-session leaf1 -> 2001:db8::2: status planned is not active"], 4, True),
+]
+
 
 def _dump_block(out, n, m, k):
     return [x.replace("backend: netbox)", "backend: netbox-dump)") for x in _block(out, n, m, k)]
@@ -1793,6 +1859,61 @@ def pf8_seeded_export():
          got == _PROVEN_VERSIONS, "netbox_version=%r plugins=%r" % got)
 
 
+def rp16_seeded_reversed():
+    """RP-16 (ruling 5; REQ-46-52): the committed netbox-seeded export, which
+    holds two kept links, with every endpoint list reversed, gives
+    golden/netbox-seeded/ byte for byte."""
+    scratch = tempfile.mkdtemp(prefix="rp16_")
+    try:
+        src = os.path.join(scratch, "src")
+        out = os.path.join(scratch, "out")
+        shutil.copytree(SEEDED, src)
+        with open(os.path.join(src, "manifest.json"), encoding="utf-8") as f:
+            names = sorted(_json.load(f)["endpoints"].values())
+        for name in names:
+            path = os.path.join(src, name)
+            with open(path, encoding="utf-8") as f:
+                items = _json.load(f)
+            with open(path, "w", encoding="utf-8") as f:
+                _json.dump(items[::-1], f, indent=1)
+        r = subprocess.run(
+            [sys.executable, "-c",
+             "import sys;sys.path.insert(0,%r);"
+             "from cassian_import import run_import;"
+             "run_import(%r,%r,backend='netbox-dump')" % (_SRC, src, out)],
+            capture_output=True, text=True,
+        )
+        links = len((_load_pair(out)[0].get("links") or [])) if r.returncode == 0 else 0
+        _rec("PF-1 RP-16 the seeded export, every endpoint list reversed: exit 0, the pair "
+             "equals golden/netbox-seeded, two links (REQ-46-52; ruling 5)",
+             r.returncode == 0 and _pair_equals(out, GOLDEN_SEEDED) and links == 2,
+             "rc=%d links=%d err=%s" % (r.returncode, links, r.stderr.strip()[:300]))
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def rp18_no_docker():
+    """RP-18 (ruling 5; REQ-46-30, M-11): PF-9's container check, with a PATH
+    that holds no docker, raises nothing and returns a failing result, so its
+    no-lab stage is recorded FAIL and named."""
+    empty = tempfile.mkdtemp(prefix="rp18_")
+    try:
+        code = ("import sys;sys.path.insert(0,%r);import import_deploy_proof as p;"
+                "rc, left = p.lab_containers();print('RESULT rc=%%d left=%%s' %% (rc, left))"
+                % _HERE)
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                           env=dict(os.environ, PATH=empty))
+        last = (r.stdout.strip().splitlines() or [""])[-1]
+        m = _re.fullmatch(r"RESULT rc=(-?\d+) left=\[\]", last)
+        _rec("PF-9 RP-18 with no docker on PATH the container check raises nothing and "
+             "fails (REQ-46-30, M-11; ruling 5)",
+             r.returncode == 0 and m is not None and int(m.group(1)) != 0,
+             "rc=%d out=%s err=%s" % (r.returncode, r.stdout.strip()[-200:],
+                                      r.stderr.strip()[-200:]))
+    finally:
+        shutil.rmtree(empty, ignore_errors=True)
+
+
 def _pf11_seeded_triples(stdout):
     """(L, X, AS) of each active session in the seeded export's sessions file,
     read from the file itself, less those the import names as excluded: the
@@ -1922,6 +2043,7 @@ def main():
     po4_boundedness()
     pf2_contract_rejections()
     pf2_contract_positives()
+    rp17_contract_two_orders()
     pf4_contract_exclusions()
     pf5_golden_and_positives()
     pf11_render_site_a()
@@ -1932,6 +2054,8 @@ def main():
     pf4_bundle_exclusions()
     pf4_page_and_docs_legs()
     pf8_seeded_export()
+    rp16_seeded_reversed()
+    rp18_no_docker()
     pf11_render_seeded()
     failed = [n for n, ok, _ in checks if not ok]
     for n, ok, detail in checks:
