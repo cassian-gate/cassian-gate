@@ -1,0 +1,321 @@
+[
+  {
+    "id": 1,
+    "url": "http://127.0.0.1:54091/api/ipam/ip-addresses/1/",
+    "display_url": "http://127.0.0.1:54091/ipam/ip-addresses/1/",
+    "display": "10.0.0.1/30",
+    "family": {
+      "value": 4,
+      "label": "IPv4"
+    },
+    "address": "10.0.0.1/30",
+    "vrf": null,
+    "tenant": null,
+    "status": {
+      "value": "active",
+      "label": "Active"
+    },
+    "role": null,
+    "assigned_object_type": "dcim.interface",
+    "assigned_object_id": 1,
+    "assigned_object": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/interfaces/1/",
+      "display": "eth1",
+      "device": {
+        "id": 1,
+        "url": "http://127.0.0.1:54091/api/dcim/devices/1/",
+        "display": "leaf1",
+        "name": "leaf1",
+        "description": ""
+      },
+      "name": "eth1",
+      "description": "",
+      "cable": {
+        "id": 1,
+        "url": "http://127.0.0.1:54091/api/dcim/cables/1/",
+        "display": "#1",
+        "label": "",
+        "description": ""
+      },
+      "_occupied": true
+    },
+    "nat_inside": null,
+    "nat_outside": [],
+    "dns_name": "",
+    "description": "",
+    "owner": null,
+    "comments": "",
+    "tags": [],
+    "custom_fields": {},
+    "created": "2026-11-16T11:28:52.977573Z",
+    "last_updated": "2026-11-16T11:28:52.977579Z"
+  },
+  {
+    "id": 2,
+    "url": "http://127.0.0.1:54091/api/ipam/ip-addresses/2/",
+    "display_url": "http://127.0.0.1:54091/ipam/ip-addresses/2/",
+    "display": "10.0.0.2/30",
+    "family": {
+      "value": 4,
+      "label": "IPv4"
+    },
+    "address": "10.0.0.2/30",
+    "vrf": null,
+    "tenant": null,
+    "status": {
+      "value": "active",
+      "label": "Active"
+    },
+    "role": null,
+    "assigned_object_type": "dcim.interface",
+    "assigned_object_id": 2,
+    "assigned_object": {
+      "id": 2,
+      "url": "http://127.0.0.1:54091/api/dcim/interfaces/2/",
+      "display": "eth1",
+      "device": {
+        "id": 2,
+        "url": "http://127.0.0.1:54091/api/dcim/devices/2/",
+        "display": "spine1",
+        "name": "spine1",
+        "description": ""
+      },
+      "name": "eth1",
+      "description": "",
+      "cable": {
+        "id": 1,
+        "url": "http://127.0.0.1:54091/api/dcim/cables/1/",
+        "display": "#1",
+        "label": "",
+        "description": ""
+      },
+      "_occupied": true
+    },
+    "nat_inside": null,
+    "nat_outside": [],
+    "dns_name": "",
+    "description": "",
+    "owner": null,
+    "comments": "",
+    "tags": [],
+    "custom_fields": {},
+    "created": "2026-11-16T11:28:53.030159Z",
+    "last_updated": "2026-11-16T11:28:53.030164Z"
+  },
+  {
+    "id": 3,
+    "url": "http://127.0.0.1:54091/api/ipam/ip-addresses/3/",
+    "display_url": "http://127.0.0.1:54091/ipam/ip-addresses/3/",
+    "display": "10.0.0.5/30",
+    "family": {
+      "value": 4,
+      "label": "IPv4"
+    },
+    "address": "10.0.0.5/30",
+    "vrf": null,
+    "tenant": null,
+    "status": {
+      "value": "active",
+      "label": "Active"
+    },
+    "role": null,
+    "assigned_object_type": "dcim.interface",
+    "assigned_object_id": 3,
+    "assigned_object": {
+      "id": 3,
+      "url": "http://127.0.0.1:54091/api/dcim/interfaces/3/",
+      "display": "eth1",
+      "device": {
+        "id": 3,
+        "url": "http://127.0.0.1:54091/api/dcim/devices/3/",
+        "display": "leaf2",
+        "name": "leaf2",
+        "description": ""
+      },
+      "name": "eth1",
+      "description": "",
+      "cable": {
+        "id": 2,
+        "url": "http://127.0.0.1:54091/api/dcim/cables/2/",
+        "display": "#2",
+        "label": "",
+        "description": ""
+      },
+      "_occupied": true
+    },
+    "nat_inside": null,
+    "nat_outside": [],
+    "dns_name": "",
+    "description": "",
+    "owner": null,
+    "comments": "",
+    "tags": [],
+    "custom_fields": {},
+    "created": "2026-11-16T11:28:54.383326Z",
+    "last_updated": "2026-11-16T11:28:54.383334Z"
+  },
+  {
+    "id": 4,
+    "url": "http://127.0.0.1:54091/api/ipam/ip-addresses/4/",
+    "display_url": "http://127.0.0.1:54091/ipam/ip-addresses/4/",
+    "display": "10.0.0.6/30",
+    "family": {
+      "value": 4,
+      "label": "IPv4"
+    },
+    "address": "10.0.0.6/30",
+    "vrf": null,
+    "tenant": null,
+    "status": {
+      "value": "active",
+      "label": "Active"
+    },
+    "role": null,
+    "assigned_object_type": "dcim.interface",
+    "assigned_object_id": 4,
+    "assigned_object": {
+      "id": 4,
+      "url": "http://127.0.0.1:54091/api/dcim/interfaces/4/",
+      "display": "eth2",
+      "device": {
+        "id": 2,
+        "url": "http://127.0.0.1:54091/api/dcim/devices/2/",
+        "display": "spine1",
+        "name": "spine1",
+        "description": ""
+      },
+      "name": "eth2",
+      "description": "",
+      "cable": {
+        "id": 2,
+        "url": "http://127.0.0.1:54091/api/dcim/cables/2/",
+        "display": "#2",
+        "label": "",
+        "description": ""
+      },
+      "_occupied": true
+    },
+    "nat_inside": null,
+    "nat_outside": [],
+    "dns_name": "",
+    "description": "",
+    "owner": null,
+    "comments": "",
+    "tags": [],
+    "custom_fields": {},
+    "created": "2026-11-16T11:28:54.434838Z",
+    "last_updated": "2026-11-16T11:28:54.434844Z"
+  },
+  {
+    "id": 6,
+    "url": "http://127.0.0.1:54091/api/ipam/ip-addresses/6/",
+    "display_url": "http://127.0.0.1:54091/ipam/ip-addresses/6/",
+    "display": "172.16.0.1/24",
+    "family": {
+      "value": 4,
+      "label": "IPv4"
+    },
+    "address": "172.16.0.1/24",
+    "vrf": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/ipam/vrfs/1/",
+      "display": "mgmt",
+      "name": "mgmt",
+      "rd": null,
+      "description": ""
+    },
+    "tenant": null,
+    "status": {
+      "value": "active",
+      "label": "Active"
+    },
+    "role": null,
+    "assigned_object_type": "dcim.interface",
+    "assigned_object_id": 2,
+    "assigned_object": {
+      "id": 2,
+      "url": "http://127.0.0.1:54091/api/dcim/interfaces/2/",
+      "display": "eth1",
+      "device": {
+        "id": 2,
+        "url": "http://127.0.0.1:54091/api/dcim/devices/2/",
+        "display": "spine1",
+        "name": "spine1",
+        "description": ""
+      },
+      "name": "eth1",
+      "description": "",
+      "cable": {
+        "id": 1,
+        "url": "http://127.0.0.1:54091/api/dcim/cables/1/",
+        "display": "#1",
+        "label": "",
+        "description": ""
+      },
+      "_occupied": true
+    },
+    "nat_inside": null,
+    "nat_outside": [],
+    "dns_name": "",
+    "description": "",
+    "owner": null,
+    "comments": "",
+    "tags": [],
+    "custom_fields": {},
+    "created": "2026-11-16T11:28:54.844483Z",
+    "last_updated": "2026-11-16T11:28:54.844489Z"
+  },
+  {
+    "id": 5,
+    "url": "http://127.0.0.1:54091/api/ipam/ip-addresses/5/",
+    "display_url": "http://127.0.0.1:54091/ipam/ip-addresses/5/",
+    "display": "2001:db8::1/64",
+    "family": {
+      "value": 6,
+      "label": "IPv6"
+    },
+    "address": "2001:db8::1/64",
+    "vrf": null,
+    "tenant": null,
+    "status": {
+      "value": "active",
+      "label": "Active"
+    },
+    "role": null,
+    "assigned_object_type": "dcim.interface",
+    "assigned_object_id": 1,
+    "assigned_object": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/interfaces/1/",
+      "display": "eth1",
+      "device": {
+        "id": 1,
+        "url": "http://127.0.0.1:54091/api/dcim/devices/1/",
+        "display": "leaf1",
+        "name": "leaf1",
+        "description": ""
+      },
+      "name": "eth1",
+      "description": "",
+      "cable": {
+        "id": 1,
+        "url": "http://127.0.0.1:54091/api/dcim/cables/1/",
+        "display": "#1",
+        "label": "",
+        "description": ""
+      },
+      "_occupied": true
+    },
+    "nat_inside": null,
+    "nat_outside": [],
+    "dns_name": "",
+    "description": "",
+    "owner": null,
+    "comments": "",
+    "tags": [],
+    "custom_fields": {},
+    "created": "2026-11-16T11:28:54.820653Z",
+    "last_updated": "2026-11-16T11:28:54.820659Z"
+  }
+]

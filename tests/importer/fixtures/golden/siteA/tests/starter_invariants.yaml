@@ -1,0 +1,38 @@
+needs_device_configuration:
+  reason: route_present checks for declared static routes. Cassian Gate does not configure
+    static routes on the nodes it generates, so these pass only where routing comes
+    from device configuration. They are not in topology.yaml.
+  tests:
+  - expect: pass
+    kind: invariant
+    name: starter_route_present_leaf1_192_0_2_0_24
+    node: leaf1
+    prefix: 192.0.2.0/24
+    type: route_present
+tests:
+- dst: 10.0.0.2
+  expect: pass
+  kind: invariant
+  name: starter_bgp_session_up_leaf1_10_0_0_2
+  node: leaf1
+  type: bgp_session_up
+- dst: 10.0.0.1
+  expect: pass
+  kind: invariant
+  name: starter_bgp_session_up_spine1_10_0_0_1
+  node: spine1
+  type: bgp_session_up
+- expect: pass
+  interface: eth1
+  kind: invariant
+  name: starter_interface_state_leaf1_eth1
+  node: leaf1
+  state: up
+  type: interface_state
+- expect: pass
+  interface: eth1
+  kind: invariant
+  name: starter_interface_state_spine1_eth1
+  node: spine1
+  state: up
+  type: interface_state

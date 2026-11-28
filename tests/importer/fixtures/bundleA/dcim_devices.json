@@ -1,0 +1,87 @@
+[
+ {
+  "comments": "",
+  "created": "2026-11-16T11:28:52.000000Z",
+  "custom_fields": {},
+  "description": "",
+  "display": "leaf1",
+  "id": 1,
+  "last_updated": "2026-11-16T11:28:52.000000Z",
+  "local_context_data": {
+   "cassian": {
+    "router_id": "1.1.1.1",
+    "static_routes": [
+     {
+      "prefix": "192.0.2.0/24"
+     }
+    ]
+   }
+  },
+  "name": "leaf1",
+  "platform": {
+   "_depth": 0,
+   "description": "",
+   "device_count": 2,
+   "display": "frr",
+   "id": 1,
+   "name": "frr",
+   "slug": "frr",
+   "url": "http://netbox.example.test/api/dcim/platforms/1/",
+   "virtualmachine_count": 0
+  },
+  "site": {
+   "description": "",
+   "display": "siteA",
+   "id": 1,
+   "name": "siteA",
+   "slug": "siteA",
+   "url": "http://netbox.example.test/api/dcim/sites/1/"
+  },
+  "status": {
+   "label": "Active",
+   "value": "active"
+  },
+  "tags": [],
+  "url": "http://netbox.example.test/api/dcim/devices/1/"
+ },
+ {
+  "comments": "",
+  "created": "2026-11-16T11:28:52.000000Z",
+  "custom_fields": {},
+  "description": "",
+  "display": "spine1",
+  "id": 2,
+  "last_updated": "2026-11-16T11:28:52.000000Z",
+  "local_context_data": {
+   "cassian": {
+    "router_id": "2.2.2.2"
+   }
+  },
+  "name": "spine1",
+  "platform": {
+   "_depth": 0,
+   "description": "",
+   "device_count": 2,
+   "display": "frr",
+   "id": 1,
+   "name": "frr",
+   "slug": "frr",
+   "url": "http://netbox.example.test/api/dcim/platforms/1/",
+   "virtualmachine_count": 0
+  },
+  "site": {
+   "description": "",
+   "display": "siteA",
+   "id": 1,
+   "name": "siteA",
+   "slug": "siteA",
+   "url": "http://netbox.example.test/api/dcim/sites/1/"
+  },
+  "status": {
+   "label": "Active",
+   "value": "active"
+  },
+  "tags": [],
+  "url": "http://netbox.example.test/api/dcim/devices/2/"
+ }
+]

@@ -296,6 +296,12 @@ jobs:
           python tests/importer/backend_seam_proof.py
           python tests/importer/preservation_proof.py
 
+      - name: Brownfield importer end-to-end deploy (§4.6)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tests/importer/import_deploy_proof.py
+
       - name: Two-run behavioural-equivalence proof harnesses (Phase 2 4.4)
         shell: bash
         run: |

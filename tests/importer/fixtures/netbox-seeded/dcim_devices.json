@@ -1,0 +1,424 @@
+[
+  {
+    "id": 1,
+    "url": "http://127.0.0.1:54091/api/dcim/devices/1/",
+    "display_url": "http://127.0.0.1:54091/dcim/devices/1/",
+    "display": "leaf1",
+    "name": "leaf1",
+    "device_type": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/device-types/1/",
+      "display": "frr-router",
+      "manufacturer": {
+        "id": 1,
+        "url": "http://127.0.0.1:54091/api/dcim/manufacturers/1/",
+        "display": "cassian-seed",
+        "name": "cassian-seed",
+        "slug": "cassian-seed",
+        "description": ""
+      },
+      "model": "frr-router",
+      "slug": "frr-router",
+      "description": "",
+      "device_count": 4
+    },
+    "role": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/device-roles/1/",
+      "display": "router",
+      "name": "router",
+      "slug": "router",
+      "description": "",
+      "device_count": 0,
+      "virtualmachine_count": 0,
+      "_depth": 0
+    },
+    "tenant": null,
+    "platform": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/platforms/1/",
+      "display": "frr",
+      "name": "frr",
+      "slug": "frr",
+      "description": "",
+      "device_count": 0,
+      "virtualmachine_count": 0,
+      "_depth": 0
+    },
+    "serial": "",
+    "asset_tag": null,
+    "site": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/sites/1/",
+      "display": "site-a",
+      "name": "site-a",
+      "slug": "site-a",
+      "description": ""
+    },
+    "location": null,
+    "rack": null,
+    "position": null,
+    "face": null,
+    "latitude": null,
+    "longitude": null,
+    "parent_device": null,
+    "status": {
+      "value": "active",
+      "label": "Active"
+    },
+    "airflow": null,
+    "primary_ip": null,
+    "primary_ip4": null,
+    "primary_ip6": null,
+    "oob_ip": null,
+    "cluster": null,
+    "virtual_chassis": null,
+    "vc_position": null,
+    "vc_priority": null,
+    "description": "",
+    "owner": null,
+    "comments": "",
+    "config_template": null,
+    "config_context": {
+      "cassian": {
+        "router_id": "1.1.1.1",
+        "static_routes": [
+          {
+            "prefix": "192.0.2.0/24"
+          }
+        ]
+      }
+    },
+    "local_context_data": {
+      "cassian": {
+        "router_id": "1.1.1.1",
+        "static_routes": [
+          {
+            "prefix": "192.0.2.0/24"
+          }
+        ]
+      }
+    },
+    "tags": [],
+    "custom_fields": {},
+    "created": "2026-11-16T11:28:52.765116Z",
+    "last_updated": "2026-11-16T11:28:52.765124Z",
+    "console_port_count": 0,
+    "console_server_port_count": 0,
+    "power_port_count": 0,
+    "power_outlet_count": 0,
+    "interface_count": 1,
+    "front_port_count": 0,
+    "rear_port_count": 0,
+    "device_bay_count": 0,
+    "module_bay_count": 0,
+    "inventory_item_count": 0
+  },
+  {
+    "id": 3,
+    "url": "http://127.0.0.1:54091/api/dcim/devices/3/",
+    "display_url": "http://127.0.0.1:54091/dcim/devices/3/",
+    "display": "leaf2",
+    "name": "leaf2",
+    "device_type": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/device-types/1/",
+      "display": "frr-router",
+      "manufacturer": {
+        "id": 1,
+        "url": "http://127.0.0.1:54091/api/dcim/manufacturers/1/",
+        "display": "cassian-seed",
+        "name": "cassian-seed",
+        "slug": "cassian-seed",
+        "description": ""
+      },
+      "model": "frr-router",
+      "slug": "frr-router",
+      "description": "",
+      "device_count": 4
+    },
+    "role": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/device-roles/1/",
+      "display": "router",
+      "name": "router",
+      "slug": "router",
+      "description": "",
+      "device_count": 0,
+      "virtualmachine_count": 0,
+      "_depth": 0
+    },
+    "tenant": null,
+    "platform": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/platforms/1/",
+      "display": "frr",
+      "name": "frr",
+      "slug": "frr",
+      "description": "",
+      "device_count": 0,
+      "virtualmachine_count": 0,
+      "_depth": 0
+    },
+    "serial": "",
+    "asset_tag": null,
+    "site": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/sites/1/",
+      "display": "site-a",
+      "name": "site-a",
+      "slug": "site-a",
+      "description": ""
+    },
+    "location": null,
+    "rack": null,
+    "position": null,
+    "face": null,
+    "latitude": null,
+    "longitude": null,
+    "parent_device": null,
+    "status": {
+      "value": "active",
+      "label": "Active"
+    },
+    "airflow": null,
+    "primary_ip": null,
+    "primary_ip4": null,
+    "primary_ip6": null,
+    "oob_ip": null,
+    "cluster": null,
+    "virtual_chassis": null,
+    "vc_position": null,
+    "vc_priority": null,
+    "description": "",
+    "owner": null,
+    "comments": "",
+    "config_template": null,
+    "config_context": {
+      "cassian": {
+        "router_id": "3.3.3.3"
+      }
+    },
+    "local_context_data": {
+      "cassian": {
+        "router_id": "3.3.3.3"
+      }
+    },
+    "tags": [],
+    "custom_fields": {},
+    "created": "2026-11-16T11:28:52.888723Z",
+    "last_updated": "2026-11-16T11:28:52.888745Z",
+    "console_port_count": 0,
+    "console_server_port_count": 0,
+    "power_port_count": 0,
+    "power_outlet_count": 0,
+    "interface_count": 1,
+    "front_port_count": 0,
+    "rear_port_count": 0,
+    "device_bay_count": 0,
+    "module_bay_count": 0,
+    "inventory_item_count": 0
+  },
+  {
+    "id": 4,
+    "url": "http://127.0.0.1:54091/api/dcim/devices/4/",
+    "display_url": "http://127.0.0.1:54091/dcim/devices/4/",
+    "display": "leaf9",
+    "name": "leaf9",
+    "device_type": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/device-types/1/",
+      "display": "frr-router",
+      "manufacturer": {
+        "id": 1,
+        "url": "http://127.0.0.1:54091/api/dcim/manufacturers/1/",
+        "display": "cassian-seed",
+        "name": "cassian-seed",
+        "slug": "cassian-seed",
+        "description": ""
+      },
+      "model": "frr-router",
+      "slug": "frr-router",
+      "description": "",
+      "device_count": 4
+    },
+    "role": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/device-roles/1/",
+      "display": "router",
+      "name": "router",
+      "slug": "router",
+      "description": "",
+      "device_count": 0,
+      "virtualmachine_count": 0,
+      "_depth": 0
+    },
+    "tenant": null,
+    "platform": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/platforms/1/",
+      "display": "frr",
+      "name": "frr",
+      "slug": "frr",
+      "description": "",
+      "device_count": 0,
+      "virtualmachine_count": 0,
+      "_depth": 0
+    },
+    "serial": "",
+    "asset_tag": null,
+    "site": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/sites/1/",
+      "display": "site-a",
+      "name": "site-a",
+      "slug": "site-a",
+      "description": ""
+    },
+    "location": null,
+    "rack": null,
+    "position": null,
+    "face": null,
+    "latitude": null,
+    "longitude": null,
+    "parent_device": null,
+    "status": {
+      "value": "planned",
+      "label": "Planned"
+    },
+    "airflow": null,
+    "primary_ip": null,
+    "primary_ip4": null,
+    "primary_ip6": null,
+    "oob_ip": null,
+    "cluster": null,
+    "virtual_chassis": null,
+    "vc_position": null,
+    "vc_priority": null,
+    "description": "",
+    "owner": null,
+    "comments": "",
+    "config_template": null,
+    "config_context": {},
+    "local_context_data": null,
+    "tags": [],
+    "custom_fields": {},
+    "created": "2026-11-16T11:28:54.640311Z",
+    "last_updated": "2026-11-16T11:28:54.640318Z",
+    "console_port_count": 0,
+    "console_server_port_count": 0,
+    "power_port_count": 0,
+    "power_outlet_count": 0,
+    "interface_count": 1,
+    "front_port_count": 0,
+    "rear_port_count": 0,
+    "device_bay_count": 0,
+    "module_bay_count": 0,
+    "inventory_item_count": 0
+  },
+  {
+    "id": 2,
+    "url": "http://127.0.0.1:54091/api/dcim/devices/2/",
+    "display_url": "http://127.0.0.1:54091/dcim/devices/2/",
+    "display": "spine1",
+    "name": "spine1",
+    "device_type": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/device-types/1/",
+      "display": "frr-router",
+      "manufacturer": {
+        "id": 1,
+        "url": "http://127.0.0.1:54091/api/dcim/manufacturers/1/",
+        "display": "cassian-seed",
+        "name": "cassian-seed",
+        "slug": "cassian-seed",
+        "description": ""
+      },
+      "model": "frr-router",
+      "slug": "frr-router",
+      "description": "",
+      "device_count": 4
+    },
+    "role": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/device-roles/1/",
+      "display": "router",
+      "name": "router",
+      "slug": "router",
+      "description": "",
+      "device_count": 0,
+      "virtualmachine_count": 0,
+      "_depth": 0
+    },
+    "tenant": null,
+    "platform": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/platforms/1/",
+      "display": "frr",
+      "name": "frr",
+      "slug": "frr",
+      "description": "",
+      "device_count": 0,
+      "virtualmachine_count": 0,
+      "_depth": 0
+    },
+    "serial": "",
+    "asset_tag": null,
+    "site": {
+      "id": 1,
+      "url": "http://127.0.0.1:54091/api/dcim/sites/1/",
+      "display": "site-a",
+      "name": "site-a",
+      "slug": "site-a",
+      "description": ""
+    },
+    "location": null,
+    "rack": null,
+    "position": null,
+    "face": null,
+    "latitude": null,
+    "longitude": null,
+    "parent_device": null,
+    "status": {
+      "value": "active",
+      "label": "Active"
+    },
+    "airflow": null,
+    "primary_ip": null,
+    "primary_ip4": null,
+    "primary_ip6": null,
+    "oob_ip": null,
+    "cluster": null,
+    "virtual_chassis": null,
+    "vc_position": null,
+    "vc_priority": null,
+    "description": "",
+    "owner": null,
+    "comments": "",
+    "config_template": null,
+    "config_context": {
+      "cassian": {
+        "router_id": "2.2.2.2"
+      }
+    },
+    "local_context_data": {
+      "cassian": {
+        "router_id": "2.2.2.2"
+      }
+    },
+    "tags": [],
+    "custom_fields": {},
+    "created": "2026-11-16T11:28:52.834743Z",
+    "last_updated": "2026-11-16T11:28:52.834751Z",
+    "console_port_count": 0,
+    "console_server_port_count": 0,
+    "power_port_count": 0,
+    "power_outlet_count": 0,
+    "interface_count": 3,
+    "front_port_count": 0,
+    "rear_port_count": 0,
+    "device_bay_count": 0,
+    "module_bay_count": 0,
+    "inventory_item_count": 0
+  }
+]

@@ -1,0 +1,90 @@
+[
+ {
+  "comments": "",
+  "created": "2026-11-16T11:28:52.000000Z",
+  "custom_fields": {},
+  "description": "",
+  "device": {
+   "description": "",
+   "display": "leaf1",
+   "id": 1,
+   "name": "leaf1",
+   "url": "http://netbox.example.test/api/dcim/devices/1/"
+  },
+  "display": "leaf1 session",
+  "id": 1,
+  "last_updated": "2026-11-16T11:28:52.000000Z",
+  "local_as": {
+   "asn": 65001,
+   "description": "",
+   "display": "AS65001",
+   "id": 1,
+   "url": "http://netbox.example.test/api/ipam/asns/1/"
+  },
+  "name": "leaf1 session",
+  "remote_address": {
+   "address": "10.0.0.2/30",
+   "description": "",
+   "display": "10.0.0.2/30",
+   "id": 2,
+   "url": "http://netbox.example.test/api/ipam/ip-addresses/2/"
+  },
+  "remote_as": {
+   "asn": 65002,
+   "description": "",
+   "display": "AS65002",
+   "id": 2,
+   "url": "http://netbox.example.test/api/ipam/asns/2/"
+  },
+  "status": {
+   "label": "Active",
+   "value": "active"
+  },
+  "tags": [],
+  "url": "http://netbox.example.test/api/plugins/bgp/bgpsession/1/"
+ },
+ {
+  "comments": "",
+  "created": "2026-11-16T11:28:52.000000Z",
+  "custom_fields": {},
+  "description": "",
+  "device": {
+   "description": "",
+   "display": "spine1",
+   "id": 2,
+   "name": "spine1",
+   "url": "http://netbox.example.test/api/dcim/devices/2/"
+  },
+  "display": "spine1 session",
+  "id": 2,
+  "last_updated": "2026-11-16T11:28:52.000000Z",
+  "local_as": {
+   "asn": 65002,
+   "description": "",
+   "display": "AS65002",
+   "id": 2,
+   "url": "http://netbox.example.test/api/ipam/asns/2/"
+  },
+  "name": "spine1 session",
+  "remote_address": {
+   "address": "10.0.0.1/30",
+   "description": "",
+   "display": "10.0.0.1/30",
+   "id": 1,
+   "url": "http://netbox.example.test/api/ipam/ip-addresses/1/"
+  },
+  "remote_as": {
+   "asn": 65001,
+   "description": "",
+   "display": "AS65001",
+   "id": 1,
+   "url": "http://netbox.example.test/api/ipam/asns/1/"
+  },
+  "status": {
+   "label": "Active",
+   "value": "active"
+  },
+  "tags": [],
+  "url": "http://netbox.example.test/api/plugins/bgp/bgpsession/2/"
+ }
+]
